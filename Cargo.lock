@@ -2929,6 +2929,7 @@ dependencies = [
  "chrono",
  "futures",
  "hex",
+ "http 1.5.0",
  "reqwest",
  "serde",
  "serde_json",

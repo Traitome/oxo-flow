@@ -17,6 +17,15 @@ fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))
 }
 
+/// Log-assertion tests must see the engine's default (info) tracing level —
+/// a dev shell exporting `RUST_LOG=warn` filters the teed stream and breaks
+/// them (same pin as oxo_flow_cmd_without_rust_log in cli_integration.rs).
+fn oxo_flow_cmd_without_rust_log() -> Command {
+    let mut cmd = oxo_flow_cmd();
+    cmd.env_remove("RUST_LOG");
+    cmd
+}
+
 // ─── Workflow version provenance (issue #115 pillar 1) ───────────────
 
 #[test]
@@ -76,7 +85,7 @@ fn cli_run_records_workflow_git_sha_in_git_repo() {
     let head = git(&["rev-parse", "HEAD"]);
     let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
 
-    oxo_flow_cmd()
+    oxo_flow_cmd_without_rust_log()
         .args(["run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()
@@ -180,7 +189,9 @@ fn cli_run_log_rotates_and_names_workflow_version() {
     assert!(content1.contains("workflow_name: logged"));
     assert!(content1.contains("workflow_version: 2.3.0"));
     assert!(
-        content1.contains("workflow run started"),
+        // The engine tees its tracing stream into the run log as JSON
+        // events — `workflow_started` is the run-level one.
+        content1.contains("\"event\":\"workflow_started\""),
         "the tracing stream must be teed into the log"
     );
     assert!(!dir.path().join(".oxo-flow/logs/oxo-flow.log.1").exists());

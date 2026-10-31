@@ -75,6 +75,11 @@ fn spawn_web_server_once(
         .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
         .env("OXO_FLOW_HOST", "127.0.0.1")
         .env("OXO_FLOW_PORT", port.to_string())
+        // The bind wait greps the log for the INFO-level "Listening on"
+        // line — a dev shell exporting RUST_LOG=warn filters it out and
+        // stalls the suite (same pin as oxo_flow_cmd_without_rust_log in
+        // cli_integration.rs).
+        .env_remove("RUST_LOG")
         .env(
             "OXO_FLOW_FRONTEND_DIR",
             dir.join("missing-frontend").to_str().unwrap(),

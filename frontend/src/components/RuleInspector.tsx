@@ -111,7 +111,9 @@ export interface RuleInspectorProps {
   /** The full serialized rule (from the DAG node) or null for a new rule. */
   rule: Record<string, unknown> | null;
   /** Called with the update_rule patch (only changed/complete sub-objects). */
-  onSave: (patch: Record<string, unknown>) => void;
+  /** When the rule name changed, the second argument carries the new name
+   *  and the parent applies a separate rename_rule edit after the patch. */
+  onSave: (patch: Record<string, unknown>, newName?: string) => void;
   onClose: () => void;
 }
 
@@ -239,8 +241,9 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
       put('envvars', envvarsOf(form));
     }
     // Renaming is a separate edit op; the patch never carries `name`.
-    if (Object.keys(patch).length === 0) return;
-    onSave(patch);
+    const newName = form.name !== original.name ? form.name.trim() : '';
+    if (Object.keys(patch).length === 0 && newName === '') return;
+    onSave(patch, newName === '' ? undefined : newName);
   };
 
   // #907 P3-16: collapsible field groups. All start open (same behavior as
@@ -312,6 +315,7 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
       </div>
 
       <div className="inspector-body">
+        {textInput(t('inspector.name'), 'name')}
         {textInput(t('inspector.description'), 'description', t('inspector.descriptionPlaceholder'))}
         <label className="inspector-field">
           <span>{t('inspector.shell')}</span>

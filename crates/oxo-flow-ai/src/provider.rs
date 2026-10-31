@@ -104,14 +104,26 @@ fn is_transient_transport_error(e: &reqwest::Error) -> bool {
     !e.is_timeout() && (e.is_connect() || e.is_request() || e.is_body() || e.is_decode())
 }
 
+/// Upstream statuses worth replaying when the response body is empty:
+/// the reverse-proxy outage signature (an observed 502 with a zero-byte
+/// body carries nothing the caller could classify). A body that does
+/// parse keeps its immediate path — a 503 `model_not_found` JSON is a
+/// provider decision, not a flake.
+fn is_transient_http_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 502 | 503 | 504 | 522 | 524)
+}
+
 /// Send a prepared request and hand the response to `decode` inside the
 /// retry scope, so a transient failure in either half — the send, or
 /// reading/decoding the body — replays the whole attempt with `backoffs`
 /// pauses between tries (see [`is_transient_transport_error`]). HTTP error
-/// statuses are *not* retried here — they carry provider semantics (429
-/// back-off, auth, context overflow) that the caller classifies from the
-/// returned status and body. When the transport stays broken after every
-/// retry, [`AiError::RetryExhausted`] reports the total attempt count.
+/// statuses carry provider semantics (429 back-off, auth, context
+/// overflow) that the caller classifies from the returned status and body,
+/// so they are *not* retried — except a transient status (see
+/// [`is_transient_http_status`]) answering with an empty body, the
+/// gateway-outage signature, which is replayed. When the failure stays
+/// transient after every retry, [`AiError::RetryExhausted`] reports the
+/// total attempt count.
 async fn send_with_retry<T, Fut>(
     request: reqwest::RequestBuilder,
     provider: &str,
@@ -130,6 +142,10 @@ where
         /// not be replayed — surface the status instead of masking it as
         /// a flaky parse.
         HttpErrorBody(reqwest::StatusCode, reqwest::Error),
+        /// A transient HTTP status answering with an empty body: nothing
+        /// for the caller to classify, characteristic of a gateway or
+        /// proxy outage — replay the request.
+        EmptyGatewayError(reqwest::StatusCode),
     }
 
     let mask = |message: String| match secret {
@@ -159,6 +175,24 @@ where
                 .map_err(StepFailure::Transport)?;
             let status = response.status();
             let headers = response.headers().clone();
+            // Buffer the error body once so an empty body on a transient
+            // status can be distinguished from a provider error payload;
+            // success bodies stream straight to the decoder.
+            let response = if status.is_success() {
+                response
+            } else {
+                let body = response.text().await.map_err(StepFailure::Transport)?;
+                if is_transient_http_status(status) && body.trim().is_empty() {
+                    return Err(StepFailure::EmptyGatewayError(status));
+                }
+                // Hand the buffered body back so every caller — including
+                // the streaming pass-through — sees the original payload.
+                http::Response::builder()
+                    .status(status)
+                    .body(body)
+                    .map(reqwest::Response::from)
+                    .expect("rebuilding a received response cannot fail")
+            };
             let decoded = decode(response).await.map_err(|e| {
                 if status.is_success() {
                     // Garbled success body — the flaky-proxy case retrying
@@ -190,6 +224,29 @@ where
                     provider: provider.into(),
                     message: mask(format!("HTTP {status} — {}", describe(e))),
                 });
+            }
+            Err(StepFailure::EmptyGatewayError(status)) if attempt >= backoffs.len() => {
+                return Err(AiError::RetryExhausted {
+                    attempts: attempt as u32 + 1,
+                    message: mask(format!(
+                        "HTTP {status} returned an empty body on every attempt — the gateway \
+                         looks persistently unhealthy; check the AI endpoint URL \
+                         (ANTHROPIC_BASE_URL / OXO_FLOW_AI_API_URL) or switch model/provider \
+                         (ANTHROPIC_MODEL / OXO_FLOW_AI_PROVIDER)"
+                    )),
+                });
+            }
+            Err(StepFailure::EmptyGatewayError(status)) => {
+                let backoff = backoffs[attempt];
+                tracing::warn!(
+                    provider,
+                    attempt = attempt + 1,
+                    status = %status,
+                    backoff_secs = backoff.as_secs(),
+                    "transient gateway error (empty body) — retrying"
+                );
+                attempt += 1;
+                tokio::time::sleep(backoff).await;
             }
             Err(StepFailure::Transport(e)) if attempt >= backoffs.len() => {
                 return Err(AiError::RetryExhausted {
@@ -2324,6 +2381,241 @@ mod tests {
             }
             other => panic!("expected Provider error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_empty_502_retries_then_succeeds() {
+        // The observed school-proxy flake: a 502 with a zero-byte body.
+        // Nothing in it carries provider semantics, so the request is
+        // replayed and the next attempt succeeds.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let responses = [
+                "HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "exactly one replay");
+        assert!(status.is_success());
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn gateway_empty_502_replays_streaming_pass_through() {
+        // The streaming call site hands the raw response to its caller,
+        // so the empty-body classification must happen inside the retry
+        // scope — not in the decoder, which never sees the error body.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let responses = [
+                "HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: {}\n\n",
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, resp) =
+            send_with_retry(request, "test", None, &backoffs, |resp| async move {
+                Ok::<_, reqwest::Error>(resp)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "exactly one replay");
+        assert!(status.is_success());
+        assert_eq!(resp.text().await.unwrap(), "data: {}\n\n");
+    }
+
+    #[tokio::test]
+    async fn gateway_persistent_empty_502_exhausts_with_user_guidance() {
+        // When the gateway stays broken the error must say so in user
+        // terms: what failed, how many tries were spent, and which knobs
+        // to reach for — not a bare parse failure.
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let response =
+                "HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
+            Ok::<_, reqwest::Error>(resp)
+        })
+        .await
+        .unwrap_err();
+
+        match err {
+            AiError::RetryExhausted { attempts, message } => {
+                assert_eq!(attempts, backoffs.len() as u32 + 1);
+                assert!(
+                    message.contains("HTTP 502 Bad Gateway")
+                        && message.contains("empty body")
+                        && message.contains("ANTHROPIC_BASE_URL")
+                        && message.contains("switch model/provider"),
+                    "unexpected guidance: {message}"
+                );
+            }
+            other => panic!("expected RetryExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_401_empty_body_is_not_retried() {
+        // Auth failures must surface immediately even with an empty body:
+        // replaying cannot fix credentials, and the endpoint may bill or
+        // lock out on repeated hits.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let response =
+                "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            if let Ok((mut stream, _)) = listener.accept() {
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the 401 must not be replayed"
+        );
+        assert!(
+            matches!(err, AiError::Provider { ref message, .. } if message.contains("HTTP 401 Unauthorized")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn service_unavailable_with_json_body_is_not_retried() {
+        // A 503 with a parseable provider payload (the proxy's
+        // model_not_found) is a decision, not an outage — the caller gets
+        // the status and body unchanged after a single attempt.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let body = r#"{"error":{"type":"model_not_found","message":"unknown model"}}"#;
+            let response = format!(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            if let Ok((mut stream, _)) = listener.accept() {
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the 503 must not be replayed"
+        );
+        assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["error"]["type"], "model_not_found");
     }
 
     #[test]
