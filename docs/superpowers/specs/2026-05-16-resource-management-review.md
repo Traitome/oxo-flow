@@ -55,6 +55,7 @@ fn detect_system_memory() -> u64 {
 ```
 
 **Changes:**
+
 - Add `sysinfo = "0.33"` to Cargo.toml (workspace)
 - Update `executor.rs::detect_system_resources()` to use sysinfo
 - Remove Linux-specific `/proc/meminfo` reading (keep as fallback)
@@ -78,6 +79,7 @@ fn kill_process_group(pid: u32) -> Result<()> {
 ```
 
 **Changes:**
+
 - Add `nix = "0.29"` to Cargo.toml (Unix only)
 - Wrap timeout handling to kill process group
 - macOS/Linux support only (Windows uses job objects differently)
@@ -111,6 +113,7 @@ fn validate_resources_against_system(rule: &Rule, system_threads: u32, system_me
 ```
 
 **Changes:**
+
 - Add validation function in `config.rs`
 - Call during workflow validation, emit warnings to tracing
 - Don't block execution - user may intentionally oversubscribe
@@ -137,6 +140,7 @@ fn pbs_gpu_directive(spec: &GpuSpec) -> String {
 ```
 
 **Changes:**
+
 - Update `cluster.rs` GPU handling in script generators
 - Add model-specific GPU constraint for SLURM
 - Document that PBS/SGE GPU syntax is site-specific
@@ -164,6 +168,7 @@ fn estimate_memory_from_hint(hint: &ResourceHint, base_mb: u64) -> u64 {
 ```
 
 **Changes:**
+
 - Add helper function in scheduler.rs
 - Use when rule has no explicit memory but has resource_hint
 - Simple scaling - don't attempt actual input size detection
@@ -193,6 +198,7 @@ fn check_disk_space(rule: &Rule, workdir: &Path) -> Vec<String> {
 ```
 
 **Changes:**
+
 - Add `fs2 = "0.4"` to Cargo.toml
 - Check during dry-run/validation
 - Warning only - can't enforce disk usage
@@ -215,6 +221,7 @@ tracing::info!(
 ```
 
 **Changes:**
+
 - Add structured logging in executor.rs reserve/release
 - Add --verbose flag to show resource pool state
 - Extend dry-run output to show resource requirements summary
@@ -245,6 +252,7 @@ async fn execute_rule(...) -> Result<JobRecord> {
 ```
 
 **Changes:**
+
 - Add cleanup logic in executor failure handling
 - Clean temp_output files on job failure
 - Clean transform chunk outputs when cleanup=true
@@ -337,6 +345,7 @@ Best practices guide:
 ## Thread Declaration
 
 Match threads to tool's parallelism capability:
+
 - **BWA-MEM2**: threads=16 (saturates ~12-16 cores)
 - **samtools sort**: threads=4 + memory=2G per thread
 - **GATK**: threads varies by tool (CheckDuplicates: threads=1, HaplotypeCaller: threads=4)
@@ -344,6 +353,7 @@ Match threads to tool's parallelism capability:
 ## Memory Declaration
 
 Rule of thumb:
+
 - **Alignment**: 2-4x largest input file size
 - **Variant calling**: 32G for WGS, 8G for targeted panels
 - **Sort/index**: threads × 2G per thread for samtools
@@ -351,6 +361,7 @@ Rule of thumb:
 ## GPU Resources
 
 For SLURM with specific GPU models:
+
 ```toml
 [rules.resources.gpu_spec]
 count = 2
@@ -361,6 +372,7 @@ memory_gb = 40
 ## ResourceHints
 
 When exact requirements unknown:
+
 ```toml
 [rules.resource_hint]
 input_size = "medium"  # ~10GB
@@ -370,9 +382,12 @@ memory_scale = 2.0     # 2x input size
 ## HPC vs Local
 
 Same workflow, different execution:
+
 - Local: Declare what you have
 - HPC: Declare what scheduler allocates
+
 - Use ResourceBudget to limit total concurrent usage
+
 ```
 
 ---

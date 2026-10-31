@@ -436,6 +436,7 @@ conda = "envs/report.yaml"
 ### 6.2 Aggregated Output
 
 `{sample}.aggr.txt` - Final circRNA calls with columns:
+
 - `chr`: Chromosome
 - `start`: Start position (0-based)
 - `end`: End position
@@ -501,9 +502,11 @@ SAMPLE_02,raw/SAMPLE_02_1.fastq.gz,raw/SAMPLE_02_2.fastq.gz
 ```yaml
 name: fastp
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - fastp=0.23.4
 ```
 
@@ -512,9 +515,11 @@ dependencies:
 ```yaml
 name: ciriquant
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - python=2.7
   - bwa=0.7.17
   - hisat2=2.2.0
@@ -535,9 +540,11 @@ dependencies:
 ```yaml
 name: circexplorer2
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - python=3.7
   - bwa
   - pip
@@ -550,9 +557,11 @@ dependencies:
 ```yaml
 name: findcirc
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - find_circ=1.2
   - bowtie2
   - samtools
@@ -563,9 +572,11 @@ dependencies:
 ```yaml
 name: circrna_finder
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - circrna_finder
   - star
   - samtools
@@ -576,9 +587,11 @@ dependencies:
 ```yaml
 name: annotation
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - r-base=4.2
   - r-data.table
 ```
@@ -588,9 +601,11 @@ dependencies:
 ```yaml
 name: report
 channels:
+
   - conda-forge
   - bioconda
 dependencies:
+
   - r-base=4.2
   - r-rmarkdown
   - r-plotly
@@ -635,20 +650,24 @@ During implementation, the following oxo-flow improvements may be needed:
 ## 11. Implementation Phases
 
 ### Phase 1: Core Pipeline
+
 - qc.oxoflow
 - callers.oxoflow
 - Basic testing
 
 ### Phase 2: Aggregation
+
 - annotation.oxoflow
 - aggregation.oxoflow
 - common.py integration
 
 ### Phase 3: Reporting
+
 - report.oxoflow
 - HTML template
 
 ### Phase 4: Polish
+
 - Documentation
 - Test data
 - CI/CD integration
