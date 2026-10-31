@@ -7,6 +7,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  type ReactFlowInstance,
   useEdgesState,
   useNodesState,
   type Connection,
@@ -155,6 +156,8 @@ export interface WorkflowCanvasProps {
   onEditRule?: (name: string) => void;
   /** Called when the user connects two nodes (editable canvas). */
   onConnectRules?: (from: string, to: string) => void;
+  /** Called when the user deletes selected edge(s) (editable canvas). */
+  onDisconnectRules?: (edges: Array<{ from: string; to: string }>) => void;
   /** Called when the user deletes the selected node(s). */
   onRemoveRules?: (names: string[]) => void;
   /** Per-node status strings for the read-only monitor view. */
@@ -169,6 +172,7 @@ export default function WorkflowCanvas({
   scopeKey,
   onEditRule,
   onConnectRules,
+  onDisconnectRules,
   onRemoveRules,
   statusById,
   context = 'editor',
@@ -177,6 +181,7 @@ export default function WorkflowCanvas({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RuleNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastNodeSet = useRef('');
+  const rfInstance = useRef<ReactFlowInstance<Node<RuleNodeData>> | null>(null);
 
   // Rebuild the graph whenever the DAG document changes. Saved positions are
   // reused only while the node set is unchanged; a changed set gets a fresh
@@ -227,12 +232,93 @@ export default function WorkflowCanvas({
             : { stroke: 'var(--color-text-secondary)' },
       })),
     );
+    if (!sameSet) {
+      pendingFit.current = true;
+      wrapperRef.current?.removeAttribute('data-fitted');
+    }
   }, [dag, editable, scopeKey, statusById, onEditRule, setNodes, setEdges]);
+
+  // Fit once per node-set change: the DAG document arrives async after
+  // mount, so a bare mount-time fit sees an empty canvas, and a fit before
+  // measurement reads zero-size bounds and "succeeds" with a viewport that
+  // still clips the graph. Arm a pending fit when the set changes; the
+  // dimension changes that flow back through onNodesChange fire it once
+  // every node has a measured size.
+  const pendingFit = useRef(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Manual fit: React Flow's instance.fitView kept returning a viewport that
+  // clipped the graph on narrow panes even with fully measured nodes, so the
+  // bounds math lives here — deterministic and testable.
+  const fitToNodes = useCallback((instance: ReactFlowInstance<Node<RuleNodeData>>) => {
+    const container = wrapperRef.current;
+    if (!container) return;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw === 0 || ch === 0) return;
+    const rects = instance.getNodes().map((n) => ({
+      x: n.position.x,
+      y: n.position.y,
+      w: n.measured?.width ?? 0,
+      h: n.measured?.height ?? 0,
+    }));
+    if (rects.length === 0) return;
+    const minX = Math.min(...rects.map((r) => r.x));
+    const minY = Math.min(...rects.map((r) => r.y));
+    const maxX = Math.max(...rects.map((r) => r.x + r.w));
+    const maxY = Math.max(...rects.map((r) => r.y + r.h));
+    const bw = Math.max(maxX - minX, 1);
+    const bh = Math.max(maxY - minY, 1);
+    const padding = 0.25;
+    const zoom = Math.min(
+      Math.max((cw * (1 - padding * 2)) / bw, 0.5),
+      Math.max((ch * (1 - padding * 2)) / bh, 0.5),
+      1.2,
+    );
+    instance.setViewport({
+      x: (cw - bw * zoom) / 2 - minX * zoom,
+      y: (ch - bh * zoom) / 2 - minY * zoom,
+      zoom,
+    });
+  }, []);
+
+  // onInit fires after the first nodes mount — fit immediately only when
+  // every node already has a measured size; otherwise leave the flag armed
+  // for the completing dimension batch (a partial fit clips unmeasured nodes).
+  const handleCanvasInit = useCallback(
+    (instance: ReactFlowInstance<Node<RuleNodeData>>) => {
+      rfInstance.current = instance;
+      if (!pendingFit.current) return;
+      const current = instance.getNodes();
+      if (current.length === 0 || !current.every((n) => n.measured?.width !== undefined)) return;
+      // eslint-disable-next-line react-hooks/immutability -- consumes the pending fit exactly once, after init
+      pendingFit.current = false;
+      fitToNodes(instance);
+      wrapperRef.current?.setAttribute('data-fitted', 'true');
+    },
+    [fitToNodes],
+  );
 
   // Persist positions after drags settle.
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
       onNodesChange(changes);
+      const instance = rfInstance.current;
+      if (pendingFit.current && instance && changes.some((c) => c.type === 'dimensions')) {
+        // Run after this batch lands in the store. Consume the pending fit
+        // only when EVERY node has a measured size — fitting on a partial
+        // batch computes bounds from the measured subset and clips the rest.
+        window.setTimeout(() => {
+          if (!pendingFit.current) return;
+          const allMeasured = instance
+            .getNodes()
+            .every((n) => n.measured?.width !== undefined);
+          if (!allMeasured) return;
+          pendingFit.current = false;
+          fitToNodes(instance);
+          wrapperRef.current?.setAttribute('data-fitted', 'true');
+        }, 0);
+      }
       if (changes.some((c) => c.type === 'position' && c.dragging === false)) {
         const saved = positionsStore.load(scopeKey);
         for (const n of nodes) {
@@ -241,7 +327,7 @@ export default function WorkflowCanvas({
         positionsStore.save(scopeKey, saved);
       }
     },
-    [onNodesChange, scopeKey, nodes],
+    [onNodesChange, scopeKey, nodes, fitToNodes],
   );
 
   const handleConnect = useCallback(
@@ -260,9 +346,16 @@ export default function WorkflowCanvas({
         return;
       }
       const selected = nodes.filter((n) => n.selected).map((n) => n.id);
-      if (selected.length > 0) onRemoveRules?.(selected);
+      if (selected.length > 0) {
+        onRemoveRules?.(selected);
+      } else {
+        const selectedEdges = edges
+          .filter((e) => e.selected)
+          .map((e) => ({ from: e.source, to: e.target }));
+        if (selectedEdges.length > 0) onDisconnectRules?.(selectedEdges);
+      }
     },
-    [editable, nodes, onRemoveRules],
+    [editable, nodes, edges, onRemoveRules, onDisconnectRules],
   );
 
   useEffect(() => {
@@ -282,16 +375,19 @@ export default function WorkflowCanvas({
   }
 
   return (
-    <div className="workflow-canvas" data-editable={editable}>
+    <div className="workflow-canvas" data-editable={editable} ref={wrapperRef}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={handleConnect}
+        isValidConnection={(c) => c.source !== c.target}
         nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.25, maxZoom: 1.2 }}
+        // No `fitView` prop: it re-queues a fit on every render, and a queued
+        // fit that lands on freshly-replaced, not-yet-measured nodes resets
+        // the viewport to identity. Explicit fits (onInit + node-set changes)
+        // run against measured nodes instead.
         // Issue #79 (P2): minZoom 0.2 rendered node text at ~4px on large
         // DAGs — unreadable. 0.5 keeps the minimum glyph height legible
         // while still zooming out far enough for 30+ node graphs.
@@ -300,6 +396,7 @@ export default function WorkflowCanvas({
         proOptions={{ hideAttribution: true }}
         nodesConnectable={editable}
         deleteKeyCode={null}
+        onInit={handleCanvasInit}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-border)" />
         <Controls showInteractive={false} />

@@ -606,10 +606,17 @@ draft) and
 measured GLM round took 145 s, which the old 120 s default killed
 mid-round). Below the orchestrator, the
 provider backends retry transient transport failures (dropped or
-reset connections, response bodies that fail to decode) twice with a
-short backoff before surfacing an error — timeouts are excluded,
-since a retry would deterministically re-timeout and the knob above
-is the remedy. When a provider error does
+reset connections, response bodies that fail to decode), plus the
+gateway-outage signature — a transient HTTP status (408, 502, 503,
+504, 522, 524) answering with an empty body — twice with a short
+backoff before surfacing an error. Error bodies that do parse are
+never replayed (a 503 `model_not_found` JSON is a provider decision,
+not a flake), and timeouts are excluded, since a retry would
+deterministically re-timeout and the knob above is the remedy. When
+every attempt fails on the gateway signature, the surfaced error names
+the status and points at the endpoint/model knobs (`ANTHROPIC_BASE_URL`
+/ `OXO_FLOW_AI_API_URL`, `ANTHROPIC_MODEL` / `OXO_FLOW_AI_PROVIDER`).
+When a provider error does
 abort a generation, the orchestrator archives the transcript and logged
 token spend into the saved session instead of dropping them — the
 rounds before the failure were real paid work, and the CLI's

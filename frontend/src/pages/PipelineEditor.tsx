@@ -553,6 +553,16 @@ export default function PipelineEditor() {
   };
 
   const handleConnect = (from: string, to: string) => runEdit('connect', { from, to });
+  // Same chaining rule as handleRemove: every edit posts the whole TOML, so
+  // parallel disconnects would race and only the last one would survive.
+  const handleDisconnect = async (edges: Array<{ from: string; to: string }>) => {
+    let current = toml;
+    for (const { from, to } of edges) {
+      const next = await runEdit('disconnect', { from, to }, current);
+      if (next === null) return; // superseded or failed — stop the chain
+      current = next;
+    }
+  };
   // Each edit posts the whole TOML, so firing remove_rule per name in
   // parallel raced: every request carried the same original content and only
   // the last removal survived. Chain them, threading each response's TOML
@@ -584,9 +594,22 @@ export default function PipelineEditor() {
     setInspector({ ruleName: name, rule: node ? node.rule : null });
   };
 
-  const handleInspectorSave = async (patch: Record<string, unknown>) => {
+  const handleInspectorSave = async (patch: Record<string, unknown>, newName?: string) => {
     if (!inspector) return;
-    await runEdit('update_rule', { name: inspector.ruleName, patch });
+    // The patch targets the old name, so it must be applied before the
+    // rename. A failed edit keeps the dialog open (the result bar carries
+    // the backend's validation message) instead of silently discarding work.
+    if (Object.keys(patch).length > 0) {
+      const patched = await runEdit('update_rule', { name: inspector.ruleName, patch });
+      if (patched === null) return;
+    }
+    if (newName && newName !== inspector.ruleName) {
+      const renamed = await runEdit('rename_rule', {
+        name: inspector.ruleName,
+        new_name: newName,
+      });
+      if (renamed === null) return;
+    }
     setInspector(null);
   };
 
@@ -927,6 +950,7 @@ export default function PipelineEditor() {
             scopeKey={pipelineId}
             onEditRule={handleEditRule}
             onConnectRules={handleConnect}
+            onDisconnectRules={handleDisconnect}
             onRemoveRules={handleRemove}
           />
           <div className="canvas-legend">

@@ -743,6 +743,21 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         config.rules.iter().map(|r| r.name.as_str()).collect();
     for rule in &config.rules {
         for dep in &rule.depends_on {
+            // A self-dependency is invisible to E006: the DAG builder drops
+            // self-edges (directory write-back patterns rely on that), so it
+            // must be flagged directly here.
+            if dep == &rule.name {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!("rule '{}' depends on itself", rule.name),
+                    rule: Some(rule.name.clone()),
+                    code: "E006".to_string(),
+                    suggestion: Some(format!(
+                        "remove '{}' from its own depends_on list",
+                        rule.name
+                    )),
+                });
+            }
             if !rule_names.contains(dep.as_str()) {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
@@ -5583,6 +5598,31 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         assert!(
             !result.diagnostics.iter().any(|d| d.code == "E006"),
             "an acyclic config-routed chain must stay clean: {result:?}"
+        );
+    }
+
+    #[test]
+    fn validate_flags_self_dependency() {
+        // The DAG builder drops self-edges on purpose (directory write-back
+        // patterns), so an explicit `depends_on = ["itself"]` must be caught
+        // directly instead of silently disappearing into E006.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "a"
+            shell = "echo a"
+            depends_on = ["a"]
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "E006" && d.message.contains("depends on itself")),
+            "a self-dependency must be flagged: {result:?}"
         );
     }
 

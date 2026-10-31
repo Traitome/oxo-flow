@@ -56,6 +56,9 @@ is preserved as a new revision first.
 
 Double-click a node to open the inspector:
 
+- **Name** — rename the rule; every `depends_on`, `extends`, and
+  `scatter.gather` reference is rewritten to the new name (duplicates are
+  rejected).
 - **Shell command** — free-form, with `{input}`/`{output}` placeholders.
 - **Inputs / Outputs** — file path patterns; wildcards (`{sample}`) allowed.
 - **Environment** — system / conda / mamba / docker / singularity / venv /
@@ -73,6 +76,13 @@ Fields the inspector doesn't cover stay editable in the TOML pane.
 Drag from a node's right handle to another node's left handle. This adds an
 explicit `depends_on` edge.
 
+Two connections are always rejected, before anything is written:
+
+- connecting a node to itself, and
+- any edge that would close a cycle — including cycles formed with
+  file-inferred edges. The editor shows the backend's error and the
+  workflow stays valid.
+
 There are two kinds of edges, and the canvas draws them differently:
 
 | Style | Kind | How to change it |
@@ -89,9 +99,11 @@ be resolved against each other leave the ordering ambiguous — use
 
 ## Deleting
 
-Select one or more nodes and press `Delete` (or `Backspace`). Removing a rule
-whose outputs other rules consume will surface validation errors on those
-rules — fix their inputs, and the workflow is valid again.
+Select one or more nodes and press `Delete` (or `Backspace`) to remove rules;
+with an edge selected instead, the same keys disconnect it (file-inferred
+edges are managed through the `input`/`output` paths, not by disconnect).
+Removing a rule whose outputs other rules consume will surface validation
+errors on those rules — fix their inputs, and the workflow is valid again.
 
 ## Auto layout
 
