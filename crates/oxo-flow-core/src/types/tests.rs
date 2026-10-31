@@ -236,3 +236,41 @@ fn test_dag_type_checking_pipeline() {
     );
     assert!(codes.contains(&"TYPE-003"), "must detect missing BAI index");
 }
+
+#[test]
+fn test_dag_type_checking_multi_channel_no_false_positive() {
+    let toml = r#"
+        [workflow]
+        name = "test_multi_channel"
+
+        [types.my_bam]
+        format = "bam"
+
+        [types.my_tsv]
+        format = "tsv"
+
+        [[rules]]
+        name = "align"
+        output = ["out.bam", "out.tsv"]
+        shell = "echo"
+        [rules.types]
+        outputs = { bam = "my_bam", metrics = "my_tsv" }
+
+        [[rules]]
+        name = "call_variants"
+        input = ["out.bam", "out.tsv"]
+        output = ["calls.vcf"]
+        shell = "echo"
+        [rules.types]
+        inputs = { bam = "my_bam", metrics = "my_tsv" }
+    "#;
+
+    let config = WorkflowConfig::parse(toml).expect("valid workflow config");
+    let dag = WorkflowDag::from_rules(&config.rules).expect("valid dag");
+    let diagnostics = check_workflow_types(&config, &dag);
+
+    assert!(
+        diagnostics.is_empty(),
+        "multi-channel rules must not cross-compare mismatched channels: {diagnostics:?}"
+    );
+}

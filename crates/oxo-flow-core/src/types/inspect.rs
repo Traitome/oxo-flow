@@ -351,7 +351,12 @@ fn parse_text_header(
     }
 
     // 2. SAM text format
-    if trimmed.starts_with("@HD") || trimmed.starts_with("@SQ") || trimmed.starts_with("@RG") {
+    if trimmed.starts_with("@HD")
+        || trimmed.starts_with("@SQ")
+        || trimmed.starts_with("@RG")
+        || trimmed.starts_with("@PG")
+        || trimmed.starts_with("@CO")
+    {
         let mut info = parse_sam_header_text(trimmed);
         info.format = BioFormat::Sam;
         info.compression = compression;
@@ -459,8 +464,7 @@ fn is_bed_table(text: &str) -> bool {
 /// Parse SAM header lines (`@HD`, `@SQ`, `@RG`).
 fn parse_sam_header_text(header: &str) -> IntrospectedBioType {
     let mut sort_order = None;
-    let mut contigs = Vec::new();
-    let mut contig_lens = Vec::new();
+    let mut contigs: Vec<(String, Option<u64>)> = Vec::new();
     let mut read_groups = Vec::new();
     let mut explicit_build = None;
 
@@ -490,10 +494,7 @@ fn parse_sam_header_text(header: &str) -> IntrospectedBioType {
                 }
             }
             if let Some(name) = sn {
-                contigs.push(name);
-            }
-            if let Some(len) = ln {
-                contig_lens.push(len);
+                contigs.push((name, ln));
             }
             if explicit_build.is_none() && as_build.is_some() {
                 explicit_build = as_build;
@@ -511,7 +512,9 @@ fn parse_sam_header_text(header: &str) -> IntrospectedBioType {
         }
     }
 
-    let reference_build = explicit_build.or_else(|| infer_reference_build(&contigs, &contig_lens));
+    let reference_build = explicit_build.or_else(|| infer_reference_build(&contigs));
+    let num_contigs = contigs.len();
+    let contig_names = contigs.into_iter().map(|(n, _)| n).collect();
 
     IntrospectedBioType {
         format: BioFormat::Sam,
@@ -519,15 +522,14 @@ fn parse_sam_header_text(header: &str) -> IntrospectedBioType {
         sort_order,
         reference_build,
         read_groups,
-        contigs,
-        raw_header_summary: Some(format!("SAM header ({} contigs)", contig_lens.len())),
+        contigs: contig_names,
+        raw_header_summary: Some(format!("SAM header ({num_contigs} contigs)")),
     }
 }
 
 /// Parse VCF header lines (`##fileformat`, `##reference`, `##contig`).
 fn parse_vcf_header_text(header: &str) -> IntrospectedBioType {
-    let mut contigs = Vec::new();
-    let mut contig_lens = Vec::new();
+    let mut contigs: Vec<(String, Option<u64>)> = Vec::new();
     let mut explicit_build = None;
 
     for line in header.lines() {
@@ -559,10 +561,7 @@ fn parse_vcf_header_text(header: &str) -> IntrospectedBioType {
                 }
             }
             if let Some(name) = id {
-                contigs.push(name);
-            }
-            if let Some(len) = length {
-                contig_lens.push(len);
+                contigs.push((name, length));
             }
             if explicit_build.is_none() && as_tag.is_some() {
                 explicit_build = as_tag;
@@ -570,7 +569,8 @@ fn parse_vcf_header_text(header: &str) -> IntrospectedBioType {
         }
     }
 
-    let reference_build = explicit_build.or_else(|| infer_reference_build(&contigs, &contig_lens));
+    let reference_build = explicit_build.or_else(|| infer_reference_build(&contigs));
+    let contig_names = contigs.into_iter().map(|(n, _)| n).collect();
 
     IntrospectedBioType {
         format: BioFormat::Vcf,
@@ -578,17 +578,19 @@ fn parse_vcf_header_text(header: &str) -> IntrospectedBioType {
         sort_order: Some(SortOrder::Coordinate),
         reference_build,
         read_groups: Vec::new(),
-        contigs,
+        contigs: contig_names,
         raw_header_summary: Some("VCF header".to_string()),
     }
 }
 
 /// Infer reference genome assembly from chromosome length fingerprints.
-fn infer_reference_build(contigs: &[String], lengths: &[u64]) -> Option<String> {
-    for (&len, name) in lengths.iter().zip(contigs.iter()) {
+fn infer_reference_build(contigs: &[(String, Option<u64>)]) -> Option<String> {
+    for (name, len_opt) in contigs {
         let lower = name.to_ascii_lowercase();
-        if lower == "chr1" || lower == "1" {
-            match len {
+        if (lower == "chr1" || lower == "1")
+            && let Some(len) = len_opt
+        {
+            match *len {
                 248956422 => return Some("GRCh38".to_string()),
                 249250621 => return Some("GRCh37".to_string()),
                 248387328 => return Some("T2T-CHM13".to_string()),

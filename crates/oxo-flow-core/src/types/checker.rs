@@ -228,14 +228,20 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
             // Match output channels from producer with input channels of consumer
             for (out_ch, out_type_name) in &producer_types.outputs {
                 for (in_ch, in_type_name) in &consumer_types.inputs {
-                    // Channels match if identical, or either is "default", or channel names match output/input paths
+                    // Channels match if identical, or either is "default" in single-channel context,
+                    // or channel names match explicit shared output/input paths.
                     let channel_match = out_ch == in_ch
-                        || out_ch == "default"
-                        || in_ch == "default"
-                        || producer_rule
-                            .output
-                            .iter()
-                            .any(|o| rule.input.iter().any(|i| i == o));
+                        || (out_ch == "default" && consumer_types.inputs.len() == 1)
+                        || (in_ch == "default" && producer_types.outputs.len() == 1)
+                        || (producer_types.outputs.len() == 1
+                            && consumer_types.inputs.len() == 1
+                            && producer_rule
+                                .output
+                                .iter()
+                                .any(|o| rule.input.iter().any(|i| i == o)))
+                        || ((rule.input.iter().any(|i| i == out_ch) || out_ch == "default")
+                            && (producer_rule.output.iter().any(|o| o == in_ch)
+                                || in_ch == "default"));
 
                     if channel_match {
                         let producer_spec = resolve_type_spec(out_type_name, config);
