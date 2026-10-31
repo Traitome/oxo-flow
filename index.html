@@ -931,6 +931,7 @@
       border-radius: 12px;
       padding: 1rem 1.1rem;
       transition: transform 0.2s ease, border-color 0.2s ease;
+      min-width: 0;
     }
     .telemetry-card:hover {
       transform: translateY(-2px);
@@ -942,15 +943,30 @@
       font-weight: 700;
       color: var(--fg-default);
       line-height: 1.1;
-      margin-bottom: 0.25rem;
+      margin-bottom: 0.35rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .telemetry-num span {
+    .telemetry-num .sym {
+      color: var(--emerald-bright);
+      font-weight: 700;
+    }
+    .telemetry-num .unit {
+      color: var(--emerald-bright);
+      font-size: 0.92rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      margin-left: 0.32rem;
+    }
+    .telemetry-num span:not(.unit):not(.sym) {
       color: var(--emerald-bright);
     }
     .telemetry-label {
       font-size: 0.78rem;
       color: var(--fg-muted);
       line-height: 1.35;
+      overflow-wrap: break-word;
     }
 
     /* ==========================================================================
@@ -1099,12 +1115,13 @@
       margin: 0.85rem 0 1.1rem;
     }
     .ladder-step {
-      background: var(--bg-code);
-      border: 1px solid rgba(240, 246, 252, 0.1);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
       border-radius: 8px;
       padding: 0.6rem 0.65rem;
       font-family: "JetBrains Mono", monospace;
       font-size: 0.73rem;
+      color: var(--fg-default);
     }
     .ladder-step strong {
       display: block;
@@ -1115,7 +1132,7 @@
     .ladder-step.s-reclaim strong { color: #38bdf8; }
     .ladder-step.s-hold strong { color: #fbbf24; }
     .ladder-step.s-abort strong { color: #f43f5e; }
-    .ladder-step span { color: #8b949e; font-size: 0.69rem; display: block; line-height: 1.35; }
+    .ladder-step span { color: var(--fg-muted); font-size: 0.69rem; display: block; line-height: 1.35; }
 
     /* 8 Environment Backend Pills */
     .env-badges {
@@ -1130,9 +1147,9 @@
       font-weight: 600;
       padding: 0.32rem 0.7rem;
       border-radius: 8px;
-      background: var(--bg-code);
+      background: var(--bg-elevated);
       border: 1px solid var(--border-default);
-      color: #e6edf3;
+      color: var(--fg-default);
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
@@ -1185,6 +1202,10 @@
     .compare-table thead th.col-oxo {
       background: rgba(16, 185, 129, 0.15);
       color: var(--emerald-bright);
+    }
+    [data-theme="light"] .compare-table thead th.col-oxo {
+      color: #047857;
+      font-weight: 800;
     }
     .compare-table tbody tr:hover {
       background: var(--bg-subtle);
@@ -1604,26 +1625,26 @@
     .cmd-modal {
       width: 100%;
       max-width: 660px;
-      background: #0d121b;
-      border: 1px solid rgba(56, 189, 248, 0.35);
+      background: var(--bg-Default);
+      border: 1px solid var(--border-bright);
       border-radius: 14px;
-      box-shadow: 0 25px 70px rgba(0, 0, 0, 0.85);
+      box-shadow: var(--shadow-lg), 0 25px 70px rgba(0, 0, 0, 0.4);
       overflow: hidden;
-      color: #f0f6fc;
+      color: var(--fg-default);
     }
     .cmd-input-wrap {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       padding: 0.9rem 1.15rem;
-      border-bottom: 1px solid rgba(240, 246, 252, 0.1);
+      border-bottom: 1px solid var(--border-default);
     }
     .cmd-input {
       width: 100%;
       background: transparent;
       border: none;
       outline: none;
-      color: #f0f6fc;
+      color: var(--fg-default);
       font-family: "Plus Jakarta Sans", sans-serif;
       font-size: 0.98rem;
     }
@@ -1639,26 +1660,33 @@
       gap: 1rem;
       padding: 0.65rem 0.85rem;
       border-radius: 8px;
-      color: #e6edf3;
+      color: var(--fg-default);
       transition: background 0.12s ease;
     }
     .cmd-item:hover {
-      background: rgba(16, 185, 129, 0.16);
-      color: #34d399;
+      background: var(--bg-pill);
+      color: var(--emerald-bright);
     }
     .cmd-item-type {
       font-family: "JetBrains Mono", monospace;
       font-size: 0.7rem;
       padding: 0.12rem 0.45rem;
       border-radius: 4px;
-      background: rgba(240, 246, 252, 0.07);
-      color: #8b949e;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-muted);
+      color: var(--fg-muted);
       flex-shrink: 0;
     }
 
     /* ==========================================================================
        13. RESPONSIVE BREAKPOINTS
        ========================================================================== */
+    @media (max-width: 1180px) {
+      .telemetry-strip {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
     @media (max-width: 1024px) {
       .stage-panel.active {
         grid-template-columns: 1fr;
@@ -1738,6 +1766,22 @@
       }
       .cmd-trigger span.cmd-label {
         display: none;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .telemetry-strip {
+        grid-template-columns: 1fr;
+      }
+      .install-cmd-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .install-cmd-text {
+        font-size: 0.78rem;
+      }
+      .copy-btn {
+        align-self: flex-end;
       }
     }
   </style>
@@ -1898,7 +1942,7 @@
               <img src="https://img.shields.io/badge/DOI-10.64898%2F2026.06.11.731578-f59e0b?style=flat-square" alt="DOI" />
             </a>
             <a href="https://deepwiki.com/Traitome/oxo-flow" title="Ask DeepWiki AI">
-              <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
+              <img src="https://deepwiki.com/badge.svg" onerror="this.onerror=null;this.src='https://img.shields.io/badge/Ask_DeepWiki-AI_docs-6E56CF?style=flat-square'" alt="Ask DeepWiki" />
             </a>
           </div>
 
@@ -1966,6 +2010,12 @@
 <span class="tok-key">memory</span> = <span class="tok-str">"32G"</span>
 <span class="tok-key">environment</span> = { <span class="tok-key">docker</span> = <span class="tok-str">"quay.io/biocontainers/bwa-mem2:2.2.1"</span> }
 <span class="tok-key">shell</span> = <span class="tok-str">"bwa-mem2 mem -t {threads} /ref/GRCh38.fa {input[0]} {input[1]} | samtools sort -o {output[0]}"</span></div>
+<div class="code-rule-block" id="code-rule-qc"><span class="tok-sec">[[rules]]</span>
+<span class="tok-key">name</span> = <span class="tok-str">"qc_parse"</span>              <span class="tok-cmt"># Domain parser auto-aggregates metrics</span>
+<span class="tok-key">input</span> = [<span class="tok-str">"qc/<span class="tok-wc">{sample}</span>.fastp.json"</span>]
+<span class="tok-key">output</span> = [<span class="tok-str">"qc/<span class="tok-wc">{sample}</span>.metrics.tsv"</span>]
+<span class="tok-key">environment</span> = { <span class="tok-key">system</span> = <span class="tok-num">true</span> }
+<span class="tok-key">shell</span> = <span class="tok-str">"oxo-flow report parse-qc fastp {input[0]} -o {output[0]}"</span></div>
 <div class="code-rule-block" id="code-rule-mutect2"><span class="tok-sec">[[rules]]</span>
 <span class="tok-key">name</span> = <span class="tok-str">"mutect2_somatic"</span>       <span class="tok-cmt"># Scales across [[pairs]] tumor/normal</span>
 <span class="tok-key">input</span> = [<span class="tok-str">"bam/<span class="tok-wc">{experiment}</span>.sorted.bam"</span>, <span class="tok-str">"bam/<span class="tok-wc">{control}</span>.sorted.bam"</span>]
@@ -2010,7 +2060,7 @@
                       </g>
 
                       <!-- Node 3: qc_summary branch -->
-                      <g class="dag-node-btn" data-rule="fastp" transform="translate(205, 125)">
+                      <g class="dag-node-btn" data-rule="qc" transform="translate(205, 125)">
                         <rect width="130" height="60" rx="10" fill="#111927" stroke="#38bdf8" stroke-width="1.5"/>
                         <circle cx="18" cy="20" r="5" fill="#34d399"/>
                         <text x="30" y="24" fill="#f0f6fc" font-family="JetBrains Mono" font-size="11" font-weight="700">qc_parse</text>
@@ -2211,27 +2261,27 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
           <!-- Telemetry / Proof Strip -->
           <div class="telemetry-strip">
             <div class="telemetry-card">
-              <div class="telemetry-num">100<span>%</span></div>
+              <div class="telemetry-num">100<span class="sym">%</span></div>
               <div class="telemetry-label"><span class="lang-en">Safe Rust across workspace crates (<code>#![forbid(unsafe_code)]</code>)</span><span class="lang-zh">全工作区安全 Rust (<code>#![forbid(unsafe_code)]</code>)</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">8<span> backends</span></div>
+              <div class="telemetry-num">8<span class="unit">backends</span></div>
               <div class="telemetry-label"><span class="lang-en">conda, mamba, pixi, docker, singularity, venv, system, modules</span><span class="lang-zh">conda / mamba / pixi / docker / singularity / venv / system / modules</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">31<span> cmds</span></div>
+              <div class="telemetry-num">31<span class="unit">cmds</span></div>
               <div class="telemetry-label"><span class="lang-en">Complete CLI lifecycle + strict stdout/stderr separation</span><span class="lang-zh">覆盖完整生命周期的 31 个 CLI 子命令</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">100<span>+ APIs</span></div>
+              <div class="telemetry-num">100+<span class="unit">APIs</span></div>
               <div class="telemetry-label"><span class="lang-en">OpenAPI 3.1 REST endpoints across 9 modular domains</span><span class="lang-zh">9 大领域模块、100+ OpenAPI 3.1 接口</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">16<span> + hub</span></div>
+              <div class="telemetry-num">16+<span class="unit">Hub</span></div>
               <div class="telemetry-label"><span class="lang-en">CI-tested Gallery pipelines + community nf-core/Snakemake ports</span><span class="lang-zh">16 个内置 CI 验证流程 + 社区移植中心</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">3,400<span>+</span></div>
+              <div class="telemetry-num">3,400<span class="sym">+</span></div>
               <div class="telemetry-label"><span class="lang-en">Automated unit, integration, CSP, schema-drift &amp; AI eval tests</span><span class="lang-zh">3,400+ 单元、集成、安全与 AI 评测测试</span></div>
             </div>
           </div>
@@ -3005,10 +3055,21 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           <div class="bento-grid">
             <div class="bento-card span-7">
               <div>
-                <div class="bento-tag">⚖️ Open-Core &amp; Academic-Free Licensing</div>
-                <h3>Apache-2.0 Core, CLI, AI &amp; Desktop · Academic-Free Web</h3>
+                <div class="bento-tag">
+                  <span class="lang-en">⚖️ Open-Core &amp; Academic-Free Licensing</span>
+                  <span class="lang-zh">⚖️ 开放核心与学术免费授权模式</span>
+                </div>
+                <h3>
+                  <span class="lang-en">Apache-2.0 Core, CLI, AI &amp; Desktop · Academic-Free Web</span>
+                  <span class="lang-zh">Apache-2.0 核心/CLI/AI/桌面端 · 学术免费 Web</span>
+                </h3>
                 <p>
-                  <code>oxo-flow-core</code>, <code>oxo-flow-ai</code>, <code>oxo-flow-cli</code>, and <code>oxo-flow-desktop</code> are 100% free and open-source under the <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">Apache License 2.0</a>. <code>oxo-flow-web</code> is dual-licensed: free for academic, non-profit, and personal research under <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC">LICENSE-ACADEMIC</a>, with <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-COMMERCIAL">LICENSE-COMMERCIAL</a> for commercial deployments.
+                  <span class="lang-en">
+                    <code>oxo-flow-core</code>, <code>oxo-flow-ai</code>, <code>oxo-flow-cli</code>, and <code>oxo-flow-desktop</code> are 100% free and open-source under the <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">Apache License 2.0</a>. <code>oxo-flow-web</code> is dual-licensed: free for academic, non-profit, and personal research under <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC">LICENSE-ACADEMIC</a>, with <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-COMMERCIAL">LICENSE-COMMERCIAL</a> for commercial deployments.
+                  </span>
+                  <span class="lang-zh">
+                    <code>oxo-flow-core</code>、<code>oxo-flow-ai</code>、<code>oxo-flow-cli</code> 与 <code>oxo-flow-desktop</code> 遵循 <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">Apache 2.0</a> 许可证，完全开源免费。<code>oxo-flow-web</code> 采用双重授权：学术机构、非营利组织与个人研究在 <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC">LICENSE-ACADEMIC</a> 下免费使用，企业商业部署采用 <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-COMMERCIAL">LICENSE-COMMERCIAL</a>。
+                  </span>
                 </p>
               </div>
               <div class="bento-links">
@@ -3021,10 +3082,21 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
 
             <div class="bento-card span-5">
               <div>
-                <div class="bento-tag cyan">🤝 Contributors &amp; Governance</div>
-                <h3>Built by Traitome &amp; the Open-Source Community</h3>
+                <div class="bento-tag cyan">
+                  <span class="lang-en">🤝 Contributors &amp; Governance</span>
+                  <span class="lang-zh">🤝 贡献者与工程治理</span>
+                </div>
+                <h3>
+                  <span class="lang-en">Built by Traitome &amp; the Open-Source Community</span>
+                  <span class="lang-zh">由 Traitome 团队与开源社区共同构建</span>
+                </h3>
                 <p>
-                  Every pull request is gated by <code>make ci</code> (<code>rustfmt</code>, <code>clippy -D warnings</code>, 3,400+ tests, <code>cargo-audit</code>, <code>cargo-deny</code>, <code>gitleaks</code>, schema drift, and AI eval lint).
+                  <span class="lang-en">
+                    Every pull request is gated by <code>make ci</code> (<code>rustfmt</code>, <code>clippy -D warnings</code>, 3,400+ tests, <code>cargo-audit</code>, <code>cargo-deny</code>, <code>gitleaks</code>, schema drift, and AI eval lint).
+                  </span>
+                  <span class="lang-zh">
+                    每个 Pull Request 均由 <code>make ci</code> 严格门禁把关（包括 <code>rustfmt</code>、<code>clippy -D warnings</code>、3,400+ 自动化测试、<code>cargo-audit</code>、<code>cargo-deny</code>、<code>gitleaks</code>、模式漂移与 AI 评测门禁）。
+                  </span>
                 </p>
                 <div class="contributors-row">
                   <a class="contrib-pill" href="https://github.com/ShixiangWang">
@@ -3064,7 +3136,8 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
             <span class="brand-badge">Traitome</span>
           </div>
           <p style="line-height:1.6;">
-            A Rust-native bioinformatics pipeline engine with AI Companion — built from first principles for performance, reproducibility, and developer experience.
+            <span class="lang-en">A Rust-native bioinformatics pipeline engine with AI Companion — built from first principles for performance, reproducibility, and developer experience.</span>
+            <span class="lang-zh">面向第一性原理构建的 Rust 原生生信工作流引擎与 AI 伴侣——兼具极速性能、严格可复现性与极致开发体验。</span>
           </p>
         </div>
 
@@ -3217,6 +3290,12 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           badge: "docker · resource-scheduled",
           desc: "Runs inside an isolated BioContainers Docker image with 16 threads and 32 GiB RAM enforced by the resource scheduler (local pool or SLURM/PBS/SGE/LSF).",
           chips: ["Backend: docker (quay.io/biocontainers)", "Resources: 16 CPU / 32G RAM", "Protected ref: /ref/GRCh38.fa"]
+        },
+        qc: {
+          title: "Rule: qc_parse (fastp JSON domain parser)",
+          badge: "domain parser · report metrics",
+          desc: "Extracts duplication rate, Q30 score, and read counts directly into the run report. Supports auto-aggregating multi-sample QC metrics without third-party scripts.",
+          chips: ["Type: Domain QC parser", "Source: qc/{sample}.fastp.json", "Metric: Q30 / Duplication / Yield"]
         },
         mutect2: {
           title: "Rule: mutect2_somatic ([[pairs]] Tumor–Normal)",
