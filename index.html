@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>oxo-flow — Rust-Native Bioinformatics Workflow Platform &amp; AI Companion</title>
   <meta name="description" content="Compiled, memory-safe bioinformatics pipeline engine built in Rust. Declarative .oxoflow TOML, petgraph DAG scheduling, 8 environment backends, unified AI Companion, disk-pressure guard, checkpoint provenance, React 19 Web Studio, and VS Code IDE." />
-  <meta name="theme-color" content="#070a10" />
+  <meta name="theme-color" content="#06090f" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="oxo-flow" />
+  <meta property="og:title" content="oxo-flow — Rust-Native Bioinformatics Workflow Platform &amp; AI Companion" />
+  <meta property="og:description" content="Compiled, memory-safe pipeline engine: declarative .oxoflow TOML, petgraph DAG scheduling, 8 environment backends, AI Companion, disk-pressure guard, checkpoint provenance, Web Studio, and VS Code IDE." />
+  <meta property="og:url" content="https://traitome.github.io/oxo-flow/" />
+  <meta name="twitter:card" content="summary" />
   <link rel="icon" type="image/svg+xml" href="latest/assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -1818,7 +1824,7 @@
           <a class="hero-eyebrow-pill" href="latest/">
             <span class="pulse-dot"></span>
             <span class="lang-en"><strong>Compiled in Rust</strong> · <code>#![forbid(unsafe_code)]</code> · Single Binary · CLI + Web Studio + Desktop + VS Code IDE</span>
-            <span class="lang-zh"><strong>Rust 原生编译</strong> · <code>#![forbid(unsafe_code)]</code> · 单一二进制包含 CLI + Web 工作台 + 桌面端 + VS Code 插件</span>
+            <span class="lang-zh"><strong>Rust 原生编译</strong> · <code>#![forbid(unsafe_code)]</code> · 单二进制 CLI + Web 工作台 · 另有原生桌面端与 VS Code 插件</span>
           </a>
 
           <h1>
@@ -1862,7 +1868,7 @@
               <button type="button" class="install-tab" data-cmd="conda install -c bioconda oxo-flow-cli">Bioconda</button>
               <button type="button" class="install-tab" data-cmd="curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz &amp;&amp; tar xzf oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz">Linux x86_64 Binary</button>
               <button type="button" class="install-tab" data-cmd="curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-aarch64-apple-darwin.tar.gz &amp;&amp; tar xzf oxo-flow-latest-aarch64-apple-darwin.tar.gz">macOS Apple Silicon</button>
-              <button type="button" class="install-tab" data-cmd="docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest">Docker (GHCR)</button>
+              <button type="button" class="install-tab" data-cmd="docker run -d --name oxo-flow -p 3000:3000 -v oxo-flow-data:/app/data ghcr.io/traitome/oxo-flow:latest">Docker (GHCR)</button>
               <button type="button" class="install-tab" data-cmd="code --install-extension traitome.oxo-flow">VS Code IDE</button>
             </div>
             <div class="install-cmd-row">
@@ -1965,7 +1971,12 @@
 <span class="tok-key">input</span> = [<span class="tok-str">"bam/<span class="tok-wc">{experiment}</span>.sorted.bam"</span>, <span class="tok-str">"bam/<span class="tok-wc">{control}</span>.sorted.bam"</span>]
 <span class="tok-key">output</span> = [<span class="tok-str">"vcf/<span class="tok-wc">{pair_id}</span>.somatic.vcf.gz"</span>]
 <span class="tok-key">environment</span> = { <span class="tok-key">singularity</span> = <span class="tok-str">"images/gatk-4.6.sif"</span> }
-<span class="tok-key">shell</span> = <span class="tok-str">"gatk Mutect2 -R /ref/GRCh38.fa -I {input[0]} -I {input[1]} -O {output[0]}"</span></div></div>
+<span class="tok-key">shell</span> = <span class="tok-str">"gatk Mutect2 -R /ref/GRCh38.fa -I {input[0]} -I {input[1]} -O {output[0]}"</span></div>
+
+<div><span class="tok-sec">[[pairs]]</span>
+<span class="tok-key">pair_id</span> = <span class="tok-str">"CASE_001"</span>
+<span class="tok-key">experiment</span> = <span class="tok-str">"EXP_01"</span>
+<span class="tok-key">control</span> = <span class="tok-str">"CTRL_01"</span></div></div>
               </div>
 
               <div class="stage-visual-pane">
@@ -2105,11 +2116,10 @@ $ <span class="tok-sec">OXO_FLOW_TMPDIR</span>=/scratch/tmp <span class="tok-sec
 <span class="tok-ok">✓ Resumed NORMAL scheduling · 12/12 rules succeeded</span>
 
 <span class="tok-cmt"># 2. Audit checkpoint sha256 output checksums at any time</span>
-$ <span class="tok-sec">oxo-flow provenance verify</span> wgs.oxoflow --json
+$ <span class="tok-sec">oxo-flow provenance verify</span> .oxo-flow/checkpoint.json --json
 {
-  <span class="tok-key">"ok"</span>: <span class="tok-num">true</span>,
-  <span class="tok-key">"verified_outputs"</span>: <span class="tok-num">36</span>,
-  <span class="tok-key">"drifted_outputs"</span>: <span class="tok-num">0</span>
+  <span class="tok-key">"command"</span>: <span class="tok-str">"provenance"</span>,
+  <span class="tok-key">"verify"</span>: { <span class="tok-key">"matched"</span>: <span class="tok-num">36</span>, <span class="tok-key">"mismatched"</span>: <span class="tok-num">0</span>, <span class="tok-key">"missing"</span>: <span class="tok-num">0</span> }
 }</div>
               </div>
               <div class="stage-visual-pane">
@@ -2584,14 +2594,14 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
             <a class="cli-card" data-cat="dev" href="latest/commands/init/"><div class="cli-card-top"><span class="cli-cmd-name">init</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Scaffold a new .oxoflow project directory with standard structure.</div></a>
             <a class="cli-card" data-cat="dev" href="latest/commands/template/"><div class="cli-card-top"><span class="cli-cmd-name">template</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Generate pipelines from built-in templates or natural language (--ai / --from-url).</div></a>
             <a class="cli-card" data-cat="dev" href="latest/commands/validate/"><div class="cli-card-top"><span class="cli-cmd-name">validate</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Validate TOML syntax, DAG acyclicity, wildcards, and semantic AI checks.</div></a>
-            <a class="cli-card" data-cat="dev" href="latest/commands/lint/"><div class="cli-card-top"><span class="cli-cmd-name">lint</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Static best-practice analyzer (30+ diagnostic patterns &amp; reproducibility checks).</div></a>
+            <a class="cli-card" data-cat="dev" href="latest/commands/lint/"><div class="cli-card-top"><span class="cli-cmd-name">lint</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Static best-practice analyzer with reproducibility checks; --ai adds semantic linting.</div></a>
             <a class="cli-card" data-cat="dev" href="latest/commands/format/"><div class="cli-card-top"><span class="cli-cmd-name">format</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Canonical formatter for .oxoflow files (powers VS Code Format Document).</div></a>
             <a class="cli-card" data-cat="dev" href="latest/commands/debug/"><div class="cli-card-top"><span class="cli-cmd-name">debug</span><span class="cli-cat-badge">dev</span></div><div class="cli-desc">Inspect expanded shell commands, wildcards, and AI failure diagnosis.</div></a>
 
-            <a class="cli-card" data-cat="inspect" href="latest/commands/graph/"><div class="cli-card-top"><span class="cli-cmd-name">graph</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Export DAG in DOT, JSON, Mermaid, or Seqera nf-metro transit-map format.</div></a>
+            <a class="cli-card" data-cat="inspect" href="latest/commands/graph/"><div class="cli-card-top"><span class="cli-cmd-name">graph</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Export DAG as Graphviz DOT, tree, Mermaid, or Seqera nf-metro transit map.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/report/"><div class="cli-card-top"><span class="cli-cmd-name">report</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Generate HTML, JSON, Markdown, or PDF reports + domain QC &amp; --r-data TSV.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/provenance/"><div class="cli-card-top"><span class="cli-cmd-name">provenance</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Export and cryptographically verify sha256 output checksums in checkpoint.json.</div></a>
-            <a class="cli-card" data-cat="inspect" href="latest/commands/verify-data/"><div class="cli-card-top"><span class="cli-cmd-name">verify-data</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Verify input/output data integrity and audit protected_data_trees baselines.</div></a>
+            <a class="cli-card" data-cat="inspect" href="latest/commands/verify-data/"><div class="cli-card-top"><span class="cli-cmd-name">verify-data</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Verify a raw data tree against a vendor md5sum sidecar before runs.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/status/"><div class="cli-card-top"><span class="cli-cmd-name">status</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Inspect per-rule checkpoint completion state and output freshness.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/info/"><div class="cli-card-top"><span class="cli-cmd-name">info</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Summarize workflow metadata, rule counts, environments, and resource totals.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/config/"><div class="cli-card-top"><span class="cli-cmd-name">config</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Inspect resolved configuration, --profile supplements, and --arg overrides.</div></a>
@@ -2947,6 +2957,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           <div class="rail-node cyan" title="Academic Citations & Open Source Community">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
           </div>
+            <div class="rail-line"></div>
         </div>
 
         <div>
@@ -3121,6 +3132,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
         const next = htmlEl.getAttribute("data-theme") === "dark" ? "light" : "dark";
         htmlEl.setAttribute("data-theme", next);
         themeIcon.textContent = next === "dark" ? "☀️" : "🌙";
+        try { localStorage.setItem("oxoflow-theme", next); } catch (e) {}
       });
 
       // 2. Bilingual Toggle (EN / 中文)
@@ -3130,7 +3142,22 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
         const next = htmlEl.getAttribute("data-lang") === "en" ? "zh" : "en";
         htmlEl.setAttribute("data-lang", next);
         langLabel.textContent = next === "en" ? "中文" : "EN";
+        try { localStorage.setItem("oxoflow-lang", next); } catch (e) {}
       });
+
+      // Restore persisted preferences (storage may be unavailable on file://)
+      try {
+        const savedTheme = localStorage.getItem("oxoflow-theme");
+        if (savedTheme === "light" || savedTheme === "dark") {
+          htmlEl.setAttribute("data-theme", savedTheme);
+          themeIcon.textContent = savedTheme === "dark" ? "☀️" : "🌙";
+        }
+        const savedLang = localStorage.getItem("oxoflow-lang");
+        if (savedLang === "en" || savedLang === "zh") {
+          htmlEl.setAttribute("data-lang", savedLang);
+          langLabel.textContent = savedLang === "en" ? "中文" : "EN";
+        }
+      } catch (e) {}
 
       // 3. Install Command Switcher + Copy
       const installTabs = document.querySelectorAll(".install-tab");
@@ -3250,22 +3277,39 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
 
       const indexedLinks = [];
       const seenHrefs = new Set();
-      document.querySelectorAll(".atlas-list li a, .cli-card, .gallery-card-foot a:first-child").forEach(function (a) {
+      function paletteTitle(root, selector) {
+        const target = selector ? root.querySelector(selector) : root;
+        if (!target) return "";
+        // Hidden bilingual spans still contribute to textContent; display the
+        // active language and keep both in the keyword index.
+        const lang = document.documentElement.getAttribute("data-lang");
+        const visible = target.querySelector(".lang-" + lang);
+        return (visible ? visible.textContent : target.textContent).replace(/\s+/g, " ").trim();
+      }
+      document.querySelectorAll(".nav-links a, .atlas-list li a, .cli-card, .gallery-card").forEach(function (el) {
+        const isCard = el.classList.contains("cli-card");
+        const isGallery = el.classList.contains("gallery-card");
+        const a = isGallery ? el.querySelector(".gallery-card-foot a:first-child") : el;
+        if (!a) return;
         const href = a.getAttribute("href");
-        const text = a.textContent.replace(/\s+/g, " ").trim();
-        if (!href || seenHrefs.has(href + text)) return;
-        seenHrefs.add(href + text);
+        if (!href) return;
+        const title = isCard ? paletteTitle(el, ".cli-cmd-name")
+          : isGallery ? paletteTitle(el, "h4")
+          : paletteTitle(el);
+        const keywords = el.textContent.replace(/\s+/g, " ").trim();
+        if (!title || seenHrefs.has(href + title)) return;
+        seenHrefs.add(href + title);
         let type = "Doc / Link";
-        if (a.classList.contains("cli-card")) type = "CLI Command";
-        else if (href.indexOf("gallery/") !== -1) type = "Gallery Pipeline";
+        if (isCard) type = "CLI Command";
+        else if (isGallery) type = "Gallery Pipeline";
         else if (href.indexOf("http") === 0) type = "External";
-        indexedLinks.push({ title: text, href: href, type: type });
+        indexedLinks.push({ title: title, keywords: keywords, href: href, type: type });
       });
 
       function renderPalette(query) {
         const q = (query || "").toLowerCase().trim();
         const matches = indexedLinks.filter(function (item) {
-          return !q || item.title.toLowerCase().indexOf(q) !== -1 || item.href.toLowerCase().indexOf(q) !== -1;
+          return !q || item.title.toLowerCase().indexOf(q) !== -1 || item.keywords.toLowerCase().indexOf(q) !== -1 || item.href.toLowerCase().indexOf(q) !== -1;
         }).slice(0, 18);
         cmdResults.innerHTML = matches.map(function (m) {
           return '<a class="cmd-item" href="' + m.href + '"><span>' + m.title + '</span><span class="cmd-item-type">' + m.type + "</span></a>";
@@ -3280,6 +3324,9 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
       }
       function closePalette() {
         modalBackdrop.classList.remove("open");
+        // Escape leaves focus on the hidden input, which would swallow a
+        // subsequent "/" — hand focus back to the page.
+        if (document.activeElement === cmdInput) cmdInput.blur();
       }
 
       openBtn.addEventListener("click", openPalette);
@@ -3294,7 +3341,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
           e.preventDefault();
           modalBackdrop.classList.contains("open") ? closePalette() : openPalette();
-        } else if (e.key === "/" && !modalBackdrop.classList.contains("open") && document.activeElement.tagName !== "INPUT") {
+        } else if (e.key === "/" && !modalBackdrop.classList.contains("open") && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) {
           e.preventDefault();
           openPalette();
         } else if (e.key === "Escape" && modalBackdrop.classList.contains("open")) {
