@@ -5,6 +5,27 @@ pub mod models;
 pub mod postgres;
 pub mod sqlite;
 
+static GLOBAL_BACKEND: std::sync::OnceLock<std::sync::Arc<dyn StorageBackend>> =
+    std::sync::OnceLock::new();
+
+/// Register the active storage backend for the process.
+pub fn set_global_backend(backend: std::sync::Arc<dyn StorageBackend>) {
+    let _ = GLOBAL_BACKEND.set(backend);
+}
+
+/// Retrieve the active storage backend for the process.
+pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
+    if let Some(b) = GLOBAL_BACKEND.get() {
+        return Some(b.clone());
+    }
+    if let Ok(pool) = sqlite::try_pool() {
+        return Some(std::sync::Arc::new(sqlite::SqliteBackend::from_pool(
+            pool.clone(),
+        )));
+    }
+    None
+}
+
 /// Unified pool accessor: returns a reference to the SQLite pool.
 ///
 /// The handlers are SQLite-backed; even with the `postgres` feature enabled,
@@ -73,7 +94,25 @@ pub trait StorageBackend: Send + Sync {
         user_id: &str,
         pagination: Pagination,
     ) -> Result<Paginated<models::RunRow>, String>;
+    async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String>;
+    async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String>;
+    async fn is_run_cancelled(&self, id: &str) -> Result<bool, String>;
+    async fn record_run_terminal(
+        &self,
+        id: &str,
+        status: &str,
+        phase: &str,
+        finished_at: &str,
+    ) -> Result<(), String>;
+    async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String>;
     async fn cancel_run(&self, id: &str) -> Result<(), String>;
+    async fn list_runs_cursor(
+        &self,
+        filters: &models::RunFilters,
+    ) -> Result<models::CursorPage<models::RunRow>, String>;
+    async fn upsert_run_node(&self, node: &models::RunNodeRow) -> Result<(), String>;
+    async fn list_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String>;
+    async fn get_cluster(&self, id: &str) -> Result<Option<models::ClusterRow>, String>;
 
     async fn create_session(
         &self,

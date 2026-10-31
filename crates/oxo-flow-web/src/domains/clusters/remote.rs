@@ -195,37 +195,56 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
 
         // All bookkeeping below uses the legacy SQLite pool, which PostgreSQL
         // deployments never initialize — degrade instead of panicking mid-task.
-        let Some(pool) = db::try_pool() else {
-            tracing::error!(
-                "SQLite pool unavailable (PostgreSQL backend?) — cannot track remote run {run_id}"
-            );
+        let backend = crate::infra::db::global_backend();
+        let pool = db::try_pool();
+        if backend.is_none() && pool.is_none() {
+            tracing::error!("Storage backend unavailable — cannot track remote run {run_id}");
             unregister_remote(&run_id);
             return;
-        };
+        }
 
         // Only a still-queued run may transition to running: a cancel that
         // lands between create and launch must WIN, not be overwritten back
         // to running (audit #659; mirrors the local executor's
         // `AND status = 'queued'` predicate).
         let started = chrono::Utc::now();
-        match sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? \
-             WHERE id = ? AND status = 'queued'",
-        )
-        .bind(started)
-        .bind(&run_id)
-        .execute(pool)
-        .await
-        {
-            Ok(res) if res.rows_affected() == 0 => {
-                tracing::info!("remote run {run_id} was cancelled before launch — not starting");
-                unregister_remote(&run_id);
-                return;
+        let started_str = started.to_rfc3339();
+        if let Some(b) = &backend {
+            match b.mark_run_running(&run_id, &started_str).await {
+                Ok(false) => {
+                    tracing::info!(
+                        "remote run {run_id} was cancelled before launch — not starting"
+                    );
+                    unregister_remote(&run_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update remote run {run_id} to running: {e}");
+                }
+                Ok(true) => {}
             }
-            Err(e) => {
-                tracing::error!("Failed to update remote run {run_id} to running: {e}");
+        } else if let Some(p) = pool {
+            match sqlx::query(
+                "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? \
+                 WHERE id = ? AND status = 'queued'",
+            )
+            .bind(started)
+            .bind(&run_id)
+            .execute(p)
+            .await
+            {
+                Ok(res) if res.rows_affected() == 0 => {
+                    tracing::info!(
+                        "remote run {run_id} was cancelled before launch — not starting"
+                    );
+                    unregister_remote(&run_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update remote run {run_id} to running: {e}");
+                }
+                Ok(_) => {}
             }
-            Ok(_) => {}
         }
         // Wire-shape note (#914 review NIT): `data.username` carries the
         // canonical users.id (kept for wire compatibility, mirroring
@@ -249,14 +268,22 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
         // A cancel landing DURING staging must win too: re-check before the
         // wrapper is written and launched, or the cancel that already
         // returned 200 silently executes anyway (audit #659).
-        let cancelled_during_staging: Option<String> =
-            sqlx::query_scalar("SELECT status FROM runs WHERE id = ? AND status = 'cancelled'")
-                .bind(&run_id)
-                .fetch_optional(pool)
-                .await
-                .ok()
-                .flatten();
-        if cancelled_during_staging.is_some() {
+        let cancelled_during_staging = if let Some(b) = &backend {
+            b.is_run_cancelled(&run_id).await.unwrap_or(false)
+        } else if let Some(p) = pool {
+            sqlx::query_scalar::<_, String>(
+                "SELECT status FROM runs WHERE id = ? AND status = 'cancelled'",
+            )
+            .bind(&run_id)
+            .fetch_optional(p)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        } else {
+            false
+        };
+        if cancelled_during_staging {
             tracing::info!("remote run {run_id} was cancelled during staging — not launching");
             unregister_remote(&run_id);
             return;
@@ -326,13 +353,21 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
         );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let cancelled: Option<String> =
-                sqlx::query_scalar("SELECT status FROM runs WHERE id = ? AND status = 'cancelled'")
-                    .bind(&run_id)
-                    .fetch_one(pool)
-                    .await
-                    .ok();
-            if cancelled.is_some() {
+            let is_cancelled = if let Some(b) = &backend {
+                b.is_run_cancelled(&run_id).await.unwrap_or(false)
+            } else if let Some(p) = pool {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT status FROM runs WHERE id = ? AND status = 'cancelled'",
+                )
+                .bind(&run_id)
+                .fetch_one(p)
+                .await
+                .ok()
+                .is_some()
+            } else {
+                false
+            };
+            if is_cancelled {
                 // The wrapper is live on the login node by now — a bare
                 // unregister would orphan it (audit #659). Kill it first;
                 // best-effort: the run row is already terminal either way.
@@ -398,23 +433,49 @@ async fn mark_failed(run_id: &str, message: &str) {
     if let Some((user, threads, memory_mb)) = crate::infra::quota::release(run_id) {
         crate::infra::quota::global_quota_tracker().record_complete(&user, threads, memory_mb);
     }
-    let Some(pool) = db::try_pool() else {
-        tracing::error!("SQLite pool unavailable — cannot persist remote-run failure for {run_id}");
-        return;
-    };
     let end = chrono::Utc::now();
-    let _ = sqlx::query(
-        "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
-    )
-    .bind(end)
-    .bind(run_id)
-    .execute(pool)
-    .await;
-    let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+    let end_str = end.to_rfc3339();
+    let mut updated = false;
+    if let Some(backend) = crate::infra::db::global_backend() {
+        if let Err(e) = backend
+            .record_run_terminal(run_id, "failed", "failed", &end_str)
+            .await
+        {
+            tracing::error!("Failed to record remote run failure for {run_id}: {e}");
+        } else {
+            updated = true;
+        }
+    } else if let Some(pool) = db::try_pool() {
+        let _ = sqlx::query(
+            "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
+        )
+        .bind(end)
         .bind(run_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        .execute(pool)
+        .await;
+        updated = true;
+    }
+    if !updated {
+        tracing::error!(
+            "Storage backend unavailable — cannot persist remote-run failure for {run_id}"
+        );
+    }
+    let user_id: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .get_run(run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.user_id)
+    } else if let Some(pool) = db::try_pool() {
+        sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
     // Remote failure is a terminal path that bypasses finalize_run — the
     // quota reservation was released above before the pool guard.
     broadcast_event_for(

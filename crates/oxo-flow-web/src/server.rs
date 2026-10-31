@@ -504,7 +504,9 @@ pub fn build_router(mode: &str) -> Router {
         req: axum::extract::Request,
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, (StatusCode, axum::Json<ApiError>)> {
-        match runs_gate_verdict(crate::infra::db::sqlite::try_pool().is_ok()) {
+        let backend_ready = crate::infra::db::global_backend().is_some()
+            || crate::infra::db::sqlite::try_pool().is_ok();
+        match runs_gate_verdict(backend_ready) {
             Ok(()) => Ok(next.run(req).await),
             Err(response) => Err(response),
         }

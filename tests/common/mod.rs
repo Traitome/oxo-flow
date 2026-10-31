@@ -75,6 +75,7 @@ fn spawn_web_server_once(
         .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
         .env("OXO_FLOW_HOST", "127.0.0.1")
         .env("OXO_FLOW_PORT", port.to_string())
+        .env("RUST_LOG", "info")
         .env(
             "OXO_FLOW_FRONTEND_DIR",
             dir.join("missing-frontend").to_str().unwrap(),

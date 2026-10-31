@@ -582,9 +582,9 @@ pub async fn get_run_file(
     headers: axum::http::HeaderMap,
 ) -> Response {
     let user = resolve(authenticated.as_ref());
-    let pool = match crate::infra::db::sqlite::try_pool() {
-        Ok(p) => p,
-        Err(_) => {
+    let backend = match crate::infra::db::global_backend() {
+        Some(b) => b,
+        None => {
             return err(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "DB_ERROR",
@@ -593,7 +593,7 @@ pub async fn get_run_file(
             .into_response();
         }
     };
-    let run = match super::handlers::load_owned_run(pool, &user, &id).await {
+    let run = match super::handlers::load_owned_run(backend.as_ref(), &user, &id).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };

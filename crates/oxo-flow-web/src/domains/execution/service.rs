@@ -184,27 +184,7 @@ const MEMORY_BOTTLENECK_THRESHOLD_PCT: u64 = 80;
 /// caller, then turned into SQL fragments by [`assemble_run_list_query`] —
 /// the split keeps the pagination/filter semantics unit-testable without
 /// any HTTP or database plumbing.
-#[derive(Debug, Clone, Default)]
-pub struct RunListFilters {
-    /// Restrict results to this user's rows (the handler passes the
-    /// non-admin caller's id; admins pass `None` to see the whole fleet —
-    /// issue #82 P0-4 ownership scoping).
-    pub user_id: Option<String>,
-    /// `status` query parameter, already validated against the whitelist by
-    /// the caller (unrecognized values are ignored, never 400).
-    pub status: Option<String>,
-    /// `q` search term — matched against `workflow_name` and run `id`.
-    pub q: Option<String>,
-    /// Cursor = `created_at` of the last row of the previous page. A page
-    /// bound, NOT a filter: it applies to the row SELECT but never the
-    /// COUNT (audit #665).
-    pub cursor: Option<String>,
-    /// Row cap, clamped by the caller to 1..=500 (default 100). Consumed by
-    /// the CALLER — it formats the SELECT's `LIMIT` and fetches `limit + 1`
-    /// to detect a next page; the assembled WHERE fragments stay cap-agnostic.
-    #[allow(dead_code)]
-    pub limit: i64,
-}
+pub type RunListFilters = crate::infra::db::models::RunFilters;
 
 /// SQL fragments for one run-listing page: the row SELECT (filters + cursor)
 /// and the filter-only COUNT (audit #665), each with its ordered binds.

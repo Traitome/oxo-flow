@@ -124,6 +124,7 @@ impl TestServer {
             .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
             .env("OXO_FLOW_HOST", "127.0.0.1")
             .env("OXO_FLOW_PORT", port.to_string())
+            .env("RUST_LOG", "info")
             // No SPA assets in tests — API routes only.
             .env(
                 "OXO_FLOW_FRONTEND_DIR",

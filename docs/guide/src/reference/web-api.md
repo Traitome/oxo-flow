@@ -348,7 +348,7 @@ file on disk defines the version.
 
 ### Create Run
 
-> **PostgreSQL deployments**: every `/api/runs*` endpoint returns `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}` — run execution requires a SQLite-backed server. Library/AI/auth domains remain available.
+> **Database Backends**: `/api/runs*` endpoints are supported across both SQLite and PostgreSQL backends via the unified `StorageBackend` persistence layer. If the storage backend is uninitialized, the endpoint returns `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}`.
 
 ```
 POST /api/runs

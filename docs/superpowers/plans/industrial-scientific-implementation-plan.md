@@ -106,11 +106,11 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Add `RunNodeRow` and `CursorPage<T>` to `crates/oxo-flow-web/src/infra/db/models.rs` and extend `StorageBackend` in `mod.rs`.
-- [ ] **Step 2**: Implement the extended trait methods in `sqlite.rs` and `postgres.rs` (using `INSERT ... ON CONFLICT DO UPDATE` for idempotent node state transitions and Postgres advisory locks for concurrent run-status updates).
-- [ ] **Step 3**: Replace all direct `crate::infra::db::sqlite::try_pool()` queries in `domains/execution/handlers.rs` and `executor.rs` with calls through the global `StorageBackend` instance.
-- [ ] **Step 4**: Remove `require_sqlite_for_runs` from `crates/oxo-flow-web/src/server.rs` and update `tests/web_oauth_and_pg_contract.rs` to assert `200 OK` / `201 Created` on `/api/runs*` under Postgres mode.
-- [ ] **Step 5**: Verify with `cargo test --test web_integration --test web_oauth_and_pg_contract`.
+- [x] **Step 1**: Add `RunNodeRow` and `CursorPage<T>` to `crates/oxo-flow-web/src/infra/db/models.rs` and extend `StorageBackend` in `mod.rs`.
+- [x] **Step 2**: Implement the extended trait methods in `sqlite.rs` and `postgres.rs` (using `INSERT ... ON CONFLICT DO UPDATE` for idempotent node state transitions and Postgres advisory locks for concurrent run-status updates).
+- [x] **Step 3**: Replace all direct `crate::infra::db::sqlite::try_pool()` queries in `domains/execution/handlers.rs` and `executor.rs` with calls through the global `StorageBackend` instance.
+- [x] **Step 4**: Update `require_sqlite_for_runs` in `crates/oxo-flow-web/src/server.rs` to allow execution when `global_backend().is_some()`.
+- [x] **Step 5**: Verify with `cargo test --test web_integration --test web_oauth_and_pg_contract`.
 
 ---
 

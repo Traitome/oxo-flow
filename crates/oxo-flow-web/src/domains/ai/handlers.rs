@@ -220,9 +220,13 @@ pub async fn explain(
     // Try to look up run diagnostics from DB. Ownership is enforced exactly
     // like the execution handlers (#515): foreign and unknown runs both 404
     // — the run's execution log must not be readable through the AI surface.
-    let (diagnostics, log_output) = if let Ok(pool) = get_pool() {
-        let run =
-            crate::domains::execution::handlers::load_owned_run(pool, &user, &req.run_id).await?;
+    let (diagnostics, log_output) = if let Some(backend) = crate::infra::db::global_backend() {
+        let run = crate::domains::execution::handlers::load_owned_run(
+            backend.as_ref(),
+            &user,
+            &req.run_id,
+        )
+        .await?;
 
         // Node status comes from the engine's checkpoint state. The
         // checkpoint/log reads are synchronous file I/O — run the
@@ -309,9 +313,13 @@ pub async fn interpret(
     // Try to get output summary from run. Ownership is enforced exactly
     // like the execution handlers (#515): foreign and unknown runs both 404
     // — the workdir file listing must not be readable through the AI surface.
-    let output_summary = if let Ok(pool) = get_pool() {
-        let run =
-            crate::domains::execution::handlers::load_owned_run(pool, &user, &req.run_id).await?;
+    let output_summary = if let Some(backend) = crate::infra::db::global_backend() {
+        let run = crate::domains::execution::handlers::load_owned_run(
+            backend.as_ref(),
+            &user,
+            &req.run_id,
+        )
+        .await?;
 
         run.workdir
             .as_ref()

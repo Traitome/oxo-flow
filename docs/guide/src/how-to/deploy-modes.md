@@ -46,7 +46,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | SQLite-backed servers only — with PostgreSQL the whole `/api/runs*` surface answers `503 RUNS_REQUIRE_SQLITE`; library/AI/auth keep working |
+| Run execution | Supported on both SQLite and PostgreSQL via the unified `StorageBackend` trait |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -160,10 +160,9 @@ Two constraints apply:
   `cargo build --features postgres` (or the equivalent in your own
   image). On a build without the feature, a `postgres://` `DATABASE_URL`
   aborts startup with a clear error instead of silently falling back.
-- **Run-execution boundary**: with PostgreSQL, run execution and its
-  lifecycle bookkeeping stay SQLite-only — every `/api/runs*` request
-  answers `503 RUNS_REQUIRE_SQLITE`. Library/AI/auth domains keep
-  working (see [web-system-architecture](../reference/web-system-architecture.md)).
+- **Run-execution persistence**: run execution and its lifecycle
+  bookkeeping are decoupled across the `StorageBackend` trait,
+  persisting state into either SQLite or PostgreSQL seamlessly.
 
 ## Startup Verification
 

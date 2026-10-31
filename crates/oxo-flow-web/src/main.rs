@@ -57,11 +57,12 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        .add_directive("oxo_flow_web=info".parse().unwrap_or_default());
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
         .init();
 
     // Platform config file (oxo-flow.web.toml / OXO_FLOW_CONFIG) supplies

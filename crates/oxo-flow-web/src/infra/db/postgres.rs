@@ -35,7 +35,8 @@ pub async fn init_pool(database_url: &str) {
         .init()
         .await
         .expect("Failed to initialize PostgreSQL database");
-    let _ = PG_POOL.set(backend.pool);
+    let _ = PG_POOL.set(backend.pool.clone());
+    super::set_global_backend(std::sync::Arc::new(backend));
 }
 
 /// Try to obtain a reference to the global PostgreSQL pool.
@@ -58,6 +59,11 @@ impl PostgresBackend {
             .await
             .map_err(|e| format!("Failed to connect to PostgreSQL: {e}"))?;
         Ok(Self { pool })
+    }
+
+    /// Construct a `PostgresBackend` from an existing connection pool.
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     fn now() -> String {
@@ -121,6 +127,16 @@ impl StorageBackend for PostgresBackend {
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_nodes (
+                run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                rule_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                started_at TEXT,
+                finished_at TEXT,
+                PRIMARY KEY (run_id, rule_name)
             );
 
             
@@ -541,6 +557,65 @@ impl StorageBackend for PostgresBackend {
         })
     }
 
+    async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = $1 WHERE id = $2 AND status = 'queued'",
+        )
+        .bind(started_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET pid = $1 WHERE id = $2")
+            .bind(pid)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn is_run_cancelled(&self, id: &str) -> Result<bool, String> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM runs WHERE id = $1 AND status = 'cancelled'")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(count.0 > 0)
+    }
+
+    async fn record_run_terminal(
+        &self,
+        id: &str,
+        status: &str,
+        phase: &str,
+        finished_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET status = $1, phase = $2, finished_at = $3 WHERE id = $4")
+            .bind(status)
+            .bind(phase)
+            .bind(finished_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT pid FROM runs WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.and_then(|r| r.0))
+    }
+
     async fn cancel_run(&self, id: &str) -> Result<(), String> {
         let now = Self::now();
         sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = $1 WHERE id = $2")
@@ -550,6 +625,143 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn list_runs_cursor(
+        &self,
+        filters: &models::RunFilters,
+    ) -> Result<models::CursorPage<models::RunRow>, String> {
+        let mut where_clauses: Vec<String> = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+        let mut param_idx = 1;
+
+        if let Some(user_id) = &filters.user_id {
+            where_clauses.push(format!("user_id = ${param_idx}"));
+            binds.push(user_id.clone());
+            param_idx += 1;
+        }
+        if let Some(status) = &filters.status
+            && matches!(
+                status.as_str(),
+                "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
+            )
+        {
+            where_clauses.push(format!("status = ${param_idx}"));
+            binds.push(status.clone());
+            param_idx += 1;
+        }
+        if let Some(q) = &filters.q {
+            let trimmed = q.trim();
+            if !trimmed.is_empty() {
+                where_clauses.push(format!(
+                    "(workflow_name LIKE ${} OR id LIKE ${})",
+                    param_idx,
+                    param_idx + 1
+                ));
+                let pattern = format!("%{trimmed}%");
+                binds.push(pattern.clone());
+                binds.push(pattern);
+                param_idx += 2;
+            }
+        }
+
+        let filter_where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_clauses.join(" AND "))
+        };
+        let filter_binds = binds.clone();
+
+        if let Some(cursor) = &filters.cursor {
+            where_clauses.push(format!("created_at < ${param_idx}"));
+            binds.push(cursor.clone());
+        }
+
+        let page_where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_clauses.join(" AND "))
+        };
+
+        let limit = filters.limit.clamp(1, 500);
+        let sql = format!(
+            "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
+            page_where_sql,
+            limit + 1
+        );
+        let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
+        for bind in &binds {
+            query = query.bind(bind);
+        }
+        let rows: Vec<models::RunRow> = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let has_more = rows.len() as i64 > limit;
+        let items = if has_more {
+            rows[..limit as usize].to_vec()
+        } else {
+            rows
+        };
+        let next_cursor = if has_more {
+            items.last().map(|r| r.created_at.clone())
+        } else {
+            None
+        };
+
+        let count_sql = format!("SELECT COUNT(*) FROM runs{}", filter_where_sql);
+        let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
+        for bind in &filter_binds {
+            count_query = count_query.bind(bind);
+        }
+        let total: i64 = count_query.fetch_one(&self.pool).await.unwrap_or(0);
+
+        Ok(models::CursorPage {
+            items,
+            next_cursor,
+            total: total as u64,
+        })
+    }
+
+    async fn upsert_run_node(&self, node: &models::RunNodeRow) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO run_nodes (run_id, rule_name, status, exit_code, started_at, finished_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (run_id, rule_name) DO UPDATE SET \
+                status = EXCLUDED.status, \
+                exit_code = EXCLUDED.exit_code, \
+                started_at = COALESCE(EXCLUDED.started_at, run_nodes.started_at), \
+                finished_at = EXCLUDED.finished_at",
+        )
+        .bind(&node.run_id)
+        .bind(&node.rule_name)
+        .bind(&node.status)
+        .bind(node.exit_code)
+        .bind(&node.started_at)
+        .bind(&node.finished_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn list_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String> {
+        sqlx::query_as::<_, models::RunNodeRow>(
+            "SELECT * FROM run_nodes WHERE run_id = $1 ORDER BY rule_name",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_cluster(&self, id: &str) -> Result<Option<models::ClusterRow>, String> {
+        sqlx::query_as::<_, models::ClusterRow>("SELECT * FROM clusters WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn create_session(

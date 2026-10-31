@@ -31,6 +31,7 @@ pub async fn init_pool(database_url: &str) {
             Ok(backend) => match backend.init().await {
                 Ok(()) => {
                     let _ = DB_POOL.set(backend.pool.clone());
+                    super::set_global_backend(std::sync::Arc::new(backend));
                     return;
                 }
                 Err(e) => last_err = e,
@@ -90,6 +91,11 @@ impl SqliteBackend {
     /// Return a reference to the inner pool.
     pub fn inner_pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// Construct a `SqliteBackend` from an existing connection pool.
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     fn now() -> String {
@@ -216,6 +222,16 @@ impl StorageBackend for SqliteBackend {
                 FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS run_nodes (
+                run_id TEXT NOT NULL,
+                rule_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                started_at TEXT,
+                finished_at TEXT,
+                PRIMARY KEY (run_id, rule_name),
+                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
 
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
@@ -816,6 +832,65 @@ impl StorageBackend for SqliteBackend {
         })
     }
 
+    async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(started_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
+            .bind(pid)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn is_run_cancelled(&self, id: &str) -> Result<bool, String> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(count.0 > 0)
+    }
+
+    async fn record_run_terminal(
+        &self,
+        id: &str,
+        status: &str,
+        phase: &str,
+        finished_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(phase)
+            .bind(finished_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT pid FROM runs WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.and_then(|r| r.0))
+    }
+
     async fn cancel_run(&self, id: &str) -> Result<(), String> {
         let now = Self::now();
         sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
@@ -825,6 +900,135 @@ impl StorageBackend for SqliteBackend {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn list_runs_cursor(
+        &self,
+        filters: &models::RunFilters,
+    ) -> Result<models::CursorPage<models::RunRow>, String> {
+        let mut where_clauses: Vec<String> = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(user_id) = &filters.user_id {
+            where_clauses.push("user_id = ?".to_string());
+            binds.push(user_id.clone());
+        }
+        if let Some(status) = &filters.status
+            && matches!(
+                status.as_str(),
+                "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
+            )
+        {
+            where_clauses.push("status = ?".to_string());
+            binds.push(status.clone());
+        }
+        if let Some(q) = &filters.q {
+            let trimmed = q.trim();
+            if !trimmed.is_empty() {
+                where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
+                let pattern = format!("%{trimmed}%");
+                binds.push(pattern.clone());
+                binds.push(pattern);
+            }
+        }
+
+        let filter_where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_clauses.join(" AND "))
+        };
+        let filter_binds = binds.clone();
+
+        if let Some(cursor) = &filters.cursor {
+            where_clauses.push("created_at < ?".to_string());
+            binds.push(cursor.clone());
+        }
+
+        let page_where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_clauses.join(" AND "))
+        };
+
+        let limit = filters.limit.clamp(1, 500);
+        let sql = format!(
+            "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
+            page_where_sql,
+            limit + 1
+        );
+        let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
+        for bind in &binds {
+            query = query.bind(bind);
+        }
+        let rows: Vec<models::RunRow> = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let has_more = rows.len() as i64 > limit;
+        let items = if has_more {
+            rows[..limit as usize].to_vec()
+        } else {
+            rows
+        };
+        let next_cursor = if has_more {
+            items.last().map(|r| r.created_at.clone())
+        } else {
+            None
+        };
+
+        let count_sql = format!("SELECT COUNT(*) FROM runs{}", filter_where_sql);
+        let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
+        for bind in &filter_binds {
+            count_query = count_query.bind(bind);
+        }
+        let total: i64 = count_query.fetch_one(&self.pool).await.unwrap_or(0);
+
+        Ok(models::CursorPage {
+            items,
+            next_cursor,
+            total: total as u64,
+        })
+    }
+
+    async fn upsert_run_node(&self, node: &models::RunNodeRow) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO run_nodes (run_id, rule_name, status, exit_code, started_at, finished_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(run_id, rule_name) DO UPDATE SET \
+                status = excluded.status, \
+                exit_code = excluded.exit_code, \
+                started_at = COALESCE(excluded.started_at, run_nodes.started_at), \
+                finished_at = excluded.finished_at",
+        )
+        .bind(&node.run_id)
+        .bind(&node.rule_name)
+        .bind(&node.status)
+        .bind(node.exit_code)
+        .bind(&node.started_at)
+        .bind(&node.finished_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn list_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String> {
+        sqlx::query_as::<_, models::RunNodeRow>(
+            "SELECT * FROM run_nodes WHERE run_id = ? ORDER BY rule_name",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_cluster(&self, id: &str) -> Result<Option<models::ClusterRow>, String> {
+        sqlx::query_as::<_, models::ClusterRow>("SELECT * FROM clusters WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     // -----------------------------------------------------------------------
@@ -1666,5 +1870,83 @@ mod tests {
         let p = pool();
         let row: (i64,) = sqlx::query_as("SELECT 1").fetch_one(p).await.unwrap();
         assert_eq!(row.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_nodes_and_cursor_pagination() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("memory backend");
+        backend.init().await.expect("init");
+
+        let user = backend
+            .create_user("alice", "user")
+            .await
+            .expect("user create");
+
+        let run = models::RunRow {
+            id: "run-nodes-test".into(),
+            user_id: user.id.clone(),
+            pipeline_id: None,
+            pipeline_snapshot: "[workflow]\nname = \"test\"".into(),
+            workflow_name: Some("test".into()),
+            status: "running".into(),
+            phase: "executing".into(),
+            dry_run: false,
+            pid: Some(12345),
+            workdir: Some("/tmp/test".into()),
+            config_overrides: None,
+            started_at: Some("timestamp-start".into()),
+            finished_at: None,
+            created_at: "timestamp-created-1".into(),
+        };
+        backend.create_run(&run).await.expect("create run");
+
+        let node = models::RunNodeRow {
+            run_id: run.id.clone(),
+            rule_name: "fastp_trim".into(),
+            status: "running".into(),
+            exit_code: None,
+            started_at: Some("timestamp-node-start".into()),
+            finished_at: None,
+        };
+        backend.upsert_run_node(&node).await.expect("upsert node");
+
+        let nodes = backend.list_run_nodes(&run.id).await.expect("list nodes");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].rule_name, "fastp_trim");
+        assert_eq!(nodes[0].status, "running");
+
+        let updated_node = models::RunNodeRow {
+            run_id: run.id.clone(),
+            rule_name: "fastp_trim".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            started_at: None,
+            finished_at: Some("timestamp-node-end".into()),
+        };
+        backend
+            .upsert_run_node(&updated_node)
+            .await
+            .expect("update node");
+
+        let nodes = backend.list_run_nodes(&run.id).await.expect("list nodes");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].status, "completed");
+        assert_eq!(nodes[0].exit_code, Some(0));
+        assert_eq!(nodes[0].started_at, Some("timestamp-node-start".into()));
+        assert_eq!(nodes[0].finished_at, Some("timestamp-node-end".into()));
+
+        let filters = models::RunFilters {
+            user_id: Some(user.id.clone()),
+            status: Some("running".into()),
+            q: None,
+            cursor: None,
+            limit: 10,
+        };
+        let page = backend.list_runs_cursor(&filters).await.expect("page");
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "run-nodes-test");
     }
 }

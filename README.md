@@ -357,9 +357,9 @@ binary read the `DATABASE_URL` environment variable — a `postgres://` URL
 the library/AI/auth domains; the default (`sqlite://oxo-flow.db` in the
 working directory) stays SQLite. Note that the published Docker image is
 built WITHOUT the `postgres` feature — rebuild with
-`cargo build --features postgres` to enable it. Run execution stays
-SQLite-only either way: on a PostgreSQL server every `/api/runs*` endpoint
-answers `503 RUNS_REQUIRE_SQLITE`.
+`cargo build --features postgres` to enable it. Run execution and lifecycle
+bookkeeping operate through the unified `StorageBackend` trait,
+supporting both SQLite and PostgreSQL backends.
 
 ## Documentation
 

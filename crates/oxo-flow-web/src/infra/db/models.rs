@@ -50,6 +50,32 @@ pub struct RunRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunFilters {
+    pub user_id: Option<String>,
+    pub status: Option<String>,
+    pub q: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RunNodeRow {
+    pub run_id: String,
+    pub rule_name: String,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SessionRow {
     pub token: String,
