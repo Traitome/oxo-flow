@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose, Sparkles, Shield, FileSpreadsheet, AlignLeft, X, Upload } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, describeApiError } from '../api/client';
-import type { DagJson, KnowledgeTool } from '../api/types';
+import type { DagJson, KnowledgeTool, SamplesheetParseResponse, UploadedFileEntry, VerifyDataResponse } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ToolPalette from '../components/ToolPalette';
 import RuleInspector from '../components/RuleInspector';
-import RunDialog from '../components/RunDialog';
+import RunDialog, { type RunOptions } from '../components/RunDialog';
 import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
@@ -43,6 +43,299 @@ interface InspectorState {
 }
 
 type LeftTab = 'assistant' | 'palette' | 'history';
+
+interface EngineFormState {
+  minFreeDisk: string;
+  reclaimFreeDisk: string;
+  tmpDir: string;
+  protectedTrees: string;
+}
+
+// Escape a value for safe interpolation into a TOML basic string ("...").
+function escapeTomlBasicString(value: string): string {
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    const code = value.charCodeAt(i);
+    if (ch === '\\') out += '\\\\';
+    else if (ch === '"') out += '\\"';
+    else if (code === 0x08) out += '\\b';
+    else if (ch === '\t') out += '\\t';
+    else if (ch === '\n') out += '\\n';
+    else if (code === 0x0c) out += '\\f';
+    else if (ch === '\r') out += '\\r';
+    else if (code < 0x20 || code === 0x7f) out += `\\u${code.toString(16).padStart(4, '0')}`;
+    else out += ch;
+  }
+  return out;
+}
+
+function hasControlOrNewline(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x0a || code === 0x0d || (code < 0x20 && code !== 0x09) || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+interface TomlSectionSpan {
+  name: string;
+  isArrayTable: boolean;
+  headerLineStart: number;
+  bodyStart: number;
+  end: number;
+}
+
+// Lexically scan TOML top-level section headers (`[table]` and `[[array]]`),
+// ignoring anything inside basic/literal single- or multi-line strings,
+// `#` comments, or multi-line inline arrays/tables.
+function scanTomlTopLevelSections(toml: string): TomlSectionSpan[] {
+  const sections: TomlSectionSpan[] = [];
+  let inMultiBasic = false;
+  let inMultiLiteral = false;
+  let bracketDepth = 0;
+
+  let lineStart = 0;
+  while (lineStart <= toml.length) {
+    const nlIdx = toml.indexOf('\n', lineStart);
+    const lineEnd = nlIdx === -1 ? toml.length : nlIdx;
+    const rawLine = toml.slice(lineStart, lineEnd);
+
+    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
+      const arrayMatch = rawLine.match(/^[ \t]*\[\[([A-Za-z0-9_.-]+)\]\][ \t]*(?:#.*)?\r?$/);
+      const tableMatch = !arrayMatch ? rawLine.match(/^[ \t]*\[([A-Za-z0-9_.-]+)\][ \t]*(?:#.*)?\r?$/) : null;
+      if (arrayMatch || tableMatch) {
+        if (sections.length > 0) {
+          sections[sections.length - 1].end = lineStart;
+        }
+        sections.push({
+          name: (arrayMatch ?? tableMatch)![1],
+          isArrayTable: Boolean(arrayMatch),
+          headerLineStart: lineStart,
+          bodyStart: nlIdx === -1 ? toml.length : nlIdx + 1,
+          end: toml.length,
+        });
+        if (nlIdx === -1) break;
+        lineStart = nlIdx + 1;
+        continue;
+      }
+    }
+
+    let i = 0;
+    let inBasic = false;
+    let inLiteral = false;
+    while (i < rawLine.length) {
+      const ch = rawLine[i];
+      if (inMultiBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (rawLine.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
+        i++;
+      } else if (inMultiLiteral) {
+        if (rawLine.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
+        i++;
+      } else if (inBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '"') inBasic = false;
+        i++;
+      } else if (inLiteral) {
+        if (ch === "'") inLiteral = false;
+        i++;
+      } else {
+        if (ch === '#') break;
+        if (rawLine.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
+        if (rawLine.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
+        if (ch === '"') { inBasic = true; i++; continue; }
+        if (ch === "'") { inLiteral = true; i++; continue; }
+        if (ch === '[' || ch === '{') bracketDepth++;
+        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
+        i++;
+      }
+    }
+
+    if (nlIdx === -1) break;
+    lineStart = nlIdx + 1;
+  }
+
+  return sections;
+}
+
+function insertBeforeFirstRuleSection(toml: string, snippet: string): string {
+  const sections = scanTomlTopLevelSections(toml);
+  const firstRule = sections.find((s) => s.isArrayTable && s.name === 'rules');
+  if (!firstRule) {
+    return `${toml.trimEnd()}\n\n${snippet}\n`;
+  }
+  const before = toml.slice(0, firstRule.headerLineStart).trimEnd();
+  const after = toml.slice(firstRule.headerLineStart);
+  return before ? `${before}\n\n${snippet}\n\n${after}` : `${snippet}\n\n${after}`;
+}
+
+function splitSectionStatements(body: string): string[] {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  const statements: string[] = [];
+  let current: string[] = [];
+  let inMultiBasic = false;
+  let inMultiLiteral = false;
+  let bracketDepth = 0;
+
+  for (const line of lines) {
+    current.push(line);
+    let i = 0;
+    let inBasic = false;
+    let inLiteral = false;
+    while (i < line.length) {
+      const ch = line[i];
+      if (inMultiBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (line.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
+        i++;
+      } else if (inMultiLiteral) {
+        if (line.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
+        i++;
+      } else if (inBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '"') inBasic = false;
+        i++;
+      } else if (inLiteral) {
+        if (ch === "'") inLiteral = false;
+        i++;
+      } else {
+        if (ch === '#') break;
+        if (line.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
+        if (line.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
+        if (ch === '"') { inBasic = true; i++; continue; }
+        if (ch === "'") { inLiteral = true; i++; continue; }
+        if (ch === '[' || ch === '{') bracketDepth++;
+        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
+        i++;
+      }
+    }
+    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
+      statements.push(current.join('\n'));
+      current = [];
+    }
+  }
+  if (current.length > 0) statements.push(current.join('\n'));
+  return statements;
+}
+
+function unescapeTomlBasicString(raw: string): string {
+  return raw.replace(/\\(["\\btnfr])/g, (_, ch: string) => {
+    switch (ch) {
+      case '"': return '"';
+      case '\\': return '\\';
+      case 'b': return '\b';
+      case 't': return '\t';
+      case 'n': return '\n';
+      case 'f': return '\f';
+      case 'r': return '\r';
+      default: return ch;
+    }
+  });
+}
+
+function readEngineFormFromToml(toml: string): EngineFormState {
+  const sections = scanTomlTopLevelSections(toml);
+  const engineSec = sections.find((s) => !s.isArrayTable && s.name === 'engine');
+  if (!engineSec) {
+    return { minFreeDisk: '20G', reclaimFreeDisk: '50G', tmpDir: '', protectedTrees: '' };
+  }
+  const body = toml.slice(engineSec.bodyStart, engineSec.end);
+  const stmts = splitSectionStatements(body);
+  let minFreeDisk = '';
+  let reclaimFreeDisk = '';
+  let tmpDir = '';
+  let protectedTrees = '';
+  for (const stmt of stmts) {
+    const m = stmt.match(/^[ \t]*(min_free_disk|reclaim_free_disk|tmp_dir|protected_data_trees)[ \t]*=[ \t]*([\s\S]*)$/);
+    if (!m) continue;
+    const key = m[1];
+    const rhs = m[2].trim();
+    if (key === 'protected_data_trees') {
+      const items: string[] = [];
+      const strRe = /"((?:\\.|[^"\\])*)"/g;
+      let sm: RegExpExecArray | null;
+      while ((sm = strRe.exec(rhs)) !== null) {
+        items.push(unescapeTomlBasicString(sm[1]));
+      }
+      protectedTrees = items.join(', ');
+    } else {
+      const sm = rhs.match(/^"((?:\\.|[^"\\])*)"/);
+      const val = sm ? unescapeTomlBasicString(sm[1]) : '';
+      if (key === 'min_free_disk') minFreeDisk = val;
+      else if (key === 'reclaim_free_disk') reclaimFreeDisk = val;
+      else if (key === 'tmp_dir') tmpDir = val;
+    }
+  }
+  return { minFreeDisk, reclaimFreeDisk, tmpDir, protectedTrees };
+}
+
+function mergeEngineSettingsIntoToml(toml: string, form: EngineFormState): { nextToml: string; engineBlock: string } {
+  const trees = form.protectedTrees.split(',').map((s) => s.trim()).filter(Boolean);
+  const managedOrder = ['min_free_disk', 'reclaim_free_disk', 'tmp_dir', 'protected_data_trees'] as const;
+  const managedValues: Record<(typeof managedOrder)[number], string | null> = {
+    min_free_disk: form.minFreeDisk.trim() ? `"${escapeTomlBasicString(form.minFreeDisk.trim())}"` : null,
+    reclaim_free_disk: form.reclaimFreeDisk.trim() ? `"${escapeTomlBasicString(form.reclaimFreeDisk.trim())}"` : null,
+    tmp_dir: form.tmpDir.trim() ? `"${escapeTomlBasicString(form.tmpDir.trim())}"` : null,
+    protected_data_trees: trees.length > 0 ? `[${trees.map((p) => `"${escapeTomlBasicString(p)}"`).join(', ')}]` : null,
+  };
+
+  const sections = scanTomlTopLevelSections(toml);
+  const engineSec = sections.find((s) => !s.isArrayTable && s.name === 'engine');
+  if (!engineSec) {
+    const lines: string[] = ['[engine]'];
+    for (const key of managedOrder) {
+      if (managedValues[key] !== null) {
+        lines.push(`${key} = ${managedValues[key]}`);
+      }
+    }
+    const engineBlock = lines.join('\n');
+    return {
+      nextToml: insertBeforeFirstRuleSection(toml, engineBlock),
+      engineBlock,
+    };
+  }
+
+  const body = toml.slice(engineSec.bodyStart, engineSec.end);
+  const stmts = splitSectionStatements(body);
+  const handled = new Set<string>();
+  const outStmts: string[] = [];
+
+  for (const stmt of stmts) {
+    const m = stmt.match(/^[ \t]*(min_free_disk|reclaim_free_disk|tmp_dir|protected_data_trees)[ \t]*=/);
+    if (m) {
+      const key = m[1] as (typeof managedOrder)[number];
+      if (!handled.has(key) && managedValues[key] !== null) {
+        outStmts.push(`${key} = ${managedValues[key]}`);
+      }
+      handled.add(key);
+    } else {
+      outStmts.push(stmt);
+    }
+  }
+
+  while (outStmts.length > 0 && outStmts[outStmts.length - 1].trim() === '') {
+    outStmts.pop();
+  }
+
+  for (const key of managedOrder) {
+    if (!handled.has(key) && managedValues[key] !== null) {
+      outStmts.push(`${key} = ${managedValues[key]}`);
+    }
+  }
+
+  const headerLine = toml.slice(engineSec.headerLineStart, engineSec.bodyStart).trimEnd();
+  const engineBlock = [headerLine, ...outStmts].join('\n');
+  const hasFollowingSection = engineSec.end < toml.length;
+  const newBody = outStmts.length > 0
+    ? `${outStmts.join('\n')}${hasFollowingSection ? '\n\n' : '\n'}`
+    : hasFollowingSection ? '\n' : '';
+  const nextToml = `${toml.slice(0, engineSec.bodyStart)}${newBody}${toml.slice(engineSec.end)}`;
+  return { nextToml, engineBlock };
+}
 
 export default function PipelineEditor() {
   const session = usePipelineSession();
@@ -92,6 +385,32 @@ export default function PipelineEditor() {
   const [revisions, setRevisions] = useState<Array<{ id: string; version: string; actor: string; created_at: string }> | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [showDataModal, setShowDataModal] = useState(() => searchParams.get('modal') === 'data');
+  const [showEngineModal, setShowEngineModal] = useState(() => searchParams.get('modal') === 'engine');
+  const [dataTab, setDataTab] = useState<'sheet' | 'upload' | 'verify'>('sheet');
+  const [sheetText, setSheetText] = useState('sample,fastq_r1,fastq_r2\nS1,data/S1_R1.fq.gz,data/S1_R2.fq.gz\nS2,data/S2_R1.fq.gz,data/S2_R2.fq.gz');
+  const [sheetParsed, setSheetParsed] = useState<SamplesheetParseResponse | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFileEntry[]>([]);
+  const [verifyTree, setVerifyTree] = useState('inputs');
+  const [verifyMd5, setVerifyMd5] = useState('');
+  const [verifyRes, setVerifyRes] = useState<VerifyDataResponse | null>(null);
+  const [engineForm, setEngineForm] = useState<EngineFormState>(() => readEngineFormFromToml(toml));
+  const fileUploadRef = useRef<HTMLInputElement>(null);
+
+  // React to `?modal=data|engine` changes even when PipelineEditor is already mounted.
+  const modalParam = searchParams.get('modal');
+  const [lastModalParam, setLastModalParam] = useState(modalParam);
+  if (lastModalParam !== modalParam) {
+    setLastModalParam(modalParam);
+    if (modalParam === 'data') {
+      setShowDataModal(true);
+      setShowEngineModal(false);
+    } else if (modalParam === 'engine') {
+      setEngineForm(readEngineFormFromToml(toml));
+      setShowEngineModal(true);
+      setShowDataModal(false);
+    }
+  }
 
   // Load a template or a saved pipeline when navigated with
   // ?template=<id> / ?pipeline=<id> (dashboard quick-start, My Pipelines).
@@ -169,7 +488,7 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
+  const handleRun = async (dryRun = false, options: RunOptions = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
       // Issue #79 P1-12: runs launched from an opened saved pipeline must
@@ -185,6 +504,9 @@ export default function PipelineEditor() {
         targets: options.targets,
         pipeline_id: pipelineId,
         cluster_id: options.clusterId,
+        provenance: options.provenance,
+        allow_protected_drift: options.allowProtectedDrift,
+        config_overrides: options.configOverrides?.length ? options.configOverrides : undefined,
       });
       session.setRunResult({
         runId: res.run_id,
@@ -396,6 +718,55 @@ export default function PipelineEditor() {
     }
   };
 
+  const handleFormat = async () => {
+    try {
+      const res = await api.format(toml);
+      setToml(res.formatted);
+      session.setRunResult({ message: t('editor.formatted'), type: 'success' });
+    } catch (err: unknown) {
+      const msg = describeApiError(err, 'Format failed');
+      session.setRunResult({ message: msg, type: 'error' });
+    }
+  };
+
+  const handleLint = async () => {
+    try {
+      const res = await api.lint(toml);
+      const issues = [...(res.errors ?? []), ...(res.warnings ?? [])];
+      if (issues.length === 0) {
+        session.setRunResult({ message: t('editor.lintClean'), type: 'success' });
+      } else {
+        setValidation({ valid: res.errors.length === 0, errors: issues });
+        setShowErrors(true);
+        session.setRunResult({
+          message: `Lint found ${issues.length} item(s) — inspect the diagnostics panel`,
+          type: 'info',
+        });
+      }
+    } catch (err: unknown) {
+      const msg = describeApiError(err, 'Lint failed');
+      session.setRunResult({ message: msg, type: 'error' });
+    }
+  };
+
+  const applyEngineSettings = () => {
+    const rawFields = [engineForm.minFreeDisk, engineForm.reclaimFreeDisk, engineForm.tmpDir, engineForm.protectedTrees];
+    if (rawFields.some(hasControlOrNewline)) {
+      session.setRunResult({ message: t('editor.engineGuard.invalidChars'), type: 'error' });
+      return;
+    }
+    const { nextToml } = mergeEngineSettingsIntoToml(toml, engineForm);
+    setToml(nextToml);
+    setShowEngineModal(false);
+    session.setRunResult({ message: t('editor.engineGuard.updated'), type: 'success' });
+  };
+
+  useEffect(() => {
+    if (showDataModal && dataTab === 'upload') {
+      api.listUploadedFiles().then(setUploadedFiles).catch(() => setUploadedFiles([]));
+    }
+  }, [showDataModal, dataTab]);
+
   return (
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -414,6 +785,27 @@ export default function PipelineEditor() {
             title={t('editor.canvasTooltip')}
           >
             {t('editor.canvas')}
+          </button>
+        </div>
+        <div className="row" style={{ marginLeft: 'auto', gap: '6px' }}>
+          <button className="btn-sm" onClick={() => setShowDataModal(true)} title={t('editor.data.title')}>
+            <FileSpreadsheet size={14} /> {t('editor.dataWorkbench')}
+          </button>
+          <button
+            className="btn-sm"
+            onClick={() => {
+              setEngineForm(readEngineFormFromToml(toml));
+              setShowEngineModal(true);
+            }}
+            title={t('editor.engineGuard.title')}
+          >
+            <Shield size={14} /> {t('editor.engineGuard')}
+          </button>
+          <button className="btn-sm" onClick={() => void handleFormat()} title={t('editor.format')}>
+            <AlignLeft size={14} /> {t('editor.format')}
+          </button>
+          <button className="btn-sm" onClick={() => void handleLint()} title={t('editor.lint')}>
+            <Sparkles size={14} /> {t('editor.lint')}
           </button>
         </div>
       </div>
@@ -649,6 +1041,213 @@ export default function PipelineEditor() {
           onSave={handleInspectorSave}
           onClose={() => setInspector(null)}
         />
+      )}
+
+      {showDataModal && (
+        <div className="modal-overlay" onClick={() => setShowDataModal(false)}>
+          <div className="modal-dialog" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t('editor.data.title')}>
+            <div className="inspector-header" style={{ padding: '0 0 10px 0', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>{t('editor.data.title')}</h3>
+              <button className="btn-sm" onClick={() => setShowDataModal(false)} aria-label={t('common.close')}><X size={14} /></button>
+            </div>
+            <div className="pill-bar">
+              <button type="button" className={`pill-chip ${dataTab === 'sheet' ? 'active' : ''}`} onClick={() => setDataTab('sheet')}>{t('editor.data.tabSheet')}</button>
+              <button type="button" className={`pill-chip ${dataTab === 'upload' ? 'active' : ''}`} onClick={() => setDataTab('upload')}>{t('editor.data.tabUpload')}</button>
+              <button type="button" className={`pill-chip ${dataTab === 'verify' ? 'active' : ''}`} onClick={() => setDataTab('verify')}>{t('editor.data.tabVerify')}</button>
+            </div>
+            {dataTab === 'sheet' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <p className="muted">{t('editor.data.sheetHint')}</p>
+                <textarea
+                  className="search-input mono"
+                  rows={5}
+                  value={sheetText}
+                  onChange={(e) => setSheetText(e.target.value)}
+                />
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn-run"
+                    onClick={async () => {
+                      try {
+                        const res = await api.parseSamplesheet(sheetText);
+                        setSheetParsed(res);
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Sample sheet parse failed'), type: 'error' });
+                      }
+                    }}
+                  >
+                    <FileSpreadsheet size={14} /> {t('editor.data.parseBtn')}
+                  </button>
+                  {sheetParsed && sheetParsed.samples.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      onClick={() => {
+                        if (sheetParsed.samples.some((s) => hasControlOrNewline(s.sample ?? ''))) {
+                          session.setRunResult({ message: t('editor.data.invalidSampleName'), type: 'error' });
+                          return;
+                        }
+                        const sampleList = sheetParsed.samples.map((s) => `"${escapeTomlBasicString(s.sample ?? '')}"`).join(', ');
+                        const groupSnippet = `[[sample_groups]]\nname = "cohort"\nsamples = [${sampleList}]`;
+                        const next = insertBeforeFirstRuleSection(toml, groupSnippet);
+                        setToml(next);
+                        setShowDataModal(false);
+                        session.setRunResult({
+                          message: t('editor.data.injected').replace('{{count}}', String(sheetParsed.samples.length)),
+                          type: 'success',
+                        });
+                      }}
+                    >
+                      {t('editor.data.insertConfig')} ({sheetParsed.samples.length})
+                    </button>
+                  )}
+                </div>
+                {sheetParsed && (
+                  <div className="overflow-x" style={{ maxHeight: 180 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr><th>Sample</th><th>R1</th><th>R2</th></tr>
+                      </thead>
+                      <tbody>
+                        {sheetParsed.samples.map((s, idx) => (
+                          <tr key={idx}>
+                            <td className="mono">{s.sample}</td>
+                            <td className="mono">{s.fastq_r1 ?? '-'}</td>
+                            <td className="mono">{s.fastq_r2 ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {dataTab === 'upload' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="row">
+                  <button type="button" className="btn-run" onClick={() => fileUploadRef.current?.click()}>
+                    <Upload size={14} /> {t('editor.data.uploadBtn')}
+                  </button>
+                  <input
+                    ref={fileUploadRef}
+                    type="file"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      if (!e.target.files?.length) return;
+                      try {
+                        await api.uploadFiles(e.target.files);
+                        const list = await api.listUploadedFiles();
+                        setUploadedFiles(list);
+                        session.setRunResult({ message: t('editor.data.uploaded'), type: 'success' });
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Upload failed'), type: 'error' });
+                      }
+                    }}
+                  />
+                </div>
+                {uploadedFiles.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '1.5rem 0' }}>{t('editor.data.noUploads')}</div>
+                ) : (
+                  <div className="overflow-x" style={{ maxHeight: 200 }}>
+                    <table className="data-table">
+                      <thead><tr><th>Path</th><th>Size</th></tr></thead>
+                      <tbody>
+                        {uploadedFiles.map((f) => (
+                          <tr key={f.path}>
+                            <td className="mono">{f.path}</td>
+                            <td>{(f.size_bytes / 1024).toFixed(1)} KB</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {dataTab === 'verify' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <label className="inspector-field">
+                  <span>{t('editor.data.verifyTree')}</span>
+                  <input className="mono" value={verifyTree} onChange={(e) => setVerifyTree(e.target.value)} placeholder="inputs" />
+                </label>
+                <label className="inspector-field">
+                  <span>{t('editor.data.verifyMd5')}</span>
+                  <textarea className="search-input mono" rows={4} value={verifyMd5} onChange={(e) => setVerifyMd5(e.target.value)} placeholder="d41d8cd98f00b204e9800998ecf8427e  sample_R1.fastq.gz" />
+                </label>
+                <div>
+                  <button
+                    type="button"
+                    className="btn-run"
+                    disabled={!verifyTree.trim() || !verifyMd5.trim()}
+                    onClick={async () => {
+                      try {
+                        const r = await api.verifyData(verifyTree.trim(), verifyMd5);
+                        setVerifyRes(r);
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Data verification failed'), type: 'error' });
+                      }
+                    }}
+                  >
+                    <CheckCircle size={14} /> {t('editor.data.verifyBtn')}
+                  </button>
+                </div>
+                {verifyRes && (
+                  <div className="dash-card" style={{ padding: '0.75rem' }}>
+                    <div className="row" style={{ gap: '0.75rem' }}>
+                      <span className="status-badge success">{t('editor.data.matched')}: {verifyRes.matched}</span>
+                      <span className={`status-badge ${verifyRes.mismatched > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.mismatched')}: {verifyRes.mismatched}</span>
+                      <span className={`status-badge ${verifyRes.missing > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.missing')}: {verifyRes.missing}</span>
+                      <span className="status-badge">{t('editor.data.extra')}: {verifyRes.extra}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showEngineModal && (
+        <div className="modal-overlay" onClick={() => setShowEngineModal(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t('editor.engineGuard.title')}>
+            <div className="inspector-header" style={{ padding: '0 0 10px 0', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>{t('editor.engineGuard.title')}</h3>
+              <button className="btn-sm" onClick={() => setShowEngineModal(false)} aria-label={t('common.close')}><X size={14} /></button>
+            </div>
+            <div className="inspector-body" style={{ padding: 0 }}>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.minFreeDisk')}</span>
+                <input className="mono" value={engineForm.minFreeDisk} onChange={(e) => setEngineForm({ ...engineForm, minFreeDisk: e.target.value })} placeholder="20G" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.reclaimFreeDisk')}</span>
+                <input className="mono" value={engineForm.reclaimFreeDisk} onChange={(e) => setEngineForm({ ...engineForm, reclaimFreeDisk: e.target.value })} placeholder="50G" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.tmpDir')}</span>
+                <input className="mono" value={engineForm.tmpDir} onChange={(e) => setEngineForm({ ...engineForm, tmpDir: e.target.value })} placeholder="/scratch/tmp" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.protectedTrees')}</span>
+                <input className="mono" value={engineForm.protectedTrees} onChange={(e) => setEngineForm({ ...engineForm, protectedTrees: e.target.value })} placeholder="raw_data, references" />
+              </label>
+              <div className="inspector-field" style={{ marginTop: 6 }}>
+                <span>{t('editor.engineGuard.preview')}</span>
+                <pre className="code-block mono" style={{ margin: 0, maxHeight: 140, overflow: 'auto' }}>
+                  {mergeEngineSettingsIntoToml(toml, engineForm).engineBlock}
+                </pre>
+              </div>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 14 }}>
+              <button type="button" className="btn-sm" onClick={() => setShowEngineModal(false)}>{t('run.cancel')}</button>
+              <button type="button" className="btn-run" onClick={applyEngineSettings}>
+                <Shield size={14} /> {t('editor.engineGuard.apply')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, Menu, X,
-  MessageCircle, Users, ShieldCheck, Server, Sun, Moon, PanelLeftClose, PanelLeftOpen,
+  MessageCircle, Users, ShieldCheck, Server, Sun, Moon, PanelLeftClose, PanelLeftOpen, Search,
 } from 'lucide-react';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -100,6 +100,9 @@ export default function Layout() {
   // Drawer = <1024px overlay navigation; separate from the desktop
   // collapse so a narrow window never flips the user's desktop choice.
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [cmdQuery, setCmdQuery] = useState('');
+  const navigate = useNavigate();
   const version = useServerVersion();
   const { t, lang, setLang } = useI18n();
   const STATUS_TITLES = useStatusTitles(t);
@@ -182,7 +185,28 @@ export default function Layout() {
   if (lastRoute !== location.pathname) {
     setLastRoute(location.pathname);
     setDrawerOpen(false);
+    setCmdOpen(false);
   }
+
+  // Cmd+K / Ctrl+K opens the global Command Palette (skipped while typing
+  // when closed so editable surfaces keep their native chords).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const target = e.target as HTMLElement | null;
+        if (!cmdOpen && target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+        setCmdQuery('');
+      } else if (e.key === 'Escape' && cmdOpen) {
+        setCmdOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cmdOpen]);
 
   // Escape closes the drawer (restoring focus to its trigger) or, when no
   // drawer is open, dismisses icon-rail tooltips until the pointer or
@@ -309,6 +333,19 @@ export default function Layout() {
           />
           <span className="header-brand">oxo-flow</span>
         </div>
+        <div className="header-center">
+          <button
+            type="button"
+            className="cmd-trigger"
+            onClick={() => { setCmdOpen(true); setCmdQuery(''); }}
+            title={t('cmd.button')}
+            aria-label={t('cmd.button')}
+          >
+            <Search size={13} />
+            <span>{t('cmd.button')}</span>
+            <kbd className="cmd-kbd">⌘K</kbd>
+          </button>
+        </div>
         <div className="header-right">
           <button className="btn-sm" onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
             title={lang === 'en' ? '切换到中文' : 'Switch to English'}>
@@ -412,6 +449,76 @@ export default function Layout() {
         <LicenseFooterLabel />
         <span>{t('footer.contact')}: w_shixiang@163.com</span>
       </footer>
+
+      {cmdOpen && (
+        <div className="modal-overlay" onClick={() => setCmdOpen(false)}>
+          <div
+            className="cmd-palette-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('cmd.button')}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key !== 'Tab') return;
+              const focusables = e.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled])');
+              if (focusables.length === 0) return;
+              const first = focusables[0];
+              const last = focusables[focusables.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }}
+          >
+            <div className="cmd-palette-head">
+              <Search size={16} color="var(--color-primary)" />
+              <input
+                autoFocus
+                value={cmdQuery}
+                onChange={(e) => setCmdQuery(e.target.value)}
+                placeholder={t('cmd.placeholder')}
+              />
+              <button className="icon-btn" onClick={() => setCmdOpen(false)} aria-label={t('common.close')}>
+                <X size={14} />
+              </button>
+            </div>
+            <div className="cmd-palette-list">
+              {visibleSections.flatMap((s) =>
+                s.items.map((it) => ({ ...it, section: t(s.key), label: t(it.key) })),
+              )
+                .filter(
+                  (it) =>
+                    !cmdQuery.trim() ||
+                    it.label.toLowerCase().includes(cmdQuery.toLowerCase()) ||
+                    it.to.toLowerCase().includes(cmdQuery.toLowerCase()),
+                )
+                .map((it) => {
+                  const Icon = it.icon;
+                  return (
+                    <button
+                      key={it.to}
+                      type="button"
+                      className="cmd-palette-item"
+                      onClick={() => {
+                        setCmdOpen(false);
+                        navigate(it.to);
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                        <Icon size={15} />
+                        <span>{it.label}</span>
+                      </span>
+                      <span className="muted mono">{it.section} · {it.to}</span>
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
