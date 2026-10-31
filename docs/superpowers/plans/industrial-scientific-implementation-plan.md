@@ -302,13 +302,13 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Extend `ReentryRecord` and `Manifest` in `crates/oxo-flow-core/src/reentry.rs` with `values: BTreeMap<String, Vec<String>>` so a `checkpoint = true` rule can dynamically populate any declared `[[values]]` axis (e.g., `contig`, `cluster_id`, `chunk`) while preserving `MAX_REENTRY_ROUNDS` and deterministic resume replay.
-- [ ] **Step 2**: Expand `crates/oxo-flow-core/src/scientific_preflight.rs` to cover 50+ curated checks across:
+- [x] **Step 1**: Extend `ReentryRecord` and `Manifest` in `crates/oxo-flow-core/src/reentry.rs` with `values: BTreeMap<String, Vec<String>>` so a `checkpoint = true` rule can dynamically populate any declared `[[values]]` axis (e.g., `contig`, `cluster_id`, `chunk`) while preserving `MAX_REENTRY_ROUNDS` and deterministic resume replay.
+- [x] **Step 2**: Expand `crates/oxo-flow-core/src/scientific_preflight.rs` to cover 50+ curated checks across:
   - **Germline & Somatic Variant Calling**: `SCI-VQSR-COHORT`, `SCI-BQSR-NO-KNOWN-SITES`, `SCI-MUTECT2-TUMOR-ONLY`, `SCI-MUTECT2-NO-PON`, `SCI-GVCF-MISSING-ERC`, `SCI-STRELKA-UNINDEXED-BED`.
   - **Bulk & Single-Cell RNA-seq**: `SCI-FEATURECOUNTS-STRAND`, `SCI-STAR-SJDB-OVERHANG`, `SCI-SALMON-LIBTYPE`, `SCI-DESEQ2-MIN-REPLICATES`, `SCI-CELLRANGER-INTRONS`.
   - **Epigenomics & Metagenomics**: `SCI-MACS2-GENOME-SIZE`, `SCI-BISMARK-NON-DIRECTIONAL`, `SCI-KRAKEN2-CONFIDENCE`.
   - **DAG Concurrency & Dataflow**: `SCI-AGG-RACE`, `SCI-SORT-THREADS-MEM-PRODUCT`.
-- [ ] **Step 3**: For every `SCI-*` rule, add positive and negative unit tests in `scientific_preflight.rs` and document its biological rationale and literature citation in `docs/guide/src/`.
+- [x] **Step 3**: For every `SCI-*` rule, add positive and negative unit tests in `scientific_preflight.rs` and document its biological rationale and literature citation in `docs/guide/src/`.
 
 ---
 
@@ -327,10 +327,10 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Define the Metropolis semantic color and typography tokens across biological modalities (Genomics, Transcriptomics, Epigenomics, Metagenomics) in `tokens.rs` and mirror them into `theme.css`.
-- [ ] **Step 2**: Implement the Metro transit line layout algorithm in `MetroCanvas.tsx` using `@xyflow/react` and `d3-dag`, bundling parallel sample tracks into color-coded transit corridors with station interchange glyphs.
-- [ ] **Step 3**: Implement dynamic semantic zoom: collapse rules by `Process` or `Module` at low zoom; expand to full rule instance parameters and live telemetry meters at high zoom.
-- [ ] **Step 4**: Verify 60fps canvas performance and benchmark rendering of a 5,000-node cohort DAG with $<100\text{ ms}$ layout time and zero frame drops.
+- [x] **Step 1**: Define the Metropolis semantic color and typography tokens across biological modalities (Genomics, Transcriptomics, Epigenomics, Metagenomics) in `tokens.rs` and mirror them into `theme.css`.
+- [x] **Step 2**: Implement the Metro transit line layout algorithm in `MetroCanvas.tsx` using `@xyflow/react` and `d3-dag`, bundling parallel sample tracks into color-coded transit corridors with station interchange glyphs.
+- [x] **Step 3**: Implement dynamic semantic zoom: collapse rules by `Process` or `Module` at low zoom; expand to full rule instance parameters and live telemetry meters at high zoom.
+- [x] **Step 4**: Verify 60fps canvas performance and benchmark rendering of a 5,000-node cohort DAG with $<100\text{ ms}$ layout time and zero frame drops.
 
 ---
 
