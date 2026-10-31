@@ -3202,6 +3202,7 @@ mod tests {
             group: None,
             samples: vec!["S2".into()],
             pairs: vec![],
+            values: Default::default(),
         });
         ck.record_reentry(crate::reentry::ReentryRecord {
             round: 2,
@@ -3209,6 +3210,7 @@ mod tests {
             group: None,
             samples: vec!["S2".into(), "S3".into()],
             pairs: vec![],
+            values: Default::default(),
         });
         // Same rule → superseded, not appended.
         assert_eq!(ck.reentries.len(), 1);

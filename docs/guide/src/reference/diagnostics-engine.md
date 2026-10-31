@@ -168,3 +168,94 @@ Every new pattern must ship with two test rows in the module's tests
   not dead — the test fails if a pattern has no row, or a row no pattern),
 - and, when near-miss words exist, a benign line in `BENIGN_LOG_LINES`
   that mentions the vocabulary without being a real error.
+
+## Scientific Preflight & Biological Contract Catalog
+
+While runtime diagnostics analyze failed executions, the **Scientific Preflight Engine** (`crates/oxo-flow-core/src/scientific_preflight.rs`) and **Biological Semantic Subtyping System** (`crates/oxo-flow-core/src/types/`) inspect workflow DAGs *prior to execution*. They catch scientifically unsound configurations (e.g. training VQSR on single samples, unstranded quantification on stranded libraries, or uncompressed tabix inputs) before compute resources are wasted.
+
+### Biological Subtyping Violations (`TYPE-*`)
+
+The biological type system verifies formal format and coordination contracts across DAG edges.
+
+| Diagnostic Code | Category | Biological Violation | Automated Coercion / Remediation |
+|-----------------|----------|----------------------|-----------------------------------|
+| `TYPE-001` | Format | Data format incompatibility across producer and consumer channels (e.g. SAM passed into BAM consumer) | Synthesizes conversion rules (e.g. `samtools view -b`) |
+| `TYPE-002` | Sort Order | Sort order conflict (e.g. queryname-sorted BAM piped into coordinate-indexed consumer) | Inserts sort step (`samtools sort`) |
+| `TYPE-003` | Index | Missing companion index artifact (e.g. BAM without `.bai`, VCF without `.tbi`) | Generates indexer rule (`samtools index`, `tabix -p vcf`) |
+| `TYPE-004` | Assembly | Reference build conflict (e.g. GRCh38 BAM consumed by GRCh37 variant caller) | Re-aligns or re-indexes with matching reference genome |
+| `TYPE-005` | Metadata | Missing read group `@RG` metadata fields required by downstream tools | Injects read group tags (`bwa mem -R '@RG...'`) |
+| `TYPE-006` | Compression | Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required) | Re-compresses stream (`bgzip`) |
+
+### Curated Scientific Preflight Catalog (`SCI-*`)
+
+Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.
+
+#### 1. Germline & Somatic Variant Calling
+
+- `SCI-VQSR-COHORT`: VariantRecalibrator runs on fewer than 30 samples; GATK recommends minimum ~30 samples for WGS/WES to train Gaussian mixture models. Use hard filtering (`VariantFiltration`) for small cohorts.
+- `SCI-BQSR-NO-KNOWN-SITES`: BaseRecalibrator invoked without `--known-sites` resources (e.g. dbSNP, Mills); recalibration cannot model true variation without baseline polymorphic sites.
+- `SCI-MUTECT2-TUMOR-ONLY`: Mutect2 executed without matched normal sample; somatic calls depend strictly on population allele frequencies and miss private germline variants and mapping artifacts.
+- `SCI-MUTECT2-NO-PON`: Mutect2 in tumor-only mode missing Panel of Normals (`--panel-of-normals`); recurrent sequencing artifacts will be called as somatic mutations.
+- `SCI-MUTECT2-NO-GERMLINE`: Mutect2 in tumor-only mode missing `--germline-resource`; population allele frequency priors cannot be applied to filter common germline leakage.
+- `SCI-HAPLOTYPECALLER-GVCF-ERC`: HaplotypeCaller producing a `.g.vcf` path without `-ERC GVCF` or `--emit-ref-confidence GVCF`; emits flat VCF without reference confidence blocks.
+- `SCI-GENOTYPEGVCFS-NO-NEW-QUAL`: GenotypeGVCFs invoked without explicit quality scoring flags; legacy Phred calculations inflate variant scores in large cohorts.
+- `SCI-DEEPVARIANT-MODEL-TYPE`: DeepVariant executed without `--model_type`; CNN weights must match sequencing chemistry (`WGS`, `WES`, `PACBIO`, `ONT`).
+- `SCI-MANTA-NO-CONFIG`: Manta structural variant caller configured without reference genome FASTA specification.
+- `SCI-STRELKA-NO-MANTA`: Somatic Strelka execution omitting `--indelCandidates` from upstream Manta; small somatic indel sensitivity is substantially reduced.
+- `SCI-STRELKA-TARGETS-UNCOMPRESSED`: Strelka target region BED is uncompressed; Strelka requires bgzip-compressed and tabix-indexed target regions (`.bed.gz`).
+- `SCI-VEP-OFFLINE-CACHE`: Ensembl VEP running without local `--cache` or `--offline` flags; live REST queries break offline reproducibility and throttle batch jobs.
+
+#### 2. Alignment & Coordinate Sorting
+
+- `SCI-BWA-MEM-NO-RG`: `bwa mem` alignment lacks read group specification (`-R`); missing `@RG` headers prevent downstream GATK/Picard processing.
+- `SCI-BOWTIE2-NO-RG`: `bowtie2` alignment lacks read group specification (`--rg-id` / `--rg`).
+- `SCI-MINIMAP2-PRESET`: `minimap2` invoked without technology preset (`-x`); default parameters degrade alignment accuracy on PacBio, ONT, or short reads.
+- `SCI-SAMTOOLS-SORT-MEM-OVERFLOW`: `samtools sort -m` per-thread memory multiplied by thread count exceeds rule allocated memory; leads to kernel OOM kills.
+- `SCI-SAMTOOLS-INDEX-UNSORTED`: `samtools index` applied to SAM or unsorted BAM; requires coordinate-sorted BAM/CRAM.
+- `SCI-MARKDUPLICATES-REMOVE-DUPS`: Picard/GATK `MarkDuplicates` configured with `REMOVE_DUPLICATES=true`; permanently discards reads needed for discordant pair and split-read CNV/SV analyses.
+- `SCI-HISAT2-NO-SPLICE-SITES`: `hisat2` RNA-seq alignment executed without `--known-splicesite-infile`; reduces junction discovery sensitivity across annotated exons.
+- `SCI-FASTP-DEDUPLICATION`: `fastp` PCR deduplication enabled without UMI barcodes on RNA-seq; removes real biological read depth for highly expressed transcripts.
+
+#### 3. Bulk & Single-Cell RNA-seq
+
+- `SCI-FEATURECOUNTS-STRAND`: `featureCounts` executed without explicit strandness flag (`-s`); defaults to unstranded (`-s 0`), miscounting stranded libraries.
+- `SCI-FEATURECOUNTS-MULTI-OVERLAP`: `featureCounts` runs with `-O` (multi-overlapping); causes duplicate assignments for overlapping genes on opposite strands.
+- `SCI-STAR-SJDB-OVERHANG`: `STAR` index generation with annotation omits `--sjdbOverhang`; default 100 degrades junction mapping for 150bp or 75bp reads.
+- `SCI-STAR-GENOME-LOAD`: `STAR` uses `--genomeLoad LoadAndKeep` in shared batch clusters; shared memory segments risk node memory exhaustion and eviction.
+- `SCI-SALMON-LIBTYPE`: `salmon quant` uses automatic library type detection (`-l A`); can select inconsistent strandedness models on shallow-coverage libraries.
+- `SCI-SALMON-NO-GC-BIAS`: `salmon quant` executed without `--gcBias` correction on Illumina reads; fails to correct for sequence-specific coverage bias.
+- `SCI-KALLISTO-SINGLE-END-FRAG`: `kallisto quant --single` executed without mean fragment length (`-l`) or standard deviation (`-s`).
+- `SCI-RSEM-NO-STRAND`: `rsem-calculate-expression` lacks explicit `--strand-specific` setting.
+- `SCI-STRINGTIE-NO-GUIDE`: `stringtie` novel assembly running without reference guide (`-G`); leads to fragmented transcript models.
+- `SCI-DESEQ2-MIN-REPLICATES`: Differential expression analysis configured with fewer than 3 biological replicates; insufficient degrees of freedom for negative binomial dispersion estimation.
+- `SCI-CELLRANGER-INTRONS`: `cellranger count` on single-nucleus RNA-seq (snRNA-seq) lacks `--include-introns`; pre-mRNA intronic reads account for up to 50% of nuclear signal.
+- `SCI-SEURAT-NO-NORMALIZATION`: Single-cell clustering or dimensionality reduction executed on raw counts without prior `NormalizeData` or `SCTransform`.
+
+#### 4. Epigenomics, ChIP-seq & ATAC-seq
+
+- `SCI-MACS2-GENOME-SIZE`: `macs2 callpeak` missing explicit effective genome size (`-g`); default human (`hs`) invalidates peak p-values and FDR on other organisms.
+- `SCI-MACS2-BROAD-PEAKS`: `macs2 callpeak` targeting broad marks (H3K27me3, H3K9me3) without `--broad`; fragments diffuse enrichment into artificial narrow peaks.
+- `SCI-MACS2-PAIRED-END-FORMAT`: `macs2 callpeak` on paired-end data specifying `-f BAM` instead of `-f BAMPE`; discards exact paired fragment length modeling.
+- `SCI-CHIP-NO-CONTROL`: `macs2 callpeak` running without matched input control (`-c`); causes elevated false-positive peak calling due to chromatin accessibility biases.
+- `SCI-ATAC-SHIFT-COORDINATES`: ATAC-seq peak calling executed on unshifted BAMs; reads must be shifted (+4 bp on +, -5 bp on - strand) to center on Tn5 cut sites.
+- `SCI-BISMARK-NON-DIRECTIONAL`: `bismark` alignment on non-directional bisulfite library (PBAT) lacks `--non_directional`; discards over 50% of sequencing reads.
+- `SCI-BOWTIE-BISULFITE-MISMATCH`: Bisulfite alignment uses default strict mismatch scoring; bisulfite conversion artifacts require relaxed mismatch tolerance.
+- `SCI-BEDTOOLS-GENOME-FILE`: `bedtools slop`/`flank` executed without chromosome length definitions (`-g`).
+
+#### 5. Metagenomics & Microbiome
+
+- `SCI-KRAKEN2-CONFIDENCE`: `kraken2` runs with default confidence threshold of 0.0; shared k-mers cause high false-positive genus and species classifications.
+- `SCI-BRACKEN-READ-LEN`: `bracken` abundance re-estimation lacks read length parameter (`-r`) matching the database distribution.
+- `SCI-QIIME2-DENOISE-TRIM`: QIIME2 DADA2 denoising configured without 3' quality truncation (`--p-trunc-len 0`); degraded read ends inflate error models and spurious ASVs.
+- `SCI-HUMANN-NUCLEOTIDE-DB`: `humann` metabolic profiling executed without explicit ChocoPhlAn database path (`--nucleotide-database`).
+- `SCI-METAPHLAN-UNKNOWN-ESTIMATION`: `metaphlan` with `--unknown_estimation` lacks explicit marker database index (`--bowtie2db`).
+- `SCI-CHECKM-NO-LINEAGE`: `checkm lineage_wf` missing genome FASTA extension flag (`-x`).
+
+#### 6. Workflow Concurrency, Hardware & Dataflow
+
+- `SCI-AGG-RACE`: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other.
+- `SCI-SORT-THREADS-MEM-PRODUCT`: Thread count multiplied by per-thread memory buffer exceeds rule resource budget.
+- `SCI-TMPDIR-NOT-SCRATCH`: Heavy I/O tools write intermediate files to system `/tmp` instead of engine-managed scratch space (`${TMPDIR}`).
+- `SCI-PIPE-FAIL-DISABLED`: Multi-stage shell pipelines (`cmd1 | cmd2 | cmd3`) lack `set -o pipefail`; upstream tool crashes are silently masked.
+- `SCI-ZERO-BYTE-COMPLETION`: Rule masks failures by creating empty binary outputs (`|| touch {output}`), causing downstream tools to crash on corrupt streams.
+- `SCI-MULTI-TENANT-PORT-COLLISION`: Interactive server rules specify hardcoded server ports (e.g. `--port 8888`), causing collision failures on multi-tenant nodes.

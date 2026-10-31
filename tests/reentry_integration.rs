@@ -305,16 +305,20 @@ fn backend_driver_executes_reentry_rounds() {
                             message: format!("{rule_name}: {e}"),
                         }
                     })?;
-                    let (group, samples, pairs) = oxo_flow_core::reentry::parse_manifest(&content)?;
-                    if samples.is_empty() && pairs.is_empty() {
+                    let manifest_obj = oxo_flow_core::reentry::parse_manifest(&content)?;
+                    if manifest_obj.samples.is_empty()
+                        && manifest_obj.pairs.is_empty()
+                        && manifest_obj.values.is_empty()
+                    {
                         return Ok(Vec::new());
                     }
                     let mut cfg = config.lock().unwrap();
-                    oxo_flow_core::reentry::apply_reentry(
+                    oxo_flow_core::reentry::apply_reentry_ext(
                         &mut cfg,
-                        group.as_deref(),
-                        &samples,
-                        &pairs,
+                        manifest_obj.group.as_deref(),
+                        &manifest_obj.samples,
+                        &manifest_obj.pairs,
+                        &manifest_obj.values,
                     )
                 })),
                 merge: Some(Box::new(

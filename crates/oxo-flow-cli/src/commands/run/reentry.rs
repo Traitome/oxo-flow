@@ -38,13 +38,18 @@ pub(crate) async fn process_reentry(
             full.display()
         )
     })?;
-    let (group, samples, pairs) = oxo_flow_core::reentry::parse_manifest(&content)
+    let manifest = oxo_flow_core::reentry::parse_manifest(&content)
         .map_err(|e| anyhow::anyhow!("checkpoint rule '{}': {e}", rule.name))?;
-    if samples.is_empty() && pairs.is_empty() {
+    if manifest.samples.is_empty() && manifest.pairs.is_empty() && manifest.values.is_empty() {
         return Ok(()); // empty manifest = valid no-op
     }
-    let new_names =
-        oxo_flow_core::reentry::apply_reentry(config, group.as_deref(), &samples, &pairs)?;
+    let new_names = oxo_flow_core::reentry::apply_reentry_ext(
+        config,
+        manifest.group.as_deref(),
+        &manifest.samples,
+        &manifest.pairs,
+        &manifest.values,
+    )?;
     if new_names.is_empty() {
         return Ok(()); // everything already present
     }
@@ -61,9 +66,10 @@ pub(crate) async fn process_reentry(
         ck.record_reentry(oxo_flow_core::reentry::ReentryRecord {
             round,
             rule: rule.name.clone(),
-            group,
-            samples,
-            pairs,
+            group: manifest.group,
+            samples: manifest.samples,
+            pairs: manifest.pairs,
+            values: manifest.values,
         });
         round
     };

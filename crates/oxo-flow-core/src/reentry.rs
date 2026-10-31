@@ -8,7 +8,7 @@
 use crate::config::{ExperimentControlPair, SampleGroup, WorkflowConfig};
 use crate::error::{OxoFlowError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Hard cap on re-entry rounds: a checkpoint rule that keeps discovering new
 /// values past this point is a workflow bug, not an engine feature.
@@ -31,6 +31,9 @@ pub struct ReentryRecord {
     /// workflow's pair list (issue #80 item 3).
     #[serde(default)]
     pub pairs: Vec<ExperimentControlPair>,
+    /// Dynamic values axes appended to the workflow (e.g. contigs, cluster_ids).
+    #[serde(default)]
+    pub values: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +49,8 @@ struct ReentryTable {
     sample: Vec<String>,
     #[serde(default)]
     pairs: Vec<PairEntry>,
+    #[serde(default)]
+    values: BTreeMap<String, Vec<String>>,
 }
 
 /// Manifest mirror of [`ExperimentControlPair`] with the same aliases.
@@ -62,10 +67,17 @@ struct PairEntry {
     metadata: std::collections::HashMap<String, String>,
 }
 
-/// Parse a checkpoint re-entry manifest: `(group, samples, pairs)`.
-pub fn parse_manifest(
-    content: &str,
-) -> Result<(Option<String>, Vec<String>, Vec<ExperimentControlPair>)> {
+/// A fully parsed re-entry manifest declaring newly discovered samples, pairs, and arbitrary [[values]] axes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReentryManifest {
+    pub group: Option<String>,
+    pub samples: Vec<String>,
+    pub pairs: Vec<ExperimentControlPair>,
+    pub values: BTreeMap<String, Vec<String>>,
+}
+
+/// Parse a checkpoint re-entry manifest into a structured [`ReentryManifest`].
+pub fn parse_manifest(content: &str) -> Result<ReentryManifest> {
     let m: Manifest = toml::from_str(content).map_err(|e| OxoFlowError::Config {
         message: format!("invalid re-entry manifest: {e}"),
     })?;
@@ -99,7 +111,75 @@ pub fn parse_manifest(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((m.reentry.group, m.reentry.sample, pairs))
+    Ok(ReentryManifest {
+        group: m.reentry.group,
+        samples: m.reentry.sample,
+        pairs,
+        values: m.reentry.values,
+    })
+}
+
+/// Merge dynamic values into the workflow configuration (dedup).
+fn merge_values(config: &mut WorkflowConfig, values_map: &BTreeMap<String, Vec<String>>) -> usize {
+    let mut added_count = 0;
+    for (name, new_vals) in values_map {
+        if new_vals.is_empty() {
+            continue;
+        }
+        if let Some(existing) = config.values.iter_mut().find(|v| &v.name == name) {
+            for v in new_vals {
+                if !existing.values.contains(v) {
+                    existing.values.push(v.clone());
+                    added_count += 1;
+                }
+            }
+        } else {
+            added_count += new_vals.len();
+            config.values.push(crate::config::ValueGroup {
+                name: name.clone(),
+                values: new_vals.clone(),
+                values_from: None,
+            });
+        }
+    }
+    added_count
+}
+
+/// Extended re-entry merge supporting dynamic `[[values]]` axes in addition to samples and pairs.
+pub fn apply_reentry_ext(
+    config: &mut WorkflowConfig,
+    group: Option<&str>,
+    samples: &[String],
+    pairs: &[ExperimentControlPair],
+    values: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<String>> {
+    let prev: HashSet<String> = config.rules.iter().map(|r| r.name.clone()).collect();
+    let group_name = resolve_group_name(config, group)?;
+    let mut staged = config.clone();
+    let added_samples = merge_samples(&mut staged, &group_name, samples);
+    let added_pairs = merge_pairs(&mut staged, pairs)?;
+    let added_values = merge_values(&mut staged, values);
+    if added_samples.is_empty() && added_pairs.is_empty() && added_values == 0 {
+        return Ok(Vec::new());
+    }
+    reexpand_from_templates(&mut staged).map_err(|e| match e {
+        // expand_wildcards already rejects duplicate instance names; add the
+        // re-entry context so a colliding pair_id points at its discoverer.
+        OxoFlowError::DuplicateRule { name } => OxoFlowError::DuplicateRule {
+            name: format!(
+                "{name} (E016: a re-entry pair_id or values combination collides with existing instance names)"
+            ),
+        },
+        other => other,
+    })?;
+    let created = staged
+        .rules
+        .iter()
+        .map(|r| r.name.clone())
+        .filter(|n| !prev.contains(n))
+        .collect();
+    *config = staged;
+    Ok(created)
 }
 
 /// Merge new samples into the target group and new pairs into the pair
@@ -118,32 +198,7 @@ pub fn apply_reentry(
     samples: &[String],
     pairs: &[ExperimentControlPair],
 ) -> Result<Vec<String>> {
-    let prev: HashSet<String> = config.rules.iter().map(|r| r.name.clone()).collect();
-    let group_name = resolve_group_name(config, group)?;
-    let mut staged = config.clone();
-    let added_samples = merge_samples(&mut staged, &group_name, samples);
-    let added_pairs = merge_pairs(&mut staged, pairs)?;
-    if added_samples.is_empty() && added_pairs.is_empty() {
-        return Ok(Vec::new());
-    }
-    reexpand_from_templates(&mut staged).map_err(|e| match e {
-        // expand_wildcards already rejects duplicate instance names; add the
-        // re-entry context so a colliding pair_id points at its discoverer.
-        OxoFlowError::DuplicateRule { name } => OxoFlowError::DuplicateRule {
-            name: format!(
-                "{name} (E016: a re-entry pair_id collides with existing instance names)"
-            ),
-        },
-        other => other,
-    })?;
-    let created = staged
-        .rules
-        .iter()
-        .map(|r| r.name.clone())
-        .filter(|n| !prev.contains(n))
-        .collect();
-    *config = staged;
-    Ok(created)
+    apply_reentry_ext(config, group, samples, pairs, &BTreeMap::new())
 }
 
 /// Replay recorded re-entries whose checkpoint rule still stands, then
@@ -164,6 +219,7 @@ pub fn replay_valid_reentries(
             let group_name = resolve_group_name(&staged, rec.group.as_deref())?;
             merge_samples(&mut staged, &group_name, &rec.samples);
             merge_pairs(&mut staged, &rec.pairs)?;
+            merge_values(&mut staged, &rec.values);
             replayed.push(rec.clone());
         }
     }
@@ -528,6 +584,7 @@ mod tests {
             group: Some("batch".to_string()),
             samples: vec!["S2".to_string()],
             pairs: vec![],
+            values: Default::default(),
         }];
 
         // Revoked: checkpoint rule invalid → no S2 instance.
@@ -546,18 +603,18 @@ mod tests {
 
     #[test]
     fn parse_manifest_shapes() {
-        assert_eq!(
-            parse_manifest("[reentry]\nsample = [\"S4\"]\n").unwrap(),
-            (None, vec!["S4".to_string()], vec![])
-        );
-        assert_eq!(
-            parse_manifest("[reentry]\ngroup = \"g\"\nsample = [\"S4\",\"S5\"]\n").unwrap(),
-            (Some("g".into()), vec!["S4".into(), "S5".into()], vec![])
-        );
-        assert_eq!(
-            parse_manifest("[reentry]\nsample = []\n").unwrap(),
-            (None, Vec::<String>::new(), vec![])
-        );
+        let m1 = parse_manifest("[reentry]\nsample = [\"S4\"]\n").unwrap();
+        assert_eq!(m1.group, None);
+        assert_eq!(m1.samples, vec!["S4".to_string()]);
+        assert!(m1.pairs.is_empty());
+        assert!(m1.values.is_empty());
+
+        let m2 = parse_manifest("[reentry]\ngroup = \"g\"\nsample = [\"S4\",\"S5\"]\n").unwrap();
+        assert_eq!(m2.group.as_deref(), Some("g"));
+        assert_eq!(m2.samples, vec!["S4".to_string(), "S5".to_string()]);
+
+        let m3 = parse_manifest("[reentry]\nsample = []\n").unwrap();
+        assert!(m3.samples.is_empty());
         assert!(parse_manifest("no reentry table").is_err());
         assert!(parse_manifest("[other]\nx = 1\n").is_err());
     }
@@ -566,7 +623,7 @@ mod tests {
 
     #[test]
     fn parse_manifest_reads_pairs_entries() {
-        let (group, samples, pairs) = parse_manifest(
+        let m = parse_manifest(
             r#"[reentry]
 sample = ["S4"]
 pairs = [
@@ -574,15 +631,15 @@ pairs = [
 ]"#,
         )
         .unwrap();
-        assert_eq!(group, None);
-        assert_eq!(samples, vec!["S4".to_string()]);
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].pair_id, "CASE_007");
-        assert_eq!(pairs[0].experiment, "T7");
-        assert_eq!(pairs[0].control.as_deref(), Some("N7"));
-        assert_eq!(pairs[0].experiment_type.as_deref(), Some("tumor"));
+        assert_eq!(m.group, None);
+        assert_eq!(m.samples, vec!["S4".to_string()]);
+        assert_eq!(m.pairs.len(), 1);
+        assert_eq!(m.pairs[0].pair_id, "CASE_007");
+        assert_eq!(m.pairs[0].experiment, "T7");
+        assert_eq!(m.pairs[0].control.as_deref(), Some("N7"));
+        assert_eq!(m.pairs[0].experiment_type.as_deref(), Some("tumor"));
         assert_eq!(
-            pairs[0].metadata.get("assay").map(String::as_str),
+            m.pairs[0].metadata.get("assay").map(String::as_str),
             Some("wes")
         );
     }
@@ -676,6 +733,7 @@ pairs = [
             group: None,
             samples: vec![],
             pairs: vec![pair("CASE_T2", "T2", "N2")],
+            values: Default::default(),
         }];
 
         // Revoked → no new pair instance.
@@ -749,6 +807,7 @@ pairs = [
             group: None,
             samples: vec![],
             pairs: vec![pair("CASE_T2", "T2", "N2")],
+            values: Default::default(),
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: ReentryRecord = serde_json::from_str(&json).unwrap();
@@ -758,6 +817,71 @@ pairs = [
         let legacy = r#"{"round":1,"rule":"discover","group":null,"samples":["S2"]}"#;
         let back: ReentryRecord = serde_json::from_str(legacy).unwrap();
         assert_eq!(back.pairs, vec![]);
+        assert_eq!(back.values, BTreeMap::new());
         assert_eq!(back.samples, vec!["S2".to_string()]);
+    }
+
+    #[test]
+    fn apply_reentry_dynamic_values_expansion() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+            [workflow]
+            name = "reentry-values-test"
+
+            [[values]]
+            name = "contig"
+            values = ["chr1"]
+
+            [[rules]]
+            name = "discover"
+            shell = "echo"
+            output = ["discover.done"]
+            checkpoint = true
+            checkpoint_manifest = "discover.toml"
+
+            [[rules]]
+            name = "call_contig"
+            input = ["discover.done"]
+            output = ["calls/{contig}.vcf"]
+            shell = "echo {contig} > calls/{contig}.vcf"
+        "#;
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        assert_eq!(
+            config
+                .rules
+                .iter()
+                .filter(|r| r.name.starts_with("call_contig"))
+                .count(),
+            1
+        );
+
+        let manifest_content = r#"
+            [reentry.values]
+            contig = ["chr1", "chr2", "chrX"]
+        "#;
+        let manifest = parse_manifest(manifest_content).unwrap();
+        let new_names = apply_reentry_ext(
+            &mut config,
+            None,
+            &manifest.samples,
+            &manifest.pairs,
+            &manifest.values,
+        )
+        .unwrap();
+        assert_eq!(new_names.len(), 2);
+        assert!(new_names.iter().any(|n| n.contains("chr2")));
+        assert!(new_names.iter().any(|n| n.contains("chrX")));
+        assert_eq!(
+            config
+                .rules
+                .iter()
+                .filter(|r| r.name.starts_with("call_contig"))
+                .count(),
+            3
+        );
     }
 }
