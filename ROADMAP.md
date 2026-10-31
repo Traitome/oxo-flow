@@ -471,6 +471,42 @@ framework extensibility, code quality, and documentation.
 
 ---
 
+## Phase 12: v1.0 — Industrial Scale & Nature-Tier Scientific Verification
+
+**Goal**: Transform `oxo-flow` into an enterprise-grade cloud-native engine and establish a new scientific computing paradigm (*Nature Biotechnology* / *Nature Methods* target): **AI-Native, Formally-Verified Scientific Workflows**.
+
+Full research proposal & architectural specification: [`docs/superpowers/specs/industrial-scientific-roadmap.md`](docs/superpowers/specs/industrial-scientific-roadmap.md).
+
+Rigorous task-by-task implementation plan & scientific execution protocol: [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](docs/superpowers/plans/industrial-scientific-implementation-plan.md).
+
+### Stage 12.1: Cloud-Native Core & Decoupled Persistence
+
+- [ ] Unified `StorageBackend` for PostgreSQL-native multi-tenant run execution (resolving issue #207)
+- [ ] Native Kubernetes `ExecutorBackend` (`kube-rs`) and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
+- [ ] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
+- [ ] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
+
+### Stage 12.2: BioTypes Biological Semantic Typing & Verification
+
+- [ ] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
+- [ ] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
+- [ ] Sub-millisecond binary header introspection (BAM/CRAM/VCF/FASTQ) prior to job dispatch
+- [ ] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
+
+### Stage 12.3: Universal Ecosystem Transpiler & Autonomous Self-Healing
+
+- [ ] Deterministic Nextflow DSL2 (`nf-core`) and Snakemake AST transpiler (`oxo-flow import`) with automated `BioTypes` lifting
+- [ ] Four-layer causal fault-isolation graph unifying exit codes, resource telemetry (`BenchmarkRecord`), and header metadata
+- [ ] Bounded, provenance-preserving autonomous self-healing loop (resource scaling, localized bridge rules, branch switching)
+
+### Stage 12.4: Large-Scale Empirical Benchmark & Manuscript Package
+
+- [ ] Multi-hundred-intent synthesis and fault-detection benchmark (`eval/frontier/`) vs. Nextflow & Snakemake
+- [ ] Population-scale multi-omics cohort execution study across HPC and cloud backends
+- [ ] Open reproducible artifact package and manuscript submissions (*Nature Methods* / *Nature Biotechnology*)
+
+---
+
 ## Technology Stack
 
 | Component | Technology |
