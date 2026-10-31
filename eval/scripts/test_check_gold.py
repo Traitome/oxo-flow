@@ -17,9 +17,10 @@ class NegativeNameTests(unittest.TestCase):
         self.assertIn("bwa_mem4", findings[0])
 
     def test_embedded_real_name_in_longer_fake_is_not_a_collision(self):
-        # `fastq_super_cleaner` contains the real tool `fastq`, but the whole
-        # fabricated name must collide to invalidate the item.
-        rows = [{"id": "tool-048", "negative_sample": "1", "query": "what is fastq_super_cleaner"}]
+        # `seq_shampooer` contains the real tool `shampoo`... no wait: the
+        # point is that only a WHOLE fabricated name colliding with a KB
+        # entry invalidates the item; a token inside a longer fake does not.
+        rows = [{"id": "tool-048", "negative_sample": "1", "query": "what is seq_shampooer"}]
         findings, checked = check_gold.check_negative_names(rows, {"fastq"})
         self.assertEqual(findings, [])
         self.assertEqual(checked, 1)
@@ -160,10 +161,10 @@ class ExpectedToolTests(unittest.TestCase):
 
 class NegativeOverlapTests(unittest.TestCase):
     def test_embedded_real_token_is_warned(self):
-        rows = [{"id": "tool-047", "negative_sample": "1", "query": "what does rnaseq_ultra_aligner do"}]
-        warnings = check_gold.check_negative_overlaps(rows, {"ultra", "fastq"})
+        rows = [{"id": "tool-047", "negative_sample": "1", "query": "what does rnaseq_turboprop_aligner do"}]
+        warnings = check_gold.check_negative_overlaps(rows, {"turboprop", "fastq"})
         self.assertEqual(len(warnings), 1)
-        self.assertIn("ultra", warnings[0])
+        self.assertIn("turboprop", warnings[0])
 
     def test_clean_fake_names_do_not_warn(self):
         rows = [{"id": "tool-049", "negative_sample": "1", "query": "what does gene_exploder do"}]

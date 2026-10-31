@@ -280,8 +280,8 @@ def check_workflow_edges(workflow_rows, repo_root, graph_source, fetch_community
 def check_negative_overlaps(tool_rows, kb_norms):
     """Warn when a fabricated name embeds a KB tool name token (>=5 chars).
 
-    tool-047 (`rnaseq_ultra_aligner`) embeds the real `ultra`; the exact-form
-    collision check cannot see it, and a "did you mean ULTRA?" answer is
+    tool-047 (`rnaseq_turboprop_aligner`) embeds the real `prop`; the exact-form
+    collision check cannot see it, and a "did you mean PROP?" answer is
     penalised by design — flag such rows for review attention (not a hard
     failure: the item is still negative, it is just confusable).
     """
