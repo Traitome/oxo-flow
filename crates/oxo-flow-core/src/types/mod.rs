@@ -11,10 +11,17 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 pub mod checker;
+pub mod inspect;
+#[cfg(test)]
+mod inspect_tests;
 #[cfg(test)]
 mod tests;
 
 pub use checker::{TypeDiagnostic, check_workflow_types};
+pub use inspect::{
+    IntrospectError, IntrospectedBioType, introspect_bytes, introspect_file,
+    introspect_path_with_spec,
+};
 
 /// Standard biological file format category.
 #[derive(

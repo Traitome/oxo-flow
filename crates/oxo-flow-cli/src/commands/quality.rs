@@ -574,6 +574,18 @@ fn print_deep_console(report: &oxo_flow_core::deep_check::DeepCheckReport) {
         finding_lines("D004");
     }
 
+    if report.biological_headers_checked > 0 || has("D005") {
+        eprintln!("{}", "  Biological Headers:".bold());
+        if report.biological_headers_checked > 0 && !has("D005") {
+            eprintln!(
+                "    {} {} biological header(s) verified",
+                "✓".green().bold(),
+                report.biological_headers_checked
+            );
+        }
+        finding_lines("D005");
+    }
+
     eprintln!(
         "\n{} {}, {}",
         "Deep check summary:".bold(),

@@ -273,18 +273,20 @@ pub struct BioTypeSpec {
 **Files**:
 
 - Create: `crates/oxo-flow-core/src/types/inspect.rs`
-- Modify: `crates/oxo-flow-core/src/readiness.rs`
+- Modify: `crates/oxo-flow-core/src/deep_check.rs`
+- Modify: `crates/oxo-flow-cli/src/commands/quality.rs`
+- Benchmark: `crates/oxo-flow-core/benches/header_inspect_bench.rs`
 - Test: `crates/oxo-flow-core/src/types/inspect_tests.rs`
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Implement bounded header parsers using initial 64 KiB reads (`StorageBackend::read_range(path, 0, 65536)`):
+- [x] **Step 1**: Implement bounded header parsers using initial 64 KiB reads (`StorageBackend::read_range(path, 0, 65536)`):
   - **BGZF / GZIP**: Verify magic bytes (`1f 8b 08 04` and subfield `BC` for BGZF vs plain GZIP).
   - **BAM / SAM / CRAM**: Parse `@HD SO:<sort_order>`, `@SQ SN:<contig> LN:<len>` (detecting `chr`-prefix conventions and build fingerprints), and `@RG` tags (`ID`, `SM`, `PL`).
   - **VCF / BCF**: Parse `##fileformat=VCFv4.*`, `##reference=`, and `##contig=<ID=...,length=...>`.
   - **FASTQ**: Verify `@` record header framing, quality line length parity, and Phred+33 / Phred+64 ASCII ranges.
-- [ ] **Step 2**: Wire `inspect_source_headers` into `oxo-flow validate --deep`, `oxo-flow test --deep`, and pre-execution source checks in `run`.
-- [ ] **Step 3**: Benchmark header inspection latency in `benches/` to guarantee $<1\text{ ms}$ per local file and zero full-file reads.
+- [x] **Step 2**: Wire `inspect_source_headers` into `oxo-flow validate --deep`, `oxo-flow test --deep`, and pre-execution source checks in `run`.
+- [x] **Step 3**: Benchmark header inspection latency in `benches/` to guarantee $<1\text{ ms}$ per local file and zero full-file reads.
 
 ---
 

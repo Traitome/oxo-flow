@@ -101,3 +101,7 @@ harness = false
 name = "wildcard_large_bench"
 harness = false
 
+[[bench]]
+name = "header_inspect_bench"
+harness = false
+
