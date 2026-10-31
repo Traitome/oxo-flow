@@ -118,8 +118,8 @@ Pre-built images are published to GitHub Container Registry on every release (an
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
 # Pin a release (or track a minor line)
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.26.0
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.26
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.27.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.27
 
 # CLI one-shot usage (workflow files mounted from the host)
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
@@ -249,7 +249,7 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX with checksum attached to every GitHub release):
 
-> **Note** — the extension is published to both marketplaces: [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) (searched by default by VSCodium, Cursor, Windsurf and most forks) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) (stock VS Code, live since v0.26.0). Install from either, or grab the release VSIX offline:
+> **Note** — the extension is published to both marketplaces: [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) (searched by default by VSCodium, Cursor, Windsurf and most forks) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) (stock VS Code, live since v0.27.0). Install from either, or grab the release VSIX offline:
 
 ```bash
 codium --install-extension traitome.oxo-flow              # Open VSX (forks)

@@ -72,7 +72,7 @@ Every served response — including the SPA index at the mount root
 ## Output
 
 ```
-oxo-flow v0.26.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.27.0 — Rust-native bioinformatics pipeline engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 
@@ -184,7 +184,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "mode": "personal",
   "uptime_secs": 12,
   "components": {
