@@ -13,6 +13,7 @@
 ## File Structure
 
 **Modified files:**
+
 - `crates/oxo-flow-cli/src/main.rs` - Add `--as-include` flag to Validate command
 - `crates/oxo-flow-cli/src/commands/quality.rs` - Implement `--as-include` validation logic
 - `crates/oxo-flow-core/src/config.rs` - Add `reference_dir` and `env_groups` fields
@@ -23,6 +24,7 @@
 - `README.md` - Document new features
 
 **Test locations:**
+
 - Tests are inline in each file (Rust convention)
 - Integration tests in `tests/` directory
 
@@ -33,6 +35,7 @@
 ### Task 1: Add CLI Flag
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/main.rs:103-106`
 
 - [ ] **Step 1: Add `--as-include` flag to Validate command**
@@ -72,6 +75,7 @@ git commit -m "feat(cli): add --as-include flag to validate command"
 ### Task 2: Implement Validation Logic
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/quality.rs:9-108`
 
 - [ ] **Step 1: Update `validate_command` signature**
@@ -186,6 +190,7 @@ git commit -m "feat(cli): implement --as-include validation mode"
 ### Task 3: Add Tests for `--as-include`
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/quality.rs` (add test module)
 
 - [ ] **Step 1: Add integration test for as_include mode**
@@ -262,6 +267,7 @@ git commit -m "test(cli): add tests for --as-include validation"
 ### Task 4: Add `reference_dir` Field to Config
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/config.rs`
 
 - [ ] **Step 1: Add `reference_dir` field to WorkflowConfig struct**
@@ -344,6 +350,7 @@ git commit -m "feat(config): add reference_dir field with auto-derivation"
 ### Task 5: Add Tests for `reference_dir`
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/config.rs`
 
 - [ ] **Step 1: Add unit tests for reference_dir derivation**
@@ -416,6 +423,7 @@ git commit -m "test(config): add tests for reference_dir derivation"
 ### Task 6: Extend Resources for Auto-Scaling
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/rule.rs`
 
 - [ ] **Step 1: Add `AutoScale` variant for threads/memory**
@@ -498,6 +506,7 @@ git commit -m "feat(rule): add AutoScale type for resource auto-scaling"
 ### Task 7: Implement Auto-Scaling in Executor
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/executor/mod.rs`
 
 - [ ] **Step 1: Add system info query function**
@@ -543,6 +552,7 @@ git commit -m "feat(executor): add auto-scaling helper functions"
 ### Task 8: Add `env_groups` to Config
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/config.rs`
 
 - [ ] **Step 1: Add `env_groups` field to WorkflowConfig**
@@ -596,6 +606,7 @@ git commit -m "feat(config): add env_groups for shared environments"
 ### Task 9: Add `env_group` Field to Rule
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/rule.rs`
 
 - [ ] **Step 1: Add `env_group` field to Rule struct**
@@ -626,6 +637,7 @@ git commit -m "feat(rule): add env_group field for environment group reference"
 ### Task 10: Add Validation for Environment Groups
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/format.rs`
 
 - [ ] **Step 1: Add validation check for undefined env_group references**
@@ -669,6 +681,7 @@ git commit -m "feat(format): add validation for undefined env_group references"
 ### Task 11: Add `optional` Field to Rule
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/rule.rs`
 
 - [ ] **Step 1: Add `optional` field to Rule struct**
@@ -700,6 +713,7 @@ git commit -m "feat(rule): add optional field for skip-on-missing behavior"
 ### Task 12: Implement Optional Rule Handling in Executor
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/executor/mod.rs`
 
 - [ ] **Step 1: Add input existence check for optional rules**
@@ -748,6 +762,7 @@ git commit -m "feat(executor): implement optional rule skip logic"
 ### Task 13: Extend FilePatterns for Directory Input
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/rule.rs`
 
 - [ ] **Step 1: Add Dir variant to FilePatterns**
@@ -819,6 +834,7 @@ git commit -m "feat(rule): add Dir variant to FilePatterns for directory input"
 ### Task 14: Update CHANGELOG
 
 **Files:**
+
 - Modify: `CHANGELOG.md`
 
 - [ ] **Step 1: Add release notes**
@@ -852,6 +868,7 @@ git commit -m "docs: update CHANGELOG for new features"
 ### Task 15: Update README
 
 **Files:**
+
 - Modify: `README.md`
 
 - [ ] **Step 1: Document new CLI flag**
@@ -946,6 +963,7 @@ git commit -m "chore: ensure all CI checks pass"
 ## Summary
 
 This plan implements 6 oxo-flow optimizations:
+
 - **P0**: `--as-include` validation, `reference_dir` convention
 - **P1**: Auto-scaling resources, environment groups
 - **P2**: Optional rules, directory input type

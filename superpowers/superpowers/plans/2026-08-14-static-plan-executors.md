@@ -11,6 +11,7 @@
 **Spec:** [docs/superpowers/specs/2026-08-14-static-plan-executors-design.md](../specs/2026-08-14-static-plan-executors-design.md)
 
 **Implementation notes (refinements of spec, same behaviour):**
+
 - `ScheduledRule` carries the expanded `Rule` clone (single source for rendering) instead of duplicated resource fields — spec §3.1 field list superseded.
 - `cd <workdir>` is composed into the wrapped shell command (`cd '<workdir>' && <wrapped>`) rather than injected into the rendered script — keeps `render_script` byte-compatible with `cluster.rs` output.
 - `ExecutorBackend::submit` is per-rule (`submit(script_path)`) instead of per-fragment; the driver composes fragments (waves). Same contract, simpler adapters.
@@ -33,11 +34,13 @@
 ## Task 1: `ScheduledRule` + `ScheduledPlan` types and builder
 
 **Files:**
+
 - Create: `crates/oxo-flow-core/src/backend/mod.rs`
 - Modify: `crates/oxo-flow-core/src/lib.rs` (add `pub mod backend;`)
 - Test: inline `#[cfg(test)] mod tests` in `backend/mod.rs`
 
 **Interfaces:**
+
 - Consumes: `WorkflowDag::execution_order`, `WorkflowDag::parallel_groups`, `WorkflowDag::dependencies`, `WorkflowConfig::get_rule`, `build_execution_command`, `EnvironmentResolver::wrap_command`, `Rule`.
 - Produces (used by Tasks 2–5, 15):
   - `backend::ScheduledRule { rule: Rule, shell_cmd: String, workdir: PathBuf, dependencies: Vec<String>, wildcard_values: HashMap<String, String> }`
@@ -225,10 +228,12 @@ fn build_rule(
 ## Task 2: `ExecutorBackend` trait, `BackendJobStatus`, shared job-id parsing
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/backend/mod.rs` (trait + status + `parse_job_id` + `parse_status_line`)
 - Test: inline in `backend/mod.rs`
 
 **Interfaces:**
+
 - Produces (used by Tasks 3–6, 15):
   - `pub enum BackendJobStatus { Pending, Running, Completed, Failed, Cancelled, Unknown }` (Copy, Clone, Debug, PartialEq, Eq)
   - `pub trait ExecutorBackend: Send + Sync { fn name(&self) -> &'static str; fn render_script(&self, rule: &ScheduledRule, cluster: &ClusterJobConfig) -> Result<String>; async fn submit(&self, script_path: &Path) -> Result<String>; async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>>; async fn cancel(&self, job_id: &str) -> Result<()>; async fn logs(&self, job_id: &str) -> Result<String>; }` (async_trait)
@@ -371,10 +376,12 @@ Note: SGE state resolution needs the paired `state:` line; `ClusterExecutor::pol
 ## Task 3: `ClusterExecutor` (render/submit/poll/cancel/logs)
 
 **Files:**
+
 - Create: `crates/oxo-flow-core/src/backend/cluster.rs`
 - Test: inline in `backend/cluster.rs`
 
 **Interfaces:**
+
 - Consumes: Task 1 (`ScheduledRule`), Task 2 (trait, `parse_job_id`, `parse_status_line`), `crate::cluster::{generate_submit_script, submit_command}`.
 - Produces: `pub struct ClusterExecutor { backend: ClusterBackend }` with `pub fn new(backend: ClusterBackend) -> Self`; `impl ExecutorBackend for ClusterExecutor`.
 
@@ -522,10 +529,12 @@ impl ExecutorBackend for ClusterExecutor {
 ## Task 4: Mock scheduler fixtures
 
 **Files:**
+
 - Create: `tests/fixtures/mock-scheduler/sbatch`, `tests/fixtures/mock-scheduler/squeue`, `tests/fixtures/mock-scheduler/scancel`, `tests/fixtures/mock-scheduler/sacct` (all `chmod +x`)
 - Test: exercised by Tasks 6 and 15; smoke-test here by hand (see Step 1)
 
 **Interfaces:**
+
 - Environment: `MOCK_SCHEDULER_DIR` (state root; `<dir>/jobs/<id>/{state,exit_code,stdout.log,stderr.log,job.sh,pid}`).
 - Produces: a fake SLURM on `PATH` for integration tests (issue #74 comment 3; reusable by @andrewbudge).
 
@@ -654,10 +663,12 @@ Expected: `1|COMPLETED` (or RUNNING if raced — accept both), sacct table, `hel
 ## Task 5: `BackendDriver`
 
 **Files:**
+
 - Create: `crates/oxo-flow-core/src/backend/driver.rs`
 - Test: inline in `driver.rs` (runs against the mock fixtures via `PATH` override)
 
 **Interfaces:**
+
 - Consumes: Tasks 1–3. `JobRecord`/`JobStatus` from `crate::executor`.
 - Produces (used by Tasks 6, 15):
   - `pub struct DriverConfig { pub max_submitted: usize, pub poll_interval: std::time::Duration, pub poll_timeout: Option<std::time::Duration> }` + `Default` (max_submitted 50, poll_interval 5 s, poll_timeout None)
@@ -807,9 +818,11 @@ Notes for the implementer: write `status.json` (state + submitted_at + finished_
 ## Task 6: P1 E2E parity + preview parity integration tests
 
 **Files:**
+
 - Create: `tests/cluster_backend.rs` (workspace root; copy the `workspace_bin` helper style from `tests/cli_integration.rs`)
 
 **Interfaces:**
+
 - Consumes: Tasks 1–5; the `oxo-flow` binary; `checkpoint.json` format; dry-run `--json` output (see `run_preview.rs` JSON structs).
 
 - [ ] **Step 1: Write the failing tests**
@@ -885,10 +898,12 @@ Exact assertion targets for the dry-run `--json` schema: read `crates/oxo-flow-c
 ## Task 7: CLI `cluster` command refactor through the trait + `mkdir -p logs`
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/cluster.rs`
 - Test: extend an existing CLI integration test or `tests/cluster_backend.rs` (byte parity of rendered scripts)
 
 **Interfaces:**
+
 - Consumes: Tasks 1–3 (`ClusterExecutor::render_script`, `ScheduledRule`).
 
 - [ ] **Step 1: Write failing test** — `cluster submit` on a 2-rule workflow writes scripts; assert each script is byte-identical to `generate_submit_script_with_env` output computed in the test process (link against oxo-flow-core, which the root test crate can do), and that `logs/` exists before the script references it (check the `--output` directive in `cluster.rs` — if present, create its parent dir before writing).
@@ -924,10 +939,12 @@ and, before writing each script, create any log directory the script's `--output
 ## Task 8: `StorageBackend::head` + `RemoteStat` (local / s3 / gcs)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/storage/mod.rs` (trait + type), `storage/local.rs`, `storage/s3.rs`, `storage/gcs.rs`
 - Test: inline in `storage/mod.rs` (fake backend), `storage/s3.rs` (fixture), `storage/gcs.rs` (fixture)
 
 **Interfaces:**
+
 - Consumes: `StoragePath`, `aws_sdk_s3` (feature `s3-storage`), gcs XML helpers.
 - Produces (used by Tasks 9–11):
   - `pub struct RemoteStat { pub size: u64, pub etag: Option<String> }` (Clone, Debug, PartialEq, Eq)
@@ -1015,10 +1032,12 @@ pub fn parse_md5_hash_header(header: Option<&str>) -> Option<String> {
 ## Task 9: `RemoteManifestEntry` + `InputManifestEntry.remote` + legacy compatibility
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/executor/checkpoint.rs`
 - Test: inline in `checkpoint.rs`
 
 **Interfaces:**
+
 - Consumes: Task 8 (`RemoteStat`).
 - Produces (used by Tasks 10–11): `pub struct RemoteManifestEntry { pub scheme: String, pub key: String, pub size: u64, #[serde(default, skip_serializing_if = "Option::is_none")] pub etag: Option<String> }`; `InputManifestEntry.remote: Option<RemoteManifestEntry>`.
 
@@ -1049,10 +1068,12 @@ fn remote_entry_roundtrips() {
 ## Task 10: `snapshot_input_manifest` remote support + `manifests_match` remote matrix
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/executor/checkpoint.rs`
 - Test: inline in `checkpoint.rs` (in-memory fake backend with mutable etag)
 
 **Interfaces:**
+
 - Consumes: Task 8 (`StorageBackend::head`), Task 9, `StoragePath`.
 - Produces (used by Task 11):
   - `snapshot_input_manifest(rule: &Rule, workdir: &Path, wildcard_values: &HashMap<String, String>, resolver: &StorageResolver) -> Result<Option<InputManifest>>` (new resolver param)
@@ -1151,10 +1172,12 @@ recorded.iter().zip(current).all(|(r, c)| match (&r.remote, &c.remote) {
 ## Task 11: Call-site threading + fake-backend invalidation integration test
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/run.rs` (two one-line resolver passes at the `snapshot_input_manifest` call sites), any other caller the compiler lists.
 - Test: `tests/` or inline — an integration test in `tests/cluster_backend.rs` is NOT the place; add to `tests/integration_test.rs` or a new `tests/storage_invalidation.rs`: a workflow whose input is `s3://`… but the real CLI has no s3 backend by default. Instead: core-level test (Task 10's fake) is the semantic proof; add a CLI-level test only for "remote URI in inputs warns and degrades gracefully" (no backend registered): run the binary with an `s3://` input → run completes, checkpoint records no manifest for that entry, a warning is logged.
 
 **Interfaces:**
+
 - Consumes: Task 10 signatures.
 
 - [ ] **Step 1: Write failing test** — `tests/storage_invalidation.rs`: workflow with `input = ["s3://b/k", "data/S1.fq"]`; run completes; `checkpoint.json` input_manifests contains the local entry and no remote entry (no backend registered); stderr contains "no storage backend registered".
@@ -1170,6 +1193,7 @@ storage.add_backend(oxo_flow_core::storage::StorageScheme::Gcs, Arc::new(oxo_flo
 ```
 
 Then pass `&storage` at both snapshot sites (run.rs ~1263 and the dry-run/preview snapshot if present). Check whether the CLI crate enables `s3-storage`/`gcs-storage` on its core dependency (cli/Cargo.toml) — enable them so the cfg branches compile (they're already deps of core behind features; enabling adds aws-sdk build time — if the CLI doesn't enable them today, do NOT enable; instead gate the registration code with the same cfg and leave a comment).
+
 - [ ] **Step 4: Run to verify PASS.**
 - [ ] **Step 5: Commit** — `git commit -m "feat(cli): thread StorageResolver into manifest snapshots; graceful remote-input degradation (#78)"`
 
@@ -1180,10 +1204,12 @@ Then pass `&storage` at both snapshot sites (run.rs ~1263 and the dry-run/previe
 ## Task 12: `checkpoint_manifest` field + validation rules
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/rule.rs` (field), `crates/oxo-flow-core/src/format.rs` (validation near the existing W010 checkpoint check at ~line 782)
 - Test: inline in `format.rs` tests + a serde roundtrip in `rule.rs` tests
 
 **Interfaces:**
+
 - Consumes: `Rule`, `Diagnostic` (format.rs types).
 - Produces: `Rule.checkpoint_manifest: Option<String>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`, after `checkpoint: bool`).
 
@@ -1212,11 +1238,13 @@ fn checkpoint_rule_with_manifest_validates() { /* checkpoint=true + checkpoint_m
 ## Task 13: `rule_templates` preservation + `apply_reentry` / `replay_valid_reentries`
 
 **Files:**
+
 - Create: `crates/oxo-flow-core/src/reentry.rs`
 - Modify: `crates/oxo-flow-core/src/config.rs` (`rule_templates` field with `#[serde(skip)]`; capture in `expand_wildcards`; `pub mod reentry;` in lib.rs)
 - Test: inline in `reentry.rs`
 
 **Interfaces:**
+
 - Consumes: `WorkflowConfig`, `expand_wildcards`, `SampleGroup`, `Rule`.
 - Produces (used by Tasks 14–17):
   - `pub const MAX_REENTRY_ROUNDS: u32 = 32;`
@@ -1356,10 +1384,12 @@ Edge cases to handle in tests: `rule_templates` empty (expand never ran) → rep
 ## Task 14: `ReentryRecord` persistence in `CheckpointState` + `SchedulerState::add_rule`
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/executor/checkpoint.rs`, `crates/oxo-flow-core/src/scheduler.rs`
 - Test: inline in both files
 
 **Interfaces:**
+
 - Consumes: Task 13 (`ReentryRecord`).
 - Produces:
   - `CheckpointState.reentries: Vec<ReentryRecord>` (`#[serde(default, skip_serializing_if = "Vec::is_empty")]`)
@@ -1395,10 +1425,12 @@ fn add_rule_makes_rule_ready_when_deps_done() { /* SchedulerState::new(["a"]); a
 ## Task 15: `run.rs` event-loop hookup (the only P3 loop edits)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/run.rs`
 - Test: integration — `tests/reentry_integration.rs` (drives the real `oxo-flow run` binary)
 
 **Interfaces:**
+
 - Consumes: Tasks 13–14; the run loop structure (order/order_set/dag/sched/checkpoint at run.rs ~1097-1290; the completion handler inside the spawned task / join_set collection).
 
 - [ ] **Step 1: Write failing integration tests** (`tests/reentry_integration.rs`):
@@ -1500,10 +1532,12 @@ d) Deadlock check call sites use the (possibly rebuilt) `dag` — they already r
 ## Task 16: BackendDriver re-entry hook + driver-path integration test
 
 **Files:**
+
 - Modify: `crates/oxo-flow-core/src/backend/driver.rs` (flesh out the Task 5 reentry branch)
 - Test: `tests/reentry_integration.rs` (driver path with mock scheduler)
 
 **Interfaces:**
+
 - Consumes: Tasks 13–15 pieces (`apply_reentry`, `ScheduledPlan::merge_new_instances`).
 
 - [ ] **Step 1: Write failing test** — same discover workflow, driven by `BackendDriver` + mock SLURM: round-1 discover completes → callback `apply_reentry` returns new names → driver merges + executes `analyze_*_S4/S5` → records contain all 5 Success rules; events.jsonl shows SUBMITTED for the round-2 instances AFTER the discover COMPLETED line.
@@ -1515,10 +1549,12 @@ d) Deadlock check call sites use the (possibly rebuilt) `dag` — they already r
 ## Task 17: dry-run preview re-entry support
 
 **Files:**
+
 - Modify: `crates/oxo-flow-cli/src/commands/run_preview.rs` (and `dry_run_command` in run.rs where it consumes preview results)
 - Test: extend `tests/preview_parity.rs`
 
 **Interfaces:**
+
 - Consumes: Tasks 13–14; the preview JSON structs.
 
 - [ ] **Step 1: Write failing tests** — `preview_parity.rs`: (a) fresh workdir with a discover workflow → `dry-run --json` shows round-0 plan + a `reentry` section listing the checkpoint rule as a possible re-entry point with its manifest path; (b) after one real run (reentries recorded) → `dry-run --json` shows the round-1 instances as part of the static plan (deterministic reconstruction) and the same will-run set a real run would produce (no discover re-run → analyze instances up-to-date).
@@ -1534,6 +1570,7 @@ d) Deadlock check call sites use the (possibly rebuilt) `dag` — they already r
 ## Task 18: Documentation sync + full CI
 
 **Files:**
+
 - Modify: `docs/guide/src/` — new `execution-backends.md` (static plan → executor mapping, `cluster` command as render layer, mock-scheduler CI harness, assumptions: shared storage, outputs land where declared); extend `workflow-format.md` (`checkpoint_manifest`, re-entry manifest format, remote inputs + etag invalidation semantics, documented limitations: no remote globs/staging, pairs re-entry out of scope, `MAX_REENTRY_ROUNDS = 32`); extend `run.md`/`dry-run.md` re-entry semantics (resume determinism, revoke-on-invalidate, preview annotation); `status.md` checkpoint format gains `reentries` field; glossary entries (executor backend, re-entry, remote manifest, static plan).
 - Modify: `docs/guide/mkdocs.yml` (nav entry for the new page).
 

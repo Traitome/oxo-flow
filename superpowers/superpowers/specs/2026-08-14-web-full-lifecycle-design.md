@@ -206,6 +206,7 @@ status='success'`) in `rebuild_runs_table`-adjacent init. Terminal set
 **Process control** — `executor.rs` gains a `RunProcessRegistry`
 (`RwLock<HashMap<String, ChildHandle>>`, child PID + pgid captured at spawn via
 `setsid`-equivalent: spawn through `CommandExt::process_group(0)` on Unix).
+
 - `cancel`: SIGTERM to pgid → 5 s grace → SIGKILL; DB → `cancelled`, SSE `run_cancelled`
 - `pause`: SIGSTOP to pgid; DB → `paused`, SSE `run_paused`
 - `resume`: SIGCONT to pgid; DB → `running` (or `queued` if not yet started), SSE `run_resumed`
@@ -260,6 +261,7 @@ dependency semantics (see dag-engine.md; edges are exact-string match only).
 **Backend — knowledge endpoints** (implemented in `domains/ai/handlers.rs` — the
 module that already owns the oxo-flow-ai relationship — thin adapters over the
 in-memory knowledge APIs, no new domain module for two endpoints):
+
 - `GET /api/knowledge/tools?q=&limit=` → `oxo_flow_ai::knowledge::bioconda::search_tools` (name, version, summary)
 - `GET /api/knowledge/skills?q=&domain=` → `knowledge::skills::search_skills` / `skills_in_domain`
 - `GET /api/knowledge/templates` → existing templates table (already exists)

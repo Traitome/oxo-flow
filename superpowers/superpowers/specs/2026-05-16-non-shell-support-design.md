@@ -54,6 +54,7 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=./src python train.py
 ```
 
 **Implementation:**
+
 - In `executor.rs`, before `Command::new("sh")`, build env prefix from `rule.envvars`
 - Support both inline (`envvars = { A = "1" }`) and table (`[rules.envvars]`) formats
 - Support placeholder expansion in envvar values: `{config.reference}` → actual value
@@ -63,6 +64,7 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=./src python train.py
 **Problem:** `script` field defined but executor only uses `shell`.
 
 **Solution:**
+
 1. When both `shell` and `script` exist: execute shell first, then script (sequential)
 2. When only `script` exists: auto-detect interpreter from file extension
 3. Optional `interpreter` field for explicit override
@@ -111,6 +113,7 @@ script = "reports/qc_report.qmd"
 ```
 
 Execution order:
+
 1. `fastqc data.fastq -o qc/` (shell)
 2. `quarto render reports/qc_report.qmd` (script)
 
