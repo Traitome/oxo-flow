@@ -13,8 +13,11 @@ use crate::rule::Rule;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub mod aws_batch;
 pub mod cluster;
 pub mod driver;
+pub mod gcp_batch;
+pub mod k8s;
 
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

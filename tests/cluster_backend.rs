@@ -697,3 +697,152 @@ fn run_directory_records_what_each_job_cost() {
         "queue wait must be derivable from the run dir alone: {status}"
     );
 }
+
+#[tokio::test]
+async fn kubernetes_executor_renders_manifest_and_parses_status() {
+    use oxo_flow_core::backend::ExecutorBackend;
+    let dir = tempfile::tempdir().unwrap();
+    let cluster_config = ClusterJobConfig {
+        backend: ClusterBackend::Kubernetes,
+        queue: None,
+        account: None,
+        walltime: None,
+        extra_args: Vec::new(),
+    };
+    let exec = oxo_flow_core::backend::k8s::KubernetesExecutor::new(cluster_config.clone())
+        .with_namespace("oxoflow-prod")
+        .with_workdir(dir.path().to_path_buf());
+
+    assert_eq!(exec.name(), "kubernetes");
+
+    let resources = oxo_flow_core::rule::Resources {
+        threads: 4,
+        memory: Some("16G".into()),
+        ..Default::default()
+    };
+    let rule = oxo_flow_core::rule::Rule {
+        name: "test_k8s_rule".into(),
+        resources,
+        ..Default::default()
+    };
+    let sr = oxo_flow_core::backend::ScheduledRule {
+        rule: rule.clone(),
+        template: "test_k8s_rule".into(),
+        shell_cmd: "echo k8s".into(),
+        workdir: dir.path().to_path_buf(),
+        dependencies: Vec::new(),
+        wildcard_values: HashMap::new(),
+    };
+
+    let manifest = exec.render_script(&sr).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(val["kind"], "Job");
+    assert_eq!(val["metadata"]["name"], "oxoflow-test-k8s-rule");
+    assert_eq!(
+        val["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]["cpu"],
+        "4"
+    );
+
+    let array_manifest = exec.render_array_script(&rule, "runs/cmd", 3).unwrap();
+    let arr_val: serde_json::Value = serde_json::from_str(&array_manifest).unwrap();
+    assert_eq!(arr_val["spec"]["completions"], 3);
+    assert_eq!(arr_val["spec"]["completionMode"], "Indexed");
+}
+
+#[tokio::test]
+async fn aws_batch_executor_renders_spec_and_parses_status() {
+    use oxo_flow_core::backend::ExecutorBackend;
+    let dir = tempfile::tempdir().unwrap();
+    let cluster_config = ClusterJobConfig {
+        backend: ClusterBackend::AwsBatch,
+        queue: Some("biotech-queue".into()),
+        account: Some("job-def-arn".into()),
+        walltime: None,
+        extra_args: Vec::new(),
+    };
+    let exec = oxo_flow_core::backend::aws_batch::AwsBatchExecutor::new(cluster_config.clone())
+        .with_workdir(dir.path().to_path_buf());
+
+    assert_eq!(exec.name(), "aws-batch");
+
+    let resources = oxo_flow_core::rule::Resources {
+        threads: 8,
+        memory: Some("32G".into()),
+        ..Default::default()
+    };
+    let rule = oxo_flow_core::rule::Rule {
+        name: "test_aws_rule".into(),
+        resources,
+        ..Default::default()
+    };
+    let sr = oxo_flow_core::backend::ScheduledRule {
+        rule: rule.clone(),
+        template: "test_aws_rule".into(),
+        shell_cmd: "echo aws".into(),
+        workdir: dir.path().to_path_buf(),
+        dependencies: Vec::new(),
+        wildcard_values: HashMap::new(),
+    };
+
+    let spec = exec.render_script(&sr).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&spec).unwrap();
+    assert_eq!(val["jobName"], "oxoflow-test_aws_rule");
+    assert_eq!(val["jobQueue"], "biotech-queue");
+    assert_eq!(
+        val["containerOverrides"]["resourceRequirements"][0]["value"],
+        "8"
+    );
+
+    let array_spec = exec.render_array_script(&rule, "runs/cmd", 4).unwrap();
+    let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
+    assert_eq!(arr_val["arrayProperties"]["size"], 4);
+}
+
+#[tokio::test]
+async fn gcp_batch_executor_renders_spec_and_parses_status() {
+    use oxo_flow_core::backend::ExecutorBackend;
+    let dir = tempfile::tempdir().unwrap();
+    let cluster_config = ClusterJobConfig {
+        backend: ClusterBackend::GcpBatch,
+        queue: None,
+        account: None,
+        walltime: None,
+        extra_args: Vec::new(),
+    };
+    let exec = oxo_flow_core::backend::gcp_batch::GcpBatchExecutor::new(cluster_config.clone())
+        .with_project("biotech-gcp")
+        .with_location("us-east1")
+        .with_workdir(dir.path().to_path_buf());
+
+    assert_eq!(exec.name(), "gcp-batch");
+
+    let resources = oxo_flow_core::rule::Resources {
+        threads: 2,
+        memory: Some("8G".into()),
+        ..Default::default()
+    };
+    let rule = oxo_flow_core::rule::Rule {
+        name: "test_gcp_rule".into(),
+        resources,
+        ..Default::default()
+    };
+    let sr = oxo_flow_core::backend::ScheduledRule {
+        rule: rule.clone(),
+        template: "test_gcp_rule".into(),
+        shell_cmd: "echo gcp".into(),
+        workdir: dir.path().to_path_buf(),
+        dependencies: Vec::new(),
+        wildcard_values: HashMap::new(),
+    };
+
+    let spec = exec.render_script(&sr).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&spec).unwrap();
+    assert_eq!(
+        val["taskGroups"][0]["taskSpec"]["computeResource"]["cpuMilli"],
+        2000
+    );
+
+    let array_spec = exec.render_array_script(&rule, "runs/cmd", 6).unwrap();
+    let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
+    assert_eq!(arr_val["taskGroups"][0]["taskCount"], 6);
+}

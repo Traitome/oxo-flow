@@ -36,6 +36,30 @@ pub fn parse_job_id(backend: &ClusterBackend, stdout: &str, stderr: &str) -> Res
         }
         ClusterBackend::Sge => parse_with_regex(r"Your job(?:-array)? (\d+)", out),
         ClusterBackend::Lsf => parse_with_regex(r"Job <(\d+)> is submitted", out),
+        ClusterBackend::Kubernetes => {
+            if !out.is_empty() {
+                if let Some(name) = out
+                    .strip_prefix("job.batch/")
+                    .and_then(|s| s.strip_suffix(" created"))
+                {
+                    return Ok(name.trim().to_string());
+                }
+                return Ok(out.to_string());
+            }
+            Err(unparseable("Kubernetes", out, stderr.trim()))
+        }
+        ClusterBackend::AwsBatch => {
+            if !out.is_empty() {
+                return Ok(out.to_string());
+            }
+            Err(unparseable("AWS Batch", out, stderr.trim()))
+        }
+        ClusterBackend::GcpBatch => {
+            if !out.is_empty() {
+                return Ok(out.to_string());
+            }
+            Err(unparseable("GCP Batch", out, stderr.trim()))
+        }
     }
 }
 
@@ -142,6 +166,18 @@ pub fn parse_status_line(
                 BackendJobStatus::Unknown,
             ))
         }
+        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch => {
+            let (id, state) = line.split_once('|')?;
+            let status = match state.trim().to_uppercase().as_str() {
+                "PENDING" | "SUBMITTED" | "RUNNABLE" | "QUEUED" => BackendJobStatus::Pending,
+                "RUNNING" | "STARTING" => BackendJobStatus::Running,
+                "COMPLETED" | "SUCCEEDED" => BackendJobStatus::Completed,
+                "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
+                "CANCELLED" => BackendJobStatus::Cancelled,
+                _ => BackendJobStatus::Unknown,
+            };
+            Some((id.trim().to_string(), status))
+        }
     }
 }
 
@@ -190,6 +226,38 @@ pub fn status_invocations(
             .iter()
             .map(|id| ("qstat", vec!["-j".to_string(), id.clone()]))
             .collect(),
+        ClusterBackend::Kubernetes => job_ids
+            .iter()
+            .map(|id| {
+                (
+                    "kubectl",
+                    vec!["get".to_string(), "job".to_string(), id.clone()],
+                )
+            })
+            .collect(),
+        ClusterBackend::AwsBatch => vec![(
+            "aws",
+            vec![
+                "batch".to_string(),
+                "describe-jobs".to_string(),
+                "--jobs".to_string(),
+                job_ids.join(" "),
+            ],
+        )],
+        ClusterBackend::GcpBatch => job_ids
+            .iter()
+            .map(|id| {
+                (
+                    "gcloud",
+                    vec![
+                        "batch".to_string(),
+                        "jobs".to_string(),
+                        "describe".to_string(),
+                        id.clone(),
+                    ],
+                )
+            })
+            .collect(),
     }
 }
 
@@ -216,6 +284,16 @@ pub fn my_jobs_invocations(backend: &ClusterBackend) -> Vec<(&'static str, Vec<S
         ClusterBackend::Pbs => vec![("qstat", vec!["-u".to_string(), user])],
         ClusterBackend::Sge => vec![("qstat", Vec::new())],
         ClusterBackend::Lsf => vec![("bjobs", Vec::new())],
+        ClusterBackend::Kubernetes => {
+            vec![("kubectl", vec!["get".to_string(), "jobs".to_string()])]
+        }
+        ClusterBackend::AwsBatch => {
+            vec![("aws", vec!["batch".to_string(), "list-jobs".to_string()])]
+        }
+        ClusterBackend::GcpBatch => vec![(
+            "gcloud",
+            vec!["batch".to_string(), "jobs".to_string(), "list".to_string()],
+        )],
     }
 }
 
@@ -246,6 +324,9 @@ pub fn cancel_command(backend: &ClusterBackend) -> &'static str {
         ClusterBackend::Slurm => "scancel",
         ClusterBackend::Pbs | ClusterBackend::Sge => "qdel",
         ClusterBackend::Lsf => "bkill",
+        ClusterBackend::Kubernetes => "kubectl",
+        ClusterBackend::AwsBatch => "aws",
+        ClusterBackend::GcpBatch => "gcloud",
     }
 }
 
@@ -467,6 +548,9 @@ fn finish_script(script: &str, backend: &ClusterBackend, workdir: &Path) -> Stri
         ClusterBackend::Pbs => format!("cd '{dir}' || exit 1"),
         ClusterBackend::Sge => format!("#$ -wd '{dir}'"),
         ClusterBackend::Lsf => format!("#BSUB -cwd '{dir}'"),
+        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch => {
+            return script.to_string();
+        }
     };
     let mut lines = script.lines();
     let mut finished = vec![lines.next().unwrap_or_default().to_string()];
@@ -616,6 +700,9 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Pbs => "pbs",
             ClusterBackend::Sge => "sge",
             ClusterBackend::Lsf => "lsf",
+            ClusterBackend::Kubernetes => "kubernetes",
+            ClusterBackend::AwsBatch => "aws-batch",
+            ClusterBackend::GcpBatch => "gcp-batch",
         }
     }
 
@@ -726,6 +813,98 @@ impl super::ExecutorBackend for ClusterExecutor {
                 }
                 Ok(statuses)
             }
+            ClusterBackend::Kubernetes => {
+                let mut statuses = HashMap::new();
+                for id in job_ids {
+                    let out = match self
+                        .run_cmd(
+                            "kubectl",
+                            &["get", "job", id, "-o", "jsonpath={.status.succeeded}"],
+                        )
+                        .await
+                    {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    if out.status.success() {
+                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        let st = if text == "1" {
+                            BackendJobStatus::Completed
+                        } else {
+                            BackendJobStatus::Running
+                        };
+                        statuses.insert(id.clone(), st);
+                    }
+                }
+                Ok(statuses)
+            }
+            ClusterBackend::AwsBatch => {
+                let mut statuses = HashMap::new();
+                for id in job_ids {
+                    let out = match self
+                        .run_cmd(
+                            "aws",
+                            &[
+                                "batch",
+                                "describe-jobs",
+                                "--jobs",
+                                id,
+                                "--query",
+                                "jobs[0].status",
+                                "--output",
+                                "text",
+                            ],
+                        )
+                        .await
+                    {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    if out.status.success() {
+                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        let st = match text.as_str() {
+                            "SUCCEEDED" => BackendJobStatus::Completed,
+                            "FAILED" => BackendJobStatus::Failed,
+                            "RUNNING" => BackendJobStatus::Running,
+                            _ => BackendJobStatus::Pending,
+                        };
+                        statuses.insert(id.clone(), st);
+                    }
+                }
+                Ok(statuses)
+            }
+            ClusterBackend::GcpBatch => {
+                let mut statuses = HashMap::new();
+                for id in job_ids {
+                    let out = match self
+                        .run_cmd(
+                            "gcloud",
+                            &[
+                                "batch",
+                                "jobs",
+                                "describe",
+                                id,
+                                "--format=value(status.state)",
+                            ],
+                        )
+                        .await
+                    {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    if out.status.success() {
+                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        let st = match text.as_str() {
+                            "SUCCEEDED" => BackendJobStatus::Completed,
+                            "FAILED" => BackendJobStatus::Failed,
+                            "RUNNING" => BackendJobStatus::Running,
+                            _ => BackendJobStatus::Pending,
+                        };
+                        statuses.insert(id.clone(), st);
+                    }
+                }
+                Ok(statuses)
+            }
         }
     }
 
@@ -734,8 +913,24 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Slurm => "scancel",
             ClusterBackend::Pbs | ClusterBackend::Sge => "qdel",
             ClusterBackend::Lsf => "bkill",
+            ClusterBackend::Kubernetes => "kubectl",
+            ClusterBackend::AwsBatch => "aws",
+            ClusterBackend::GcpBatch => "gcloud",
         };
-        self.run_cmd(cmd, &[job_id]).await.map(|_| ())
+        let args: Vec<&str> = match self.backend {
+            ClusterBackend::Kubernetes => vec!["delete", "job", job_id],
+            ClusterBackend::AwsBatch => vec![
+                "batch",
+                "cancel-job",
+                "--job-id",
+                job_id,
+                "--reason",
+                "cancelled",
+            ],
+            ClusterBackend::GcpBatch => vec!["batch", "jobs", "delete", job_id, "--quiet"],
+            _ => vec![job_id],
+        };
+        self.run_cmd(cmd, &args).await.map(|_| ())
     }
 
     async fn logs(&self, job_id: &str) -> Result<String> {
@@ -751,6 +946,9 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Pbs => ("qstat", vec!["-x", "-f", job_id]),
             ClusterBackend::Sge => ("qacct", vec!["-j", job_id]),
             ClusterBackend::Lsf => ("bacct", vec![job_id]),
+            ClusterBackend::Kubernetes => ("kubectl", vec!["logs", job_id]),
+            ClusterBackend::AwsBatch => ("aws", vec!["batch", "describe-jobs", "--jobs", job_id]),
+            ClusterBackend::GcpBatch => ("gcloud", vec!["batch", "jobs", "describe", job_id]),
         };
         let out = self.run_cmd(program, &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -969,6 +1167,7 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                 None
             }
         }
+        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch => None,
     }
 }
 

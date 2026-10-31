@@ -151,6 +151,15 @@ fn generate_submit_helper(backend: &ClusterBackend) -> String {
         ClusterBackend::Lsf => {
             "  out=$(bsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Job <[0-9]+>' | grep -oE '[0-9]+')\n"
         }
+        ClusterBackend::Kubernetes => {
+            "  out=$(kubectl create -f \"$@\" -o jsonpath='{.metadata.name}') || return $?\n  id=\"$out\"\n"
+        }
+        ClusterBackend::AwsBatch => {
+            "  out=$(aws batch submit-job --cli-input-json file://\"$@\" --query 'jobId' --output text) || return $?\n  id=\"$out\"\n"
+        }
+        ClusterBackend::GcpBatch => {
+            "  out=$(gcloud batch jobs submit \"$@\" --query 'name' --format='value(name)') || return $?\n  id=\"$out\"\n"
+        }
     };
 
     let mut helper = String::new();
@@ -270,6 +279,15 @@ fn generate_submit_wrapper(
                         "JOB_IDS[{}]=$(oxo_submit -w \"{}\" {})\n",
                         rule_name,
                         dep_str,
+                        script_path.display()
+                    ));
+                }
+                ClusterBackend::Kubernetes
+                | ClusterBackend::AwsBatch
+                | ClusterBackend::GcpBatch => {
+                    script.push_str(&format!(
+                        "JOB_IDS[{}]=\"$(oxo_submit {})\"\n",
+                        rule_name,
                         script_path.display()
                     ));
                 }

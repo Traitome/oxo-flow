@@ -130,10 +130,10 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Extend `ClusterBackend` enum in `crates/oxo-flow-core/src/cluster.rs` with `Kubernetes`, `AwsBatch`, and `GcpBatch` variants while keeping existing `Slurm`, `Pbs`, `Sge`, and `Lsf` behavior byte-identical.
-- [ ] **Step 2**: Implement `ExecutorBackend` for `KubernetesExecutor` (`k8s.rs`), mapping `ScheduledRule` resources (`threads`, `memory_mb`, `gpu_spec`, `time_limit`, `tmp_dir`) into Kubernetes `Job` manifests with deterministic label selectors (`oxoflow.io/run-id`, `oxoflow.io/rule`).
-- [ ] **Step 3**: Implement `ExecutorBackend` for `AwsBatchExecutor` (`aws_batch.rs`) and `GcpBatchExecutor` (`gcp_batch.rs`), mapping `BackendJobStatus` and `TerminalRecord` (exit code, wall-clock runtime, peak memory from container metrics) into `BackendDriver`.
-- [ ] **Step 4**: Add mock-API transport tests in `tests/cluster_backend.rs` verifying submission, array batching, `cancel_inflight`, and accounting fallback when jobs leave the active queue.
+- [x] **Step 1**: Extend `ClusterBackend` enum in `crates/oxo-flow-core/src/cluster.rs` with `Kubernetes`, `AwsBatch`, and `GcpBatch` variants while keeping existing `Slurm`, `Pbs`, `Sge`, and `Lsf` behavior byte-identical.
+- [x] **Step 2**: Implement `ExecutorBackend` for `KubernetesExecutor` (`k8s.rs`), mapping `ScheduledRule` resources (`threads`, `memory_mb`, `gpu_spec`, `time_limit`, `tmp_dir`) into Kubernetes `Job` manifests with deterministic label selectors (`oxoflow.io/run-id`, `oxoflow.io/rule`).
+- [x] **Step 3**: Implement `ExecutorBackend` for `AwsBatchExecutor` (`aws_batch.rs`) and `GcpBatchExecutor` (`gcp_batch.rs`), mapping `BackendJobStatus` and `TerminalRecord` (exit code, wall-clock runtime, peak memory from container metrics) into `BackendDriver`.
+- [x] **Step 4**: Add mock-API transport tests in `tests/cluster_backend.rs` verifying submission, array batching, `cancel_inflight`, and accounting fallback when jobs leave the active queue.
 
 ---
 

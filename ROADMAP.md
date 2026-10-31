@@ -482,7 +482,7 @@ Rigorous task-by-task implementation plan & scientific execution protocol: [`doc
 ### Stage 12.1: Hardware-Aware Cloud Core, Decoupled Persistence & Streaming I/O
 
 - [x] Unified `StorageBackend` for PostgreSQL-native multi-tenant run execution (resolving issue #207)
-- [ ] Native Kubernetes `ExecutorBackend` (`kube-rs`) and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
+- [x] Native Kubernetes `ExecutorBackend` and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
 - [ ] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
 - [ ] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
 - [ ] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail

@@ -22,6 +22,12 @@ pub enum ClusterBackend {
     Sge,
     /// IBM Spectrum LSF.
     Lsf,
+    /// Kubernetes batch Jobs.
+    Kubernetes,
+    /// AWS Batch managed compute.
+    AwsBatch,
+    /// Google Cloud Batch.
+    GcpBatch,
 }
 
 impl fmt::Display for ClusterBackend {
@@ -31,6 +37,9 @@ impl fmt::Display for ClusterBackend {
             Self::Pbs => write!(f, "pbs"),
             Self::Sge => write!(f, "sge"),
             Self::Lsf => write!(f, "lsf"),
+            Self::Kubernetes => write!(f, "kubernetes"),
+            Self::AwsBatch => write!(f, "aws-batch"),
+            Self::GcpBatch => write!(f, "gcp-batch"),
         }
     }
 }
@@ -44,6 +53,9 @@ impl FromStr for ClusterBackend {
             "pbs" => Ok(Self::Pbs),
             "sge" => Ok(Self::Sge),
             "lsf" => Ok(Self::Lsf),
+            "kubernetes" | "k8s" => Ok(Self::Kubernetes),
+            "aws-batch" | "awsbatch" => Ok(Self::AwsBatch),
+            "gcp-batch" | "gcpbatch" => Ok(Self::GcpBatch),
             other => Err(format!("unknown cluster backend: {other}")),
         }
     }
@@ -121,6 +133,15 @@ pub fn generate_submit_script(
         ClusterBackend::Pbs => generate_pbs_script(rule, shell_cmd, cluster_config),
         ClusterBackend::Sge => generate_sge_script(rule, shell_cmd, cluster_config),
         ClusterBackend::Lsf => generate_lsf_script(rule, shell_cmd, cluster_config),
+        ClusterBackend::Kubernetes => {
+            crate::backend::k8s::generate_k8s_job_manifest(rule, shell_cmd, cluster_config)
+        }
+        ClusterBackend::AwsBatch => {
+            crate::backend::aws_batch::generate_aws_batch_job_spec(rule, shell_cmd, cluster_config)
+        }
+        ClusterBackend::GcpBatch => {
+            crate::backend::gcp_batch::generate_gcp_batch_job_spec(rule, shell_cmd, cluster_config)
+        }
     }
 }
 
@@ -169,6 +190,24 @@ pub fn generate_array_submit_script(
     count: usize,
     config: &ClusterJobConfig,
 ) -> String {
+    match backend {
+        ClusterBackend::Kubernetes => {
+            return crate::backend::k8s::generate_k8s_array_job_manifest(
+                rule, cmd_dir, count, config,
+            );
+        }
+        ClusterBackend::AwsBatch => {
+            return crate::backend::aws_batch::generate_aws_batch_array_spec(
+                rule, cmd_dir, count, config,
+            );
+        }
+        ClusterBackend::GcpBatch => {
+            return crate::backend::gcp_batch::generate_gcp_batch_array_spec(
+                rule, cmd_dir, count, config,
+            );
+        }
+        _ => {}
+    }
     let base = generate_submit_script(backend, rule, "", config);
     let mut lines: Vec<String> = base.lines().map(str::to_string).collect();
 
@@ -177,6 +216,7 @@ pub fn generate_array_submit_script(
         ClusterBackend::Pbs => ("#PBS -J 1-{count}", "PBS_ARRAY_INDEX"),
         ClusterBackend::Sge => ("#$ -t 1-{count}", "SGE_TASK_ID"),
         ClusterBackend::Lsf => ("#BSUB -J \"{name}[1-{count}]\"", "LSB_JOBINDEX"),
+        _ => unreachable!(),
     };
     let range = range_directive
         .replace("{count}", &count.to_string())
@@ -244,6 +284,9 @@ pub fn submit_command(backend: &ClusterBackend) -> &'static str {
         ClusterBackend::Pbs => "qsub",
         ClusterBackend::Sge => "qsub",
         ClusterBackend::Lsf => "bsub",
+        ClusterBackend::Kubernetes => "kubectl",
+        ClusterBackend::AwsBatch => "aws",
+        ClusterBackend::GcpBatch => "gcloud",
     }
 }
 
@@ -254,6 +297,9 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
         ClusterBackend::Pbs => "qstat",
         ClusterBackend::Sge => "qstat",
         ClusterBackend::Lsf => "bjobs",
+        ClusterBackend::Kubernetes => "kubectl get jobs",
+        ClusterBackend::AwsBatch => "aws batch describe-jobs",
+        ClusterBackend::GcpBatch => "gcloud batch jobs describe",
     }
 }
 
