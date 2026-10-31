@@ -170,6 +170,7 @@ nav:
       - export: commands/export.md
       - format: commands/format.md
       - graph: commands/graph.md
+      - import: commands/import.md
       - init: commands/init.md
       - info: commands/info.md
       - license: commands/license.md

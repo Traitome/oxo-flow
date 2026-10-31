@@ -351,10 +351,10 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Implement lexical/structural parsers in `nextflow.rs` (extracting `process` blocks, `cpus`, `memory`, `time`, `container`, `conda`, `input:` tuple/path qualifiers, `output:` qualifiers, and `script:`/`shell:` templates) and `snakemake.rs` (extracting `rule`, `input`, `output`, `params`, `threads`, `resources`, `conda`, `container`, `shell`/`script`).
-- [ ] **Step 2**: Translate wildcard/channel variables (`${task.cpus}` -> `{threads}`, `${meta.id}` -> `{sample}`, `{wildcards.sample}` -> `{sample}`, `{input.bam}` -> `{input[0]}`) and infer `[rules.types]` contracts by querying `nfcore_modules.jsonl` and `edam_terms.jsonl`.
-- [ ] **Step 3**: Wire `oxo-flow import` into `crates/oxo-flow-cli/src/main.rs` (updating subcommand count and docs in `AGENTS.md`, `README.md`, and `docs/guide/src/`).
-- [ ] **Step 4**: Validate transpiled outputs on 20+ canonical `nf-core` modules and Snakemake rules in `tests/transpile_integration.rs` using `oxo-flow validate` and `oxo-flow lint`.
+- [x] **Step 1**: Implement lexical/structural parsers in `nextflow.rs` (extracting `process` blocks, `cpus`, `memory`, `time`, `container`, `conda`, `input:` tuple/path qualifiers, `output:` qualifiers, and `script:`/`shell:` templates) and `snakemake.rs` (extracting `rule`, `input`, `output`, `params`, `threads`, `resources`, `conda`, `container`, `shell`/`script`).
+- [x] **Step 2**: Translate wildcard/channel variables (`${task.cpus}` -> `{threads}`, `${meta.id}` -> `{sample}`, `{wildcards.sample}` -> `{sample}`, `{input.bam}` -> `{input[0]}`) and infer `[rules.types]` contracts by querying `nfcore_modules.jsonl` and `edam_terms.jsonl`.
+- [x] **Step 3**: Wire `oxo-flow import` into `crates/oxo-flow-cli/src/main.rs` (updating subcommand count and docs in `AGENTS.md`, `README.md`, and `docs/guide/src/`).
+- [x] **Step 4**: Validate transpiled outputs on 20+ canonical `nf-core` modules and Snakemake rules in `tests/transpile_integration.rs` using `oxo-flow validate` and `oxo-flow lint`.
 
 ---
 
@@ -372,13 +372,13 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Move the core pattern table and causal classifier into `crates/oxo-flow-core/src/diagnostics.rs` so both `oxo-flow-cli` and `oxo-flow-web` call the exact same diagnostic engine (honoring the *Reuse, never retype* invariant).
-- [ ] **Step 2**: Enrich diagnostic evaluation inputs with `BenchmarkRecord` telemetry (`max_rss_mb`, `cpu_seconds`, `duration_ms`), exit signals (`137`/`SIGKILL`, `139`/`SIGSEGV`, `140`/`SIGXCPU`), and `BioTypes` header inspection results.
-- [ ] **Step 3**: Define bounded, deterministic `RepairAction` variants:
+- [x] **Step 1**: Move the core pattern table and causal classifier into `crates/oxo-flow-core/src/diagnostics.rs` so both `oxo-flow-cli` and `oxo-flow-web` call the exact same diagnostic engine (honoring the *Reuse, never retype* invariant).
+- [x] **Step 2**: Enrich diagnostic evaluation inputs with `BenchmarkRecord` telemetry (`max_rss_mb`, `cpu_seconds`, `duration_ms`), exit signals (`137`/`SIGKILL`, `139`/`SIGSEGV`, `140`/`SIGXCPU`), and `BioTypes` header inspection results.
+- [x] **Step 3**: Define bounded, deterministic `RepairAction` variants:
   - `ScaleResources { memory_multiplier: f64, time_multiplier: f64 }` (for confirmed OOM / walltime kills, capped by system/cluster ceiling).
   - `InsertBridgeRule { adapter_rule: Rule }` (for `TYPE-002` unsorted BAM or `TYPE-003` missing index).
   - `RerouteScratch { tmp_dir: PathBuf }` (for `ENOSPC` on system temp volume).
-- [ ] **Step 4**: Record every applied `RepairAction` inside `CheckpointState` and `.oxo-flow/ai_sessions/`, re-verify the modified DAG with `check_workflow_types`, and resume execution from the failed node.
+- [x] **Step 4**: Record every applied `RepairAction` inside `CheckpointState` and `.oxo-flow/ai_sessions/`, re-verify the modified DAG with `check_workflow_types`, and resume execution from the failed node.
 
 ---
 
@@ -395,9 +395,9 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: When a rule fails under `run` or `run --cluster`, format terminal output with the exact root cause and emit a single-key prompt: `[R] Auto-scale memory & resume  [D] Debug command with AI  [A] Abort`.
-- [ ] **Step 2**: In the Web and Desktop UI, render failed stations with a luminous red diagnostic halo and display a 1-click remediation card containing the exact planned repair diff.
-- [ ] **Step 3**: Support bi-directional deep linking: clicking an error in the Web dashboard opens the exact rule in the VS Code editor (`vscode://...`); running `oxo-flow run --web-preview` in the CLI auto-opens the live Metro-DAG canvas in the desktop or browser shell.
+- [x] **Step 1**: When a rule fails under `run` or `run --cluster`, format terminal output with the exact root cause and emit a single-key prompt: `[R] Auto-scale memory & resume  [D] Debug command with AI  [A] Abort`.
+- [x] **Step 2**: In the Web and Desktop UI, render failed stations with a luminous red diagnostic halo and display a 1-click remediation card containing the exact planned repair diff.
+- [x] **Step 3**: Support bi-directional deep linking: clicking an error in the Web dashboard opens the exact rule in the VS Code editor (`vscode://...`); running `oxo-flow run --web-preview` in the CLI auto-opens the live Metro-DAG canvas in the desktop or browser shell.
 
 ---
 

@@ -380,6 +380,26 @@ pub enum Commands {
         )]
         format: Option<String>,
     },
+    /// Transpile a Nextflow DSL2 or Snakemake pipeline into oxo-flow.
+    Import {
+        #[arg(
+            value_name = "SOURCE",
+            help = "Path to Nextflow (.nf) or Snakemake (Snakefile, .smk) file"
+        )]
+        source: PathBuf,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            help = "Source format: 'nextflow' or 'snakemake' (auto-detected if omitted)"
+        )]
+        from: Option<String>,
+        #[arg(
+            short = 'o',
+            long,
+            help = "Output .oxoflow file (prints to stdout if omitted)"
+        )]
+        output: Option<PathBuf>,
+    },
     /// Initialize a new workflow project.
     Init {
         #[arg(value_name = "NAME", help = "Project name (no path separators)")]
@@ -1615,6 +1635,25 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include, cli.json, ai).await?;
         }
         Commands::Info { workflow, format } => info_command(workflow, format)?,
+        Commands::Import {
+            source,
+            from,
+            output,
+        } => {
+            let parsed_from = match from.as_deref() {
+                Some("nextflow") | Some("nf") => {
+                    Some(oxo_flow_core::transpile::SourceFormat::Nextflow)
+                }
+                Some("snakemake") | Some("smk") => {
+                    Some(oxo_flow_core::transpile::SourceFormat::Snakemake)
+                }
+                Some(other) => anyhow::bail!(
+                    "unknown source format '{other}': expected 'nextflow' or 'snakemake'"
+                ),
+                None => None,
+            };
+            crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
+        }
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template {
             template,

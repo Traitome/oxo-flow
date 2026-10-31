@@ -372,7 +372,7 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         );
     }
 
-    /// The prompt permits "only the changed portions" — a [[rules]]-only
+    /// The prompt permits "only the changed portions" — a `[[rules]]`-only
     /// block is a legitimate fix and must not be discarded.
     #[test]
     fn toml_block_accepts_rules_only_fragments() {

@@ -921,12 +921,38 @@ export default function MonitorReport() {
             <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, color: 'var(--color-error)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <CircleX size={14} /> {fn.rule}
+                <a
+                  href={`vscode://traitome.oxo-flow/open?rule=${encodeURIComponent(fn.rule)}`}
+                  style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--color-accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+                  title="Open in VS Code"
+                >
+                  VS Code ↗
+                </a>
               </div>
               <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
               {fn.suggestions.length > 0 && (
                 <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
                   {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
                 </ul>
+              )}
+              {fn.auto_fixable && fn.fix_action && (
+                <div style={{ marginTop: '6px', padding: '6px 8px', background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--color-text)' }}>
+                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>⚡ 1-Click Fix:</span>
+                    {fn.fix_action.description}
+                  </div>
+                  <button
+                    className="btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                    onClick={() => {
+                      if (selId) {
+                        api.retryRun(selId).catch(console.error);
+                      }
+                    }}
+                  >
+                    Apply &amp; Retry
+                  </button>
+                </div>
               )}
               {/* AI explanation grounded in the deterministic diagnosis
                   (issue #82 P1-10: the explain endpoint existed but the

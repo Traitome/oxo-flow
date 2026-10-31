@@ -67,7 +67,7 @@ struct PairEntry {
     metadata: std::collections::HashMap<String, String>,
 }
 
-/// A fully parsed re-entry manifest declaring newly discovered samples, pairs, and arbitrary [[values]] axes.
+/// A fully parsed re-entry manifest declaring newly discovered samples, pairs, and arbitrary `[[values]]` axes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReentryManifest {
     pub group: Option<String>,

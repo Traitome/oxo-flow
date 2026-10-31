@@ -980,9 +980,13 @@ shell = "gatk VariantRecalibrator -V {input} -O {output[0]}"
     #[test]
     fn plan_collects_deterministic_scientific_warnings() {
         let plan = build_explain_plan(&fixture_config(), None).unwrap();
-        // 3-sample cohort < GATK VQSR minimum of ~30.
-        assert_eq!(plan.warnings.len(), 1);
-        let warning = &plan.warnings[0];
+        // 3-sample cohort < GATK VQSR minimum of ~30, along with evidence-backed preflight rules.
+        assert!(!plan.warnings.is_empty());
+        let warning = plan
+            .warnings
+            .iter()
+            .find(|w| w.code == "SCI-VQSR-COHORT")
+            .expect("SCI-VQSR-COHORT warning must be present");
         assert_eq!(warning.code, "SCI-VQSR-COHORT");
         assert_eq!(warning.rule, "vqsr_snps");
         assert!(!warning.suggestion.is_empty());
@@ -1124,7 +1128,15 @@ shell = "gatk VariantRecalibrator -V {input} -O {output[0]}"
         assert_eq!(output["steps"][0]["explanation"], "trims");
         assert_eq!(output["steps"][3]["name"], "vqsr_snps");
         assert_eq!(output["steps"][3]["explanation"], "");
-        assert_eq!(output["review"][0]["code"], "SCI-VQSR-COHORT");
+        assert!(
+            output["review"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["code"] == "SCI-VQSR-COHORT"),
+            "expected SCI-VQSR-COHORT in review: {:?}",
+            output["review"]
+        );
         assert!(output["provenance"]["bio_skills"].as_u64().unwrap() >= 500);
         assert_eq!(output["provenance"]["model"], "deepseek-v4-pro");
     }

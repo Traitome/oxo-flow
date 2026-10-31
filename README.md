@@ -260,7 +260,7 @@ It provides `[[rules]]`-aware syntax highlighting (wildcards and `{input[0]}` pl
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **31 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
+The `oxo-flow` binary provides **32 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
 
 | Category | Commands |
 |----------|----------|
@@ -288,7 +288,7 @@ oxo-flow/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 31 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 32 subcommands
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 │   └── oxo-flow-desktop/  # Native desktop shell ("oxo-flow-desktop", wry + tao) —
 │                          # excluded from the workspace (own Cargo.toml)

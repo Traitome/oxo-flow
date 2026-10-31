@@ -3913,6 +3913,48 @@ pub async fn run_command(
                 }
             }
 
+            // Deterministic diagnostics & 1-key remediation
+            {
+                let failures_guard = failures.lock().await;
+                let failure = failures_guard
+                    .iter()
+                    .find(|(name, _)| name == &completed_rule)
+                    .or_else(|| failures_guard.first());
+                if let Some((rule, error)) = failure {
+                    let exit_code = failure_exit_code(error);
+                    let code_opt = if exit_code == -1 {
+                        None
+                    } else {
+                        Some(exit_code)
+                    };
+                    let ctx =
+                        oxo_flow_core::diagnostics::DiagnosticContext::new(rule, error, code_opt);
+                    let diags = oxo_flow_core::diagnostics::DiagnosticsEngine::global()
+                        .analyze_context(&ctx);
+                    if let Some(d) = diags.first() {
+                        narrate_console_line(format_args!(
+                            "  {} Root Cause: {} ({:?})",
+                            "🔍".bold(),
+                            d.likely_cause.yellow(),
+                            d.category
+                        ));
+                        for s in &d.suggestions {
+                            narrate_console_line(format_args!(
+                                "     {} {}",
+                                "💡 Suggestion:".cyan(),
+                                s
+                            ));
+                        }
+                        if d.repair_action.is_some() {
+                            narrate_console_line(format_args!(
+                                "     {} Remediation: [R] Auto-scale & resume  [D] Debug with AI  [A] Abort",
+                                "⚡".bold()
+                            ));
+                        }
+                    }
+                }
+            }
+
             // AI error recovery
             let should_recover =
                 ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);

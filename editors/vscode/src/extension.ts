@@ -20,6 +20,7 @@ import {
   type ReportEnvironment,
 } from "./core/reportIssue";
 import { buildGenerationPrompt, extractToml, resolveBackend } from "./core/aiBackend";
+import { ruleLensInfos } from "./core/ruleIndex";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCodeActionProvider } from "./providers/codeActions";
 import { OxoflowCompletionProvider } from "./providers/completion";
@@ -186,6 +187,23 @@ export function activate(context: vscode.ExtensionContext): void {
     const ctx = (args[0] ?? {}) as ReportContext;
     return reportIssue(statusBar, ctx);
   });
+  register("oxo-flow.jumpToRule", (rule: unknown) => {
+    if (typeof rule === "string") {
+      void jumpToRule(rule);
+    }
+  });
+
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri(uri: vscode.Uri) {
+        const query = new URLSearchParams(uri.query);
+        const rule = query.get("rule");
+        if (rule) {
+          void jumpToRule(rule);
+        }
+      },
+    })
+  );
 }
 
 export function deactivate(): void {
@@ -225,6 +243,20 @@ async function pipelineTarget(): Promise<{ folder: vscode.WorkspaceFolder; file:
 
 function folderFor(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+}
+
+async function jumpToRule(ruleName: string): Promise<void> {
+  const target = await pipelineTarget();
+  if (!target) return;
+  const doc = await vscode.workspace.openTextDocument(target.file);
+  const editor = await vscode.window.showTextDocument(doc);
+  const infos = ruleLensInfos(doc.getText());
+  const found = infos.find((r) => r.name === ruleName);
+  if (found) {
+    const pos = new vscode.Position(found.nameLine, 0);
+    editor.selection = new vscode.Selection(pos, pos);
+    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+  }
 }
 
 async function executePipelineTask(
