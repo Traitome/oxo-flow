@@ -22,6 +22,7 @@ pub mod rate_limit;
 pub mod server;
 pub mod sse;
 pub mod sys;
+pub mod theme;
 pub mod workspace;
 
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};

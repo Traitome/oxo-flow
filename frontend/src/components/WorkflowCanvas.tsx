@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -17,9 +17,10 @@ import {
 } from '@xyflow/react';
 import { graphStratify, sugiyama } from 'd3-dag';
 import '@xyflow/react/dist/style.css';
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, TrainTrack } from 'lucide-react';
 import type { DagJson } from '../api/types';
 import { useI18n } from '../context/I18n';
+import { MetroCanvas } from './MetroCanvas';
 
 // ── Node card: a terminal snippet, because the subject's vernacular is code ──
 
@@ -174,6 +175,7 @@ export default function WorkflowCanvas({
   context = 'editor',
 }: WorkflowCanvasProps) {
   const { t } = useI18n();
+  const [viewMode, setViewMode] = useState<'standard' | 'metro'>('standard');
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RuleNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastNodeSet = useRef('');
@@ -281,6 +283,36 @@ export default function WorkflowCanvas({
     return <div className="empty-state">{t('canvas.empty')}</div>;
   }
 
+  if (viewMode === 'metro') {
+    return (
+      <div className="workflow-canvas" data-editable={editable} style={{ position: 'relative' }}>
+        <MetroCanvas
+          dag={dag}
+          editable={editable}
+          scopeKey={scopeKey}
+          onEditRule={onEditRule}
+          onConnectRules={onConnectRules}
+          onRemoveRules={onRemoveRules}
+          statuses={statusById}
+        />
+        <div
+          className="rf-metro-view-toggle"
+          style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: 6 }}
+        >
+          <button
+            type="button"
+            className="rf-layout-btn"
+            style={{ background: 'var(--color-primary, #4F7DF9)', color: '#ffffff' }}
+            onClick={() => setViewMode('standard')}
+            title="Switch to Standard DAG View"
+          >
+            <LayoutGrid size={14} /> DAG View
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="workflow-canvas" data-editable={editable}>
       <ReactFlow
@@ -310,11 +342,24 @@ export default function WorkflowCanvas({
             editor-canvas). minZoom 0.5 keeps large DAGs readable instead. */}
         {!editable && <MiniMap pannable zoomable className="rf-minimap" />}
       </ReactFlow>
-      {context === 'editor' && (
-        <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>
-          <LayoutGrid size={14} /> {t('canvas.autoLayout')}
+      <div
+        className="rf-metro-view-toggle"
+        style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: 6 }}
+      >
+        <button
+          type="button"
+          className="rf-layout-btn"
+          onClick={() => setViewMode('metro')}
+          title="Switch to Metro Transit Map View"
+        >
+          <TrainTrack size={14} /> Metro View
         </button>
-      )}
+        {context === 'editor' && (
+          <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>
+            <LayoutGrid size={14} /> {t('canvas.autoLayout')}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

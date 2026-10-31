@@ -1,0 +1,214 @@
+/* Metropolis Design System: Biological Modality & Transit Canvas Tokens */
+:root {
+  /* Biological Modality Semantic Palette */
+  --metro-genomics-primary: #3B82F6;
+  --metro-genomics-accent: #06B6D4;
+  --metro-genomics-glow: rgba(59, 130, 246, 0.15);
+
+  --metro-transcriptomics-primary: #10B981;
+  --metro-transcriptomics-accent: #14B8A6;
+  --metro-transcriptomics-glow: rgba(16, 185, 129, 0.15);
+
+  --metro-epigenomics-primary: #F59E0B;
+  --metro-epigenomics-accent: #F97316;
+  --metro-epigenomics-glow: rgba(245, 158, 11, 0.15);
+
+  --metro-metagenomics-primary: #8B5CF6;
+  --metro-metagenomics-accent: #D946EF;
+  --metro-metagenomics-glow: rgba(139, 92, 246, 0.15);
+
+  --metro-infra-primary: #64748B;
+  --metro-infra-accent: #94A3B8;
+  --metro-infra-glow: rgba(100, 116, 139, 0.15);
+
+  /* Transit Graph Typography & Geometry */
+  --metro-font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --metro-font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --metro-line-width: 3px;
+  --metro-station-radius: 6px;
+  --metro-interchange-size: 14px;
+  --metro-corridor-gap: 28px;
+
+  /* Diagnostic Glow Halos */
+  --halo-error: 0 0 16px rgba(239, 68, 68, 0.6);
+  --halo-running: 0 0 16px rgba(59, 130, 246, 0.6);
+  --halo-success: 0 0 12px rgba(16, 185, 129, 0.4);
+}
+
+:root[data-theme="dark"] {
+  --metro-genomics-primary: #60A5FA;
+  --metro-genomics-accent: #22D3EE;
+  --metro-genomics-glow: rgba(96, 165, 250, 0.2);
+
+  --metro-transcriptomics-primary: #34D399;
+  --metro-transcriptomics-accent: #2DD4BF;
+  --metro-transcriptomics-glow: rgba(52, 211, 153, 0.2);
+
+  --metro-epigenomics-primary: #FBBF24;
+  --metro-epigenomics-accent: #FB923C;
+  --metro-epigenomics-glow: rgba(251, 191, 36, 0.2);
+
+  --metro-metagenomics-primary: #A78BFA;
+  --metro-metagenomics-accent: #E879F9;
+  --metro-metagenomics-glow: rgba(167, 139, 250, 0.2);
+
+  --metro-infra-primary: #94A3B8;
+  --metro-infra-accent: #CBD5E1;
+  --metro-infra-glow: rgba(148, 163, 184, 0.2);
+}
+
+/* Metro-DAG Studio Components */
+.rf-metro-canvas-container {
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-bg, #0B1220);
+}
+
+.rf-metro-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  background: var(--color-bg-secondary, #0F172A);
+  border: 1px solid var(--color-border, #263449);
+  border-radius: var(--radius-md, 8px);
+  padding: 4px;
+  box-shadow: var(--shadow-card);
+}
+
+.rf-metro-granularity-group {
+  display: flex;
+  gap: 4px;
+}
+
+.rf-metro-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary, #94A3B8);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.rf-metro-btn:hover {
+  background: var(--color-bg-tertiary, #1E293B);
+  color: var(--color-text, #E2E8F0);
+}
+
+.rf-metro-btn.active {
+  background: var(--color-primary, #4F7DF9);
+  color: #ffffff;
+}
+
+/* Compact Station Glyph (Macro Zoom) */
+.rf-metro-station-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 2px solid;
+  border-radius: 20px;
+  font-family: var(--metro-font-sans);
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.rf-metro-station-compact:hover {
+  transform: scale(1.05);
+}
+
+.rf-metro-compact-glyph {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.rf-metro-compact-label {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Detailed Station Stop Card (Micro Zoom) */
+.rf-metro-station-card {
+  background: var(--color-bg-secondary, #0F172A);
+  border: 1px solid var(--color-border, #263449);
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 14px;
+  min-width: 200px;
+  max-width: 280px;
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  font-family: var(--metro-font-sans);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.rf-metro-station-card:hover {
+  border-color: var(--color-primary, #4F7DF9);
+}
+
+.rf-metro-station-card.selected {
+  outline: 2px solid var(--color-primary, #4F7DF9);
+}
+
+.rf-metro-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rf-metro-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.rf-metro-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text, #E2E8F0);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-metro-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.rf-metro-modality-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.rf-metro-env {
+  color: var(--color-text-tertiary, #64748B);
+}
+
+.rf-metro-shell {
+  font-family: var(--metro-font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary, #94A3B8);
+  background: var(--color-bg-tertiary, #1E293B);
+  padding: 4px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

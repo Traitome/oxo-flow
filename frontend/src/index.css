@@ -1,3 +1,5 @@
+@import './styles/theme.css';
+
 /* oxo-flow v0.8 — Spec Section 10 Design System */
 :root {
   --color-primary:#2456E6; --color-primary-hover:#1C46C4; --color-primary-light:#EDF2FF;
