@@ -22,6 +22,7 @@ oxo-flow validate rules/qc.oxoflow --as-include
 ```
 
 **Behavior:**
+
 - Parse the file as TOML
 - Validate rule syntax (name, input, output, shell/script)
 - Check for required fields per rule
@@ -31,10 +32,12 @@ oxo-flow validate rules/qc.oxoflow --as-include
 - Skip missing input file checks (will be checked in parent context)
 
 **Files to modify:**
+
 - `crates/oxo-flow-cli/src/commands/quality.rs` - Add `--as-include` flag
 - `crates/oxo-flow-cli/src/main.rs` - Update CLI definition
 
 **Acceptance criteria:**
+
 - `oxo-flow validate sub.oxoflow --as-include` passes for valid fragment
 - `oxo-flow validate sub.oxoflow --as-include` fails with clear error for invalid fragment
 - DAG validation is skipped when flag is set
@@ -74,10 +77,12 @@ reference_fasta = "/custom/path/genome.fa"  # overrides auto-derivation
 | `hisat2_index` | `{reference_dir}/hisat2/genome.fa` |
 
 **Files to modify:**
+
 - `crates/oxo-flow-core/src/config.rs` - Add `reference_dir` field and auto-derivation
 - `crates/oxo-flow-core/src/format.rs` - Document convention in comments
 
 **Acceptance criteria:**
+
 - Setting `reference_dir` auto-populates standard paths
 - Explicit values override auto-derived ones
 - Works with existing config parsing
@@ -103,15 +108,18 @@ memory = "32G"     # explicit override
 ```
 
 **Behavior:**
+
 - If rule has `threads = "auto"` → scale to `min(default_threads, available_cpus)`
 - If rule has `memory = "auto"` → scale to `min(default_memory, 80% of available_memory)`
 - CLI flags `--max-threads` and `--max-memory` set global caps (already implemented)
 
 **Files to modify:**
+
 - `crates/oxo-flow-core/src/rule.rs` - Extend threads/memory parsing for "auto"
 - `crates/oxo-flow-core/src/executor.rs` - Implement auto-scaling logic
 
 **Acceptance criteria:**
+
 - `"auto"` value is accepted for threads and memory
 - System resources are queried using sysinfo crate
 - Values are capped at available resources
@@ -140,18 +148,21 @@ env_group = "qc"  # reuses same environment
 ```
 
 **Behavior:**
+
 - `env_group` takes precedence over rule-level `environment`
 - Environment is resolved at DAG construction time
 - Same environment instance is shared across all rules in the group (cached)
 - Validation error if `env_group` references non-existent group
 
 **Files to modify:**
+
 - `crates/oxo-flow-core/src/config.rs` - Add `env_groups` to config, `env_group` to rule
 - `crates/oxo-flow-core/src/rule.rs` - Add `env_group` field
 - `crates/oxo-flow-core/src/executor.rs` - Modify environment resolution logic
 - `crates/oxo-flow-core/src/format.rs` - Add validation for undefined group references
 
 **Acceptance criteria:**
+
 - `env_groups` section is parsed from workflow config
 - Rules can reference environment groups by name
 - Undefined group references cause validation error
@@ -176,17 +187,20 @@ optional = true  # skip if input missing, no error
 ```
 
 **Behavior:**
+
 - When `optional = true` and input files don't exist, the rule is skipped
 - Skipped rules don't block dependent rules (outputs treated as "not produced")
 - Validation warns if optional rule has no wildcards in input
 - Default is `optional = false` (current behavior)
 
 **Files to modify:**
+
 - `crates/oxo-flow-core/src/rule.rs` - Add `optional` field
 - `crates/oxo-flow-core/src/executor.rs` - Check input existence for optional rules
 - `crates/oxo-flow-core/src/dag.rs` - Handle missing outputs from skipped rules
 
 **Acceptance criteria:**
+
 - Optional rules are skipped when inputs missing
 - Non-optional rules still fail on missing inputs
 - Skipped optional rules are logged at info level
@@ -207,15 +221,18 @@ shell = "process-dir {input} -o {output}"
 ```
 
 **Behavior:**
+
 - Directory input tracks all files recursively
 - Rule re-runs if any file in directory is newer than output
 - Supports glob patterns: `{ dir = "data/*/", pattern = "*.fastq" }`
 
 **Files to modify:**
+
 - `crates/oxo-flow-core/src/rule.rs` - Extend `FilePatterns` for directory type
 - `crates/oxo-flow-core/src/executor.rs` - Handle directory input checking
 
 **Acceptance criteria:**
+
 - Directory inputs are tracked recursively
 - Modification time is max of all contained files
 - Pattern filtering works for directory inputs
@@ -225,6 +242,7 @@ shell = "process-dir {input} -o {output}"
 ## Documentation Updates
 
 All changes require:
+
 1. Inline documentation comments in modified code
 2. README.md updates for new CLI flags and config options
 3. CHANGELOG.md entry for the release

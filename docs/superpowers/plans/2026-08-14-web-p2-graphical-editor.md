@@ -22,11 +22,13 @@
 ### Task 1: Dag command API — full rule editing (backend)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/dag/service.rs` (execute_edit operations)
 - Modify: `crates/oxo-flow-web/Cargo.toml` (add `toml = { workspace = true }`)
 - Test: inline tests in service.rs + 2 integration cases in `crates/oxo-flow-web/tests/phase4_v09_integration.rs`
 
 **Interfaces:**
+
 - Consumes: `oxo_flow_core::{Rule, WorkflowConfig}`, `format_workflow`, existing `validate_pipeline`.
 - Produces (new operation semantics, existing envelope unchanged):
   - `add_rule` payload `{ rule: {…rule table…} }` (full field support; legacy `{name, shell}` still accepted)
@@ -217,11 +219,13 @@ fn json_to_toml(v: &serde_json::Value) -> toml::Value {
 ### Task 2: Edge kinds in `/api/pipelines/dag` (backend)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/workflow/types.rs` (`DagJsonEdge` + `kind: String`)
 - Modify: `crates/oxo-flow-web/src/domains/workflow/service.rs` (`build_dag` — classify each edge)
 - Test: inline service test + phase1 integration assertion
 
 **Interfaces:**
+
 - Consumes: parsed `WorkflowConfig` rules (each rule's `depends_on`).
 - Produces: `DagJsonEdge { from, to, kind }` where `kind == "declared"` iff `to.depends_on` contains `from`, else `"file"`.
 
@@ -267,11 +271,13 @@ fn json_to_toml(v: &serde_json::Value) -> toml::Value {
 ### Task 3: Knowledge endpoints for the tool palette (backend)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/ai/handlers.rs` (two GET handlers)
 - Modify: `crates/oxo-flow-web/src/server.rs` (routes `GET /api/knowledge/tools`, `GET /api/knowledge/skills` — mount OUTSIDE the auth middleware's protected set is unnecessary: personal mode has no auth; in team mode they're behind auth like other endpoints)
 - Test: `crates/oxo-flow-web/tests/knowledge_integration.rs` (new file; no DB needed — memory-backed)
 
 **Interfaces:**
+
 - Consumes: `oxo_flow_ai::knowledge::bioconda::{search_tools, tool_count}`, `oxo_flow_ai::knowledge::skills::{search_skills, skill_count}`.
 - Produces: `GET /api/knowledge/tools?q=<str>&limit=<n>` → `{ "total": <db size>, "tools": [{name, version, summary, platforms}] }`; `GET /api/knowledge/skills?q=` → `{ "total": …, "skills": [{name, domain, description, primary_tool}] }` (match `SkillRecord`'s actual fields).
 
@@ -313,6 +319,7 @@ pub async fn knowledge_tools(Query(params): Query<KnowledgeQuery>) -> ApiResult<
 ```
 
   with `#[derive(Deserialize)] pub struct KnowledgeQuery { q: String, limit: Option<usize> }` and a default `q=""` (Deserialize default). Server routes: `.route("/api/knowledge/tools", get(ai::handlers::knowledge_tools))` + skills analog, next to the existing `/api/ai/*` mounts.
+
 - [ ] **Step 4/5: verify + commit** `feat(web): knowledge search endpoints for the editor palette`.
 
 ---
@@ -320,6 +327,7 @@ pub async fn knowledge_tools(Query(params): Query<KnowledgeQuery>) -> ApiResult<
 ### Task 4: React Flow editor canvas (frontend)
 
 **Files:**
+
 - Modify: `frontend/package.json` (+`@xyflow/react`, +`d3-dag`; remove `cytoscape`, `cytoscape-dagre`, `cytoscape-edgehandles`, `@types/cytoscape`, `@types/cytoscape-edgehandles`)
 - Create: `frontend/src/components/WorkflowCanvas.tsx` — React Flow canvas: nodes from `/api/pipelines/dag` (id, label, color, env badge), edges (solid = declared, dashed = file, file edges non-deletable), drag-to-arrange (positions in `localStorage` keyed by pipeline id), connect handles → `api.dagCommand(…, "connect")`, delete (Backspace/Delete on selected node) → `remove_rule`, double-click node → open inspector, auto-layout button (d3-dag layered, 200×80 node size), minimap + fitView.
 - Create: `frontend/src/components/RuleInspector.tsx` — modal/side panel: name, description, shell (textarea), script, inputs/outputs (list editor, add/remove rows), environment (backend select: system/conda/mamba/docker/singularity/venv/modules + spec string), resources (threads, memory, gpu, disk, time_limit), envvars (key-value rows), when, retries, tags (comma string), optional/required (checkboxes), log, benchmark. Save → `api.dagCommand(…, "update_rule", {name, patch})` where patch contains ONLY changed fields (complete sub-objects for environment/resources/envvars).

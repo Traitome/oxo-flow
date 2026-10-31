@@ -153,6 +153,22 @@ Share URL truth (#907 R16):
   literals on the override path are bracketed. Import accepts both
   schemes, so older `oxo+https://` links keep working.
 
+Server process environment:
+
+- `OXO_FLOW_BIN` — explicit path to the `oxo-flow` CLI binary the server
+  spawns for run execution. It is the first of the binary search steps
+  (env override → `CARGO_BIN_EXE_oxo-flow` → sibling of the running
+  executable → parent directory → `PATH`), so a stale `PATH` entry can
+  no longer silently win over a deliberate pin; the resolved path is
+  logged at startup (from which the source is inferable) and a major/minor
+  mismatch between the server and the spawned CLI is warned.
+- `OXO_FLOW_WORKSPACE` — root directory for all user-scoped server data
+  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`,
+  `users/<u>/pipelines/<pipeline_id>/`). Defaults to a relative
+  `workspace/` under the process cwd; container deployments should point
+  it at a persistent volume. Path components are traversal-validated
+  before use.
+
 ---
 
 ## Domain-Driven Module Structure
@@ -360,3 +376,4 @@ The frontend (`frontend/`, React 19 + TypeScript) follows a few shared UX conven
 - **Honest AI-disabled state**: when no AI provider is configured, the Dashboard entry card renders a "configure AI" call-to-action linking to `/settings` (with a note about server-side configuration), and the chat composer's editor hand-off CTA only renders outside the editor context.
 - **Unified app navigation (issue #947)**: the SPA has exactly one primary nav — a sectioned sidebar (`WORKSPACE` / `INTELLIGENCE` / `INFRASTRUCTURE` / `ADMINISTRATION`) defined once in `Layout.tsx` with per-item role gating (issue #82 P1-15); the header is deliberately nav-free. At ≥1280px the sidebar is collapsible (240px ↔ 72px icon rail, persisted per device in localStorage, Ctrl/Cmd+B toggles); 1024–1279px forces the icon rail; below 1024px the sidebar becomes a drawer opened from the header toggle — a `role="dialog"` with focus trap, focus moved in on open, Escape/scrim/route-change dismissal. Icon-rail tooltips show on hover and keyboard focus. Version and license render exactly once, in the page footer; `/login` is a standalone centered card outside the app shell (same pattern as `/share`).
 - **Polling-stable UI state**: expansion/collapse choices on the run monitor are keyed by stable alert identifiers (`alert_id`, falling back to `rule-prediction`), so they survive the 5-second polling re-render.
+- **End-to-end workflow lifecycle & Command Palette**: the Command Center (`Dashboard.tsx`) surfaces a 5-stage lifecycle architecture grid (`1. Data & Samples` → `2. Author & AI` → `3. Validate & Lint` → `4. Execute & Guard` → `5. Provenance & Report`) that links directly to the corresponding editor modals (`/editor?modal=data`, `/editor?modal=engine`) and monitor tabs. A global keyboard Command Palette (`⌘K` / `Ctrl+K`) in `Layout.tsx` provides quick search across pages, lifecycle modals, and theme/locale toggles without adding header navigation links. The editor integrates sample-sheet cohort parsing (`POST /api/data/samplesheet/parse`), workspace file uploads (`GET/POST /api/files`), vendor MD5 delivery verification (`POST /api/data/verify`), `[engine]` disk-pressure & protected-tree configuration, canonical formatting (`POST /api/pipelines/format`), and best-practice linting (`POST /api/pipelines/lint`); the run launcher and monitor expose `--provenance` (`GET /api/runs/{id}/provenance-verify`), `--allow-protected-drift` (`GET /api/runs/{id}/protected-drift`), `--arg KEY=VALUE` overrides, and output file preview/download (`GET /api/runs/{id}/files`).

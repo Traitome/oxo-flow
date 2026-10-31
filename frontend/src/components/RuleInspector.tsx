@@ -28,7 +28,7 @@ interface RuleFormState {
   benchmark: string;
 }
 
-const ENV_BACKENDS = ['system', 'conda', 'mamba', 'docker', 'singularity', 'venv', 'modules'];
+const ENV_BACKENDS = ['system', 'conda', 'mamba', 'pixi', 'docker', 'singularity', 'venv', 'modules'];
 
 function emptyForm(name: string): RuleFormState {
   return {

@@ -9,6 +9,9 @@ import type {
   DagEditResponse, DataPerceptionReport, MonitorStatus, RunInstance,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
   KnowledgeToolsResponse, KnowledgeSkillsResponse,
+  QuotaInfo, ProtectedDriftResponse, ProvenanceVerifyResponse,
+  VerifyDataResponse, DiffResponse, UploadedFileEntry, FilePreviewResponse,
+  SamplesheetParseResponse, WorkflowStats,
 } from './types';
 
 
@@ -133,6 +136,7 @@ export const api = {
   health: () => get<HealthResponse>('/api/health'),
   system: () => get<SystemInfo>('/api/system'),
   metrics: () => get<RuntimeMetrics>('/api/metrics'),
+  quota: () => get<QuotaInfo>('/api/quota'),
   audit: (days = 7, page = 1, perPage = 50) =>
     get<AuditLogResponse>(`/api/audit?days=${days}&page=${page}&per_page=${perPage}`),
   updateQuota: (config: { max_concurrent_runs: number; max_total_threads: number; max_total_memory_mb: number; max_runs_per_day: number }) =>
@@ -159,8 +163,11 @@ export const api = {
   buildDag: (toml_content: string) => post<DagJson>('/api/pipelines/dag', { toml_content }),
   format: (toml_content: string) => post<{ formatted: string }>('/api/pipelines/format', { toml_content }),
   lint: (toml_content: string) => post<ValidateResponse>('/api/pipelines/lint', { toml_content }),
+  stats: (toml_content: string) => post<WorkflowStats>('/api/pipelines/stats', { toml_content }),
   // Sends inline TOML (the server also accepts ids — issue #82 P1-10).
   diff: (a: string, b: string) => post<{ diffs: Array<Record<string, unknown>> }>('/api/pipelines/diff', { toml_a: a, toml_b: b }),
+  diffPipelines: (data: { toml_a?: string; toml_b?: string; pipeline_a_id?: string; pipeline_b_id?: string }) =>
+    post<DiffResponse>('/api/pipelines/diff', data),
   exportPipeline: (id: string, format?: string) => post<{ content: string }>('/api/pipelines/export', { pipeline_id: id, format }),
   search: (query: string) => post<SearchResponse>('/api/pipelines/search', { query }),
 
@@ -187,14 +194,60 @@ export const api = {
   // ── Data Perception ──
   analyzeData: (paths: string[], maxDepth = 2) => post<DataAnalysis>('/api/data/analyze', { paths, max_depth: maxDepth }),
   perceiveData: (paths?: string[], description?: string) => post<DataPerceptionReport>('/api/data/perceive', { paths, description }),
+  parseSamplesheet: (content: string) => post<SamplesheetParseResponse>('/api/data/samplesheet/parse', { content }),
+  verifyData: (tree: string, md5_content: string) => post<VerifyDataResponse>('/api/data/verify', { tree, md5_content }),
+  listUploadedFiles: () => get<UploadedFileEntry[]>('/api/files'),
+  uploadFiles: async (files: FileList | File[], subdir?: string): Promise<{ files: UploadedFileEntry[] }> => {
+    const fd = new FormData();
+    if (subdir && subdir.trim()) {
+      fd.append('path', subdir.trim());
+    }
+    Array.from(files).forEach((f) => fd.append('file', f));
+    const res = await fetch(apiUrl('/api/files'), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    if (res.status === 401) {
+      redirectToLoginOn401();
+    }
+    if (!res.ok) throw await toApiError(res);
+    return res.json() as Promise<{ files: UploadedFileEntry[] }>;
+  },
   discoverReference: (genome: string, components: string[]) => post<ReferenceResult>('/api/data/reference', { genome, components }),
   referenceStatus: () => get<ReferenceStatus>('/api/data/reference/status'),
 
   // ── Execution ──
   createRun: (
     toml_content: string,
-    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string; cluster_id?: string; include_files?: Record<string, string>; config_overrides?: string[]; allow_protected_drift?: boolean } = {},
-  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null, cluster_id: options.cluster_id ?? null, ...(options.include_files ? { include_files: options.include_files } : {}), ...(options.config_overrides ? { config_overrides: options.config_overrides } : {}), ...(options.allow_protected_drift ? { allow_protected_drift: true } : {}) }),
+    options: {
+      max_jobs?: number;
+      dry_run?: boolean;
+      keep_going?: boolean;
+      samples?: string[];
+      targets?: string[];
+      pipeline_id?: string;
+      cluster_id?: string;
+      include_files?: Record<string, string>;
+      config_overrides?: string[];
+      allow_protected_drift?: boolean;
+      provenance?: boolean;
+    } = {},
+  ) =>
+    post<RunResponse>('/api/runs', {
+      toml_content,
+      max_jobs: options.max_jobs ?? 4,
+      dry_run: options.dry_run ?? false,
+      keep_going: options.keep_going ?? false,
+      samples: options.samples ?? [],
+      targets: options.targets ?? [],
+      pipeline_id: options.pipeline_id ?? null,
+      cluster_id: options.cluster_id ?? null,
+      ...(options.include_files ? { include_files: options.include_files } : {}),
+      ...(options.config_overrides ? { config_overrides: options.config_overrides } : {}),
+      ...(options.allow_protected_drift ? { allow_protected_drift: true } : {}),
+      ...(options.provenance ? { provenance: true } : {}),
+    }),
   listRuns: (params: { limit?: number; cursor?: string; status?: string; q?: string } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));
@@ -217,6 +270,12 @@ export const api = {
   resumeRun: (id: string, from_rule?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/resume`, { from_rule }),
   cleanRun: (id: string) => post<{ run_id: string; exit_code: number | null; stdout: string; stderr: string }>(`/api/runs/${id}/clean`, {}),
   resumeCheckpoint: (id: string, maxJobs = 1) => post<{ run_id: string; resumed_from: string; max_jobs: number }>(`/api/runs/${id}/resume-checkpoint`, { max_jobs: maxJobs }),
+  getRunProtectedDrift: (id: string, signal?: AbortSignal) => get<ProtectedDriftResponse>(`/api/runs/${id}/protected-drift`, signal),
+  verifyRunProvenance: (id: string, signal?: AbortSignal) => get<ProvenanceVerifyResponse>(`/api/runs/${id}/provenance-verify`, signal),
+  previewRunFile: (id: string, path: string, signal?: AbortSignal) =>
+    get<FilePreviewResponse>(`/api/runs/${id}/files?path=${encodeURIComponent(path)}&preview=true`, signal),
+  getRunFileDownloadUrl: (id: string, path: string) =>
+    apiUrl(`/api/runs/${id}/files?path=${encodeURIComponent(path)}`),
   aiStatus: (id: string, signal?: AbortSignal) => get<MonitorStatus>(`/api/runs/${id}/ai-status`, signal),
 
   // ── Report ──

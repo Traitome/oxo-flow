@@ -113,6 +113,7 @@ impl AiProvider {
 ```
 
 **Enhancements over current `ai_provider.rs`:**
+
 - `chat_with_tools()` translates ToolDef → DeepSeek/OpenAI native `tools` JSON, handles `tool_calls` response, and supports follow-up `tool` role messages for multi-turn.
 - DeepSeek `strict` mode (Beta) for structured output when tool schemas allow.
 - Unified error handling: network → retry, auth → clear message, schema → validation error.
@@ -699,6 +700,7 @@ All CLI commands that support AI use a consistent flag set:
 | `oxo-flow template --ai` | Interactive mode: agent asks clarifying questions |
 
 **Agent flow:**
+
 1. `TemplateAgent.plan()` — parse intent, determine analysis type, identify needed tools
 2. `Orchestrator` loop:
    - Agent may call `lookup_tool`, `read_file`, `fetch_url` to gather knowledge
@@ -715,6 +717,7 @@ All CLI commands that support AI use a consistent flag set:
 | `oxo-flow dry-run <WORKFLOW> --ai` | Agent analyzes logic, resources, best practices |
 
 **Agent flow:**
+
 1. `DryRunAgent.plan()` — load workflow, identify rules and their tools
 2. Agent checks each rule against:
    - Tool reference table (appropriate thread/memory?)
@@ -732,6 +735,7 @@ All CLI commands that support AI use a consistent flag set:
 | `oxo-flow run <WORKFLOW> --ai-recover` | On failure: Agent diagnoses → fixes → retries |
 
 **Agent flow on failure:**
+
 1. `RunRecoveryAgent.plan()` — capture failed rule, exit code, stderr, logs
 2. Agent matches error against `error_patterns` knowledge
 3. Agent proposes fix (modify TOML params, add env, fix dependencies)
@@ -1123,15 +1127,18 @@ fn dry_run_detects_missing_threads() {
 ### Phase 1 Complete (2026-08-09/10)
 
 **Delivered:**
+
 - `oxo-flow-ai` crate with full Layer 1–3 infrastructure
 - `oxo-flow template "<intent>" --ai` working with DeepSeek
 - `--from-url`, `--from-file`, `--ai-max-retries` flags on template command
 
 **Files created:**
+
 - `crates/oxo-flow-ai/` — 9 source files, 54 unit tests
 - `crates/oxo-flow-cli/src/commands/ai_template.rs` — 7 tests
 
 **Files modified:**
+
 - `Cargo.toml` — added workspace member + dep
 - `crates/oxo-flow-cli/Cargo.toml` — added oxo-flow-ai dep
 - `crates/oxo-flow-cli/src/main.rs` — Template command AI flags
@@ -1139,11 +1146,13 @@ fn dry_run_detects_missing_threads() {
 - `crates/oxo-flow-cli/src/commands/project.rs` — async template_command
 
 **Verified:**
+
 - `make ci`: fmt + clippy + build + test all passing (audit skipped — DNS timeout)
 - Manual test: `DEEPSEEK_API_KEY=<key> OXO_FLOW_AI_PROVIDER=deepseek oxo-flow template "RNA-seq" --ai` → generated valid 4-rule workflow
 - All 226+ tests passing across workspace
 
 **Deferred to Phase 2:**
+
 - Web crate migration (delete ai_provider.rs, copilot.rs; depend on oxo-flow-ai)
 - Dry-run + validate AI integration
 - Run error recovery with --ai-recover
@@ -1151,14 +1160,17 @@ fn dry_run_detects_missing_threads() {
 ### Phase 2 Complete (2026-08-10)
 
 **Delivered:**
+
 - `oxo-flow dry-run <workflow> --ai` — AI analyzes workflow for errors, resource mismatches, safety violations
 - `oxo-flow validate <workflow> --ai` — AI semantic validation in addition to schema checks
 - Web crate migration: `ai_provider.rs` → compatibility shim over oxo-flow-ai
 
 **Files created:**
+
 - `crates/oxo-flow-cli/src/commands/ai_check.rs` — shared AI analysis engine
 
 **Files modified:**
+
 - `crates/oxo-flow-cli/src/main.rs` — --ai flag on DryRun, Validate commands
 - `crates/oxo-flow-cli/src/commands/run.rs` — dry_run_command AI parameter
 - `crates/oxo-flow-cli/src/commands/quality.rs` — validate_command AI + block_on adapter
@@ -1168,33 +1180,40 @@ fn dry_run_detects_missing_threads() {
 - `Makefile` — audit --no-fetch fallback
 
 **Verified:**
+
 - Tested on `examples/cohort_analysis.oxoflow`: AI found 4 ERRORs + 4 WARNINGs
 - `make ci`: fmt + clippy + build + test + audit all passing
 
 **Deferred to Phase 3:**
+
 - Run error recovery with --ai-recover
 
 ### Phase 3 Complete (2026-08-10)
 
 **Delivered:**
+
 - `oxo-flow run <workflow> --ai-recover` — AI diagnoses rule failures and proposes fixes
 - `oxo-flow resume <checkpoint> --ai-recover` — AI diagnosis for resumed workflows
 - Error pattern matching against built-in library (OOM, segfault, missing files, etc.)
 - Automatic workflow archiving before fix application
 
 **Files created:**
+
 - `crates/oxo-flow-cli/src/commands/ai_recover.rs` — AI error diagnosis + fix archiving
 
 **Files modified:**
+
 - `crates/oxo-flow-cli/src/main.rs` — --ai-recover on Run, Resume
 - `crates/oxo-flow-cli/src/commands/run.rs` — AI recovery in failure path
 - `crates/oxo-flow-cli/src/commands/quality.rs` — updated run_command callers
 - `crates/oxo-flow-cli/Cargo.toml` — added chrono dependency
 
 **Verified:**
+
 - `make ci`: fmt + clippy + build + test + audit all passing
 
 **Deferred to Phase 4-5:**
+
 - Scope-level AI config (project/rule-level [ai] sections)
 - AI plugin types (AiToolPlugin, AiKnowledgePlugin, AiValidatorPlugin)
 - MCP/Skill ecosystem
@@ -1202,6 +1221,7 @@ fn dry_run_detects_missing_threads() {
 ### Phase 4 Complete (2026-08-10)
 
 **Delivered:**
+
 - Scope-level AI config: `AiConfig::resolve_chain()` resolving global→project→workflow→rule
 - `AiConfig::from_project_file()` — reads `.oxo-flow/ai.toml`
 - `AiConfig::from_rule_table()` — per-rule `[ai]` section
@@ -1209,25 +1229,30 @@ fn dry_run_detects_missing_threads() {
 - `AiPluginRegistry` for dynamic plugin discovery
 
 **Files created:**
+
 - `crates/oxo-flow-ai/src/plugin.rs` — 4 tests
 
 **Files modified:**
+
 - `crates/oxo-flow-ai/src/config.rs` — scope resolution + 4 tests
 - `crates/oxo-flow-ai/src/lib.rs` — plugin module
 
 ### Phase 5 Complete (2026-08-10)
 
 **Delivered:**
+
 - MCP bridge: `McpClient` trait, `McpToolBridge` (MCP→Tool adapter)
 - MCP tool discovery: `McpToolBridge::discover()` auto-registers server tools
 - Skill system: `SkillManifest` TOML format, `SkillRegistry`, discovery
 - Skill auto-discovery from `~/.oxo-flow/skills/` and project-level dirs
 
 **Files created:**
+
 - `crates/oxo-flow-ai/src/mcp.rs` — 3 tests
 - `crates/oxo-flow-ai/src/skill.rs` — 5 tests
 
 **Final verification:**
+
 - `make ci`: fmt + clippy + build + test + audit all passing
 - 70 oxo-flow-ai tests, 113 core tests, 59 CLI integration tests
 - E2E tested with DeepSeek: template, dry-run, validate all working
@@ -1265,6 +1290,7 @@ oxo-flow run workflow.oxoflow        # auto-recovery on failure
 workflows without `[ai]` sections.
 
 **Implementation:**
+
 - `should_use_ai(path, cli_flag)` — checks workflow [ai] section
 - `try_resolve_ai(path, cli_flag)` — returns Some(provider) when available
 - All 7 AI commands refactored to use auto-detection
@@ -1284,6 +1310,7 @@ workflows without `[ai]` sections.
 - Skill/MCP discovery runs at AiRuntime initialization
 
 **Files created:**
+
 - `crates/oxo-flow-cli/src/commands/ai_runtime.rs` — L1-L3 integration
 - `crates/oxo-flow-cli/src/commands/ai_session.rs` — session tracking
 - `crates/oxo-flow-cli/src/commands/ai_status.rs` — status command

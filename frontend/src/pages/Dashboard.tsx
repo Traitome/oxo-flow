@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bot, FileCode2, PlayCircle, Sparkles } from 'lucide-react';
+import { Bot, FileCode2, PlayCircle, Sparkles, Database, ShieldCheck, CheckCircle2, Cpu, FileSpreadsheet } from 'lucide-react';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template, RuntimeMetrics } from '../api/types';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -121,6 +121,65 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* 5-Stage End-to-End Workflow Lifecycle Architecture */}
+      <div className="lifecycle-grid" role="region" aria-label="Workflow Lifecycle">
+        <button
+          type="button"
+          className="lifecycle-stage-card"
+          onClick={() => navigate('/editor?modal=data')}
+        >
+          <div className="lifecycle-stage-title">
+            <span>{t('lifecycle.stage1')}</span>
+            <FileSpreadsheet size={15} color="var(--color-primary)" />
+          </div>
+          <div className="lifecycle-stage-sub">{t('lifecycle.stage1.sub')}</div>
+        </button>
+        <button
+          type="button"
+          className="lifecycle-stage-card"
+          onClick={() => navigate(aiConfigured ? '/chat' : '/editor')}
+        >
+          <div className="lifecycle-stage-title">
+            <span>{t('lifecycle.stage2')}</span>
+            <Sparkles size={15} color="var(--color-accent)" />
+          </div>
+          <div className="lifecycle-stage-sub">{t('lifecycle.stage2.sub')}</div>
+        </button>
+        <button
+          type="button"
+          className="lifecycle-stage-card"
+          onClick={() => navigate('/editor')}
+        >
+          <div className="lifecycle-stage-title">
+            <span>{t('lifecycle.stage3')}</span>
+            <CheckCircle2 size={15} color="var(--color-info)" />
+          </div>
+          <div className="lifecycle-stage-sub">{t('lifecycle.stage3.sub')}</div>
+        </button>
+        <button
+          type="button"
+          className="lifecycle-stage-card"
+          onClick={() => navigate('/editor?modal=engine')}
+        >
+          <div className="lifecycle-stage-title">
+            <span>{t('lifecycle.stage4')}</span>
+            <Cpu size={15} color="var(--color-warning)" />
+          </div>
+          <div className="lifecycle-stage-sub">{t('lifecycle.stage4.sub')}</div>
+        </button>
+        <button
+          type="button"
+          className="lifecycle-stage-card"
+          onClick={() => navigate('/runs')}
+        >
+          <div className="lifecycle-stage-title">
+            <span>{t('lifecycle.stage5')}</span>
+            <ShieldCheck size={15} color="var(--color-success)" />
+          </div>
+          <div className="lifecycle-stage-sub">{t('lifecycle.stage5.sub')}</div>
+        </button>
+      </div>
+
       {/* Quick templates + recent runs */}
       <div className="dashboard-grid">
         <div className="dash-card">
@@ -177,8 +236,9 @@ export default function Dashboard() {
       </div>
 
       {/* Quick access to the AI chat stays one click away */}
-      <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--color-text-tertiary)' }}>
-        <Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>{t('dashboard.openAiChat')}</Link>
+      <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--color-text-tertiary)', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span><Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>{t('dashboard.openAiChat')}</Link></span>
+        <span><Database size={13} style={{ verticalAlign: '-2px' }} /> <Link to="/settings" style={{ color: 'var(--color-primary)' }}>{t('settings.refs.title')}</Link></span>
       </div>
     </div>
   );

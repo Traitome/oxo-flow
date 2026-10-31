@@ -26,6 +26,7 @@ shell = "merge {input}"
 ```
 
 This pattern (split → parallel process → combine) is extremely common in:
+
 - dplyr: `group_by() %>% summarize()`
 - pandas: `df.groupby().apply()`
 - Spark: `map-reduce`

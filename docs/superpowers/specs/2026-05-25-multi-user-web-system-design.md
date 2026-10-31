@@ -9,6 +9,7 @@
 ## Overview
 
 Design a comprehensive, professional multi-user web system for oxo-flow, targeting:
+
 - **Bioinformatics Lab**: Researchers running pipelines collaboratively
 - **Enterprise Platform**: RBAC, quotas, audit compliance
 - **HPC Cluster Portal**: Slurm/PBS integration, job submission
@@ -60,6 +61,7 @@ crates/oxo-flow-web/src/
 ```
 
 **Key Refactoring:**
+
 - lib.rs: 3400 lines → ~100 lines (Router + shared types only)
 - handlers/: Each endpoint module independent
 - templates/: maud templates for type-safe HTML generation
@@ -125,6 +127,7 @@ Card-based dashboard with GitHub dark theme (#0d1117 base):
 ### Existing (Keep)
 
 All 30+ existing endpoints remain unchanged:
+
 - `/api/auth/login`, `/api/auth/me`
 - `/api/workflows/validate`, `/api/workflows/parse`, `/api/workflows/dag`
 - `/api/workflows/run`, `/api/workflows/save`, `/api/workflows/saved`
