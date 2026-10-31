@@ -33,16 +33,17 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 
 > 🧬 **Community:** browse curated, rated, ready-to-run workflows — ports of popular nf-core & Snakemake pipelines, original designs, and community submissions — at [oxo-flow-community](https://oxo-flow-community.github.io/).
 
-- 🤖 **AI Companion** — Natural language pipeline generation, intelligent refinement, failure diagnosis, and results interpretation. Powered by Claude, OpenAI, DeepSeek, or local Ollama.
-- 🔀 **DAG engine** — Automatic dependency resolution, topological ordering, and parallel execution with resource-aware scheduling (CPU, memory, GPU, disk) across local and cluster backends (SLURM, PBS, SGE, LSF)
-- 📦 **8 environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
-- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in every workspace crate
-- 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (React Flow + d3-dag), TOML editor (CodeMirror 6), and AI chat
-- 🧩 **VS Code extension** — first-party `traitome.oxo-flow` IDE for `.oxoflow`: schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (Open VSX + release VSIX)
-- 📊 **Built-in reporting** — HTML/JSON/Markdown/PDF reports with execution summaries, failure diagnosis, resource metrics, and checkpoint-verified file manifests; QC metrics parsed from real tool outputs (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), R-friendly TSV export (`--r-data`), and a JSON report snapshot auto-written after every run
-- 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
-- 🗄️ **Checkpoint & resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule
-- 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — same binary
+- 🤖 **AI Companion & Scientist Team** — Grounded on deterministic engine APIs: natural language pipeline generation, intelligent refinement, 30+ domain diagnostic patterns, automated error recovery, and an opt-in Scientist Team multi-agent review profile. Powered by Claude, OpenAI, DeepSeek, or local Ollama.
+- 🔀 **DAG-first engine** — Full static planning before compute: automatic dependency resolution, topological ordering, cycle detection, and target-driven (`-t`) minimal rule scheduling.
+- 🛡️ **Physical resource & disk guards** — Multi-stage runtime disk-pressure guard (`min_free_disk` / `reclaim_free_disk` with cascade tombstone reclamation), global scratch directory isolation (`tmp_dir` / `OXO_FLOW_TMPDIR`), and concurrency-aware resource scheduling (CPU, memory, GPU, disk).
+- 📦 **8 hermetic environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation and an opt-in content-addressable store (`OXO_FLOW_ENV_STORE`) with automatic GC.
+- 🔒 **Cryptographic reproducibility** — Execution truth anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`), rejecting fragile file modification timestamps (`mtime`).
+- ⚡ **Rust performance & safety** — Compiled zero-dependency native binary, instant startup, fearless concurrency with Tokio, and `#![forbid(unsafe_code)]` in every workspace crate.
+- 🌐 **Modern Web Studio & Desktop shell** — Embedded React 19 SPA with interactive DAG canvas (React Flow + d3-dag), CodeMirror 6 TOML editor, and native desktop app (`oxo-flow-desktop`, wry + tao).
+- 🧩 **First-party VS Code IDE** — `traitome.oxo-flow` extension published on both [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow): schema-driven completion, background diagnostics, canonical formatting, and one-click run/debug actions.
+- 📊 **Clinical-grade reporting** — Deterministic HTML, JSON, Markdown, and PDF reports generated from checkpoint data; real tool QC metric parsing (fastp, STAR, bcftools, etc.), R-friendly TSV export (`--r-data`), and automated run snapshots.
+- 🗄️ **Checkpoint & exact resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule without re-running verified steps.
+- 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2 (ORCID/GitHub), or HPC cluster submit panel — all from the exact same binary.
 
 ## Why oxo-flow?
 
@@ -51,23 +52,28 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` in the core, AI, CLI, and web crates | Python | Groovy/JVM |
 | **Performance** | Native binary, instant startup | Python + JIT overhead | JVM startup overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile (Python DSL) | Nextflow DSL (Groovy) |
+| **Execution planning** | Pure DAG compiled & verified before compute; target-driven (`-t`) minimal subgraphs | Dynamic DAG evaluated by Python runtime | Dataflow channels dynamically wired at runtime |
+| **Reproducibility model** | Cryptographic SHA-256 output checksums, config fingerprints, protected data tree audits | File modification timestamp (`mtime`), sensitive to clock/NFS drift | File timestamps + task hash cache (`.nextflow/cache`) |
+| **Disk & scratch safety** | Built-in runtime disk-pressure guard (Hold/Reclaim ladder) + global `tmp_dir` scratch isolation | None — unhandled out-of-disk crashes; tools spill into system `/tmp` | Disk monitoring via Wave/Tower; no engine-level cascade reclamation |
 | **Environment support** | 8 backends — conda, mamba, pixi, docker, singularity, venv, system, modules — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
-| **Web interface** | Built-in React 19 SPA + REST API | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data (execution truth, failure diagnosis, file checksums) | Via MultiQC | Via Nextflow Tower |
-| **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
+| **Web interface** | Built-in React 19 SPA + 100+ OpenAPI REST endpoints + SSE live events | External Snakemake-UI / panoptes | Nextflow Tower / Seqera Platform (commercial) |
+| **Editor & IDE** | First-party VS Code IDE (Open VSX + VS Code Marketplace) & native desktop shell | Community editor plugins | Community editor plugins |
+| **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data + domain QC parser + `--r-data` TSV | Via MultiQC | Via Nextflow Tower / MultiQC |
+| **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
-| **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | 3,200+ tests (unit, integration, doc) | pytest-based | Varied |
+| **AI Companion** | Architectural citizen — unified agent, 30+ domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
+| **Testing** | 3,400+ tests (unit, integration, schema drift, AI eval) | pytest-based | Spock / varied |
 
-## Design Principles
+## Design Principles (First Principles Thinking)
 
-oxo-flow is built on five principles:
+oxo-flow is built from first principles on six architectural pillars:
 
-1. **DAG is the fundamental abstraction** — Every workflow is a directed acyclic graph. The engine constructs, validates, and executes DAGs with maximum parallelism.
-2. **Environment isolation is non-negotiable** — Each task runs in its own isolated environment via one of 8 backends.
-3. **Reproducible by design** — Config checksums, execution provenance, and container pinning guarantee identical outputs from identical inputs.
-4. **Performance through Rust** — Zero-cost abstractions and fearless concurrency for orchestrating thousands of concurrent tasks.
-5. **Outcome-driven** — The DAG engine's target-aware execution (`-t` flag) computes the minimal rule set needed to produce specific deliverables.
+1. **DAG as Pure Declarative Data** — A workflow is mathematically a directed acyclic graph of pure data transformations, not an imperative script. All dependencies, wildcards, environments, and resource requirements are declared statically in `.oxoflow` TOML and validated before any job starts.
+2. **Cryptographic Determinism over File Timestamps** — Reproducibility must be mathematically provable. oxo-flow anchors checkpoint state on SHA-256 output checksums, configuration fingerprints, content-addressable environment hashes, and protected data tree audits (`protected_data_trees`), rejecting fragile file modification timestamps (`mtime`).
+3. **Hard Physical Boundaries & Resource Guards** — Real-world bioinformatics computation is constrained by physical limits: CPUs, GPUs, RAM, and finite disk volumes. oxo-flow enforces resource limits as first-class scheduling constraints, isolates scratch spaces via `tmp_dir`, and guards runs against out-of-space aborts through a multi-stage runtime disk-pressure ladder (Normal → Reclaim → Hold → Abort).
+4. **Hermetic Environment Isolation** — Tool conflict is non-negotiable. Every rule names its isolated execution environment across 8 supported backends (conda, mamba, pixi, docker, singularity, venv, system, modules), with optional content-addressable deduplication.
+5. **Rust-Native Performance & Safety** — Zero-cost abstractions, fearless concurrency with Tokio, and `#![forbid(unsafe_code)]` in every workspace crate ensure instant startup, minimal memory footprint, and reliable orchestration of tens of thousands of concurrent tasks without JVM or Python interpreter overhead.
+6. **AI as an Architectural Citizen** — AI assistance is not a bolt-on chatbot; it is integrated directly into the engine's feedback loop. Machine-readable structured error codes (`{code, message, detail, suggestion}`), canonical TOML synthesis, 30+ domain diagnostic patterns, and the multi-agent Scientist Team allow AI to safely generate, audit, and self-heal workflows through deterministic engine APIs.
 
 ## Workflow Gallery
 
@@ -277,6 +283,7 @@ See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands
 
 The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **100+ endpoints** across 9 domains (workflow, execution, dag, AI, auth, collaboration, observability, chat, clusters). Full API reference at the [Web API reference](https://traitome.github.io/oxo-flow/latest/reference/web-api/) (`GET /api/openapi.json` serves the live OpenAPI 3.1 spec).
 
+## Architecture & Workspace Layout
 
 oxo-flow is organized as a Cargo workspace with four crates, plus a fifth
 (`oxo-flow-desktop`) that lives in `crates/` but is excluded from the
@@ -292,6 +299,9 @@ oxo-flow/
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 │   └── oxo-flow-desktop/  # Native desktop shell ("oxo-flow-desktop", wry + tao) —
 │                          # excluded from the workspace (own Cargo.toml)
+├── editors/
+│   └── vscode/            # First-party VS Code IDE extension (traitome.oxo-flow)
+├── frontend/              # Modern React 19 + TypeScript + Vite web workspace
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
 └── docs/                  # Documentation (MkDocs)
