@@ -22,10 +22,12 @@
 ### Task 1: `AiProvider::chat_stream` (oxo-flow-ai)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-ai/src/provider.rs`
 - Test: inline unit tests (SSE line parser, no network)
 
 **Interfaces:**
+
 - Consumes: existing backend config (api_url/model/api_key), reqwest client.
 - Produces: `pub async fn chat_stream(&self, system: &str, user: &str) -> Result<ChatStream, AiError>` where `pub type ChatStream = std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamChunk, AiError>> + Send>>;` and `pub enum ChatStreamChunk { Text(String), Done { content: String, usage: Option<AiUsage> } }`.
 
@@ -80,10 +82,12 @@
 ### Task 2: Orchestrator event sink + cancellation (oxo-flow-ai)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-ai/src/agent/orchestrator.rs`, `crates/oxo-flow-ai/src/agent/mod.rs` (or a new `agent/events.rs` — prefer the new file, orchestrator.rs is already large)
 - Test: inline test with ScriptedBackend + a Vec<AgentEvent> sink asserting the event sequence (status → tool_call → tool_result → …).
 
 **Interfaces:**
+
 - Produces (in `agent/events.rs`):
 
 ```rust
@@ -109,11 +113,13 @@ pub type AgentEventSink = dyn FnMut(AgentEvent) + Send;
 ### Task 3: Web chat runs the real agent loop (backend)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/chat/service.rs`, `crates/oxo-flow-web/src/domains/chat/handlers.rs` (typed SSE), new `crates/oxo-flow-web/src/domains/chat/tools.rs` (web ToolRegistry builder)
 - Modify: `crates/oxo-flow-web/src/infra/db/sqlite.rs` (+`chat_messages` DDL; INSERT helper)
 - Test: `crates/oxo-flow-web/tests/chat_agent_integration.rs` — ScriptedBackend configured via env, POST /api/chat/send, assert the SSE body contains `event: tool_call` and `event: done`.
 
 **Interfaces:**
+
 - Consumes: `oxo_flow_ai::{agent::{Agent, AgentContext, Orchestrator, AgentOutcome}, tools::{ToolRegistry, builtin::lookup_tool…}, provider::{AiProvider, ChatStreamChunk}, events::AgentEvent}`.
 - Produces: `/api/chat/send` SSE stream with the spec's event names; `chat_messages(session_id, role, content, meta, created_at)` rows.
 
@@ -131,6 +137,7 @@ pub type AgentEventSink = dyn FnMut(AgentEvent) + Send;
 ### Task 4: ChatUI tool-call cards (frontend)
 
 **Files:**
+
 - Modify: `frontend/src/components/ChatUI.tsx` (parse `tool_call`/`tool_result` events → collapsible cards: tool name, args (truncated), result summary; keep agent/status line, text streaming, pipeline_ready actions)
 - Modify: `frontend/src/index.css` (+`.chat-tool-card` styles)
 - Test: `frontend/e2e/chat-tool-cards.spec.ts` — with the ScriptedBackend server env (reuse the chat integration's scripted setup via env vars the test server inherits), assert the UI renders a tool card and the final text.

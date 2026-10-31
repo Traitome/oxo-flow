@@ -24,12 +24,14 @@
 ### Task 1: Process-group registry (`process_control.rs`) — foundation for B1
 
 **Files:**
+
 - Create: `crates/oxo-flow-web/src/process_control.rs`
 - Modify: `crates/oxo-flow-web/src/lib.rs` (add `pub mod process_control;`)
 - Modify: `crates/oxo-flow-web/Cargo.toml` (add `libc = "0.2"` under `[dependencies]` — check first whether `[workspace.dependencies]` already pins it; reuse that)
 - Test: unit tests inline in `process_control.rs`
 
 **Interfaces:**
+
 - Consumes: nothing (leaf module).
 - Produces:
   - `pub fn register(run_id: &str, pgid: i32)`
@@ -163,10 +165,12 @@ git commit -m "feat(web): process-group registry for real run control"
 ### Task 2: Executor registers the child and defers to cancel (B1 part 1)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/executor.rs` (spawn: `process_group(0)` + register; after wait: unregister + status check before writing terminal state)
 - Test: inline unit test for the extracted status helper
 
 **Interfaces:**
+
 - Consumes: `process_control::{register, unregister, pgid}`
 - Produces: `fn final_status_from_exit(success: bool) -> &'static str` (Task 4 also uses this), and the executor's spawn path is signal-able via the registry.
 
@@ -257,10 +261,12 @@ git commit -m "feat(web): executor registers run process group, defers to cancel
 ### Task 3: Real cancel/pause/resume through the handlers (B1 part 2)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/execution/handlers.rs` (cancel_run :762, pause_run :816, resume_run :882)
 - Test: `crates/oxo-flow-web/tests/process_control_integration.rs` (new; follows the `tests/web_integration.rs` harness pattern — note: that harness exists in the repo per memory; match its setup, incl. `OXO_FLOW_BIN` shim)
 
 **Interfaces:**
+
 - Consumes: `process_control::{pgid, signal_group, SIGTERM, SIGKILL, SIGSTOP, SIGCONT}`
 - Produces: handlers now emit `run_cancelled` SSE; cancel leaves the executor's exit path respecting `cancelled` (Task 2).
 
@@ -297,6 +303,7 @@ fn insert_run_row(pool: &sqlx::SqlitePool, id: &str, status: &str) {
 ```
 
   Concrete assertions:
+
   - `cancel_signals_the_process_group`: register a `sleep 30` child pgid under run id "pc-cancel"; `POST /api/runs/pc-cancel/cancel` → 200, response `status == "cancelled"`; the child must exit within ~7 s (SIGTERM kills `sleep` immediately, so assert exit < 7s); DB row status `cancelled` and `finished_at` set; registry no longer returns the pgid.
   - `pause_freezes_then_resume_continues`: register `sleep 30` under "pc-pause"; `POST /api/runs/pc-pause/pause` → 200; the child must NOT exit within 1 s; `POST /api/runs/pc-pause/resume` → 200; then `signal_group(pgid, SIGKILL)` from the test to clean up and assert the child exits.
   - `cancel_unknown_run_is_404`: `POST /api/runs/does-not-exist/cancel` → 404, code `NOT_FOUND`.
@@ -368,12 +375,14 @@ git commit -m "feat(web): cancel/pause/resume signal the live run process group"
 ### Task 4: Status vocabulary unification (B2)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/executor.rs` (done in Task 2 — verify `final_status_from_exit` is the only writer)
 - Modify: `crates/oxo-flow-web/src/infra/db/sqlite.rs` (legacy-row migration in the init path near `rebuild_runs_table`)
 - Modify: `crates/oxo-flow-web/src/infra/db/models.rs` (doc comment for status vocabulary, `:36`)
 - Test: sqlite unit test for the migration
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: every terminal run row is one of `completed | failed | cancelled`.
 
@@ -439,6 +448,7 @@ git commit -m "fix(web): unify run status vocabulary on completed"
 ### Task 5: Checkpoint-derived node status; drop `run_nodes` (B5)
 
 **Files:**
+
 - Create: `crates/oxo-flow-web/src/domains/execution/checkpoint_status.rs`
 - Modify: `crates/oxo-flow-web/src/domains/execution/mod.rs` (re-export the new module)
 - Modify: `crates/oxo-flow-web/src/domains/execution/handlers.rs` (5 read sites: :306 get_run_status, :398 get_dag_status, :528 get_diagnostics, :711 get_run, :974 get_ai_status)
@@ -446,6 +456,7 @@ git commit -m "fix(web): unify run status vocabulary on completed"
 - Test: unit tests inline in `checkpoint_status.rs` (fixture checkpoint JSON + fixture log)
 
 **Interfaces:**
+
 - Consumes: `oxo_flow_core::executor::checkpoint::{CheckpointState, BenchmarkRecord}` — `CheckpointState::load_from_file`, `CheckpointState::default_path(workdir)`; existing `NodeStatusItem`/`NodeStatus` from `execution/types.rs`.
 - Produces:
   - `pub fn load_node_statuses(run_dir: &std::path::Path, is_running: bool) -> Vec<NodeStatusItem>`
@@ -613,11 +624,13 @@ git commit -m "feat(web): node status derived from engine checkpoint; drop dead 
 ### Task 6: Audit schema unification + complete insert_run (B3, B4)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/db.rs` (audit_logs DDL :~115-125, `log_action`, `insert_run` :455-469)
 - Modify: `crates/oxo-flow-web/src/infra/db/sqlite.rs` (audit_logs DDL :290-298)
 - Test: integration test in `tests/` (or sqlite unit test) that calls the sqlite `log_action` after `db::init_db` created the schema first
 
 **Interfaces:**
+
 - Consumes: existing init functions.
 - Produces: one `audit_logs` shape — `(id, user_id, action, target, result TEXT NOT NULL DEFAULT 'success', metadata TEXT, timestamp)`.
 
@@ -705,12 +718,14 @@ git commit -m "fix(web): unify audit_logs schema across init paths; insert_run f
 ### Task 7: OAuth state verification (B8)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/domains/auth/service.rs` (`initiate_oauth` :178 — persists the state; `handle_oauth_callback` :193 — verifies + consumes)
 - Modify: `crates/oxo-flow-web/src/domains/auth/handlers.rs` (`oauth_callback` :355 — keep the non-empty check as defense in depth; the service now does the real check)
 - Modify: `crates/oxo-flow-web/src/infra/db/sqlite.rs` (DDL: `CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, created_at TEXT NOT NULL);`)
 - Test: integration test — authorize stores state, callback with a wrong state fails `OAUTH_INVALID_STATE`, callback with the issued state is consumed (second use fails)
 
 **Interfaces:**
+
 - Consumes: existing `initiate_oauth(provider, redirect_uri)` / `handle_oauth_callback(provider, code, state, redirect_uri)` signatures (keep them; the state already flows through).
 - Produces: same signatures; new behavior only.
 
@@ -788,11 +803,13 @@ git commit -m "fix(web): verify and consume OAuth state server-side"
 ### Task 8: save_pipeline ownership + real effective AI config (B9, B10)
 
 **Files:**
+
 - Modify: `crates/oxo-flow-web/src/server.rs` (auth middleware :498-583 — attach the authenticated user id as `Extension<Option<String>>` on success; use `axum::Extension`)
 - Modify: `crates/oxo-flow-web/src/domains/workflow/handlers.rs` (`save_pipeline` :280-310 — resolve owner: extension user → `default`)
 - Modify: `crates/oxo-flow-web/src/domains/ai/handlers.rs` (`get_ai_config_effective` :340 — read the user row (`user_id='default'` or session user) and server row from `ai_provider_config`; fill `user_provider`; keep the env tier)
 
 **Interfaces:**
+
 - Consumes: existing `require_auth` middleware, `ai_provider_config` table.
 - Produces: `save_pipeline` rows owned by the acting user; `config/effective.tiers.user_provider` real.
 
