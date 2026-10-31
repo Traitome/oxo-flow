@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "a30d5585f7d9122c9800d0b9ee6d5e54513cd3bd0f9571d19163c8cc113fbbfb",
+  "schemaSha256": "d343dad67e8be4a94765846c320f4b63d427525705e153c3db8c982cb0b05efc",
   "contexts": {
     "root": {
       "keys": [
@@ -219,6 +219,19 @@
           "description": "Schema synced from config whitelist (see known_keys.rs)"
         },
         {
+          "key": "staging_mode",
+          "description": "Default remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
+        },
+        {
           "key": "threads",
           "description": "",
           "type": "integer"
@@ -284,6 +297,19 @@
           "key": "reclaim_free_disk",
           "description": "Reclaim threshold (>= min_free_disk). Below it new submissions hold while regenerable outputs of completed temporary rules are tombstoned and deleted; the run aborts if space stays below min_free_disk afterward.",
           "type": "string"
+        },
+        {
+          "key": "staging_mode",
+          "description": "Global remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
         },
         {
           "key": "tmp_dir",
@@ -698,6 +724,19 @@
           "key": "shell",
           "description": "Shell command template to execute",
           "type": "string"
+        },
+        {
+          "key": "staging_mode",
+          "description": "Remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
         },
         {
           "key": "tags",

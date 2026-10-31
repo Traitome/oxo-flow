@@ -1479,6 +1479,13 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub pipe: bool,
 
+    /// Remote input staging mode: "eager" (default, download full object to scratch),
+    /// "stream" / "stream_fifo" (stream on demand via FIFO pipe), or "passthrough"
+    /// (leave raw remote URI untouched).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
+
     /// Checksum algorithm for output integrity verification ("md5", "sha256").
     ///
     /// When set, output file checksums are computed after execution and stored
@@ -1533,6 +1540,17 @@ impl Rule {
     /// Returns the effective memory requirement.
     pub fn effective_memory(&self) -> Option<&str> {
         self.memory.as_deref().or(self.resources.memory.as_deref())
+    }
+
+    /// Returns the effective remote input staging mode.
+    pub fn effective_staging_mode(&self) -> crate::storage::StagingMode {
+        if let Some(mode) = self.staging_mode {
+            mode
+        } else if self.pipe {
+            crate::storage::StagingMode::StreamFifo
+        } else {
+            crate::storage::StagingMode::Eager
+        }
     }
 
     /// Validate the rule for internal consistency.
@@ -1908,6 +1926,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn pipe(mut self, pipe: bool) -> Self {
         self.rule.pipe = pipe;
+        self
+    }
+
+    /// Set remote input staging mode.
+    #[must_use]
+    pub fn staging_mode(mut self, mode: crate::storage::StagingMode) -> Self {
+        self.rule.staging_mode = Some(mode);
         self
     }
 

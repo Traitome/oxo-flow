@@ -1005,6 +1005,13 @@ impl WorkflowConfig {
             {
                 rule.resources.time_limit = Some(tl.clone());
             }
+            // Apply default staging mode if rule doesn't specify one
+            if rule.staging_mode.is_none() {
+                rule.staging_mode = self
+                    .defaults
+                    .staging_mode
+                    .or_else(|| self.engine.as_ref().and_then(|e| e.staging_mode));
+            }
         }
     }
 

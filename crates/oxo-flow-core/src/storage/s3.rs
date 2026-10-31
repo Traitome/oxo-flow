@@ -326,6 +326,43 @@ impl StorageBackend for S3Storage {
         })
     }
 
+    /// Read at most `len` bytes starting at `offset` without staging the full object.
+    async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let bucket = require_bucket(path)?;
+        let stat = self.head(path).await?.ok_or_else(|| {
+            s3_error(format!(
+                "cannot read_range {}: object does not exist",
+                path.raw
+            ))
+        })?;
+        if offset >= stat.size {
+            return Ok(Vec::new());
+        }
+        let end = (offset + len as u64 - 1).min(stat.size.saturating_sub(1));
+        let range_header = format!("bytes={offset}-{end}");
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(&path.key)
+            .range(range_header)
+            .send()
+            .await
+            .map_err(|e| s3_error(format!("S3 get_object range error: {}", s3_display(&e))))?;
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| s3_error(format!("S3 read body range error: {e}")))?
+            .into_bytes();
+
+        Ok(bytes.to_vec())
+    }
+
     /// Write bytes to an object, replacing it if it already exists.
     async fn write(&self, path: &StoragePath, data: &[u8]) -> Result<()> {
         let bucket = require_bucket(path)?;

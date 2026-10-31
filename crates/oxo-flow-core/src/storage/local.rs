@@ -29,6 +29,25 @@ impl StorageBackend for LocalStorage {
         Ok(tokio::fs::read_to_string(&path.key).await?)
     }
 
+    async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let p = Path::new(&path.key);
+        let mut file = tokio::fs::File::open(p).await?;
+        let metadata = file.metadata().await?;
+        let file_len = metadata.len();
+        if offset >= file_len {
+            return Ok(Vec::new());
+        }
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+        file.seek(SeekFrom::Start(offset)).await?;
+        let to_read = (len as u64).min(file_len - offset) as usize;
+        let mut buf = vec![0u8; to_read];
+        file.read_exact(&mut buf).await?;
+        Ok(buf)
+    }
+
     async fn write(&self, path: &StoragePath, data: &[u8]) -> Result<()> {
         let p = Path::new(&path.key);
         let parent = crate::parent_dir(p);
@@ -119,5 +138,27 @@ mod tests {
     #[test]
     fn test_name() {
         assert_eq!(LocalStorage.name(), "local");
+    }
+
+    #[tokio::test]
+    async fn test_read_range_slices() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("range.txt");
+        tokio::fs::write(&file_path, b"hello world from oxoflow")
+            .await
+            .unwrap();
+        let sp = StoragePath::parse(file_path.to_str().unwrap());
+        let backend = LocalStorage;
+
+        // Zero len
+        assert_eq!(backend.read_range(&sp, 0, 0).await.unwrap(), b"");
+        // Start slice
+        assert_eq!(backend.read_range(&sp, 0, 5).await.unwrap(), b"hello");
+        // Middle slice
+        assert_eq!(backend.read_range(&sp, 6, 5).await.unwrap(), b"world");
+        // Past EOF
+        assert_eq!(backend.read_range(&sp, 100, 10).await.unwrap(), b"");
+        // Partial (len larger than remaining)
+        assert_eq!(backend.read_range(&sp, 17, 100).await.unwrap(), b"oxoflow");
     }
 }

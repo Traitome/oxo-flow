@@ -206,6 +206,40 @@ async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
         .map_err(|e| gcs_io_error("GET", bucket, key, &e.to_string()))
 }
 
+/// Make a signed GET Range request for a GCS object and return the response bytes.
+async fn gcs_get_range(bucket: &str, key: &str, offset: u64, end: u64) -> Result<Vec<u8>> {
+    let creds = load_credentials()?;
+    let url = gcs_url(bucket, key);
+    let date = rfc1123_date();
+    let resource = canonical_resource(bucket, key);
+    let auth = gcs_authorization(creds, "GET", "", "", &date, &resource);
+    let range = format!("bytes={offset}-{end}");
+
+    let resp = http_client()
+        .get(&url)
+        .header("Date", &date)
+        .header("Authorization", &auth)
+        .header("Range", range)
+        .send()
+        .await
+        .map_err(|e| gcs_io_error("GET_RANGE", bucket, key, &e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(gcs_io_error(
+            "GET_RANGE",
+            bucket,
+            key,
+            &format!("HTTP {status}: {body}"),
+        ));
+    }
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| gcs_io_error("GET_RANGE", bucket, key, &e.to_string()))
+}
+
 /// Make a signed HEAD request and return whether the object exists.
 async fn gcs_head(bucket: &str, key: &str) -> Result<bool> {
     Ok(gcs_head_stat(bucket, key).await?.is_some())
@@ -403,6 +437,26 @@ impl StorageBackend for GcsStorage {
         String::from_utf8(bytes).map_err(|e| OxoFlowError::Config {
             message: format!("GCS content is not valid UTF-8: {e}"),
         })
+    }
+
+    async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let bucket = require_gcs_bucket(path)?;
+        let stat = self.head(path).await?.ok_or_else(|| {
+            gcs_io_error(
+                "read_range head",
+                bucket,
+                &path.key,
+                "object does not exist",
+            )
+        })?;
+        if offset >= stat.size {
+            return Ok(Vec::new());
+        }
+        let end = (offset + len as u64 - 1).min(stat.size.saturating_sub(1));
+        gcs_get_range(bucket, &path.key, offset, end).await
     }
 
     async fn write(&self, path: &StoragePath, data: &[u8]) -> Result<()> {

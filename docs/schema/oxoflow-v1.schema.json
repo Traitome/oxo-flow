@@ -250,6 +250,19 @@
         "time_limit": {
           "type": "string",
           "description": "Default wall-time limit (e.g. 48h) applied to every rule whose resources.time_limit is unset"
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Default remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
         }
       }
     },
@@ -436,6 +449,19 @@
         "tmp_dir": {
           "type": "string",
           "description": "Global scratch directory injected as TMPDIR/TMP/TEMP into every rule shell so tools that spill caches into the system temp directory write to a volume with room. Relative paths resolve against the workflow file's directory; created on demand. OXO_FLOW_TMPDIR overrides it per invocation."
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Global remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
         }
       }
     },
@@ -1427,6 +1453,19 @@
           "type": "boolean",
           "default": false,
           "description": "Enable FIFO streaming mode"
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
         },
         "checksum": {
           "type": "string",

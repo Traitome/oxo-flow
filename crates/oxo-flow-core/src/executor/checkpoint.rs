@@ -2638,6 +2638,15 @@ mod tests {
             Ok(String::new())
         }
 
+        async fn read_range(
+            &self,
+            _path: &StoragePath,
+            _offset: u64,
+            len: usize,
+        ) -> Result<Vec<u8>> {
+            Ok(vec![0u8; len])
+        }
+
         async fn write(&self, _path: &StoragePath, _data: &[u8]) -> Result<()> {
             Ok(())
         }

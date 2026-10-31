@@ -119,6 +119,7 @@ const DEFAULTS_KEYS: &[&str] = &[
     "environment",
     "memory",
     "shell_prelude",
+    "staging_mode",
     "threads",
     "time_limit",
 ];
@@ -216,6 +217,7 @@ const ENGINE_KEYS: &[&str] = &[
     "min_free_disk",
     "protected_data_trees",
     "reclaim_free_disk",
+    "staging_mode",
     "tmp_dir",
 ];
 
@@ -293,6 +295,7 @@ const RULE_KEYS: &[&str] = &[
     "scratch",
     "shell",
     "script",
+    "staging_mode",
     "tags",
     "target",
     "temp_output",
@@ -1114,6 +1117,7 @@ mod tests {
             on_failure = "echo"
             format_hint = ["bam"]
             pipe = true
+            staging_mode = "stream"
             checksum = "md5"
             resource_hint = { input_size = "small" }
             rule_metadata = { assay = "rna" }

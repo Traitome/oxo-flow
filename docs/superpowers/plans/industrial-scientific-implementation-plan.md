@@ -163,9 +163,9 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Add `read_range` to `StorageBackend` in `crates/oxo-flow-core/src/storage/mod.rs` and implement HTTP `Range: bytes=offset-(offset+len-1)` requests in `s3.rs` and `gcs.rs` (and `Seek` + `Read::take` in `local.rs`).
-- [ ] **Step 2**: Add `StagingMode` (`Eager`, `StreamFifo`, `PassThrough`) to rule/workflow storage configuration and update `stage_remote_io` in `crates/oxo-flow-core/src/executor/staging.rs`.
-- [ ] **Step 3**: Write unit and fault-injection tests verifying that a truncated stream or mid-stream network error fails the rule cleanly and invalidates partial outputs via `output_invalidation.rs`.
+- [x] **Step 1**: Add `read_range` to `StorageBackend` in `crates/oxo-flow-core/src/storage/mod.rs` and implement HTTP `Range: bytes=offset-(offset+len-1)` requests in `s3.rs` and `gcs.rs` (and `Seek` + `Read::take` in `local.rs`).
+- [x] **Step 2**: Add `StagingMode` (`Eager`, `StreamFifo`, `PassThrough`) to rule/workflow storage configuration and update `stage_remote_io` in `crates/oxo-flow-core/src/executor/staging.rs`.
+- [x] **Step 3**: Write unit and fault-injection tests verifying that a truncated stream or mid-stream network error fails the rule cleanly and invalidates partial outputs via `output_invalidation.rs`.
 
 ---
 

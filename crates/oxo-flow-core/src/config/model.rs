@@ -389,6 +389,11 @@ pub struct Defaults {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_limit: Option<String>,
+
+    /// Default remote input staging mode ("eager", "stream_fifo" / "stream", "passthrough").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
 }
 
 /// Prepend a shell prelude to a command on its own line (issue #92).
@@ -852,6 +857,11 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protected_data_trees: Option<Vec<String>>,
+
+    /// Global remote input staging mode ("eager", "stream_fifo" / "stream", "passthrough").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
 }
 
 impl EngineConfig {

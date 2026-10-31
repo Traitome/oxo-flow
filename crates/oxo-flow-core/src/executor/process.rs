@@ -1897,7 +1897,7 @@ impl LocalExecutor {
         // upload-stage paths (issue #80 item 2). The substitution lives on
         // a copy of the rule — `config.rules` is never mutated and
         // checkpoints keep recording the original remote URIs.
-        let (rule, uploads) = match super::staging::stage_remote_io(
+        let (rule, uploads, mut stream_guards) = match super::staging::stage_remote_io(
             rule,
             &self.config.workdir,
             wildcard_values,
@@ -1912,9 +1912,9 @@ impl LocalExecutor {
                     record.finished_at = Some(Utc::now());
                     return Ok(record);
                 }
-                (prep.rule, prep.uploads)
+                (prep.rule, prep.uploads, prep.stream_guards)
             }
-            Ok(None) => (rule.clone(), Vec::new()),
+            Ok(None) => (rule.clone(), Vec::new(), Vec::new()),
             Err(e) => {
                 record.status = JobStatus::Failed;
                 record.finished_at = Some(Utc::now());
@@ -2711,6 +2711,42 @@ impl LocalExecutor {
             // (e.g. "tool_a; rm -f temp" — rm succeeds, masking tool_a failure).
             let missing = validate_outputs(&rule, &self.config.workdir, wildcard_values);
             if missing.is_empty() {
+                let mut stream_ok = true;
+                for guard in &mut stream_guards {
+                    if let Err(e) = guard.finish().await {
+                        record.status = JobStatus::Failed;
+                        record.exit_code = Some(-1);
+                        push_stderr_note(
+                            &mut record,
+                            &format!("\n[oxo-flow] streaming FIFO failed: {e}"),
+                        );
+                        stream_ok = false;
+                        break;
+                    }
+                }
+                if !stream_ok {
+                    cleanup_temp_outputs(&rule, &self.config.workdir).await;
+                    super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                    if let Some(ref hook_cmd) = rule.on_failure {
+                        run_hook(
+                            &render_shell_command(
+                                hook_cmd,
+                                &rule,
+                                wildcard_values,
+                                crate::scheduler::ResourceLimits {
+                                    threads: self.system_threads,
+                                    memory_mb: self.system_memory_mb,
+                                },
+                            ),
+                            &rule,
+                            &self.config.workdir,
+                            self.config.shell_prelude.as_deref(),
+                            self.config.tmp_dir.as_deref(),
+                        )
+                        .await;
+                    }
+                    return Ok(record);
+                }
                 record.status = JobStatus::Success;
                 // Remote outputs land in the cloud only after the local
                 // copies passed validation (issue #80 item 2). An upload

@@ -13,7 +13,53 @@ use std::path::Path;
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
-use crate::storage::{StoragePath, StorageResolver};
+use crate::storage::{StagingMode, StoragePath, StorageResolver};
+
+/// Background streaming guard that cleans up FIFO resources on completion or abort.
+#[derive(Debug)]
+pub struct StreamGuard {
+    /// Local FIFO path where data is being streamed.
+    pub fifo_path: std::path::PathBuf,
+    /// Asynchronous streaming worker task.
+    pub task: Option<tokio::task::JoinHandle<Result<()>>>,
+}
+
+impl StreamGuard {
+    /// Create a new stream guard.
+    pub fn new(fifo_path: std::path::PathBuf, task: tokio::task::JoinHandle<Result<()>>) -> Self {
+        Self {
+            fifo_path,
+            task: Some(task),
+        }
+    }
+
+    /// Await the streaming task and remove the local FIFO pipe.
+    pub async fn finish(&mut self) -> Result<()> {
+        let res = if let Some(task) = self.task.take() {
+            match task.await {
+                Ok(r) => r,
+                Err(e) if e.is_cancelled() => Ok(()),
+                Err(e) => Err(OxoFlowError::Execution {
+                    rule: "stream".to_string(),
+                    message: format!("FIFO stream worker panicked or failed: {e}"),
+                }),
+            }
+        } else {
+            Ok(())
+        };
+        let _ = tokio::fs::remove_file(&self.fifo_path).await;
+        res
+    }
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        let _ = std::fs::remove_file(&self.fifo_path);
+    }
+}
 
 /// A prepared rule: remote inputs staged, remote outputs redirected, and
 /// the pending uploads (remote URI → local stage path) in declared order.
@@ -26,6 +72,8 @@ pub struct RemoteIoPrep {
     /// A declared optional input does not exist remotely — the rule is a
     /// skip candidate (same contract as local optional inputs).
     pub missing_optional_input: bool,
+    /// Active background FIFO streaming tasks.
+    pub stream_guards: Vec<StreamGuard>,
 }
 
 /// Expand a pattern with the instance's wildcard values — the same pass
@@ -79,6 +127,7 @@ pub async fn stage_remote_io(
     let mut input_map: HashMap<String, String> = HashMap::new();
     let mut output_map: HashMap<String, String> = HashMap::new();
     let mut uploads: Vec<(StoragePath, std::path::PathBuf)> = Vec::new();
+    let mut stream_guards: Vec<StreamGuard> = Vec::new();
     let mut missing_optional_input = false;
     let mut saw_remote = false;
     // Mode-aware optional tracking (audit #650): how many OPTIONAL remote
@@ -98,6 +147,7 @@ pub async fn stage_remote_io(
         return Err(remote_wildcard_error("output", path));
     }
 
+    let staging_mode = rule.effective_staging_mode();
     // ── inputs ─────────────────────────────────────────────────────────────
     for pattern in rule.input.to_vec() {
         let expanded = expand_patterns(&pattern, wildcard_values);
@@ -122,30 +172,176 @@ pub async fn stage_remote_io(
         if is_optional {
             remote_optional_total += 1;
         }
-        match backend.stage(&storage_path, workdir).await {
-            Ok(local) => {
-                let rel = local
-                    .strip_prefix(workdir)
-                    .unwrap_or(&local)
-                    .to_string_lossy()
-                    .to_string();
-                tracing::debug!(input = %expanded, staged = %rel, "staged remote input");
-                input_map.insert(pattern, rel);
-            }
-            Err(e) if is_optional => {
-                tracing::warn!(
-                    input = %expanded,
-                    error = %e,
-                    "optional remote input unavailable; treating as missing"
-                );
-                remote_optional_failed += 1;
-            }
-            Err(e) => {
-                return Err(OxoFlowError::Execution {
-                    rule: rule.name.clone(),
-                    message: format!("failed to stage remote input '{expanded}': {e}"),
-                });
-            }
+        match staging_mode {
+            StagingMode::Passthrough => match backend.exists(&storage_path).await {
+                Ok(true) => {
+                    tracing::debug!(input = %expanded, "passthrough remote input");
+                    input_map.insert(pattern, expanded);
+                }
+                Ok(false) if is_optional => {
+                    tracing::warn!(
+                        input = %expanded,
+                        "optional remote input unavailable under passthrough; treating as missing"
+                    );
+                    remote_optional_failed += 1;
+                }
+                Ok(false) => {
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("remote input '{expanded}' does not exist"),
+                    });
+                }
+                Err(e) if is_optional => {
+                    tracing::warn!(
+                        input = %expanded,
+                        error = %e,
+                        "optional remote input check failed under passthrough; treating as missing"
+                    );
+                    remote_optional_failed += 1;
+                }
+                Err(e) => {
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to check remote input '{expanded}': {e}"),
+                    });
+                }
+            },
+            StagingMode::StreamFifo => match backend.head(&storage_path).await {
+                Ok(Some(stat)) => {
+                    let local = crate::storage::staged_path(workdir, &storage_path)?;
+                    if let Some(parent) = local.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    let _ = tokio::fs::remove_file(&local).await;
+                    let status = std::process::Command::new("mkfifo")
+                        .arg(&local)
+                        .status()
+                        .map_err(|e| OxoFlowError::Config {
+                            message: format!(
+                                "failed to invoke mkfifo for {}: {e}",
+                                local.display()
+                            ),
+                        })?;
+                    if !status.success() {
+                        return Err(OxoFlowError::Config {
+                            message: format!("mkfifo failed for {}", local.display()),
+                        });
+                    }
+                    let fifo_path = local.clone();
+                    let backend_clone = backend.clone();
+                    let sp = storage_path.clone();
+                    let total_size = stat.size;
+                    let stream_task = tokio::task::spawn(async move {
+                        let open_path = fifo_path.clone();
+                        let std_file = tokio::task::spawn_blocking(move || {
+                            std::fs::OpenOptions::new().write(true).open(&open_path)
+                        })
+                        .await
+                        .map_err(|e| OxoFlowError::Execution {
+                            rule: "stream".to_string(),
+                            message: format!("FIFO open join error: {e}"),
+                        })?
+                        .map_err(|e| OxoFlowError::Execution {
+                            rule: "stream".to_string(),
+                            message: format!(
+                                "failed to open FIFO for writing {}: {e}",
+                                fifo_path.display()
+                            ),
+                        })?;
+
+                        let mut writer = tokio::fs::File::from_std(std_file);
+                        use tokio::io::AsyncWriteExt;
+                        let mut offset = 0u64;
+                        const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+                        while offset < total_size {
+                            let to_read = ((total_size - offset) as usize).min(CHUNK_SIZE);
+                            let chunk = backend_clone.read_range(&sp, offset, to_read).await?;
+                            if chunk.is_empty() {
+                                break;
+                            }
+                            let n = chunk.len();
+                            if let Err(e) = writer.write_all(&chunk).await {
+                                if e.kind() == std::io::ErrorKind::BrokenPipe {
+                                    tracing::debug!(path = %sp.raw, "FIFO reader closed pipe");
+                                    return Ok(());
+                                }
+                                return Err(OxoFlowError::Execution {
+                                    rule: "stream".to_string(),
+                                    message: format!(
+                                        "failed writing to FIFO {}: {e}",
+                                        fifo_path.display()
+                                    ),
+                                });
+                            }
+                            offset += n as u64;
+                        }
+                        let _ = writer.flush().await;
+                        Ok(())
+                    });
+                    stream_guards.push(StreamGuard::new(local.clone(), stream_task));
+                    let rel = local
+                        .strip_prefix(workdir)
+                        .unwrap_or(&local)
+                        .to_string_lossy()
+                        .to_string();
+                    tracing::debug!(input = %expanded, fifo = %rel, "FIFO streaming remote input");
+                    input_map.insert(pattern, rel);
+                }
+                Ok(None) if is_optional => {
+                    tracing::warn!(
+                        input = %expanded,
+                        "optional remote input unavailable for streaming; treating as missing"
+                    );
+                    remote_optional_failed += 1;
+                }
+                Ok(None) => {
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!(
+                            "cannot stream remote input '{expanded}': object does not exist"
+                        ),
+                    });
+                }
+                Err(e) if is_optional => {
+                    tracing::warn!(
+                        input = %expanded,
+                        error = %e,
+                        "optional remote input check failed; treating as missing"
+                    );
+                    remote_optional_failed += 1;
+                }
+                Err(e) => {
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to inspect remote input '{expanded}': {e}"),
+                    });
+                }
+            },
+            StagingMode::Eager => match backend.stage(&storage_path, workdir).await {
+                Ok(local) => {
+                    let rel = local
+                        .strip_prefix(workdir)
+                        .unwrap_or(&local)
+                        .to_string_lossy()
+                        .to_string();
+                    tracing::debug!(input = %expanded, staged = %rel, "staged remote input");
+                    input_map.insert(pattern, rel);
+                }
+                Err(e) if is_optional => {
+                    tracing::warn!(
+                        input = %expanded,
+                        error = %e,
+                        "optional remote input unavailable; treating as missing"
+                    );
+                    remote_optional_failed += 1;
+                }
+                Err(e) => {
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to stage remote input '{expanded}': {e}"),
+                    });
+                }
+            },
         }
     }
 
@@ -174,6 +370,10 @@ pub async fn stage_remote_io(
         saw_remote = true;
         if expanded.contains('{') {
             return Err(remote_wildcard_error("output", &pattern));
+        }
+        if staging_mode == StagingMode::Passthrough {
+            output_map.insert(pattern, expanded);
+            continue;
         }
         let local = crate::storage::upload_stage_path(workdir, &storage_path)?;
         if let Some(parent) = local.parent() {
@@ -228,6 +428,7 @@ pub async fn stage_remote_io(
         rule: substituted,
         uploads,
         missing_optional_input,
+        stream_guards,
     }))
 }
 
@@ -256,6 +457,8 @@ mod tests {
     struct FakeCloud {
         objects: tokio::sync::Mutex<HashMap<String, (Vec<u8>, String)>>,
         stage_calls: std::sync::atomic::AtomicUsize,
+        range_calls: std::sync::atomic::AtomicUsize,
+        fail_range_after_bytes: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -279,6 +482,33 @@ mod tests {
         async fn read_to_string(&self, path: &StoragePath) -> Result<String> {
             let bytes = self.objects.lock().await.get(&path.raw).unwrap().0.clone();
             Ok(String::from_utf8(bytes).unwrap())
+        }
+
+        async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+            self.range_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let fail_after = self
+                .fail_range_after_bytes
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if fail_after > 0 && offset >= fail_after as u64 {
+                return Err(OxoFlowError::Integrity {
+                    message: "simulated mid-stream network drop".into(),
+                    failed_files: vec![path.raw.clone()],
+                });
+            }
+            let guard = self.objects.lock().await;
+            let (bytes, _) = guard.get(&path.raw).ok_or_else(|| OxoFlowError::Config {
+                message: "no such object".into(),
+            })?;
+            let start = offset as usize;
+            if start >= bytes.len() {
+                return Ok(Vec::new());
+            }
+            let mut end = (start + len).min(bytes.len());
+            if fail_after > 0 && end > fail_after {
+                end = fail_after;
+            }
+            Ok(bytes[start..end].to_vec())
         }
 
         async fn write(&self, path: &StoragePath, content: &[u8]) -> Result<()> {
@@ -344,6 +574,8 @@ mod tests {
                 (content.to_vec(), etag.to_string()),
             )])),
             stage_calls: std::sync::atomic::AtomicUsize::new(0),
+            range_calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_range_after_bytes: std::sync::atomic::AtomicUsize::new(0),
         });
         let mut resolver = StorageResolver::with_local();
         resolver.add_backend(StorageScheme::S3, fake.clone());
@@ -455,5 +687,86 @@ output = { result = "s3://b/out.txt" }
             .await
             .unwrap_err();
         assert!(err.to_string().contains("stage remote input"));
+    }
+
+    #[tokio::test]
+    async fn stream_fifo_creates_pipe_and_streams_content() {
+        let (resolver, _fake) =
+            resolver_with("s3://b/large.fq", b">R1\nACTG\n+R1\nIIII\n", "etag-large");
+        let mut rule = rule_with(r#"["s3://b/large.fq"]"#);
+        rule.staging_mode = Some(StagingMode::StreamFifo);
+        let dir = tempfile::tempdir().unwrap();
+        let mut prep = stage_remote_io(&rule, dir.path(), &HashMap::new(), &resolver)
+            .await
+            .unwrap()
+            .expect("remote prep");
+
+        assert_eq!(prep.stream_guards.len(), 1);
+        let fifo_rel = &prep.rule.input.to_vec()[0];
+        let fifo_abs = dir.path().join(fifo_rel);
+        assert!(fifo_abs.exists());
+
+        // Read from the FIFO
+        let read_bytes = tokio::fs::read(&fifo_abs).await.unwrap();
+        assert_eq!(read_bytes, b">R1\nACTG\n+R1\nIIII\n");
+
+        // Clean finish
+        prep.stream_guards[0].finish().await.unwrap();
+        assert!(!fifo_abs.exists());
+    }
+
+    #[tokio::test]
+    async fn passthrough_leaves_raw_uri_intact() {
+        let (resolver, _fake) = resolver_with("s3://b/ref.fa", b">chr1\nNNNN", "e1");
+        let mut rule = toml::from_str::<Rule>(
+            r#"
+name = "native_cloud"
+shell = "bwa mem {input[0]} > {output[0]}"
+input = ["s3://b/ref.fa"]
+output = ["s3://b/out.bam"]
+staging_mode = "passthrough"
+"#,
+        )
+        .unwrap();
+        rule.staging_mode = Some(StagingMode::Passthrough);
+        let dir = tempfile::tempdir().unwrap();
+        let prep = stage_remote_io(&rule, dir.path(), &HashMap::new(), &resolver)
+            .await
+            .unwrap()
+            .expect("remote prep");
+
+        assert_eq!(prep.rule.input.to_vec(), vec!["s3://b/ref.fa"]);
+        assert_eq!(prep.rule.output.to_vec(), vec!["s3://b/out.bam"]);
+        assert!(prep.uploads.is_empty());
+        assert!(prep.stream_guards.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stream_fifo_mid_stream_failure_propagates() {
+        let (resolver, fake) = resolver_with("s3://b/corrupt.fq", b"0123456789", "etag-corrupt");
+        fake.fail_range_after_bytes
+            .store(4, std::sync::atomic::Ordering::Relaxed);
+
+        let mut rule = rule_with(r#"["s3://b/corrupt.fq"]"#);
+        rule.staging_mode = Some(StagingMode::StreamFifo);
+        let dir = tempfile::tempdir().unwrap();
+        let mut prep = stage_remote_io(&rule, dir.path(), &HashMap::new(), &resolver)
+            .await
+            .unwrap()
+            .expect("remote prep");
+
+        let fifo_rel = &prep.rule.input.to_vec()[0];
+        let fifo_abs = dir.path().join(fifo_rel);
+
+        // Reader attempts to read
+        let _ = tokio::fs::read(&fifo_abs).await;
+
+        // Finish detects the failure
+        let err = prep.stream_guards[0].finish().await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("simulated mid-stream network drop")
+                || err.to_string().contains("stream")
+        );
     }
 }
