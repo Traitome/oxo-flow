@@ -171,8 +171,8 @@ def curated_negative_queries():
     """Fake tool names the AI must reject (negative samples)."""
     return [
         "what is bwa_mem4",
-        "what does rnaseq_ultra_aligner do",
-        "what is fastq_super_cleaner",
+        "what does rnaseq_turboprop_aligner do",
+        "what is seq_shampooer",
         "what does gene_exploder do",
         "what is metagenome_magic",
         "what is vcf_annihilator",

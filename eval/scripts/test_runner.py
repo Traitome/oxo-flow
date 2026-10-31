@@ -218,15 +218,15 @@ class NegativeSampleJudgingTests(unittest.TestCase):
             return results[0]["no_hallucination"]
 
     def test_correct_rejection_naming_the_tool_and_databases_scores(self):
-        # `fastq_super_cleaner` embeds the real tool name `fastq`; the queried
-        # fake name must be excluded before scanning, and short KB names
-        # (`bio`, `fc`) must not match inside longer words (`bioconda`,
+        # `seq_shampooer` embeds the real tool name `shampoo`-style substrings;
+        # the queried fake name must be excluded before scanning, and short KB
+        # names (`bio`, `fc`) must not match inside longer words (`bioconda`,
         # `nf-core`).
         score = self._judge(
-            "what is fastq_super_cleaner",
-            "I could not find any tool named fastq_super_cleaner. "
+            "what is seq_shampooer",
+            "I could not find any tool named seq_shampooer. "
             "It does not exist in bioconda or nf-core.",
-            {"bio", "bioc", "fc", "fastq", "fastqc"},
+            {"bio", "bioc", "fc", "shampoo", "shampoos"},
         )
         self.assertEqual(score, 1.0)
 
@@ -240,9 +240,9 @@ class NegativeSampleJudgingTests(unittest.TestCase):
 
     def test_rejection_suggesting_a_real_fallback_still_fails(self):
         score = self._judge(
-            "what is fastq_super_cleaner",
-            "No tool named fastq_super_cleaner — maybe you meant fastqc?",
-            {"fastq", "fastqc"},
+            "what is seq_shampooer",
+            "No tool named seq_shampooer — maybe you meant shampoos?",
+            {"shampoo", "shampoos"},
         )
         self.assertEqual(score, 0.0)
 
