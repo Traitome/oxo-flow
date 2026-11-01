@@ -633,63 +633,11 @@ pub async fn run_command(
     let sensitive_keys = sensitive_keys_of(&config);
 
     // ── Snapshot drift warning (issue #243) ──────────────────────────────
-    // The checkpoint records the EFFECTIVE config of the original run
-    // (workflow defaults + its CLI overrides). This invocation re-parsed
-    // the workflow with THIS invocation's overrides — `resume` passes none,
-    // so plan-time gates (pair/instance `when`, `{meta.*}` baking) re-judge
-    // on defaults and the instance set can drift from the original run
-    // before any invalidation machinery sees it. Invalidation (below)
-    // covers shell interpolation and gate flips; it cannot resurrect
-    // instances expansion already dropped. Warn loudly, naming every key
-    // that differs — the operator decides whether to re-pass the overrides.
+    // The rationale and the masking rule live on the shared finding
+    // (findings::config_snapshot_drift).
     {
         let ck = checkpoint.lock().await;
-        let drifted: Vec<String> = ck
-            .config_snapshot
-            .keys()
-            .filter(|key| {
-                !oxo_flow_core::config_impact::is_engine_injected_key(key)
-                    && match config.config.get(key.as_str()) {
-                        Some(value) => {
-                            let new = oxo_flow_core::config_impact::snapshot_value(
-                                value,
-                                sensitive_keys.contains(key.as_str()),
-                            );
-                            &new != ck.config_snapshot.get(*key).unwrap()
-                        }
-                        None => true,
-                    }
-            })
-            .cloned()
-            .collect();
-        if !drifted.is_empty() && !ck.completed_rules.is_empty() {
-            eprintln!(
-                "{} effective config differs from the original run's snapshot — \
-                 plan-time gated instances (pair/sample `when`, `{{meta.*}}`) may \
-                 drift from the recorded run. Re-pass the original overrides to \
-                 resume the same instance set:",
-                "Config drift:".bold().yellow()
-            );
-            for key in &drifted {
-                match config.config.get(key.as_str()) {
-                    Some(value) => {
-                        let new = oxo_flow_core::config_impact::snapshot_value(
-                            value,
-                            sensitive_keys.contains(key.as_str()),
-                        );
-                        let old = ck.config_snapshot.get(key.as_str()).unwrap();
-                        let (old, new) = if old.starts_with("sha256:") || new.starts_with("sha256:")
-                        {
-                            ("****".to_string(), "****".to_string())
-                        } else {
-                            (old.clone(), new)
-                        };
-                        eprintln!("  {key}: {old} → {new}");
-                    }
-                    None => eprintln!("  {key}: (removed from this invocation)"),
-                }
-            }
-        }
+        config_snapshot_drift(&ck, &config, &sensitive_keys);
     }
 
     // Store workflow path and working directory in the checkpoint so

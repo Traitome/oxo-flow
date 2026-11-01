@@ -150,6 +150,80 @@ pub(crate) fn load_checkpoint_for_command(
     Ok((state, stale_running))
 }
 
+/// Snapshot drift warning (issue #243) — the checkpoint records the
+/// EFFECTIVE config of the original run (workflow defaults + its CLI
+/// overrides). This invocation re-parsed the workflow with THIS
+/// invocation's overrides — `resume` passes none, so plan-time gates
+/// (pair/instance `when`, `{meta.*}` baking) re-judge on defaults and the
+/// instance set can drift from the original run before any invalidation
+/// machinery sees it. Invalidation covers shell interpolation and gate
+/// flips; it cannot resurrect instances expansion already dropped. Warn
+/// loudly, naming every key that differs — the operator decides whether
+/// to re-pass the overrides. Returns the drifted keys (engine-injected
+/// keys excluded; empty when the checkpoint has no completed rules to
+/// drift against, so a fresh run never warns).
+pub(crate) fn config_snapshot_drift(
+    ck: &CheckpointState,
+    config: &WorkflowConfig,
+    sensitive_keys: &HashSet<String>,
+) -> Vec<String> {
+    let drifted: Vec<String> = ck
+        .config_snapshot
+        .keys()
+        .filter(|key| {
+            !oxo_flow_core::config_impact::is_engine_injected_key(key)
+                && match config.config.get(key.as_str()) {
+                    Some(value) => {
+                        let new = oxo_flow_core::config_impact::snapshot_value(
+                            value,
+                            sensitive_keys.contains(key.as_str()),
+                        );
+                        &new != ck.config_snapshot.get(*key).unwrap()
+                    }
+                    None => true,
+                }
+        })
+        .cloned()
+        .collect();
+    if drifted.is_empty() || ck.completed_rules.is_empty() {
+        return Vec::new();
+    }
+    eprintln!(
+        "{} effective config differs from the original run's snapshot — \
+         plan-time gated instances (pair/sample `when`, `{{meta.*}}`) may \
+         drift from the recorded run. Re-pass the original overrides to \
+         resume the same instance set:",
+        "Config drift:".bold().yellow()
+    );
+    for key in &drifted {
+        match config.config.get(key.as_str()) {
+            Some(value) => {
+                let new = oxo_flow_core::config_impact::snapshot_value(
+                    value,
+                    sensitive_keys.contains(key.as_str()),
+                );
+                let old = ck.config_snapshot.get(key.as_str()).unwrap();
+                let (old, new) = mask_snapshot_pair(old, &new);
+                eprintln!("  {key}: {old} → {new}");
+            }
+            None => eprintln!("  {key}: (removed from this invocation)"),
+        }
+    }
+    drifted
+}
+
+/// Recorded vs current snapshot values are content hashes for keys whose
+/// raw values never print (issue #99 B1 family): a `sha256:` on either
+/// side means the pair is masked — printing the hash of a secret is
+/// still a leak.
+fn mask_snapshot_pair(old: &str, new: &str) -> (String, String) {
+    if old.starts_with("sha256:") || new.starts_with("sha256:") {
+        ("****".to_string(), "****".to_string())
+    } else {
+        (old.to_string(), new.to_string())
+    }
+}
+
 pub(crate) fn print_truncated_list(label: &str, names: &[String]) -> String {
     // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
     // expanded rule instances (e.g. step5 × 100 samples).
@@ -557,6 +631,74 @@ pub(crate) fn missing_source_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workflow_config_with(toml_body: &str) -> WorkflowConfig {
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+{toml_body}
+"#
+        );
+        WorkflowConfig::parse(&toml).expect("test workflow config parses")
+    }
+
+    #[test]
+    fn snapshot_drift_names_changed_and_removed_keys_only() {
+        // issue #243: changed and removed keys drift; untouched keys and
+        // engine-injected keys (samples churn) never warn.
+        let mut ck = CheckpointState::default();
+        ck.completed_rules.insert("gen".to_string());
+        ck.config_snapshot
+            .insert("threads".to_string(), "4".to_string());
+        ck.config_snapshot
+            .insert("same".to_string(), "keep".to_string());
+        ck.config_snapshot
+            .insert("samples_list".to_string(), "old".to_string());
+        ck.config_snapshot
+            .insert("gone".to_string(), "x".to_string());
+        let config = workflow_config_with(
+            r#"
+[config]
+threads = "8"
+same = "keep"
+samples_list = "new"
+"#,
+        );
+        let sensitive = std::collections::HashSet::new();
+        let drifted = config_snapshot_drift(&ck, &config, &sensitive);
+        assert_eq!(drifted, vec!["gone".to_string(), "threads".to_string()]);
+    }
+
+    #[test]
+    fn snapshot_drift_stays_silent_without_completed_rules() {
+        // A fresh checkpoint has nothing to drift against — a fresh run
+        // with different defaults is not drift, it is the first run.
+        let ck = CheckpointState::default();
+        let config = workflow_config_with("[config]\nthreads = \"8\"\n");
+        let sensitive = std::collections::HashSet::new();
+        assert!(config_snapshot_drift(&ck, &config, &sensitive).is_empty());
+    }
+
+    #[test]
+    fn snapshot_pair_hash_is_masked_on_either_side() {
+        // Printing the hash of a secret is still a leak (issue #99 B1
+        // family): a sha256: prefix on the recorded OR the current value
+        // masks the whole pair.
+        assert_eq!(
+            mask_snapshot_pair("sha256:abc", "sha256:def"),
+            ("****".to_string(), "****".to_string())
+        );
+        assert_eq!(
+            mask_snapshot_pair("plain", "sha256:def"),
+            ("****".to_string(), "****".to_string())
+        );
+        assert_eq!(
+            mask_snapshot_pair("plain", "other"),
+            ("plain".to_string(), "other".to_string())
+        );
+    }
 
     fn corrupt_checkpoint(dir: &std::path::Path) -> std::path::PathBuf {
         let path = dir.join(".oxo-flow");
