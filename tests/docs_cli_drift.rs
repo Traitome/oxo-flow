@@ -1,7 +1,10 @@
 //! Docs ↔ CLI drift gate. The README's command-category table and the
 //! "N subcommands" prose across the docs hand-mirror the clap definition;
 //! this gate derives the truth from the built binary's `--help` and fails
-//! on any divergence (missing/extra table entries, stale counts).
+//! on any divergence (missing/extra table entries, stale counts). The
+//! GitHub Pages landing page's command cards (`docs/index.html`) hand-write
+//! each subcommand's name, category badge, and description — the same gate
+//! keeps that page in lockstep.
 
 mod common;
 
@@ -98,6 +101,21 @@ fn readme_table_commands(readme: &str) -> Vec<String> {
     commands
 }
 
+/// `cli-cmd-name` anchor texts on the landing page, in document order.
+fn landing_page_cards(html: &str) -> Vec<String> {
+    let mut cards = Vec::new();
+    let mut tail = html;
+    while let Some(pos) = tail.find("cli-cmd-name\">") {
+        let rest = &tail[pos + "cli-cmd-name\">".len()..];
+        let name: String = rest.chars().take_while(|c| *c != '<').collect();
+        if !name.is_empty() {
+            cards.push(name);
+        }
+        tail = rest;
+    }
+    cards
+}
+
 #[test]
 fn readme_command_table_and_count_mentions_match_the_clap_definition() {
     let (mut cli, aliases) = clap_subcommands();
@@ -162,5 +180,30 @@ fn readme_command_table_and_count_mentions_match_the_clap_definition() {
         failures.is_empty(),
         "stale subcommand counts in the docs:\n{}",
         failures.join("\n")
+    );
+}
+
+#[test]
+fn landing_page_command_cards_match_the_clap_definition() {
+    let (mut cli, _aliases) = clap_subcommands();
+    cli.sort();
+    assert!(
+        cli.len() >= 10,
+        "--help parsing broke: only {} subcommands found",
+        cli.len()
+    );
+
+    let html =
+        fs::read_to_string(repo_root().join("docs/index.html")).expect("docs/index.html readable");
+    let mut cards = landing_page_cards(&html);
+    cards.sort();
+
+    // Strict set equality — a missing card hides a subcommand from the
+    // page's entry grid, an extra card links to nothing real, and a
+    // duplicate double-links one command. Alias cards count as extras:
+    // the canonical name's card already covers the command.
+    assert_eq!(
+        cards, cli,
+        "landing-page CLI cards drifted from clap (missing = subcommands without a card, extra = cards that are not subcommands — aliases included)"
     );
 }
