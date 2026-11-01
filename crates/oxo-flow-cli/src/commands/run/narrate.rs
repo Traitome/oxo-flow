@@ -62,6 +62,46 @@ pub(crate) fn narrate_console_line(msg: std::fmt::Arguments<'_>) {
     narrate_line_to(&mut std::io::stderr(), msg);
 }
 
+/// Render the startup execution plan: rule count, then module headers when
+/// the workflow has `[[include]]` modules (issue #887), otherwise a flat
+/// numbered listing. The writer parameter keeps the rendering testable; the
+/// run command sends it to process stderr.
+pub(crate) fn write_execution_plan<W: std::io::Write>(
+    sink: &mut W,
+    order: &[String],
+    config: &WorkflowConfig,
+) -> std::io::Result<()> {
+    writeln!(
+        sink,
+        "{} {} rules in execution order",
+        "DAG:".bold().green(),
+        order.len()
+    )?;
+
+    let names: Vec<&str> = order.iter().map(String::as_str).collect();
+    if let Some(groups) = module_groups_for_rules(&names, &config.module_rules) {
+        let mut seen = 0usize;
+        for (group, members) in &groups {
+            writeln!(
+                sink,
+                "  {} — {} rule{}",
+                run_group_title(*group).bold(),
+                members.len(),
+                if members.len() == 1 { "" } else { "s" }
+            )?;
+            for (i, rule_name) in members.iter().enumerate() {
+                writeln!(sink, "    {}. {}", seen + i + 1, rule_name)?;
+            }
+            seen += members.len();
+        }
+    } else {
+        for (i, rule_name) in order.iter().enumerate() {
+            writeln!(sink, "  {}. {}", i + 1, rule_name)?;
+        }
+    }
+    Ok(())
+}
+
 /// Emit one audit-trail diagnostic line to stderr AND the run log: adoption
 /// notes, config-change summaries, and invalidation cascades explain WHY
 /// checkpoint credit was lost, and nohup/CI users only keep the run-log file
@@ -209,7 +249,10 @@ mod sigpipe_narrate_tests {
     //! with a Failed entry for a healthy rule. The tolerant writer is the
     //! whole fix; these tests pin it in place.
 
-    use super::{diagnostic_narrate, narrate_line_to, progress_narrate, write_run_log_line};
+    use super::{
+        WorkflowConfig, diagnostic_narrate, narrate_line_to, progress_narrate, strip_ansi,
+        write_execution_plan, write_run_log_line,
+    };
 
     /// A sink that is always full/dead: every write fails with EPIPE.
     struct DeadSink;
@@ -243,5 +286,57 @@ mod sigpipe_narrate_tests {
         diagnostic_narrate(format_args!("  ⚠ adoption note"), Some(&run_log));
         diagnostic_narrate(format_args!("  ⚠ operator hint"), None);
         write_run_log_line(&run_log, "plain line");
+    }
+
+    #[test]
+    fn execution_plan_groups_module_rules_without_renumbering() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "plan"
+
+[[rules]]
+name = "prepare"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        config
+            .module_rules
+            .insert("qc".to_string(), vec!["qc::align".to_string()]);
+        let order = vec!["qc::align".to_string(), "prepare".to_string()];
+        let mut sink = Vec::new();
+        write_execution_plan(&mut sink, &order, &config).unwrap();
+        let plain = strip_ansi(&String::from_utf8(sink).unwrap());
+
+        assert!(
+            plain.contains("DAG: 2 rules in execution order\n"),
+            "{plain}"
+        );
+        assert!(plain.contains("QC — 1 rule\n    1. qc::align\n"), "{plain}");
+        assert!(
+            plain.contains("Main workflow — 1 rule\n    2. prepare\n"),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn execution_plan_stays_flat_without_module_rules() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "plan"
+
+[[rules]]
+name = "only"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let mut sink = Vec::new();
+        write_execution_plan(&mut sink, &["only".to_string()], &config).unwrap();
+        let plain = strip_ansi(&String::from_utf8(sink).unwrap());
+
+        assert_eq!(plain, "DAG: 1 rules in execution order\n  1. only\n");
     }
 }

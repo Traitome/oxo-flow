@@ -503,37 +503,10 @@ pub async fn run_command(
         None,
     )
     .await;
-    if !crate::commands::is_quiet() {
-        eprintln!(
-            "{} {} rules in execution order",
-            "DAG:".bold().green(),
-            order.len()
-        );
-
-        // Issue #887: with [[include]] modules, group the plan under module
-        // headers so a long pipeline reads as module → rule. Attribution is
-        // the same function the metro graph export uses. Single-file
-        // workflows keep the flat listing below.
-        let names: Vec<&str> = order.iter().map(String::as_str).collect();
-        if let Some(groups) = module_groups_for_rules(&names, &config.module_rules) {
-            let mut seen = 0usize;
-            for (group, members) in &groups {
-                eprintln!(
-                    "  {} — {} rule{}",
-                    run_group_title(*group).bold(),
-                    members.len(),
-                    if members.len() == 1 { "" } else { "s" }
-                );
-                for (i, rule_name) in members.iter().enumerate() {
-                    eprintln!("    {}. {}", seen + i + 1, rule_name);
-                }
-                seen += members.len();
-            }
-        } else {
-            for (i, rule_name) in order.iter().enumerate() {
-                eprintln!("  {}. {}", i + 1, rule_name);
-            }
-        }
+    if !crate::commands::is_quiet()
+        && let Err(e) = write_execution_plan(&mut std::io::stderr().lock(), &order, &config)
+    {
+        tracing::trace!(error = %e, "execution plan console output dropped (stderr unavailable)");
     }
 
     // ── Load checkpoint + config-change impact analysis (issue #62) ─────
