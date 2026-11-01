@@ -803,38 +803,32 @@ Rules:
     Ok(())
 }
 
-/// Extract YAML content from an AI response (```yaml fence or raw).
-fn extract_yaml(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```yaml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            let content = response[start..start + end].trim().to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
-    }
-    if let Some(pos) = response.find("name:") {
-        return Some(response[pos..].trim().to_string());
-    }
-    None
+/// First fenced segment carrying the given info tag, via the shared fence
+/// state machine (`pipeline_gen::fenced_segments`) so stray openers and
+/// unclosed drafts pair exactly as the canonical extractor documents.
+fn first_fenced(response: &str, tag: &str) -> Option<String> {
+    oxo_flow_ai::agent::pipeline_gen::fenced_segments(response)
+        .into_iter()
+        .find(|(t, body)| t.eq_ignore_ascii_case(tag) && !body.trim().is_empty())
+        .map(|(_, body)| body)
 }
 
-/// Extract TOML content from an AI response (```toml fence or raw).
+/// Extract YAML content from an AI response (```yaml fence or raw `name:`).
+fn extract_yaml(response: &str) -> Option<String> {
+    first_fenced(response, "yaml").or_else(|| {
+        response
+            .find("name:")
+            .map(|pos| response[pos..].trim().to_string())
+    })
+}
+
+/// Extract TOML content from an AI response (```toml fence or raw `[project]`).
 fn extract_toml(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```toml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            let content = response[start..start + end].trim().to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
-    }
-    if let Some(pos) = response.find("[project]") {
-        return Some(response[pos..].trim().to_string());
-    }
-    None
+    first_fenced(response, "toml").or_else(|| {
+        response
+            .find("[project]")
+            .map(|pos| response[pos..].trim().to_string())
+    })
 }
 
 #[cfg(test)]
