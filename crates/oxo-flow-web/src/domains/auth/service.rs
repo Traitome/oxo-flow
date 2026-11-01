@@ -80,60 +80,6 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
     Err("Invalid credentials".into())
 }
 
-/// Validate session token. Returns user info if valid.
-pub fn validate_session(token: &str, sessions: &[Session]) -> Result<AuthMeResponse, String> {
-    if token.is_empty() {
-        return Ok(AuthMeResponse {
-            authenticated: false,
-            username: None,
-            role: None,
-        });
-    }
-
-    // Check if token exists in the session list and is not expired
-    let now = chrono::Utc::now().to_rfc3339();
-    for session in sessions {
-        if session.token == token {
-            if session.expires_at > now {
-                // Map user_id to username — in production this queries the DB
-                let username = if session.user_id.is_empty() {
-                    "user".to_string()
-                } else {
-                    session.user_id.clone()
-                };
-                return Ok(AuthMeResponse {
-                    authenticated: true,
-                    username: Some(username),
-                    role: Some("user".into()),
-                });
-            }
-            // Token expired
-            return Ok(AuthMeResponse {
-                authenticated: false,
-                username: None,
-                role: None,
-            });
-        }
-    }
-
-    // Token not found in sessions — authentication failed.
-    // In production, every token MUST be in the sessions table.
-    Ok(AuthMeResponse {
-        authenticated: false,
-        username: None,
-        role: None,
-    })
-}
-
-/// Check if user has required role.
-pub fn check_role(role: &str, required: &str) -> bool {
-    match required {
-        "admin" => role == "admin",
-        "user" => role == "admin" || role == "user",
-        _ => true, // viewer can access anything viewer-level
-    }
-}
-
 /// Get license status from existing OXO_FLOW_CONFIG.
 pub fn license_status() -> LicenseResponse {
     LicenseResponse {
@@ -451,57 +397,6 @@ mod tests {
     fn test_authenticate_invalid() {
         let result = authenticate("nobody", "wrongpassword");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_session_empty() {
-        let sessions = vec![];
-        let result = validate_session("", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_validate_session_unknown_token_rejected() {
-        // Unknown tokens are rejected — no more dev-mode fallback
-        let sessions = vec![];
-        let result = validate_session("some-token", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_validate_session_valid_token() {
-        let sessions = vec![Session {
-            token: "valid-token".into(),
-            user_id: "admin".into(),
-            created_at: "2024-01-01T00:00:00Z".into(),
-            expires_at: "2099-12-31T23:59:59Z".into(),
-        }];
-        let result = validate_session("valid-token", &sessions).unwrap();
-        assert!(result.authenticated);
-        assert_eq!(result.username, Some("admin".into()));
-    }
-
-    #[test]
-    fn test_validate_session_expired_token() {
-        let sessions = vec![Session {
-            token: "expired-token".into(),
-            user_id: "admin".into(),
-            created_at: "2020-01-01T00:00:00Z".into(),
-            expires_at: "2020-01-02T00:00:00Z".into(),
-        }];
-        let result = validate_session("expired-token", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_check_role_admin() {
-        assert!(check_role("admin", "admin"));
-        assert!(check_role("admin", "user"));
-        assert!(check_role("admin", "viewer"));
-        assert!(!check_role("user", "admin"));
-        assert!(check_role("user", "user"));
-        assert!(check_role("user", "viewer"));
-        assert!(check_role("viewer", "viewer"));
     }
 
     #[test]

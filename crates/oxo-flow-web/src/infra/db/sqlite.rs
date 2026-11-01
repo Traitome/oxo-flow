@@ -938,17 +938,6 @@ impl StorageBackend for SqliteBackend {
         Ok(row.and_then(|r| r.0))
     }
 
-    async fn cancel_run(&self, id: &str) -> Result<(), String> {
-        let now = Self::now();
-        sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     async fn list_runs_cursor(
         &self,
         filters: &models::RunFilters,
@@ -1785,11 +1774,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test: cancel_run
+    // Test: record_run_terminal (cancelled)
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_cancel_run() {
+    async fn test_record_run_terminal_cancelled() {
         let backend = create_backend().await;
         let user = create_test_user(&backend, "cancel-test").await;
         let pipeline = create_test_pipeline(&backend, &user.id, "cancel-pipeline").await;
@@ -1812,9 +1801,18 @@ mod tests {
         };
         let created = backend.create_run(&run).await.unwrap();
 
-        backend.cancel_run(&created.id).await.unwrap();
+        backend
+            .record_run_terminal(
+                &created.id,
+                "cancelled",
+                "cancelled",
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .await
+            .unwrap();
         let cancelled = backend.get_run(&created.id).await.unwrap().unwrap();
         assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(cancelled.phase, "cancelled");
         assert!(cancelled.finished_at.is_some());
     }
 

@@ -894,7 +894,8 @@ pub fn expand_meta_namespace(
 /// Given `{"sample": ["A", "B"], "read": ["1", "2"]}`, produces:
 /// `[{sample: A, read: 1}, {sample: A, read: 2}, {sample: B, read: 1}, {sample: B, read: 2}]`
 pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> WildcardCombinations {
-    let keys: Vec<&String> = wildcard_lists.keys().collect();
+    let mut keys: Vec<&String> = wildcard_lists.keys().collect();
+    keys.sort_unstable();
     if keys.is_empty() {
         return vec![WildcardValues::new()];
     }

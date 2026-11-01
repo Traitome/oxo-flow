@@ -616,17 +616,6 @@ impl StorageBackend for PostgresBackend {
         Ok(row.and_then(|r| r.0))
     }
 
-    async fn cancel_run(&self, id: &str) -> Result<(), String> {
-        let now = Self::now();
-        sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = $1 WHERE id = $2")
-            .bind(&now)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     async fn list_runs_cursor(
         &self,
         filters: &models::RunFilters,

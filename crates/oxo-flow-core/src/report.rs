@@ -475,8 +475,11 @@ impl Report {
 
     /// Generate an execution summary section from job records.
     pub fn execution_summary(records: &HashMap<String, JobRecord>) -> ReportSection {
+        let mut keys: Vec<&String> = records.keys().collect();
+        keys.sort_unstable();
         let mut rows = Vec::new();
-        for (name, record) in records {
+        for name in keys {
+            let record = &records[name];
             rows.push(vec![
                 name.clone(),
                 record.status.to_string(),
@@ -680,7 +683,11 @@ pub fn execution_time_chart(records: &HashMap<String, JobRecord>) -> ReportSecti
         .collect();
 
     // Sort by duration descending
-    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    entries.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     let labels: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
     let values: Vec<f64> = entries.iter().map(|(_, dur)| *dur).collect();

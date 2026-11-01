@@ -116,7 +116,6 @@ pub trait StorageBackend: Send + Sync {
         finished_at: &str,
     ) -> Result<(), String>;
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String>;
-    async fn cancel_run(&self, id: &str) -> Result<(), String>;
     async fn list_runs_cursor(
         &self,
         filters: &models::RunFilters,
