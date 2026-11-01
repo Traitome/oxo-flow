@@ -224,6 +224,222 @@ fn mask_snapshot_pair(old: &str, new: &str) -> (String, String) {
     }
 }
 
+/// What the input-manifest phase hands back to the run loop: the rules to
+/// force on the next plan and the protected-tree drift evidence the
+/// fail-gate after the phase reads.
+pub(crate) struct InputManifestPhase {
+    pub force_rules: Vec<String>,
+    pub protected_drift_lines: Vec<String>,
+    pub protected_drift: bool,
+}
+
+/// The input-manifest comparison phase (issue #72): a completed rule is
+/// reused only when the file set its inputs resolved to at completion time
+/// (paths + size + mtime) still matches. Globs and Dir inputs detect
+/// added/removed files; plain files detect edits. A mismatch invalidates
+/// the rule and its DAG downstream (the same cascade as config changes);
+/// legacy checkpoints (no manifest recorded) adopt the current set as a
+/// one-time baseline — the same policy as the config snapshot (issue #62).
+/// Detection is shared with dry-run's read-only preview (issue #66); this
+/// side MUTATES the checkpoint (cascades, baselines) and narrates every
+/// category, then persists both detections' side effects in one save
+/// (issue #72 + #935 P1). Protected-tree drift state (issue #935 P1) is
+/// returned so the fail-gate in the caller can read it.
+#[allow(clippy::too_many_arguments)] // phase plumbing: detection inputs + persistence + narration target
+pub(crate) fn apply_input_manifest_phase(
+    ck: &mut CheckpointState,
+    config: &WorkflowConfig,
+    dag: &WorkflowDag,
+    order: &[String],
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    checkpoint_path: &Path,
+    run_log: Option<&SharedRunLog>,
+) -> InputManifestPhase {
+    let mut force_rules: Vec<String> = Vec::new();
+    let (
+        mismatched,
+        missing_inputs,
+        baselined,
+        sample_selection_driven,
+        input_diffs,
+        symlink_notices,
+    ) = crate::commands::run_preview::detect_input_manifest_invalidations(
+        ck,
+        config,
+        dag,
+        order,
+        workdir,
+        wildcard_values,
+    );
+    // Issue #142 M1: a rule whose only input-manifest change is the
+    // engine-injected sample list is NOT invalidated — toggling --samples
+    // must not overwrite cohort-level gather outputs with a subset table.
+    // Emit the documented warning; the detection function already proved
+    // (re-expansion + content-identity) the change is sample-selection-only.
+    if !sample_selection_driven.is_empty() {
+        let names: Vec<&str> = sample_selection_driven.iter().map(String::as_str).collect();
+        diagnostic_narrate(
+            format_args!(
+                "  {} skipped {} whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                "⚠".yellow(),
+                oxo_flow_core::plural(names.len(), "rule", "rules"),
+                names.join(", ")
+            ),
+            run_log,
+        );
+    }
+    // Cascade-up: missing inputs (tombstoned temporaries) re-run their
+    // completed producers first — the same semantics the preview shows.
+    // Empty upstream means NO completed producer exists for the missing
+    // inputs (e.g. a deleted external source file with no producer rule
+    // at all) — re-running "0 producers" silently and exiting 0 would
+    // claim success from stale outputs, so surface each affected rule's
+    // missing patterns loudly instead (never "re-running 0 producer(s)").
+    if !missing_inputs.is_empty() {
+        let upstream = crate::commands::run_preview::cascade_up(ck, dag, &missing_inputs);
+        force_rules.extend(upstream.iter().cloned());
+        if upstream.is_empty() {
+            let lines = missing_source_lines(&missing_inputs, config, workdir, wildcard_values);
+            diagnostic_narrate(
+                format_args!(
+                    "  {} {} missing and cannot be regenerated in this run — affected rule{}:\n{}",
+                    "⚠".yellow(),
+                    oxo_flow_core::plural(
+                        missing_inputs.len(),
+                        "required input",
+                        "required inputs"
+                    ),
+                    if missing_inputs.len() == 1 { ":" } else { "s:" },
+                    lines.join("\n")
+                ),
+                run_log,
+            );
+        } else {
+            diagnostic_narrate(
+                format_args!(
+                    "  {} missing intermediate inputs — re-running {}: {}",
+                    "↻".yellow(),
+                    oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
+                    upstream.join(", ")
+                ),
+                run_log,
+            );
+        }
+    }
+    if !mismatched.is_empty() {
+        let invalidated =
+            crate::commands::run_preview::invalidate_with_downstream(ck, dag, &mismatched);
+        force_rules.extend(invalidated.iter().cloned());
+        // Issue #432(a): say WHY completed credit was lost when the
+        // likely cause is a prior failed run's side effects — the issue
+        // reports users reading this as "restarts lose credit" when it
+        // is deterministic invalidation (shared-dir side effects shift
+        // glob/dir input sets, which cascades downstream).
+        let prior_failures = !ck.failed_rules.is_empty();
+        diagnostic_narrate(
+            format_args!(
+                "  {} input changes invalidated {}: {}{}",
+                "↻".yellow(),
+                oxo_flow_core::plural(invalidated.len(), "rule", "rules"),
+                invalidated.join(", "),
+                if prior_failures {
+                    " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
+                } else {
+                    ""
+                }
+            ),
+            run_log,
+        );
+        // Issue #926 P0: say WHAT changed — one describe() line per
+        // affected file, so a size collapse to 0 B shows `(TRUNCATED)`
+        // and symlink churn shows `[symlink]` instead of a bare rule
+        // name. The diff map only carries invalidated seeds (not their
+        // cascaded dependents, whose inputs did not change on disk).
+        let mut diff_names: Vec<&String> = mismatched.iter().collect();
+        diff_names.sort();
+        for name in diff_names {
+            if let Some(lines) = input_diffs.get(name) {
+                for line in lines {
+                    diagnostic_narrate(format_args!("    {} {}", "·".yellow(), line), run_log);
+                }
+            }
+        }
+    }
+    // Issue #926 P0 item 3: first-seen symlink notice — regardless of
+    // invalidation (a same-content rewrite through a symlink leaves the
+    // manifests matching, which is exactly the incident #926 documents),
+    // every first-seen symlinked input is named once per run.
+    if !symlink_notices.is_empty() {
+        for line in &symlink_notices {
+            diagnostic_narrate(format_args!("  {} {}", "ℹ".cyan(), line), run_log);
+        }
+    }
+    if baselined > 0 {
+        diagnostic_narrate(
+            format_args!(
+                "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed; future input changes will invalidate them automatically",
+                oxo_flow_core::plural(baselined, "rule", "rules")
+            ),
+            run_log,
+        );
+    }
+    // ── Protected-tree drift (issue #935 P1) ─────────────────────────
+    // Whole-tree baselines opt-in via [engine] protected_data_trees:
+    // first observation adopts, later observations diff and report one
+    // describe() line per drifted file. Run FAILS on drift unless
+    // --allow-protected-drift — this is the fast, loud out-of-band
+    // damage detector (a truncated vendor FASTQ surfaces here within
+    // minutes, not one rule at a time).
+    let (protected_drift_lines, protected_baselined, protected_warnings) =
+        crate::commands::run_preview::detect_protected_tree_drift(ck, config, workdir);
+    let protected_drift = !protected_drift_lines.is_empty();
+    for line in &protected_warnings {
+        diagnostic_narrate(format_args!("  {} {}", "⚠".yellow(), line), run_log);
+    }
+    if protected_baselined > 0 {
+        diagnostic_narrate(
+            format_args!(
+                "  Note: {} — future changes will be flagged by plan/dry-run/run",
+                oxo_flow_core::plural(
+                    protected_baselined,
+                    "baseline recorded for protected tree",
+                    "baselines recorded for protected trees"
+                )
+            ),
+            run_log,
+        );
+    }
+    if protected_drift {
+        diagnostic_narrate(
+            format_args!(
+                "  {} PROTECTED TREE DRIFT detected in {} file(s):",
+                "✗".red().bold(),
+                protected_drift_lines.len()
+            ),
+            run_log,
+        );
+        for line in &protected_drift_lines {
+            diagnostic_narrate(format_args!("    {} {}", "·".red(), line), run_log);
+        }
+    }
+    // One save covers both detections (issue #72 + #935 P1): manifest
+    // baselines/diffs and protected-tree baselines must both persist.
+    if (!mismatched.is_empty() || baselined > 0 || protected_baselined > 0 || protected_drift)
+        && let Err(e) = ck.save_to_file(checkpoint_path)
+    {
+        tracing::warn!(
+            error = %e,
+            "failed to save checkpoint after input-manifest/protected-tree detection"
+        );
+    }
+    InputManifestPhase {
+        force_rules,
+        protected_drift_lines,
+        protected_drift,
+    }
+}
+
 pub(crate) fn print_truncated_list(label: &str, names: &[String]) -> String {
     // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
     // expanded rule instances (e.g. step5 × 100 samples).
