@@ -5089,14 +5089,7 @@ pub async fn dry_run_command(
     };
 
     // All config values (including CLI --arg overrides) become {config.key} in templates.
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
+    let wildcard_values = config_placeholder_values(&config.config);
 
     // ── Checkpoint-aware rerun preview (issue #66) ────────────────────────
     // Read-only: the preview classifies every rule in the execution set
@@ -5878,14 +5871,7 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
         // Build wildcard values from config so template variables expand
-        let mut debug_wildcards = std::collections::HashMap::new();
-        for (key, value) in &config.config {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            debug_wildcards.insert(format!("config.{key}"), string_val);
-        }
+        let debug_wildcards = crate::commands::run::config_placeholder_values(&config.config);
         let expanded: Vec<String> = config
             .rules
             .iter()
@@ -5994,14 +5980,7 @@ logical errors. Output format per rule:
         rules_to_show.len()
     );
 
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
+    let wildcard_values = config_placeholder_values(&config.config);
 
     for rule in &rules_to_show {
         eprintln!("{}", format!("── Rule: {} ──", rule.name).bold().cyan());

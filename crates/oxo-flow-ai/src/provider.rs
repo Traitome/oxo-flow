@@ -2099,24 +2099,28 @@ fn read_stored_api_key(path: &std::path::Path) -> String {
 /// Empty strings mean the field was absent. Canonical path first, with the
 /// pre-unification location still honored as a migration fallback (see
 /// [`ai_config_path`]).
-pub fn load_ai_config() -> Option<(String, String, String, String)> {
-    // Canonical path first; a legacy-location config is honored only when
-    // no canonical file exists (migration — see ai_config_path docs).
+/// The config file to read: the canonical path when it exists, else the
+/// legacy path when that exists (migration — see [`ai_config_path`] docs).
+/// Single source for the fallback so every reader sees the same file.
+pub fn resolved_ai_config_path() -> Option<std::path::PathBuf> {
     let path = ai_config_path();
-    let path = if path.exists() {
-        path
+    if path.exists() {
+        return Some(path);
+    }
+    let legacy = legacy_ai_config_path();
+    if legacy.exists() {
+        tracing::info!(
+            "reading legacy AI config at {} (run 'oxo-flow ai setup' to migrate)",
+            legacy.display()
+        );
+        Some(legacy)
     } else {
-        let legacy = legacy_ai_config_path();
-        if legacy.exists() {
-            tracing::info!(
-                "reading legacy AI config at {} (run 'oxo-flow ai setup' to migrate)",
-                legacy.display()
-            );
-            legacy
-        } else {
-            return None;
-        }
-    };
+        None
+    }
+}
+
+pub fn load_ai_config() -> Option<(String, String, String, String)> {
+    let path = resolved_ai_config_path()?;
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
     Some((

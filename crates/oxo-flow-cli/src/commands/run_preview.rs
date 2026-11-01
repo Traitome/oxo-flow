@@ -1164,13 +1164,7 @@ shell = "cat {input[0]} > {output[0]} && echo {config.ref}"
         config.expand_wildcards().unwrap();
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let mut wildcard_values = HashMap::new();
-        for (key, value) in &config.config {
-            wildcard_values.insert(
-                format!("config.{key}"),
-                value.as_str().unwrap_or_default().to_string(),
-            );
-        }
+        let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
         (config, dag, order, wildcard_values)
     }
 
@@ -2034,13 +2028,7 @@ shell = "cp {{input[0]}} {{output[0]}}"
         let mut config = WorkflowConfig::parse(&toml).unwrap();
         config.apply_defaults();
         config.expand_wildcards().unwrap();
-        let mut wildcard_values = HashMap::new();
-        for (key, value) in &config.config {
-            wildcard_values.insert(
-                format!("config.{key}"),
-                value.as_str().unwrap_or_default().to_string(),
-            );
-        }
+        let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
         // No DAG/order needed for the drift detector itself — mark the rule
         // completed directly.
         let mut ck = CheckpointState::new();

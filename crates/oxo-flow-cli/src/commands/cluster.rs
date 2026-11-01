@@ -6,7 +6,6 @@ use oxo_flow_core::backend::cluster::elementwise_aftercorr;
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -390,17 +389,8 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
                 std::collections::HashSet::new()
             } else {
-                let wildcard_values: std::collections::HashMap<String, String> = config
-                    .config
-                    .iter()
-                    .map(|(key, value)| {
-                        let string_val = match value {
-                            toml::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        (format!("config.{key}"), string_val)
-                    })
-                    .collect();
+                let wildcard_values =
+                    crate::commands::run::config_placeholder_values(&config.config);
                 config
                     .rules
                     .iter()
@@ -523,14 +513,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from("."));
 
             // Build config variable map for placeholder expansion
-            let mut wildcard_values: HashMap<String, String> = HashMap::new();
-            for (key, value) in &config.config {
-                let string_val = match value {
-                    toml::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                wildcard_values.insert(format!("config.{key}"), string_val);
-            }
+            let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
 
             for rule_name in &order {
                 let rule = config

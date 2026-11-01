@@ -4,7 +4,7 @@
 // moved to a compact footer strip — the AI chat is one click away, not
 // the entire first screen.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bot, FileCode2, PlayCircle, Sparkles, Database, ShieldCheck, CheckCircle2, Cpu, FileSpreadsheet } from 'lucide-react';
 import { api } from '../api/client';
@@ -35,14 +35,30 @@ export default function Dashboard() {
     () => localStorage.getItem(ONBOARDING_KEY) !== '1',
   );
 
-  useEffect(() => {
-    api.health().then(setHealth).catch(() => {});
-    api.system().then(setSys).catch(() => {});
-    api.metrics().then(setMetrics).catch(() => {});
-    api.listRuns().then((r) => { setRuns(r.items); setRunTotal(r.total); }).catch(() => {});
-    api.listTemplates().then(setTemplates).catch(() => {});
+  // A failed load used to render as an authoritative page of zeros —
+  // indistinguishable from "nothing is running". Surface it with a retry.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadDashboard = useCallback(() => {
+    const fail = (what: string) => (err: unknown) => {
+      setLoadError(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+    };
+    // A successful health probe clears the banner asynchronously (sync
+    // setState inside the effect trips the cascading-render rule).
+    api.health()
+      .then(setHealth)
+      .then(() => setLoadError(null))
+      .catch(fail('health'));
+    api.system().then(setSys).catch(fail('system info'));
+    api.metrics().then(setMetrics).catch(fail('metrics'));
+    api.listRuns().then((r) => { setRuns(r.items); setRunTotal(r.total); }).catch(fail('runs'));
+    api.listTemplates().then(setTemplates).catch(fail('templates'));
     api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
   }, []);
+
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
 
   const dismissOnboarding = () => {
     localStorage.setItem(ONBOARDING_KEY, '1');
@@ -58,6 +74,16 @@ export default function Dashboard() {
 
   return (
     <div className="page">
+      {loadError && (
+        <div
+          className="tool-palette-hint error"
+          style={{ cursor: 'pointer' }}
+          onClick={() => void loadDashboard()}
+          title="Click to retry"
+        >
+          {loadError}
+        </div>
+      )}
       <h1 className="page-title">{t('dashboard.title')}</h1>
       <p className="page-subtitle">{t('dashboard.subtitle')}</p>
 

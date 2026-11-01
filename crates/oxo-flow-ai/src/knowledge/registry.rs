@@ -232,30 +232,13 @@ pub fn get_nfcore_module(name: &str) -> Option<&'static NfCoreModule> {
 
 /// Fuzzy search over module names and summaries, ranked by name match.
 pub fn search_nfcore(query: &str, limit: usize) -> Vec<&'static NfCoreModule> {
-    let q = query.to_lowercase();
-    let mut exact: Vec<&NfCoreModule> = Vec::new();
-    let mut prefix: Vec<&NfCoreModule> = Vec::new();
-    let mut substring: Vec<&NfCoreModule> = Vec::new();
-    let mut summary_hits: Vec<&NfCoreModule> = Vec::new();
-    for module in NFCORE_DB.iter() {
-        let name = module.name.to_lowercase();
-        if name == q {
-            exact.push(module);
-        } else if name.starts_with(&q) {
-            prefix.push(module);
-        } else if name.contains(&q) {
-            substring.push(module);
-        } else if module.summary.to_lowercase().contains(&q) {
-            summary_hits.push(module);
-        }
-    }
-    exact
-        .into_iter()
-        .chain(prefix)
-        .chain(substring)
-        .chain(summary_hits)
-        .take(limit)
-        .collect()
+    super::ranked_name_search(
+        NFCORE_DB.iter(),
+        query,
+        limit,
+        |module| &module.name,
+        |module| &module.summary,
+    )
 }
 
 // ── commercial tools ───────────────────────────────────────────────────────
@@ -275,30 +258,13 @@ pub fn get_commercial_tool(name: &str) -> Option<&'static CommercialTool> {
 
 /// Fuzzy search over commercial tool names and summaries.
 pub fn search_commercial(query: &str, limit: usize) -> Vec<&'static CommercialTool> {
-    let q = query.to_lowercase();
-    let mut exact: Vec<&CommercialTool> = Vec::new();
-    let mut prefix: Vec<&CommercialTool> = Vec::new();
-    let mut substring: Vec<&CommercialTool> = Vec::new();
-    let mut summary_hits: Vec<&CommercialTool> = Vec::new();
-    for tool in COMMERCIAL_DB.iter() {
-        let name = tool.name.to_lowercase();
-        if name == q {
-            exact.push(tool);
-        } else if name.starts_with(&q) {
-            prefix.push(tool);
-        } else if name.contains(&q) {
-            substring.push(tool);
-        } else if tool.summary.to_lowercase().contains(&q) {
-            summary_hits.push(tool);
-        }
-    }
-    exact
-        .into_iter()
-        .chain(prefix)
-        .chain(substring)
-        .chain(summary_hits)
-        .take(limit)
-        .collect()
+    super::ranked_name_search(
+        COMMERCIAL_DB.iter(),
+        query,
+        limit,
+        |tool| &tool.name,
+        |tool| &tool.summary,
+    )
 }
 
 // ── bio.tools overlay ──────────────────────────────────────────────────────
@@ -316,30 +282,13 @@ pub fn get_biotools_overlay(name: &str) -> Option<&'static BioToolsOverlay> {
 
 /// Fuzzy search over overlay names and descriptions.
 pub fn search_biotools(query: &str, limit: usize) -> Vec<&'static BioToolsOverlay> {
-    let q = query.to_lowercase();
-    let mut exact: Vec<&BioToolsOverlay> = Vec::new();
-    let mut prefix: Vec<&BioToolsOverlay> = Vec::new();
-    let mut substring: Vec<&BioToolsOverlay> = Vec::new();
-    let mut text_hits: Vec<&BioToolsOverlay> = Vec::new();
-    for tool in BIOTOOLS_DB.iter() {
-        let name = tool.name.to_lowercase();
-        if name == q {
-            exact.push(tool);
-        } else if name.starts_with(&q) {
-            prefix.push(tool);
-        } else if name.contains(&q) {
-            substring.push(tool);
-        } else if tool.description.to_lowercase().contains(&q) {
-            text_hits.push(tool);
-        }
-    }
-    exact
-        .into_iter()
-        .chain(prefix)
-        .chain(substring)
-        .chain(text_hits)
-        .take(limit)
-        .collect()
+    super::ranked_name_search(
+        BIOTOOLS_DB.iter(),
+        query,
+        limit,
+        |tool| &tool.name,
+        |tool| &tool.description,
+    )
 }
 
 // ── EDAM terms ─────────────────────────────────────────────────────────────
@@ -356,30 +305,13 @@ pub fn get_edam_term(uri: &str) -> Option<&'static EdamTerm> {
 
 /// Fuzzy search over EDAM labels and definitions.
 pub fn search_edam(query: &str, limit: usize) -> Vec<&'static EdamTerm> {
-    let q = query.to_lowercase();
-    let mut exact: Vec<&EdamTerm> = Vec::new();
-    let mut prefix: Vec<&EdamTerm> = Vec::new();
-    let mut substring: Vec<&EdamTerm> = Vec::new();
-    let mut text_hits: Vec<&EdamTerm> = Vec::new();
-    for term in EDAM_DB.iter() {
-        let label = term.label.to_lowercase();
-        if label == q {
-            exact.push(term);
-        } else if label.starts_with(&q) {
-            prefix.push(term);
-        } else if label.contains(&q) {
-            substring.push(term);
-        } else if term.definition.to_lowercase().contains(&q) {
-            text_hits.push(term);
-        }
-    }
-    exact
-        .into_iter()
-        .chain(prefix)
-        .chain(substring)
-        .chain(text_hits)
-        .take(limit)
-        .collect()
+    super::ranked_name_search(
+        EDAM_DB.iter(),
+        query,
+        limit,
+        |term| &term.label,
+        |term| &term.definition,
+    )
 }
 
 // ── Merged registry lookup (lookup_tool fallback) ──────────────────────────

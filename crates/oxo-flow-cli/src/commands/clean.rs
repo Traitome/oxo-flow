@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
@@ -205,14 +204,7 @@ pub fn clean_command(
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // Build config variable map so {config.key} paths can be expanded
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
+    let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
 
     // Collect unique output paths, expanding config variable placeholders
     let mut outputs: Vec<String> = Vec::new();

@@ -153,7 +153,10 @@ impl AiRuntime {
 }
 
 fn load_global_config() -> Option<AiConfig> {
-    let path = oxo_flow_ai::provider::ai_config_path();
+    // Shared resolver so the legacy `~/.config/oxo-flow/ai_config.json`
+    // fallback behaves identically to `ai status` — an `ai setup`-written
+    // config used to be invisible to runtime-dependent commands.
+    let path = oxo_flow_ai::provider::resolved_ai_config_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     let provider_str = json["provider"].as_str().unwrap_or("");

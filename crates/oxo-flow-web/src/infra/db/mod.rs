@@ -65,6 +65,17 @@ pub struct Paginated<T: serde::Serialize> {
     pub total_pages: u64,
 }
 
+/// The #207 migration surface: one storage abstraction the domains route
+/// through, so a PostgreSQL backend becomes a matter of wiring, not rewrites.
+///
+/// HONEST SCOPE — today only the runs domain plus the guarded run insert
+/// consume this trait; every other domain (auth sessions, users, pipelines,
+/// templates, shares, clusters, audit, chat, AI config) still reads the
+/// SQLite pool directly, which is why a PostgreSQL deployment serves
+/// health/license/OpenAPI/SPA only (`PG_CAPABILITY_MATRIX` in lib.rs logs
+/// the served/gated split at startup). The unrouted methods below are the
+/// scaffolding each domain migrates onto — a new domain handler must call
+/// the trait, not add another raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<(), String>;
