@@ -1316,8 +1316,8 @@ async fn main() -> Result<()> {
             "`oxo-flow {name}` does not support --json yet{hint}.\n  \
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
-             status, batch, info, schema, license, ai, provenance verify, \
-             verify-data)."
+             status, batch, info, knowledge, schema, license, ai, \
+             provenance verify, verify-data)."
         );
     }
     // A background run never executes the workflow in the foreground

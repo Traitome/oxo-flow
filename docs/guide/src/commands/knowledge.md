@@ -21,10 +21,11 @@ Four actions are available:
 - `search <query>` — cross-source unified search across Bioconda CLI tools,
   the registry (nf-core modules + commercial tools + bio.tools overlay), and
   embedded pipeline skills.
-- `get <kind> <name>` — exact fetch of one record. `kind` is one of `tool`
-  (Bioconda), `module` (registry: nf-core / commercial / bio.tools), `skill`
-  (pipeline skill), or `doc` (full SKILL.md protocol document; names bridge
-  through pipeline-graph node ids).
+- `get <kind> <name>` — exact fetch of one record (case-insensitive).
+  `kind` is one of `tool` (Bioconda), `module` (registry: nf-core /
+  commercial / bio.tools), `skill` (pipeline skill; names carry a `bio-`
+  prefix, e.g. `bio-gatk-variant-calling`), or `doc` (full SKILL.md
+  protocol document; names bridge through pipeline-graph node ids).
 - `list <what>` — embedded indexes: `docs` (skill document ids) or `domains`
   (skill domains with record counts).
 - `stats` — per-source record counts with freshness (auto-generated sources
@@ -42,7 +43,7 @@ sees.
 | `-v, --verbose` | Enable verbose (debug-level) logging |
 | `--quiet` | Suppress non-essential output (errors only) |
 | `--no-color` | Disable colored output |
-| `--json` | Alias of the default JSON output for this command |
+| `--json` | Accepted for consistency with other commands; per-command output is controlled by `--format` |
 
 ## Examples
 
@@ -54,8 +55,8 @@ oxo-flow knowledge search samtools --format text
 # Exact fetch
 oxo-flow knowledge get tool samtools
 oxo-flow knowledge get module fastqc
-oxo-flow knowledge get skill germline-variant-calling
-oxo-flow knowledge get doc germline-variant-calling
+oxo-flow knowledge get skill bio-gatk-variant-calling
+oxo-flow knowledge get doc variant-calling
 
 # Indexes and freshness
 oxo-flow knowledge list domains
@@ -92,11 +93,12 @@ auto, stale per source) with live parsed counts:
 }
 ```
 
-`get tool samtools --format text` prints the record the AI tool layer sees:
+`get tool samtools --format text` prints the record the AI tool layer sees
+(`L`/`M` are the bioconda platform codes for linux-64 and osx-64):
 
 ```text
-samtools 1.25 — Tools for manipulating next-generation sequencing data
-platforms: linux-64, osx-64, osx-arm64
+samtools 1.25 — Tools for dealing with SAM, BAM and CRAM files
+platforms: L, M
 ```
 
 ## Notes

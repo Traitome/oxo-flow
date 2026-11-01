@@ -42,6 +42,13 @@ pub fn skill_count() -> usize {
     SKILL_DB.len()
 }
 
+/// Exact-name lookup (case-insensitive). Skill names carry their `bio-`
+/// prefix (e.g. `bio-gatk-variant-calling`); fuzzy lookup is `search_skills`.
+pub fn get_skill(name: &str) -> Option<&'static SkillRecord> {
+    let needle = name.to_lowercase();
+    SKILL_DB.iter().find(|s| s.name.to_lowercase() == needle)
+}
+
 /// List all skill domains with their skill counts.
 pub fn list_domains() -> Vec<(String, usize)> {
     let mut domains: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();

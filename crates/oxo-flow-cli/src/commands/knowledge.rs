@@ -22,7 +22,9 @@ use oxo_flow_ai::knowledge::registry::{
     format_registry_hit, format_registry_results, get_registry_tool, registry_count,
 };
 use oxo_flow_ai::knowledge::skillgraph_docs::{doc_count, doc_ids, format_doc, get_doc, list_docs};
-use oxo_flow_ai::knowledge::skills::{format_skills, list_domains, search_skills, skill_count};
+use oxo_flow_ai::knowledge::skills::{
+    format_skills, get_skill, list_domains, search_skills, skill_count,
+};
 use serde_json::json;
 
 /// Maximum rows returned by search/list operations (keeps text output
@@ -160,8 +162,7 @@ fn get_json(kind: &str, name: &str) -> Result<serde_json::Value> {
             .ok_or_else(|| {
                 anyhow!("no registry record named '{name}' (nf-core, commercial, or bio.tools)")
             }),
-        "skill" => oxo_flow_ai::knowledge::skills::search_skills(name, 1)
-            .first()
+        "skill" => get_skill(name)
             .map(|s| {
                 json!({
                     "command": "knowledge", "action": "get", "kind": kind,
@@ -169,7 +170,7 @@ fn get_json(kind: &str, name: &str) -> Result<serde_json::Value> {
                     "record": skill_json(s),
                 })
             })
-            .ok_or_else(|| anyhow!("no skill matching '{name}'")),
+            .ok_or_else(|| anyhow!("no skill named '{name}' (names carry a bio- prefix; see `oxo-flow knowledge search '{name}'`)")),
         "doc" => get_doc(name)
             .map(|d| {
                 json!({
@@ -245,12 +246,10 @@ fn stats_json() -> Result<serde_json::Value> {
 // ── Text emitters ───────────────────────────────────────────────────────────
 
 fn search_text(query: &str) {
+    // format_search_results self-covers the empty case ("No Bioconda CLI
+    // tools matched …"), so no is_empty fallback is needed here.
     let bioconda = format_search_results(query, SEARCH_LIMIT);
-    if bioconda.is_empty() {
-        println!("No Bioconda CLI tools matched '{query}'.");
-    } else {
-        println!("{bioconda}");
-    }
+    println!("{bioconda}");
     let registry = format_registry_results(query, SEARCH_LIMIT);
     if !registry.is_empty() {
         println!("\n{registry}");
@@ -274,7 +273,7 @@ fn get_text(kind: &str, name: &str) -> Result<()> {
             Some(hit) => println!("{}", format_registry_hit(&hit)),
             None => bail!("no registry record named '{name}' (nf-core, commercial, or bio.tools)"),
         },
-        "skill" => match oxo_flow_ai::knowledge::skills::search_skills(name, 1).first() {
+        "skill" => match get_skill(name) {
             Some(s) => {
                 println!("[{}] {} — {}", s.domain, s.name, s.description);
                 if !s.primary_tool.is_empty() {
@@ -284,7 +283,9 @@ fn get_text(kind: &str, name: &str) -> Result<()> {
                     println!("\n{}", s.preview);
                 }
             }
-            None => bail!("no skill matching '{name}'"),
+            None => bail!(
+                "no skill named '{name}' (names carry a bio- prefix; see `oxo-flow knowledge search '{name}'`)"
+            ),
         },
         "doc" => match get_doc(name) {
             Some(d) => println!("{}", format_doc(d)),
@@ -299,12 +300,13 @@ fn list_text(what: &str) -> Result<()> {
     match what {
         "docs" => println!("{}", list_docs()),
         "domains" => {
+            let domains = list_domains();
             println!(
                 "{} skill domains ({} embedded skills):",
-                list_domains().len(),
+                domains.len(),
                 skill_count()
             );
-            for (name, n) in list_domains() {
+            for (name, n) in domains {
                 println!("- {name}: {n} skills");
             }
         }
@@ -413,15 +415,21 @@ mod tests {
 
     #[test]
     fn get_json_skill_top_hit() {
-        let v = get_json("skill", "variant-calling").expect("skills exist");
+        let v = get_json("skill", "bio-gatk-variant-calling").expect("skill is embedded");
         assert_eq!(v["record"]["domain"], "variant-calling");
+    }
+
+    #[test]
+    fn get_json_skill_unknown_is_err() {
+        // get skill is an exact fetch: a fuzzy-only match must not succeed.
+        assert!(get_json("skill", "variant-calling").is_err());
     }
 
     #[test]
     fn get_json_doc_resolves_display_name() {
         // pipeline-graph display names bridge to doc ids; fall back to a
         // doc id that is verified to exist in the embedded data.
-        let v = get_json("doc", "variant-calling").or_else(|_| get_json("doc", "shared"));
+        let v = get_json("doc", "variant-calling").or_else(|_| get_json("doc", "clinical-variant"));
         assert!(v.is_ok(), "at least one canonical doc id must resolve");
         let v = v.unwrap();
         assert!(v["record"]["doc"].as_str().unwrap().len() > 100);
