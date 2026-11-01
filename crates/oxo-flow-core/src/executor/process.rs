@@ -1426,7 +1426,11 @@ impl LocalExecutor {
         }?;
 
         if rule.resources.numa_pin || rule.resources.numa_node.is_some() {
-            let topo = self.config.hardware_topology.clone().unwrap_or_default();
+            let topo = self
+                .config
+                .hardware_topology
+                .clone()
+                .unwrap_or_else(crate::hardware::HardwareTopology::discover);
             let node = rule.resources.numa_node.unwrap_or_else(|| {
                 let mem_mb = rule
                     .resources

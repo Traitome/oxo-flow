@@ -201,6 +201,21 @@
   color: var(--color-text-tertiary, #64748B);
 }
 
+.rf-metro-station-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-secondary, #94A3B8);
+  background: var(--color-bg-tertiary, #1E293B);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.rf-metro-interchange {
+  font-size: 12px;
+  color: var(--color-warning, #F59E0B);
+  font-weight: 700;
+}
+
 .rf-metro-shell {
   font-family: var(--metro-font-mono);
   font-size: 11px;

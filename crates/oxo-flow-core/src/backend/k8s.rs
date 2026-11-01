@@ -3,7 +3,7 @@
 //! Maps ScheduledRule resources and container specifications onto Kubernetes
 //! batch/v1 Job manifests with deterministic labels and fail-fast semantics.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledRule, TerminalRecord};
+use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
@@ -14,22 +14,7 @@ use std::path::{Path, PathBuf};
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
 pub fn sanitize_k8s_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if c == '-' || c == '_' || c == '.' {
-            out.push('-');
-        }
-    }
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "job".to_string()
-    } else if trimmed.len() > 63 {
-        trimmed[..63].trim_matches('-').to_string()
-    } else {
-        trimmed.to_string()
-    }
+    sanitize_cloud_name(name, 63, true, "")
 }
 
 /// Generate a Kubernetes batch/v1 Job manifest for a single rule.
@@ -183,9 +168,7 @@ pub fn generate_k8s_array_job_manifest(
 pub struct KubernetesExecutor {
     cluster: ClusterJobConfig,
     namespace: Option<String>,
-    bin_dir: Option<PathBuf>,
-    env: Vec<(String, String)>,
-    workdir: PathBuf,
+    cli: CloudCli,
 }
 
 impl KubernetesExecutor {
@@ -193,9 +176,7 @@ impl KubernetesExecutor {
         Self {
             cluster,
             namespace: None,
-            bin_dir: None,
-            env: Vec::new(),
-            workdir: PathBuf::from("."),
+            cli: CloudCli::new(),
         }
     }
 
@@ -205,35 +186,18 @@ impl KubernetesExecutor {
     }
 
     pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
-        self.bin_dir = Some(dir);
+        self.cli = self.cli.with_scheduler_dir(dir);
         self
     }
 
     pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.env.push((key.to_string(), value.to_string()));
+        self.cli = self.cli.with_env(key, value);
         self
     }
 
     pub fn with_workdir(mut self, dir: PathBuf) -> Self {
-        self.workdir = dir;
+        self.cli = self.cli.with_workdir(dir);
         self
-    }
-
-    async fn run_cmd(&self, program: &str, args: &[&str]) -> Result<std::process::Output> {
-        let resolved = match &self.bin_dir {
-            Some(dir) => dir.join(program),
-            None => PathBuf::from(program),
-        };
-        let out = tokio::process::Command::new(&resolved)
-            .args(args)
-            .envs(self.env.iter().cloned())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| OxoFlowError::Config {
-                message: format!("failed to run '{}': {e}", resolved.display()),
-            })?;
-        Ok(out)
     }
 }
 
@@ -273,7 +237,7 @@ impl ExecutorBackend for KubernetesExecutor {
             ns_flag = format!("--namespace={ns}");
             args.push(&ns_flag);
         }
-        let out = self.run_cmd("kubectl", &args).await?;
+        let out = self.cli.run_cmd("kubectl", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -302,12 +266,12 @@ impl ExecutorBackend for KubernetesExecutor {
                 ns_flag = format!("--namespace={ns}");
                 args.push(&ns_flag);
             }
-            let out = match self.run_cmd("kubectl", &args).await {
-                Ok(o) => o,
-                Err(_) => continue,
-            };
+            let out = self.cli.run_cmd("kubectl", &args).await?;
             if !out.status.success() {
-                continue;
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(OxoFlowError::Config {
+                    message: format!("kubectl get job '{id}' failed: {stderr}"),
+                });
             }
             let stdout = String::from_utf8_lossy(&out.stdout);
             if let Ok(v) = serde_json::from_str::<Value>(&stdout) {
@@ -341,7 +305,7 @@ impl ExecutorBackend for KubernetesExecutor {
             ns_flag = format!("--namespace={ns}");
             args.push(&ns_flag);
         }
-        let out = self.run_cmd("kubectl", &args).await?;
+        let out = self.cli.run_cmd("kubectl", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -359,7 +323,7 @@ impl ExecutorBackend for KubernetesExecutor {
             ns_flag = format!("--namespace={ns}");
             args.push(&ns_flag);
         }
-        let out = self.run_cmd("kubectl", &args).await?;
+        let out = self.cli.run_cmd("kubectl", &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 

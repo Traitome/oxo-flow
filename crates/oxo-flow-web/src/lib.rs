@@ -359,7 +359,9 @@ pub async fn init_database() -> anyhow::Result<()> {
         #[cfg(feature = "postgres")]
         {
             tracing::info!("Initializing PostgreSQL backend");
-            crate::infra::db::postgres::init_pool(&database_url).await;
+            if let Err(e) = crate::infra::db::postgres::init_pool(&database_url).await {
+                anyhow::bail!("PostgreSQL init failed: {e}");
+            }
             tracing::warn!("{}", PG_CAPABILITY_MATRIX);
         }
         #[cfg(not(feature = "postgres"))]

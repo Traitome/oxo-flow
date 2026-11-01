@@ -3,7 +3,7 @@
 //! Maps ScheduledRule specifications onto Google Cloud Batch jobs submit
 //! JSON configurations with cpuMilli/memoryMib, taskGroups, and allocation policies.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledRule, TerminalRecord};
+use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
@@ -11,24 +11,10 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric or hyphens, max 63 chars).
+/// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric
+/// and hyphens, max 63 chars).
 pub fn sanitize_gcp_batch_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if c == '-' || c == '_' || c == '.' {
-            out.push('-');
-        }
-    }
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "job".to_string()
-    } else if trimmed.len() > 63 {
-        trimmed[..63].trim_matches('-').to_string()
-    } else {
-        trimmed.to_string()
-    }
+    sanitize_cloud_name(name, 63, true, "")
 }
 
 /// Generate a Google Cloud Batch job JSON configuration.
@@ -134,9 +120,7 @@ pub struct GcpBatchExecutor {
     cluster: ClusterJobConfig,
     project: Option<String>,
     location: String,
-    bin_dir: Option<PathBuf>,
-    env: Vec<(String, String)>,
-    workdir: PathBuf,
+    cli: CloudCli,
 }
 
 impl GcpBatchExecutor {
@@ -145,9 +129,7 @@ impl GcpBatchExecutor {
             cluster,
             project: None,
             location: "us-central1".to_string(),
-            bin_dir: None,
-            env: Vec::new(),
-            workdir: PathBuf::from("."),
+            cli: CloudCli::new(),
         }
     }
 
@@ -162,35 +144,18 @@ impl GcpBatchExecutor {
     }
 
     pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
-        self.bin_dir = Some(dir);
+        self.cli = self.cli.with_scheduler_dir(dir);
         self
     }
 
     pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.env.push((key.to_string(), value.to_string()));
+        self.cli = self.cli.with_env(key, value);
         self
     }
 
     pub fn with_workdir(mut self, dir: PathBuf) -> Self {
-        self.workdir = dir;
+        self.cli = self.cli.with_workdir(dir);
         self
-    }
-
-    async fn run_cmd(&self, program: &str, args: &[&str]) -> Result<std::process::Output> {
-        let resolved = match &self.bin_dir {
-            Some(dir) => dir.join(program),
-            None => PathBuf::from(program),
-        };
-        let out = tokio::process::Command::new(&resolved)
-            .args(args)
-            .envs(self.env.iter().cloned())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| OxoFlowError::Config {
-                message: format!("failed to run '{}': {e}", resolved.display()),
-            })?;
-        Ok(out)
     }
 }
 
@@ -248,7 +213,7 @@ impl ExecutorBackend for GcpBatchExecutor {
             args.push(&proj_arg);
         }
 
-        let out = self.run_cmd("gcloud", &args).await?;
+        let out = self.cli.run_cmd("gcloud", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -282,12 +247,12 @@ impl ExecutorBackend for GcpBatchExecutor {
                 args.push(&proj_arg);
             }
 
-            let out = match self.run_cmd("gcloud", &args).await {
-                Ok(o) => o,
-                Err(_) => continue,
-            };
+            let out = self.cli.run_cmd("gcloud", &args).await?;
             if !out.status.success() {
-                continue;
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(OxoFlowError::Config {
+                    message: format!("gcloud batch jobs describe failed for '{id}': {stderr}"),
+                });
             }
 
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -315,7 +280,7 @@ impl ExecutorBackend for GcpBatchExecutor {
             proj_arg = format!("--project={proj}");
             args.push(&proj_arg);
         }
-        let out = self.run_cmd("gcloud", &args).await?;
+        let out = self.cli.run_cmd("gcloud", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -335,7 +300,7 @@ impl ExecutorBackend for GcpBatchExecutor {
             "--limit=50",
             "--format=value(textPayload)",
         ];
-        let out = self.run_cmd("gcloud", &args).await?;
+        let out = self.cli.run_cmd("gcloud", &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 

@@ -85,38 +85,64 @@ impl StorageTierLadder {
     /// If `allow_ram` is true and Tier 0 is configured with `>= required_mb`,
     /// Tier 0 is selected. Otherwise Tier 1, then Tier 2 are probed.
     /// Returns `None` if no configured tier has sufficient capacity.
+    ///
+    /// When the capacity probe fails (e.g. the path does not yet exist or
+    /// statfs returns an error), the tier is **skipped** with a `tracing`
+    /// warning rather than silently selected without verifying capacity.
+    /// This prevents routing a large scratch job onto a nearly-full disk.
     pub fn select_tier_for_scratch(
         &self,
         required_mb: u64,
         allow_ram: bool,
     ) -> Option<(StorageTier, PathBuf)> {
         if allow_ram && let Some(ref ram_path) = self.tier0_ram_scratch {
-            if let Some(avail) = probe_available_mb(ram_path) {
-                if avail >= required_mb {
+            match probe_available_mb(ram_path) {
+                Some(avail) if avail >= required_mb => {
                     return Some((StorageTier::Tier0Ram, ram_path.clone()));
                 }
-            } else if ram_path.exists() || ram_path.parent().is_some_and(|p| p.exists()) {
-                return Some((StorageTier::Tier0Ram, ram_path.clone()));
+                Some(_) => {} // Insufficient capacity — fall through.
+                None => {
+                    tracing::warn!(
+                        "storage-tier: cannot probe capacity of '{}'; \
+                         skipping Tier0Ram for {} MB scratch",
+                        ram_path.display(),
+                        required_mb,
+                    );
+                }
             }
         }
 
         if let Some(ref nvme_path) = self.tier1_nvme_scratch {
-            if let Some(avail) = probe_available_mb(nvme_path) {
-                if avail >= required_mb {
+            match probe_available_mb(nvme_path) {
+                Some(avail) if avail >= required_mb => {
                     return Some((StorageTier::Tier1Nvme, nvme_path.clone()));
                 }
-            } else if nvme_path.exists() || nvme_path.parent().is_some_and(|p| p.exists()) {
-                return Some((StorageTier::Tier1Nvme, nvme_path.clone()));
+                Some(_) => {}
+                None => {
+                    tracing::warn!(
+                        "storage-tier: cannot probe capacity of '{}'; \
+                         skipping Tier1Nvme for {} MB scratch",
+                        nvme_path.display(),
+                        required_mb,
+                    );
+                }
             }
         }
 
         if let Some(ref shared_path) = self.tier2_shared_scratch {
-            if let Some(avail) = probe_available_mb(shared_path) {
-                if avail >= required_mb {
+            match probe_available_mb(shared_path) {
+                Some(avail) if avail >= required_mb => {
                     return Some((StorageTier::Tier2Shared, shared_path.clone()));
                 }
-            } else if shared_path.exists() || shared_path.parent().is_some_and(|p| p.exists()) {
-                return Some((StorageTier::Tier2Shared, shared_path.clone()));
+                Some(_) => {}
+                None => {
+                    tracing::warn!(
+                        "storage-tier: cannot probe capacity of '{}'; \
+                         skipping Tier2Shared for {} MB scratch",
+                        shared_path.display(),
+                        required_mb,
+                    );
+                }
             }
         }
 
@@ -135,5 +161,31 @@ fn probe_available_mb(path: &Path) -> Option<u64> {
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// When the capacity probe fails, the tier must NOT be silently selected
+    /// (regression guard for the capacity-bypass bug).
+    #[test]
+    fn probe_failure_does_not_select_tier() {
+        let ladder = StorageTierLadder {
+            tier0_ram_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/ram")),
+            tier1_nvme_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/nvme")),
+            tier2_shared_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/shared")),
+            ..Default::default()
+        };
+        // All probes fail → None, not a silent fallback.
+        assert!(ladder.select_tier_for_scratch(1024, true).is_none());
+    }
+
+    /// When no tiers are configured at all, selection returns None.
+    #[test]
+    fn empty_ladder_returns_none() {
+        let ladder = StorageTierLadder::default();
+        assert!(ladder.select_tier_for_scratch(1024, true).is_none());
     }
 }

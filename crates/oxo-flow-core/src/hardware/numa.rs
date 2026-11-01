@@ -24,12 +24,6 @@ pub struct HardwareTopology {
     pub cache_l3_mb: u64,
 }
 
-impl Default for HardwareTopology {
-    fn default() -> Self {
-        Self::discover()
-    }
-}
-
 impl HardwareTopology {
     /// Discover hardware topology by interrogating Linux sysfs or macOS sysctl.
     pub fn discover() -> Self {

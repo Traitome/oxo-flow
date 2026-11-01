@@ -19,6 +19,106 @@ pub mod driver;
 pub mod gcp_batch;
 pub mod k8s;
 
+/// Shared CLI-process state for cloud-native backends (k8s, aws-batch,
+/// gcp-batch). Extracted once so the three executors do not each maintain
+/// byte-identical copies of `bin_dir` resolution, env propagation, and the
+/// `run_cmd` helper (AGENTS.md: "Reuse, never retype").
+#[derive(Debug, Clone, Default)]
+pub struct CloudCli {
+    /// Directory to resolve scheduler CLIs from instead of `PATH`.
+    pub bin_dir: Option<PathBuf>,
+    /// Extra environment variables injected into every scheduler CLI call.
+    pub env: Vec<(String, String)>,
+    /// Working directory the scheduler CLI calls run in.
+    pub workdir: PathBuf,
+}
+
+impl CloudCli {
+    /// Start from an empty configuration (cwd = `.`).
+    pub fn new() -> Self {
+        Self {
+            bin_dir: None,
+            env: Vec::new(),
+            workdir: PathBuf::from("."),
+        }
+    }
+
+    /// Resolve scheduler commands from `dir` instead of `PATH`.
+    pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
+        self.bin_dir = Some(dir);
+        self
+    }
+
+    /// Add an environment variable for scheduler CLI invocations.
+    pub fn with_env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Set the working directory for scheduler CLI invocations.
+    pub fn with_workdir(mut self, dir: PathBuf) -> Self {
+        self.workdir = dir;
+        self
+    }
+
+    /// Run a scheduler CLI program, propagating spawn errors as
+    /// [`OxoFlowError::Config`] with the resolved binary path attached.
+    pub async fn run_cmd(&self, program: &str, args: &[&str]) -> Result<std::process::Output> {
+        let resolved = match &self.bin_dir {
+            Some(dir) => dir.join(program),
+            None => PathBuf::from(program),
+        };
+        let out = tokio::process::Command::new(&resolved)
+            .args(args)
+            .envs(self.env.iter().cloned())
+            .current_dir(&self.workdir)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|e| OxoFlowError::Config {
+                message: format!("failed to run '{}': {e}", resolved.display()),
+            })?;
+        Ok(out)
+    }
+}
+
+/// Sanitize a free-form name into a DNS-1123 / RFC-1035 compatible label.
+///
+/// Shared by the Kubernetes and GCP Batch executors (both enforce a 63-char
+/// lowercase alphanumeric-plus-dash label). Pass `max_len` to relax the cap
+/// (AWS Batch allows 128) and `lowercase = false` to preserve case.
+/// `extra_allowed` may contain additional characters that are passed through
+/// verbatim (e.g. `'_'` for AWS Batch job names).
+pub fn sanitize_cloud_name(name: &str, max_len: usize, lowercase: bool, extra_allowed: &str) -> String {
+    let mut s = if lowercase {
+        name.to_lowercase()
+    } else {
+        name.to_string()
+    };
+    s = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || extra_allowed.contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    s = s.trim_matches('-').to_string();
+    if s.len() > max_len {
+        s.truncate(max_len);
+        s = s.trim_matches('-').to_string();
+    }
+    if s.is_empty() {
+        s = "job".to_string();
+    }
+    s
+}
+
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendJobStatus {

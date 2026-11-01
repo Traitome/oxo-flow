@@ -228,6 +228,18 @@ impl FromStr for IndexKind {
     }
 }
 
+/// Return the shell command that generates the companion index for *kind*,
+/// with `{input}` / `{output}` placeholders. Single source of truth shared
+/// by the type checker and the header introspector (DRY).
+#[must_use]
+pub fn coercion_rule_for_index(kind: IndexKind) -> Option<&'static str> {
+    match kind {
+        IndexKind::Bai | IndexKind::Csi | IndexKind::Crai => Some("samtools index {input}"),
+        IndexKind::Tbi => Some("tabix -p vcf {input}"),
+        IndexKind::Fai => Some("samtools faidx {input}"),
+    }
+}
+
 /// Data compression stream encoding.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,

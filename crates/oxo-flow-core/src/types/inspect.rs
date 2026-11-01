@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, IndexKind, SortOrder, TypeViolation,
+    coercion_rule_for_index,
     normalize_reference_build,
 };
 
@@ -643,12 +644,7 @@ pub fn introspect_path_with_spec(
     if let Some(expected_index) = expected.index {
         let has_index = check_index_exists_on_disk(path, expected_index);
         if !has_index {
-            let coercion_rule = match expected_index {
-                IndexKind::Bai | IndexKind::Csi => Some("samtools index {input}".to_string()),
-                IndexKind::Crai => Some("samtools index {input}".to_string()),
-                IndexKind::Tbi => Some("tabix -p vcf {input}".to_string()),
-                IndexKind::Fai => Some("samtools faidx {input}".to_string()),
-            };
+            let coercion_rule = coercion_rule_for_index(expected_index).map(str::to_string);
             violations.push(TypeViolation {
                 code: "TYPE-003".to_string(),
                 message: format!(

@@ -3,7 +3,7 @@
 //! Maps ScheduledRule specifications onto AWS Batch SubmitJob payloads
 //! with containerOverrides, VCPU/memory resource limits, and array properties.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledRule, TerminalRecord};
+use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
@@ -11,24 +11,10 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Sanitise a string for use as an AWS Batch job name (letters, numbers, underscores, hyphens, max 128 chars).
+/// Sanitise a string for use as an AWS Batch job name (letters, numbers,
+/// underscores, hyphens, max 128 chars, case preserved).
 pub fn sanitize_aws_batch_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-            out.push(c);
-        } else {
-            out.push('-');
-        }
-    }
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "job".to_string()
-    } else if trimmed.len() > 128 {
-        trimmed[..128].to_string()
-    } else {
-        trimmed.to_string()
-    }
+    sanitize_cloud_name(name, 128, false, "_")
 }
 
 /// Generate an AWS Batch SubmitJob input JSON specification.
@@ -137,51 +123,30 @@ pub fn generate_aws_batch_array_spec(
 /// AWS Batch executor driver.
 pub struct AwsBatchExecutor {
     cluster: ClusterJobConfig,
-    bin_dir: Option<PathBuf>,
-    env: Vec<(String, String)>,
-    workdir: PathBuf,
+    cli: CloudCli,
 }
 
 impl AwsBatchExecutor {
     pub fn new(cluster: ClusterJobConfig) -> Self {
         Self {
             cluster,
-            bin_dir: None,
-            env: Vec::new(),
-            workdir: PathBuf::from("."),
+            cli: CloudCli::new(),
         }
     }
 
     pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
-        self.bin_dir = Some(dir);
+        self.cli = self.cli.with_scheduler_dir(dir);
         self
     }
 
     pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.env.push((key.to_string(), value.to_string()));
+        self.cli = self.cli.with_env(key, value);
         self
     }
 
     pub fn with_workdir(mut self, dir: PathBuf) -> Self {
-        self.workdir = dir;
+        self.cli = self.cli.with_workdir(dir);
         self
-    }
-
-    async fn run_cmd(&self, program: &str, args: &[&str]) -> Result<std::process::Output> {
-        let resolved = match &self.bin_dir {
-            Some(dir) => dir.join(program),
-            None => PathBuf::from(program),
-        };
-        let out = tokio::process::Command::new(&resolved)
-            .args(args)
-            .envs(self.env.iter().cloned())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| OxoFlowError::Config {
-                message: format!("failed to run '{}': {e}", resolved.display()),
-            })?;
-        Ok(out)
     }
 }
 
@@ -227,7 +192,7 @@ impl ExecutorBackend for AwsBatchExecutor {
             "text",
         ];
 
-        let out = self.run_cmd("aws", &args).await?;
+        let out = self.cli.run_cmd("aws", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -254,12 +219,12 @@ impl ExecutorBackend for AwsBatchExecutor {
             args.push(id.as_str());
         }
 
-        let out = match self.run_cmd("aws", &args).await {
-            Ok(o) => o,
-            Err(_) => return Ok(statuses),
-        };
+        let out = self.cli.run_cmd("aws", &args).await?;
         if !out.status.success() {
-            return Ok(statuses);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(OxoFlowError::Config {
+                message: format!("aws batch describe-jobs failed: {stderr}"),
+            });
         }
 
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -292,7 +257,7 @@ impl ExecutorBackend for AwsBatchExecutor {
             "--reason",
             "Cancelled by oxo-flow workflow engine",
         ];
-        let out = self.run_cmd("aws", &args).await?;
+        let out = self.cli.run_cmd("aws", &args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(OxoFlowError::Config {
@@ -313,13 +278,13 @@ impl ExecutorBackend for AwsBatchExecutor {
             "--output",
             "text",
         ];
-        let out = self.run_cmd("aws", &args).await?;
+        let out = self.cli.run_cmd("aws", &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 
     async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
         let args = vec!["batch", "describe-jobs", "--jobs", job_id];
-        let out = self.run_cmd("aws", &args).await.ok()?;
+        let out = self.cli.run_cmd("aws", &args).await.ok()?;
         if !out.status.success() {
             return None;
         }

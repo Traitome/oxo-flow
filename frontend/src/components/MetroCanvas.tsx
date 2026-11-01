@@ -18,7 +18,7 @@ import {
 import { graphStratify, sugiyama } from 'd3-dag';
 import '@xyflow/react/dist/style.css';
 import { GitBranch, Layers, TrainTrack } from 'lucide-react';
-import type { DagJson } from '../api/types';
+import type { DagJson, DagJsonNode, DagJsonEdge } from '../api/types';
 
 import {
   inferModality,
@@ -96,6 +96,14 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
           {d.modality}
         </span>
         <span className="rf-metro-env">{d.environment}</span>
+        {d.stationCount && (
+          <span className="rf-metro-station-count" title={`${d.stationCount} rules in this group`}>
+            ×{d.stationCount}
+          </span>
+        )}
+        {d.isInterchange && (
+          <span className="rf-metro-interchange" title="Interchange — multiple inbound/outbound routes">⊕</span>
+        )}
         {d.status && <span className={`rf-rule-status status-${d.status}`}>{d.status}</span>}
       </div>
       {d.shell && <div className="rf-metro-shell">{d.shell}</div>}
@@ -136,22 +144,74 @@ export function MetroCanvas({
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
     if (!dag || dag.nodes.length === 0) return { nodes: [], edges: [] };
 
+    // Granularity grouping: when the user selects "process" or "module"
+    // we aggregate nodes into super-stations by environment or modality.
+    // This is the multi-scale zoom promised by Pillar III of the roadmap.
+    const groupKey = (n: DagJsonNode): string => {
+      if (granularity === 'process') return n.environment || 'system';
+      if (granularity === 'module') return inferModality(n.label);
+      return n.id; // 'rule' — no grouping
+    };
+
+    // Build grouped DAG when granularity > rule
+    let effectiveNodes: DagJsonNode[];
+    let effectiveEdges: DagJsonEdge[];
+    let nodeGroups: Map<string, string[]> = new Map(); // groupKey -> member ids
+
+    if (granularity === 'rule') {
+      effectiveNodes = dag.nodes;
+      effectiveEdges = dag.edges;
+    } else {
+      // Aggregate nodes by groupKey
+      const groups = new Map<string, DagJsonNode>();
+      nodeGroups = new Map();
+      for (const n of dag.nodes) {
+        const key = groupKey(n);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            ...n,
+            id: key,
+            label: `${key} (${dag.nodes.filter((x) => groupKey(x) === key).length})`,
+            rule: {},
+          });
+          nodeGroups.set(key, []);
+        }
+        nodeGroups.get(key)!.push(n.id);
+      }
+      effectiveNodes = Array.from(groups.values());
+
+      // Build edges between groups (deduplicated)
+      const edgeSet = new Set<string>();
+      effectiveEdges = [];
+      for (const e of dag.edges) {
+        const fromGroup = groupKey(dag.nodes.find((n) => n.id === e.from)!);
+        const toGroup = groupKey(dag.nodes.find((n) => n.id === e.to)!);
+        if (fromGroup !== toGroup) {
+          const edgeKey = `${fromGroup}->${toGroup}`;
+          if (!edgeSet.has(edgeKey)) {
+            edgeSet.add(edgeKey);
+            effectiveEdges.push({ from: fromGroup, to: toGroup, kind: e.kind });
+          }
+        }
+      }
+    }
+
     const inDegrees: Record<string, number> = {};
     const outDegrees: Record<string, number> = {};
-    dag.nodes.forEach((n) => {
+    effectiveNodes.forEach((n) => {
       inDegrees[n.id] = 0;
       outDegrees[n.id] = 0;
     });
-    dag.edges.forEach((e) => {
+    effectiveEdges.forEach((e) => {
       inDegrees[e.to] = (inDegrees[e.to] || 0) + 1;
       outDegrees[e.from] = (outDegrees[e.from] || 0) + 1;
     });
 
     const parents = new Map<string, string[]>();
-    for (const n of dag.nodes) parents.set(n.id, []);
-    for (const e of dag.edges) parents.get(e.to)?.push(e.from);
+    for (const n of effectiveNodes) parents.set(n.id, []);
+    for (const e of effectiveEdges) parents.get(e.to)?.push(e.from);
 
-    const items = dag.nodes.map((n) => ({
+    const items = effectiveNodes.map((n) => ({
       id: n.id,
       parentIds: parents.get(n.id) ?? [],
     }));
@@ -165,36 +225,47 @@ export function MetroCanvas({
         positions[n.data.id] = { x: n.y ?? 0, y: n.x ?? 0 };
       }
     } catch {
-      dag.nodes.forEach((n, i) => {
+      effectiveNodes.forEach((n, i) => {
         positions[n.id] = { x: 0, y: i * 140 };
       });
     }
 
-    const nodes: Node<MetroStationData>[] = dag.nodes.map((n) => {
+    const nodes: Node<MetroStationData>[] = effectiveNodes.map((n) => {
       const rule = (n.rule ?? {}) as Record<string, unknown>;
       const modality = inferModality(n.label);
       const isInterchange = (inDegrees[n.id] || 0) > 1 || (outDegrees[n.id] || 0) > 1;
+      const members = nodeGroups.get(n.id);
+      const stationCount = members ? members.length : undefined;
 
       return {
         id: n.id,
         type: 'metroStation',
         position: positions[n.id] || { x: 0, y: 0 },
-        selected: selectedRule === n.label,
+        selected: selectedRule === n.label || (members?.includes(selectedRule ?? '') ?? false),
         data: {
           label: n.label,
           modality,
-          environment: n.environment || 'system',
+          environment: n.environment || granularity,
           shell: String(rule.shell ?? ''),
-          status: statuses?.[n.label],
+          status: members
+            ? (() => {
+                const memberStatuses = members.map((m) => statuses?.[m]).filter(Boolean);
+                if (memberStatuses.some((s) => s === 'failed')) return 'failed';
+                if (memberStatuses.some((s) => s === 'running')) return 'running';
+                if (memberStatuses.length > 0 && memberStatuses.every((s) => s === 'completed')) return 'completed';
+                return undefined;
+              })()
+            : statuses?.[n.label],
           transform: Boolean(rule.transform),
           isInterchange,
+          stationCount,
           zoomLevel: currentZoom,
           onEdit: onEditRule,
         },
       };
     });
 
-    const edges: Edge[] = dag.edges.map((e, idx) => {
+    const edges: Edge[] = effectiveEdges.map((e, idx) => {
       const fromModality = inferModality(e.from);
       const colors = MODALITY_COLORS[fromModality];
       return {
@@ -210,7 +281,7 @@ export function MetroCanvas({
     });
 
     return { nodes, edges };
-  }, [dag, selectedRule, statuses, currentZoom, onEditRule]);
+  }, [dag, selectedRule, statuses, currentZoom, onEditRule, granularity]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

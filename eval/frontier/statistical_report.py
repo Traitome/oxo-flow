@@ -178,6 +178,63 @@ def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
     }
 
 
+def load_benchmark_results(results_dir: Path) -> Dict[str, Any]:
+    """Load real benchmark results produced by run_eval.py.
+
+    Reads every ``results.json`` under *results_dir* (one per campaign
+    stamp) and maps each run's ``variant`` to an arm:
+
+    - ``naive-prompt`` -> arm_a  (Naive Baseline)
+    - ``cli``          -> arm_b  (CLI Agent)
+    - ``full``         -> arm_c  (Type-Directed Continuum / Scientist Team)
+
+    Runs whose variant is not recognised are skipped with a warning.
+    """
+    # variant -> (arm_key, arm_label)
+    VARIANT_MAP = {
+        "naive-prompt": "arm_a",
+        "cli": "arm_b",
+        "full": "arm_c",
+    }
+
+    dataset: Dict[str, List[Dict[str, Any]]] = {
+        "arm_a": [],
+        "arm_b": [],
+        "arm_c": [],
+    }
+
+    results_files = sorted(results_dir.rglob("results.json"))
+    if not results_files:
+        raise FileNotFoundError(
+            f"No results.json files found under {results_dir}. "
+            "Run eval/frontier/run_eval.py first or pass --results-dir."
+        )
+
+    for rfile in results_files:
+        payload = json.loads(rfile.read_text())
+        for run in payload.get("runs", []):
+            variant = run.get("variant", "")
+            arm = VARIANT_MAP.get(variant)
+            if arm is None:
+                print(f"  warning: skipping unknown variant '{variant}' in {rfile}")
+                continue
+            tokens = run.get("input_tokens", 0) + run.get("output_tokens", 0)
+            dataset[arm].append({
+                "pass": bool(run.get("success", False)),
+                "tokens": tokens,
+                "cost": run.get("est_cost_usd", 0.0),
+            })
+
+    # Ensure every arm has at least one sample so downstream stats don't
+    # divide by zero.
+    for arm_key, rows in dataset.items():
+        if not rows:
+            print(f"  warning: no runs mapped to {arm_key}; "
+                  f"statistical comparisons involving it will be degenerate.")
+
+    return dataset
+
+
 def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[str, Any]:
     """Performs full statistical evaluation across arms."""
     arms = ["arm_a", "arm_b", "arm_c"]
@@ -292,7 +349,13 @@ def main() -> None:
     args = parser.parse_args()
 
     # Generate or load dataset
-    dataset = generate_synthetic_benchmark_dataset(n_intents=36)
+    if args.results_dir:
+        dataset = load_benchmark_results(Path(args.results_dir))
+        print(f"Loaded real benchmark results from: {args.results_dir}")
+    else:
+        dataset = generate_synthetic_benchmark_dataset(n_intents=36)
+        print("NOTE: using synthetic dataset (pass --results-dir to ingest "
+              "real run_eval.py output)")
     report = analyze_arms(dataset, bootstrap_rounds=args.bootstrap_rounds)
 
     print("=" * 80)

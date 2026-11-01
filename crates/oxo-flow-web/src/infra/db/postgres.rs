@@ -24,19 +24,19 @@ static PG_POOL: std::sync::OnceLock<PgPool> = std::sync::OnceLock::new();
 /// Initialize the global PostgreSQL pool and run schema migrations.
 ///
 /// Can safely be called multiple times — subsequent calls are no-ops.
-pub async fn init_pool(database_url: &str) {
+///
+/// Returns `Err` (instead of panicking) when the connection string is
+/// invalid or the initial migration fails, so the server can emit a
+/// structured error instead of crashing at startup.
+pub async fn init_pool(database_url: &str) -> Result<(), String> {
     if PG_POOL.get().is_some() {
-        return;
+        return Ok(());
     }
-    let backend = PostgresBackend::new(database_url)
-        .await
-        .expect("Failed to create PostgresBackend");
-    backend
-        .init()
-        .await
-        .expect("Failed to initialize PostgreSQL database");
+    let backend = PostgresBackend::new(database_url).await?;
+    backend.init().await?;
     let _ = PG_POOL.set(backend.pool.clone());
     super::set_global_backend(std::sync::Arc::new(backend));
+    Ok(())
 }
 
 /// Try to obtain a reference to the global PostgreSQL pool.
