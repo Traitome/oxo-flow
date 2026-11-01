@@ -49,12 +49,18 @@ pub fn kill_process_tree_with_grace(pid: u32, grace: std::time::Duration) -> std
     let deadline = std::time::Instant::now() + grace;
     loop {
         let alive = {
-            let mut s = sysinfo::System::new();
-            s.refresh_processes(sysinfo::ProcessesToUpdate::All, false);
-            targets.iter().any(|p| {
-                s.process(sysinfo::Pid::from_u32(p.as_raw() as u32))
-                    .is_some()
-            })
+            // sysinfo 0.40 made construction fallible; on failure treat the
+            // targets as alive so the grace window keeps ticking and the
+            // caller still reaches the SIGKILL escalation below.
+            let mut alive = true;
+            if let Ok(mut s) = sysinfo::System::new() {
+                s.refresh_processes(sysinfo::ProcessesToUpdate::All, false);
+                alive = targets.iter().any(|p| {
+                    s.process(sysinfo::Pid::from_u32(p.as_raw() as u32))
+                        .is_some()
+                });
+            }
+            alive
         };
         if !alive {
             tracing::debug!(
@@ -126,14 +132,19 @@ fn signal_each(
 }
 
 /// Snapshot parent→child links and walk outward from `root` to collect
-/// every descendant pid (including `root` itself).
+/// every descendant pid (including `root` itself). A sysinfo init failure
+/// (fallible since 0.40) degrades to `[root]` so the kill sweep still
+/// signals the direct child.
 #[cfg(unix)]
 fn collect_descendants(root: nix::unistd::Pid) -> Vec<nix::unistd::Pid> {
     use nix::unistd::Pid;
-    let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
     let mut targets: Vec<Pid> = vec![root];
+    let Ok(mut system) = sysinfo::System::new() else {
+        return targets;
+    };
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
     loop {
         let mut found = false;
         for (child_pid, proc) in system.processes() {

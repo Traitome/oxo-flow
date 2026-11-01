@@ -889,7 +889,9 @@ pub fn validate_resources_against_system(
         ));
     }
 
-    if req_memory > system_memory_mb {
+    // `0` means unknown (system memory detection failed) — skip the check
+    // rather than warn that every rule exceeds a fictional 0 MB system.
+    if system_memory_mb > 0 && req_memory > system_memory_mb {
         warnings.push(format!(
             "rule '{}' requests {}MB but system has {}MB (may OOM)",
             rule.name, req_memory, system_memory_mb
