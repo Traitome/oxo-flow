@@ -424,6 +424,8 @@ impl StorageBackend for SqliteBackend {
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+            CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
             "#,
         )
         .execute(&self.pool)
@@ -592,6 +594,7 @@ impl StorageBackend for SqliteBackend {
             role: role.to_string(),
             auth_type: "password".to_string(),
             os_user: None,
+            password_hash: password_hash.map(|s| s.to_string()),
             created_at: now.clone(),
         };
         sqlx::query(
@@ -636,6 +639,15 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_user(&self, id: &str) -> Result<(), String> {
+        // Cascade the user's live credentials (#520): sessions and API keys
+        let _ = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await;
         sqlx::query("DELETE FROM users WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
@@ -1404,6 +1416,17 @@ impl StorageBackend for SqliteBackend {
     // -----------------------------------------------------------------------
 
     async fn log_action(&self, user_id: &str, action: &str, target: &str) -> Result<(), String> {
+        self.log_action_with_metadata(user_id, action, target, None)
+            .await
+    }
+
+    async fn log_action_with_metadata(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         sqlx::query(
@@ -1413,12 +1436,216 @@ impl StorageBackend for SqliteBackend {
         .bind(user_id)
         .bind(action)
         .bind(target)
-        .bind(None::<String>)
+        .bind(metadata)
         .bind(&now)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // API Keys
+    // -----------------------------------------------------------------------
+
+    async fn create_api_key(&self, key: &models::ApiKeyRow) -> Result<models::ApiKeyRow, String> {
+        sqlx::query(
+            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, last_used_at, revoked)              VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&key.id)
+        .bind(&key.user_id)
+        .bind(&key.name)
+        .bind(&key.key_hash)
+        .bind(&key.created_at)
+        .bind(&key.last_used_at)
+        .bind(key.revoked)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(key.clone())
+    }
+
+    async fn list_api_keys(&self, user_id: &str) -> Result<Vec<models::ApiKeyRow>, String> {
+        let rows = sqlx::query_as::<_, models::ApiKeyRow>(
+            "SELECT id, user_id, name, key_hash, created_at, last_used_at, revoked              FROM api_keys              WHERE user_id = ? AND revoked = 0              ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(rows)
+    }
+
+    async fn revoke_api_key(&self, id: &str, user_id: &str) -> Result<bool, String> {
+        let result = sqlx::query("UPDATE api_keys SET revoked = 1 WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn resolve_api_key(
+        &self,
+        key_hash: &str,
+        touched_at: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT k.user_id, u.role FROM api_keys k              LEFT JOIN users u ON u.id = k.user_id              WHERE k.key_hash = ? AND k.revoked = 0",
+        )
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let Some((user_id, role)) = row else {
+            return Ok(None);
+        };
+
+        let _ = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
+            .bind(touched_at)
+            .bind(key_hash)
+            .execute(&self.pool)
+            .await;
+
+        Ok(Some((user_id, role)))
+    }
+
+    async fn delete_api_keys_for_user(&self, user_id: &str) -> Result<u64, String> {
+        let res = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    // -----------------------------------------------------------------------
+    // OAuth CSRF State
+    // -----------------------------------------------------------------------
+
+    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String> {
+        sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
+            .bind(state)
+            .bind(created_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT created_at FROM oauth_states WHERE state = ?")
+                .bind(state)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        if row.is_some() {
+            let _ = sqlx::query("DELETE FROM oauth_states WHERE state = ?")
+                .bind(state)
+                .execute(&self.pool)
+                .await;
+        }
+        Ok(row.map(|(c,)| c))
+    }
+
+    async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String> {
+        let res = sqlx::query("DELETE FROM oauth_states WHERE created_at < ?")
+            .bind(older_than)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth Identity Provisioning & OAuth User Synchronization
+    // -----------------------------------------------------------------------
+
+    async fn ensure_env_user(
+        &self,
+        username: &str,
+        role: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let now = Self::now();
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, ?, 'password', '', ?)",
+        )
+        .bind(username)
+        .bind(username)
+        .bind(role)
+        .bind(&now)
+        .execute(&self.pool)
+        .await;
+
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        Ok(row)
+    }
+
+    async fn ensure_oauth_user(
+        &self,
+        oauth_user_id: &str,
+        oauth_username: &str,
+        fallback_username: &str,
+    ) -> Result<String, String> {
+        if oauth_user_id.is_empty() || fallback_username.is_empty() {
+            return Err("OAuth identity is missing its unique id".into());
+        }
+
+        let existing = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+            .bind(oauth_user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| format!("OAuth user lookup failed: {e}"))?;
+        if let Some(name) = existing {
+            return Ok(name);
+        }
+
+        let now = Self::now();
+        match sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, 'user', 'oauth', '', ?)",
+        )
+        .bind(oauth_user_id)
+        .bind(oauth_username)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(_) => Ok(oauth_username.to_string()),
+            Err(first_err) => {
+                let retry =
+                    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
+                        .bind(oauth_username)
+                        .fetch_one(&self.pool)
+                        .await
+                        .map(|n| n > 0)
+                        .unwrap_or(false);
+                if !retry {
+                    return Err(format!("Failed to create OAuth user record: {first_err}"));
+                }
+                sqlx::query(
+                    "INSERT INTO users (id, username, role, auth_type, os_user, created_at)                      VALUES (?, ?, 'user', 'oauth', '', ?)",
+                )
+                .bind(oauth_user_id)
+                .bind(fallback_username)
+                .bind(&now)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to create OAuth user record: {e}"))?;
+                Ok(fallback_username.to_string())
+            }
+        }
     }
 }
 
@@ -2305,5 +2532,163 @@ mod ai_provider_config_tests {
 
         let server = backend.get_ai_provider_config(None).await.unwrap();
         assert!(server.is_none(), "user writes must not create a server row");
+    }
+
+    #[tokio::test]
+    async fn api_key_lifecycle_and_touch() {
+        let backend = backend().await;
+        let alice = backend
+            .create_user("alice_key", "user", None)
+            .await
+            .unwrap();
+
+        let key = models::ApiKeyRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: alice.id.clone(),
+            name: "ci-key".to_string(),
+            key_hash: "hash_alice_123".to_string(),
+            created_at: SqliteBackend::now(),
+            last_used_at: None,
+            revoked: 0,
+        };
+        let created = backend.create_api_key(&key).await.expect("create key");
+        assert_eq!(created.name, "ci-key");
+
+        // List keys
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "ci-key");
+        assert!(keys[0].last_used_at.is_none());
+
+        // Resolve key
+        let touch_time = SqliteBackend::now();
+        let resolved = backend
+            .resolve_api_key("hash_alice_123", &touch_time)
+            .await
+            .expect("resolve key");
+        assert_eq!(resolved, Some((alice.id.clone(), "user".to_string())));
+
+        // Touch updated last_used_at
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert_eq!(keys[0].last_used_at.as_deref(), Some(touch_time.as_str()));
+
+        // Revoke key
+        let revoked = backend
+            .revoke_api_key(&key.id, &alice.id)
+            .await
+            .expect("revoke key");
+        assert!(revoked);
+
+        // After revocation, resolve yields None and list is empty
+        let resolved = backend
+            .resolve_api_key("hash_alice_123", &touch_time)
+            .await
+            .expect("resolve revoked");
+        assert!(resolved.is_none());
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn oauth_state_lifecycle_and_cleanup() {
+        let backend = backend().await;
+        let now = SqliteBackend::now();
+
+        backend
+            .store_oauth_state("state-one", &now)
+            .await
+            .expect("store state");
+        let consumed = backend
+            .consume_oauth_state("state-one")
+            .await
+            .expect("consume state");
+        assert_eq!(consumed, Some(now.clone()));
+
+        // Single use
+        let second = backend
+            .consume_oauth_state("state-one")
+            .await
+            .expect("consume again");
+        assert!(second.is_none());
+
+        // Pruning
+        let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
+        backend
+            .store_oauth_state("state-old", &old)
+            .await
+            .expect("store old");
+        backend
+            .store_oauth_state("state-fresh", &now)
+            .await
+            .expect("store fresh");
+
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let pruned = backend
+            .cleanup_stale_oauth_states(&cutoff)
+            .await
+            .expect("cleanup");
+        assert_eq!(pruned, 1);
+
+        assert!(
+            backend
+                .consume_oauth_state("state-old")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            backend
+                .consume_oauth_state("state-fresh")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn user_deletion_cascades_credentials() {
+        let backend = backend().await;
+        let charlie = backend
+            .create_user("charlie_cred", "user", None)
+            .await
+            .unwrap();
+
+        let token = "session_charlie_tok";
+        let expires = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        backend
+            .create_session(&charlie.id, token, &expires)
+            .await
+            .unwrap();
+
+        let key = models::ApiKeyRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: charlie.id.clone(),
+            name: "charlie-key".to_string(),
+            key_hash: "hash_charlie_456".to_string(),
+            created_at: SqliteBackend::now(),
+            last_used_at: None,
+            revoked: 0,
+        };
+        backend.create_api_key(&key).await.unwrap();
+
+        // Delete charlie
+        backend
+            .delete_user(&charlie.id)
+            .await
+            .expect("delete charlie");
+
+        // Sessions cascaded
+        assert!(backend.get_session(token).await.unwrap().is_none());
+
+        // API keys cascaded
+        assert!(backend.list_api_keys(&charlie.id).await.unwrap().is_empty());
+        let touch = SqliteBackend::now();
+        assert!(
+            backend
+                .resolve_api_key("hash_charlie_456", &touch)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

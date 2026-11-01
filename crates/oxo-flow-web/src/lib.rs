@@ -330,11 +330,10 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
 /// still read the embedded SQLite pool and answer 503 on PostgreSQL.
 pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
      available: /api/health · /api/license · /api/openapi.json · SPA assets; \
-     storage-backed users, login sessions, pipelines, templates, shares, run records, \
-     cluster lookup, and AI provider configuration\n  \
-     unavailable 503 DB_ERROR (remaining SQLite-only handlers): OAuth state, API keys, \
-     credential cascades, full chat history, audit/webhook/observability lists, and \
-     other unmigrated workflow queries\n  \
+     storage-backed users, login sessions, API keys, OAuth CSRF state, credential cascades, \
+     pipelines, templates, shares, run records, cluster lookup, and AI provider configuration\n  \
+     unavailable 503 DB_ERROR (remaining SQLite-only handlers): full chat history, \
+     audit/webhook/observability lists, and other unmigrated workflow queries\n  \
      gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* execution endpoint \
      (record metadata is storage-backed; execution is SQLite-only)";
 
@@ -543,29 +542,18 @@ fn spawn_session_cleanup() {
     tokio::spawn(async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
-            let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
-                continue; // PostgreSQL deployment, or pool not ready yet
+            let Some(backend) = crate::infra::db::global_backend() else {
+                continue;
             };
             let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-            match sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
-                .bind(&cutoff)
-                .execute(pool)
-                .await
-            {
-                Ok(res) if res.rows_affected() > 0 => {
-                    tracing::info!(
-                        "session cleanup: pruned {} expired rows",
-                        res.rows_affected()
-                    );
+            match backend.cleanup_expired_sessions().await {
+                Ok(n) if n > 0 => {
+                    tracing::info!("session cleanup: pruned {n} expired rows");
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("session cleanup failed: {e}"),
             }
-            if let Err(e) = sqlx::query("DELETE FROM oauth_states WHERE created_at < ?")
-                .bind(&cutoff)
-                .execute(pool)
-                .await
-            {
+            if let Err(e) = backend.cleanup_stale_oauth_states(&cutoff).await {
                 tracing::warn!("oauth state cleanup failed: {e}");
             }
         }
@@ -647,15 +635,17 @@ mod effective_bind_host_tests {
 
         let available = line("available:");
         assert!(
-            available.contains("login sessions") && available.contains("AI provider"),
-            "storage-backed session and AI configuration surfaces must be advertised: {available}"
+            available.contains("login sessions")
+                && available.contains("API keys")
+                && available.contains("OAuth CSRF state")
+                && available.contains("credential cascades")
+                && available.contains("AI provider"),
+            "storage-backed auth, API keys, OAuth, and AI configuration surfaces must be advertised: {available}"
         );
         let unavailable = line("unavailable");
         assert!(
-            unavailable.contains("OAuth state")
-                && unavailable.contains("API keys")
-                && unavailable.contains("SQLite-only"),
-            "unmigrated credential and chat surfaces must be spelled out: {unavailable}"
+            unavailable.contains("full chat history") && unavailable.contains("SQLite-only"),
+            "unmigrated chat and observability surfaces must be spelled out: {unavailable}"
         );
         assert!(
             PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),

@@ -150,7 +150,7 @@ selects the PostgreSQL backend; anything else (including unset, which
 defaults to `sqlite://oxo-flow.db` in the working directory) stays SQLite.
 
 ```bash
-# PostgreSQL (storage-backed metadata, sessions, and AI config; execution stays SQLite-only)
+# PostgreSQL (storage-backed metadata, sessions, API keys, and AI config; execution stays SQLite-only)
 export DATABASE_URL=postgres://oxo:secret@db.lab.example.edu:5432/oxo_flow
 oxo-flow serve --mode team --host 0.0.0.0
 ```

@@ -8,6 +8,7 @@ pub struct UserRow {
     pub role: String,      // "admin" | "user" | "viewer"
     pub auth_type: String, // "password" | "oauth"
     pub os_user: Option<String>,
+    pub password_hash: Option<String>,
     pub created_at: String,
 }
 
@@ -162,3 +163,20 @@ pub struct ChatSessionRow {
     pub updated_at: String,
 }
 // v0.8 AI Companion models
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ApiKeyRow {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub key_hash: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OAuthStateRow {
+    pub state: String,
+    pub created_at: String,
+}

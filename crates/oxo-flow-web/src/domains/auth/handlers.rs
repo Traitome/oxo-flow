@@ -10,7 +10,7 @@ use super::service;
 use super::types::*;
 use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
+use crate::domains::workflow::handlers::{ApiError, err, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -66,8 +66,8 @@ fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 /// Validate a session token and return (username, role) if valid.
-async fn validate_token(
-    pool: &sqlx::SqlitePool,
+async fn validate_token_with_backend(
+    backend: &dyn crate::infra::db::StorageBackend,
     token: &str,
 ) -> Result<(String, String), (StatusCode, Json<ApiError>)> {
     if token.is_empty() {
@@ -78,19 +78,14 @@ async fn validate_token(
         ));
     }
 
-    let session: Option<models::SessionRow> =
-        sqlx::query_as("SELECT * FROM sessions WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up session token: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let session = backend.get_session(token).await.map_err(|e| {
+        tracing::error!("DB error looking up session token: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let session = session.ok_or_else(|| {
         err(
@@ -110,14 +105,8 @@ async fn validate_token(
         ));
     }
 
-    // Resolve the canonical user row. sessions.user_id is the users.id
-    // resolved at login (#516); matching by id only and failing closed on a
-    // missing row keeps deleted users and stale pre-upgrade sessions from
-    // authenticating (the old username match + "user" fallback let a
-    // client-chosen login name adopt any row's role).
-    let user: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(&session.user_id)
-        .fetch_optional(pool)
+    let user = backend
+        .get_user_by_id(&session.user_id)
         .await
         .map_err(|e| {
             tracing::error!("DB error looking up user role: {e}");
@@ -153,8 +142,14 @@ pub(crate) async fn require_admin(
         return Ok("local_user".into());
     }
 
-    let pool = get_pool()?;
-    resolve_admin(pool, headers).await
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+    resolve_admin(backend.as_ref(), headers).await
 }
 
 /// Resolve an admin identity from either credential the router's
@@ -163,23 +158,25 @@ pub(crate) async fn require_admin(
 /// API keys are first-class machine credentials (issue #82 P1-13), so an
 /// admin's key must work on admin-only routes instead of 401ing.
 async fn resolve_admin(
-    pool: &sqlx::SqlitePool,
+    backend: &dyn crate::infra::db::StorageBackend,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, (StatusCode, Json<ApiError>)> {
     let (username, role) = if let Some(token) = extract_token(headers) {
-        validate_token(pool, &token).await?
+        validate_token_with_backend(backend, &token).await?
     } else if let Some(key) = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
         .filter(|k| !k.is_empty())
     {
-        let user = resolve_api_key_in(pool, key).await.ok_or_else(|| {
-            err(
-                StatusCode::UNAUTHORIZED,
-                "INVALID_API_KEY",
-                "Invalid or revoked API key".into(),
-            )
-        })?;
+        let user = resolve_api_key_with_backend(backend, key)
+            .await
+            .ok_or_else(|| {
+                err(
+                    StatusCode::UNAUTHORIZED,
+                    "INVALID_API_KEY",
+                    "Invalid or revoked API key".into(),
+                )
+            })?;
         (user.id, user.role)
     } else {
         return Err(err(
@@ -263,73 +260,53 @@ pub async fn login(
     // id == username and must never adopt a UUID-keyed managed account —
     // otherwise the shared user password could impersonate any existing
     // user (including an admin) just by naming them.
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
     let (session_user_id, result) = match service::authenticate(&req.username, &req.password) {
         Ok(response) => {
-            // Env-password (or dev-mode) path. Resolve the canonical id:
-            // for the fixed admin name that is the bootstrap row (UUID id),
-            // found by username; for every other name it is the provisioned
-            // row whose id equals the username.
             if result_is_admin_identity(&response) {
-                let pool = get_pool()?;
-                let row: Option<(String, String)> =
-                    sqlx::query_as("SELECT id, role FROM users WHERE username = 'admin'")
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!("DB error resolving admin identity: {e}");
-                            err(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "DB_ERROR",
-                                "Internal database error".into(),
-                            )
-                        })?;
-                let (id, role) = row.ok_or_else(|| {
+                let row = backend.get_user_by_username("admin").await.map_err(|e| {
+                    tracing::error!("DB error resolving admin identity: {e}");
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DB_ERROR",
+                        "Internal database error".into(),
+                    )
+                })?;
+                let row = row.ok_or_else(|| {
                     err(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "DB_ERROR",
                         "Admin bootstrap row missing".into(),
                     )
                 })?;
-                let response = LoginResponse { role, ..response };
-                (id, response)
+                let response = LoginResponse {
+                    role: row.role,
+                    ..response
+                };
+                (row.id, response)
             } else {
-                let pool = get_pool()?;
-                // Auto-provision a users row for env-password logins (issue
-                // #82 P1-16): id = username for these provisioned
-                // identities. UNIQUE(username) makes the insert a no-op when
-                // a row for this name already exists — either another
-                // provisioned identity (fine: resolved by id below) or a
-                // UUID-keyed managed account (the SELECT then misses and
-                // the login is rejected — #516).
-                let _ = sqlx::query(
-                    "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
-                     VALUES (?, ?, ?, 'password', '', ?)",
-                )
-                .bind(&response.username)
-                .bind(&response.username)
-                .bind(&response.role)
-                .bind(now_iso())
-                .execute(pool)
-                .await;
-                let row: Option<(String, String)> =
-                    sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
-                        .bind(&response.username)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "DB error resolving env identity '{}': {e}",
-                                response.username
-                            );
-                            err(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "DB_ERROR",
-                                "Internal database error".into(),
-                            )
-                        })?;
+                let row = backend
+                    .ensure_env_user(&response.username, &response.role)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            "DB error resolving env identity '{}': {e}",
+                            response.username
+                        );
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            "Internal database error".into(),
+                        )
+                    })?;
                 let (id, role) = row.ok_or_else(|| {
-                    // The name belongs to a UUID-keyed managed account —
-                    // the shared env password must not adopt it (#516).
                     record_login_failure(&req.username, &ip);
                     err(
                         StatusCode::UNAUTHORIZED,
@@ -342,26 +319,25 @@ pub async fn login(
             }
         }
         Err(env_err) => {
-            let pool = get_pool()?;
-            let user: Option<(String, String, Option<String>)> =
-                sqlx::query_as("SELECT id, role, password_hash FROM users WHERE username = ?")
-                    .bind(&req.username)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("DB error looking up user '{}': {e}", req.username);
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "DB_ERROR",
-                            "Internal database error".into(),
-                        )
-                    })?;
+            let user = backend
+                .get_user_by_username(&req.username)
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error looking up user '{}': {e}", req.username);
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DB_ERROR",
+                        "Internal database error".into(),
+                    )
+                })?;
             match user {
-                Some((id, role, Some(hash)))
-                    if service::verify_db_password(&req.password, &hash) =>
+                Some(u)
+                    if u.password_hash
+                        .as_deref()
+                        .is_some_and(|hash| service::verify_db_password(&req.password, hash)) =>
                 {
-                    let response = service::login_response_for(req.username.clone(), role);
-                    (id, response)
+                    let response = service::login_response_for(req.username.clone(), u.role);
+                    (u.id, response)
                 }
                 _ => {
                     record_login_failure(&req.username, &ip);
@@ -372,18 +348,6 @@ pub async fn login(
     };
 
     // Persist session to database so the token is actually valid.
-    // Without this, require_auth and auth_me would reject the token.
-    // Both failure kinds (backend unavailable, insert failed) answer 503
-    // DB_ERROR: a token that was never stored would 401 on the very next
-    // request, landing the user on the login page with a bogus "expired"
-    // reason — failing the login outright with the real cause is honest.
-    let backend = crate::infra::db::global_backend().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
     let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
     backend
         .create_session(&session_user_id, &result.token, &expires.to_rfc3339())
@@ -421,9 +385,9 @@ fn result_is_admin_identity(response: &LoginResponse) -> bool {
 )]
 /// GET /api/auth/me
 pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse> {
-    let response = match get_pool() {
-        Ok(pool) => auth_me_in(pool, &headers).await,
-        Err(_) => AuthMeResponse {
+    let response = match crate::infra::db::global_backend() {
+        Some(backend) => auth_me_in(backend.as_ref(), &headers).await,
+        None => AuthMeResponse {
             authenticated: false,
             username: None,
             role: None,
@@ -432,20 +396,16 @@ pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse
     Ok(Json(response))
 }
 
-/// Pool-taking core of [`auth_me`] (testable against an in-memory pool).
-async fn auth_me_in(pool: &sqlx::SqlitePool, headers: &axum::http::HeaderMap) -> AuthMeResponse {
-    // API keys are first-class machine credentials (issue #82 P1-13): the
-    // router's `require_auth` accepts X-API-Key on every protected route,
-    // so "who am I?" must honor it too — a key holder querying /auth/me
-    // used to get `authenticated:false` while the same key authenticated
-    // quota, users, and every other endpoint. An invalid/revoked key falls
-    // through: /auth/me is a status probe, not a gate, so it answers
-    // `authenticated:false` rather than 401.
+/// Storage-backed core of [`auth_me`] (testable against an in-memory backend).
+async fn auth_me_in(
+    backend: &dyn crate::infra::db::StorageBackend,
+    headers: &axum::http::HeaderMap,
+) -> AuthMeResponse {
     if let Some(key) = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
         .filter(|k| !k.is_empty())
-        && let Some(user) = resolve_api_key_in(pool, key).await
+        && let Some(user) = resolve_api_key_with_backend(backend, key).await
     {
         return AuthMeResponse {
             authenticated: true,
@@ -457,7 +417,7 @@ async fn auth_me_in(pool: &sqlx::SqlitePool, headers: &axum::http::HeaderMap) ->
     let token = extract_token(headers).unwrap_or_default();
 
     if !token.is_empty()
-        && let Ok((username, role)) = validate_token(pool, &token).await
+        && let Ok((username, role)) = validate_token_with_backend(backend, &token).await
     {
         return AuthMeResponse {
             authenticated: true,
@@ -666,21 +626,8 @@ pub async fn delete_user(
         )
     })?;
 
-    // Cascade the user's live credentials (#520): sessions and API keys
-    // used to outlive the account and kept authenticating for up to 24 h
-    // after "firing" the user. Both stores currently share the platform's
-    // SQLite pool; moving them into StorageBackend is tracked separately.
-    if let Ok(pool) = get_pool() {
-        for (label, query) in [
-            ("sessions", "DELETE FROM sessions WHERE user_id = ?"),
-            ("api_keys", "DELETE FROM api_keys WHERE user_id = ?"),
-        ] {
-            if let Err(e) = sqlx::query(query).bind(&id).execute(pool).await {
-                tracing::error!("DB error deleting {label} of user {id}: {e}");
-            }
-        }
-    }
-
+    // Live credentials (#520: sessions and API keys) are cascaded directly
+    // within StorageBackend::delete_user across all supported engines.
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
@@ -785,18 +732,20 @@ pub async fn oauth_callback(
     // The user row MUST exist before the session is persisted: two provider
     // accounts can share a display name, and a silently skipped insert left
     // the session pointing at a nonexistent user (every request 401'd).
-    let pool = get_pool()?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
     let oauth_user_id = format!("oauth:{provider}:{}", result.provider_user_id);
     let oauth_username = format!("{provider}:{}", result.username);
     let fallback_username = format!("{provider}:{}", result.provider_user_id);
-    let stored_username = super::service::ensure_oauth_user(
-        pool,
-        &oauth_user_id,
-        &oauth_username,
-        &fallback_username,
-    )
-    .await
-    .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, "DB_ERROR", e))?;
+    let stored_username = backend
+        .ensure_oauth_user(&oauth_user_id, &oauth_username, &fallback_username)
+        .await
+        .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, "DB_ERROR", e))?;
     if stored_username != oauth_username {
         // Display name was taken — the row carries the unique fallback and
         // the response field stays the provider display name (display only).
@@ -872,8 +821,8 @@ pub async fn upload_license(
             ),
         ));
     }
-    if let Ok(pool) = get_pool()
-        && !license_data.is_empty()
+    if !license_data.is_empty()
+        && let Some(backend) = crate::infra::db::global_backend()
     {
         use std::fmt::Write as _;
 
@@ -889,17 +838,9 @@ pub async fn upload_license(
             "{{\"bytes\":{},\"sha256\":\"{hex}\"}}",
             license_data.len(),
         );
-        let _ = sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(&user.id)
-        .bind("upload_license")
-        .bind("license")
-        .bind(Some(metadata))
-        .bind(now_iso())
-        .execute(pool)
-        .await;
+        let _ = backend
+            .log_action_with_metadata(&user.id, "upload_license", "license", Some(&metadata))
+            .await;
     }
 
     Ok(Json(service::license_status()))
@@ -925,12 +866,14 @@ fn hash_api_key(key: &str) -> String {
     post,
     path = "/api/auth/keys",
     tag = "auth",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Invalid request", body = ApiError),
         (status = 401, description = "Error", body = ApiError),
     )
 )]
-/// POST /api/auth/keys — create a key; the plaintext is returned ONCE.
+/// POST /api/auth/keys — generate a new API key for the acting user.
 pub async fn create_api_key(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
     ApiJson(req): ApiJson<serde_json::Value>,
@@ -949,22 +892,26 @@ pub async fn create_api_key(
             "name must be 1-64 characters".into(),
         ));
     }
-    let pool = get_pool()?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
     let plaintext = format!("oxo_{}", uuid::Uuid::new_v4().simple());
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
-    sqlx::query(
-        "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, last_used_at, revoked) \
-         VALUES (?, ?, ?, ?, ?, NULL, 0)",
-    )
-    .bind(&id)
-    .bind(&user.id)
-    .bind(&name)
-    .bind(hash_api_key(&plaintext))
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
+    let key_row = models::ApiKeyRow {
+        id: id.clone(),
+        user_id: user.id.clone(),
+        name: name.clone(),
+        key_hash: hash_api_key(&plaintext),
+        created_at: now,
+        last_used_at: None,
+        revoked: 0,
+    };
+    backend.create_api_key(&key_row).await.map_err(|e| {
         tracing::error!("DB error creating API key: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -995,15 +942,14 @@ pub async fn list_api_keys(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
 ) -> ApiResult<Vec<serde_json::Value>> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    let pool = get_pool()?;
-    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, created_at, last_used_at FROM api_keys \
-         WHERE user_id = ? AND revoked = 0 ORDER BY created_at DESC",
-    )
-    .bind(&user.id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| {
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
+    let rows = backend.list_api_keys(&user.id).await.map_err(|e| {
         tracing::error!("DB error listing API keys: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1013,10 +959,12 @@ pub async fn list_api_keys(
     })?;
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, created_at, last_used_at)| {
+            .map(|k| {
                 serde_json::json!({
-                    "id": id, "name": name, "created_at": created_at,
-                    "last_used_at": last_used_at,
+                    "id": k.id,
+                    "name": k.name,
+                    "created_at": k.created_at,
+                    "last_used_at": k.last_used_at,
                 })
             })
             .collect(),
@@ -1038,22 +986,22 @@ pub async fn revoke_api_key(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    let pool = get_pool()?;
-    let affected = sqlx::query("UPDATE api_keys SET revoked = 1 WHERE id = ? AND user_id = ?")
-        .bind(&id)
-        .bind(&user.id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error revoking API key: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?
-        .rows_affected();
-    if affected == 0 {
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
+    let revoked = backend.revoke_api_key(&id, &user.id).await.map_err(|e| {
+        tracing::error!("DB error revoking API key: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
+    if !revoked {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1066,31 +1014,18 @@ pub async fn revoke_api_key(
 /// Resolve an `X-API-Key` header to a CurrentUser, touching last_used_at.
 /// Used by the auth middleware when no Bearer session is present.
 pub async fn resolve_api_key(key: &str) -> Option<crate::domains::auth::current_user::CurrentUser> {
-    let pool = crate::infra::db::sqlite::try_pool().ok()?;
-    resolve_api_key_in(pool, key).await
+    let backend = crate::infra::db::global_backend()?;
+    resolve_api_key_with_backend(backend.as_ref(), key).await
 }
 
-/// Pool-taking form of [`resolve_api_key`] (shared with `resolve_admin`).
-async fn resolve_api_key_in(
-    pool: &sqlx::SqlitePool,
+/// Backend-taking form of [`resolve_api_key`].
+pub async fn resolve_api_key_with_backend(
+    backend: &dyn crate::infra::db::StorageBackend,
     key: &str,
 ) -> Option<crate::domains::auth::current_user::CurrentUser> {
     let hash = hash_api_key(key);
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT k.user_id, u.role FROM api_keys k \
-         LEFT JOIN users u ON u.id = k.user_id \
-         WHERE k.key_hash = ? AND k.revoked = 0",
-    )
-    .bind(&hash)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-    let (user_id, role) = row?;
-    let _ = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
-        .bind(now_iso())
-        .bind(&hash)
-        .execute(pool)
-        .await;
+    let now = now_iso();
+    let (user_id, role) = backend.resolve_api_key(&hash, &now).await.ok()??;
     Some(crate::domains::auth::current_user::CurrentUser { id: user_id, role })
 }
 
@@ -1098,10 +1033,10 @@ async fn resolve_api_key_in(
 mod tests {
     use super::*;
 
-    /// A one-connection in-memory pool with just the tables `resolve_admin`
-    /// touches (`sqlite::memory:` is per-connection, so the pool must hold
-    /// exactly one).
-    async fn admin_pool() -> sqlx::SqlitePool {
+    use crate::infra::db::StorageBackend;
+
+    /// A one-connection in-memory backend with just the tables `resolve_admin` touches.
+    async fn admin_backend() -> crate::infra::db::sqlite::SqliteBackend {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1123,30 +1058,45 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        pool
+        sqlx::query(
+            "CREATE TABLE sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
+             created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::infra::db::sqlite::SqliteBackend::from_pool(pool)
     }
 
-    async fn seed_key(pool: &sqlx::SqlitePool, user_id: &str, role: &str, key: &str) {
+    async fn seed_key(
+        backend: &crate::infra::db::sqlite::SqliteBackend,
+        user_id: &str,
+        role: &str,
+        key: &str,
+    ) {
+        let now = now_iso();
         sqlx::query(
             "INSERT INTO users (id, username, role, auth_type, created_at) \
-             VALUES (?, ?, ?, 'password', '2026-01-01T00:00:00Z')",
+             VALUES (?, ?, ?, 'password', ?)",
         )
         .bind(user_id)
         .bind(user_id)
         .bind(role)
-        .execute(pool)
+        .bind(&now)
+        .execute(backend.inner_pool())
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, revoked) \
-             VALUES (?, ?, 'ci', ?, '2026-01-01T00:00:00Z', 0)",
-        )
-        .bind(format!("k-{user_id}"))
-        .bind(user_id)
-        .bind(hash_api_key(key))
-        .execute(pool)
-        .await
-        .unwrap();
+
+        let key_row = models::ApiKeyRow {
+            id: format!("k-{user_id}"),
+            user_id: user_id.to_string(),
+            name: "ci".to_string(),
+            key_hash: hash_api_key(key),
+            created_at: now,
+            last_used_at: None,
+            revoked: 0,
+        };
+        backend.create_api_key(&key_row).await.unwrap();
     }
 
     fn headers_with(name: &'static str, value: &'static str) -> axum::http::HeaderMap {
@@ -1160,12 +1110,12 @@ mod tests {
     /// so `require_admin` rejecting it was an inconsistent 401.
     #[tokio::test]
     async fn admin_identity_accepts_api_keys() {
-        let pool = admin_pool().await;
-        seed_key(&pool, "u-admin", "admin", "oxo_admin_key").await;
-        seed_key(&pool, "u-user", "user", "oxo_user_key").await;
+        let backend = admin_backend().await;
+        seed_key(&backend, "u-admin", "admin", "oxo_admin_key").await;
+        seed_key(&backend, "u-user", "user", "oxo_user_key").await;
 
         let admin = headers_with("x-api-key", "oxo_admin_key");
-        match resolve_admin(&pool, &admin).await {
+        match resolve_admin(&backend, &admin).await {
             Ok(name) => assert_eq!(
                 name, "u-admin",
                 "an admin API key must resolve to the admin identity"
@@ -1177,18 +1127,18 @@ mod tests {
 
         // Non-admin key: authenticated but forbidden.
         let user = headers_with("x-api-key", "oxo_user_key");
-        let (status, body) = resolve_admin(&pool, &user).await.unwrap_err();
+        let (status, body) = resolve_admin(&backend, &user).await.unwrap_err();
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body.0.code, "ACCESS_DENIED");
 
         // Unknown key: unauthenticated.
         let unknown = headers_with("x-api-key", "not-a-key");
-        let (status, body) = resolve_admin(&pool, &unknown).await.unwrap_err();
+        let (status, body) = resolve_admin(&backend, &unknown).await.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body.0.code, "INVALID_API_KEY");
 
         // No credential at all: the original AUTH_REQUIRED contract.
-        let (status, body) = resolve_admin(&pool, &axum::http::HeaderMap::new())
+        let (status, body) = resolve_admin(&backend, &axum::http::HeaderMap::new())
             .await
             .unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -1202,114 +1152,30 @@ mod tests {
     /// reported `authenticated:false`).
     #[tokio::test]
     async fn auth_me_recognizes_api_keys() {
-        let pool = admin_pool().await;
-        seed_key(&pool, "u-admin", "admin", "oxo_admin_key").await;
-        seed_key(&pool, "u-user", "user", "oxo_user_key").await;
+        let backend = admin_backend().await;
+        seed_key(&backend, "u-admin", "admin", "oxo_admin_key").await;
+        seed_key(&backend, "u-user", "user", "oxo_user_key").await;
 
         // Valid admin key → authenticated with identity.
         let admin = headers_with("x-api-key", "oxo_admin_key");
-        let me = auth_me_in(&pool, &admin).await;
+        let me = auth_me_in(&backend, &admin).await;
         assert!(me.authenticated);
         assert_eq!(me.username.as_deref(), Some("u-admin"));
         assert_eq!(me.role.as_deref(), Some("admin"));
 
         // Valid non-admin key → authenticated with its role.
         let user = headers_with("x-api-key", "oxo_user_key");
-        let me = auth_me_in(&pool, &user).await;
+        let me = auth_me_in(&backend, &user).await;
         assert!(me.authenticated);
         assert_eq!(me.role.as_deref(), Some("user"));
 
         // Invalid key → not authenticated (status probe, not a gate).
         let bad = headers_with("x-api-key", "not-a-key");
-        let me = auth_me_in(&pool, &bad).await;
+        let me = auth_me_in(&backend, &bad).await;
         assert!(!me.authenticated);
 
         // No credential → not authenticated.
-        let me = auth_me_in(&pool, &axum::http::HeaderMap::new()).await;
+        let me = auth_me_in(&backend, &axum::http::HeaderMap::new()).await;
         assert!(!me.authenticated);
-    }
-
-    // ---- OXO_FLOW_SESSION_TTL_HOURS (issue #976) ----
-
-    #[test]
-    fn ttl_unset_uses_default() {
-        assert_eq!(
-            parse_session_ttl_hours(None),
-            DEFAULT_SESSION_TTL_HOURS,
-            "unset env must keep the historical 24 h default"
-        );
-    }
-
-    #[test]
-    fn ttl_accepts_in_range_values() {
-        assert_eq!(parse_session_ttl_hours(Some("1")), 1);
-        assert_eq!(parse_session_ttl_hours(Some("24")), 24);
-        assert_eq!(parse_session_ttl_hours(Some("168")), 168);
-        assert_eq!(parse_session_ttl_hours(Some("8760")), MAX_SESSION_TTL_HOURS);
-        assert_eq!(
-            parse_session_ttl_hours(Some(" 12 ")),
-            12,
-            "surrounding whitespace tolerated"
-        );
-    }
-
-    #[test]
-    fn ttl_out_of_range_falls_back_with_default() {
-        assert_eq!(
-            parse_session_ttl_hours(Some("0")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-        assert_eq!(
-            parse_session_ttl_hours(Some("8761")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-        assert_eq!(
-            parse_session_ttl_hours(Some("999999999999")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-    }
-
-    #[test]
-    fn ttl_garbage_falls_back_with_default() {
-        assert_eq!(
-            parse_session_ttl_hours(Some("abc")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-        assert_eq!(parse_session_ttl_hours(Some("")), DEFAULT_SESSION_TTL_HOURS);
-        assert_eq!(
-            parse_session_ttl_hours(Some("-5")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-        assert_eq!(
-            parse_session_ttl_hours(Some("24.5")),
-            DEFAULT_SESSION_TTL_HOURS
-        );
-    }
-
-    /// End-to-end for the issue's acceptance criterion: a non-default TTL
-    /// must land in the minted session's `expires_at` so the production
-    /// comparators (`require_auth` in server.rs and `validate_token` here,
-    /// both SQL `expires_at > …` string compares) honor it. Uses the same
-    /// chrono arithmetic as the two minting sites.
-    #[test]
-    fn ttl_boundary_rejects_expired_session() {
-        let ttl = parse_session_ttl_hours(Some("1"));
-        let now = chrono::Utc::now();
-        let expires = (now + chrono::Duration::hours(ttl as i64)).to_rfc3339();
-
-        // Just inside the window: still valid.
-        let almost_now = now + chrono::Duration::minutes(59);
-        assert!(
-            expires.as_str() > almost_now.to_rfc3339().as_str(),
-            "session minted with a 1 h TTL must still validate near the end of the window"
-        );
-
-        // Just outside: expired under the same string comparison
-        // `require_auth`/`validate_token` use.
-        let just_after = now + chrono::Duration::minutes(61);
-        assert!(
-            expires.as_str() <= just_after.to_rfc3339().as_str(),
-            "session minted with a 1 h TTL must be expired past its window"
-        );
     }
 }

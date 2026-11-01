@@ -68,13 +68,13 @@ pub struct Paginated<T: serde::Serialize> {
 /// The #207 migration surface: one storage abstraction the domains route
 /// through, so a PostgreSQL backend becomes a matter of wiring, not rewrites.
 ///
-/// HONEST SCOPE — runs/auth-session/user, pipeline/template, share, cluster
-/// lookup, and AI provider configuration operations consume this trait.
-/// Remaining chat, OAuth/API-key, audit, webhook, observability, and some
-/// workflow/list queries still read the SQLite pool directly, so PostgreSQL
-/// deployments retain a published served/gated matrix (`PG_CAPABILITY_MATRIX`
-/// in lib.rs). A new domain handler must call the trait, not add another
-/// raw-SQL path.
+/// HONEST SCOPE — runs/auth-session/user, API keys, OAuth CSRF state,
+/// pipeline/template, share, cluster lookup, and AI provider configuration
+/// operations consume this trait. Remaining full chat history, audit, webhook,
+/// observability, and some unmigrated workflow queries still read the SQLite pool
+/// directly, so PostgreSQL deployments retain a published served/gated matrix
+/// (`PG_CAPABILITY_MATRIX` in lib.rs). A new domain handler must call the trait,
+/// not add another raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<(), String>;
@@ -160,4 +160,37 @@ pub trait StorageBackend: Send + Sync {
         config: &models::AiProviderConfigRow,
         preserve_api_key: bool,
     ) -> Result<models::AiProviderConfigRow, String>;
+
+    async fn create_api_key(&self, key: &models::ApiKeyRow) -> Result<models::ApiKeyRow, String>;
+    async fn list_api_keys(&self, user_id: &str) -> Result<Vec<models::ApiKeyRow>, String>;
+    async fn revoke_api_key(&self, id: &str, user_id: &str) -> Result<bool, String>;
+    async fn resolve_api_key(
+        &self,
+        key_hash: &str,
+        touched_at: &str,
+    ) -> Result<Option<(String, String)>, String>;
+    async fn delete_api_keys_for_user(&self, user_id: &str) -> Result<u64, String>;
+
+    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String>;
+    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String>;
+    async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String>;
+
+    async fn ensure_env_user(
+        &self,
+        username: &str,
+        role: &str,
+    ) -> Result<Option<(String, String)>, String>;
+    async fn ensure_oauth_user(
+        &self,
+        oauth_user_id: &str,
+        oauth_username: &str,
+        fallback_username: &str,
+    ) -> Result<String, String>;
+    async fn log_action_with_metadata(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String>;
 }
