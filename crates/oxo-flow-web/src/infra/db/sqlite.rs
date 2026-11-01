@@ -66,6 +66,42 @@ pub struct SqliteBackend {
     pool: SqlitePool,
 }
 
+/// Insert a queued run row only while its workdir has no live run
+/// (`queued`/`running`/`paused`). Returns `false` when a live run holds
+/// the workdir — the insert is rejected, not queued behind it. One
+/// statement, so concurrent retry/resume requests serialize on the
+/// SQLite write lock instead of racing the read-check-then-insert
+/// window that let two CLIs onto one checkpoint.
+pub async fn create_run_if_workdir_idle(
+    pool: &SqlitePool,
+    run: &models::RunRow,
+) -> Result<bool, String> {
+    let result = sqlx::query(
+        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+         WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = ? AND status IN ('queued', 'running', 'paused'))",
+    )
+    .bind(&run.id)
+    .bind(&run.user_id)
+    .bind(&run.pipeline_id)
+    .bind(&run.pipeline_snapshot)
+    .bind(&run.workflow_name)
+    .bind(&run.status)
+    .bind(&run.phase)
+    .bind(run.dry_run)
+    .bind(run.pid)
+    .bind(&run.workdir)
+    .bind(&run.config_overrides)
+    .bind(&run.started_at)
+    .bind(&run.finished_at)
+    .bind(&run.created_at)
+    .bind(&run.workdir)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(result.rows_affected() == 1)
+}
+
 impl SqliteBackend {
     /// Create a new `SqliteBackend` with a connection pool.
     ///
@@ -555,7 +591,6 @@ impl StorageBackend for SqliteBackend {
         .map_err(|e| e.to_string())?;
         Ok(row)
     }
-
     async fn get_user_by_id(&self, id: &str) -> Result<Option<models::UserRow>, String> {
         sqlx::query_as::<_, models::UserRow>("SELECT * FROM users WHERE id = ?")
             .bind(id)
@@ -1948,5 +1983,69 @@ mod tests {
         assert_eq!(page.total, 1);
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "run-nodes-test");
+    }
+}
+
+#[cfg(test)]
+mod workdir_guard_tests {
+    use super::*;
+    use crate::infra::db::models;
+
+    fn row(id: &str, status: &str, workdir: &str) -> models::RunRow {
+        models::RunRow {
+            id: id.into(),
+            user_id: "default".into(),
+            pipeline_id: None,
+            pipeline_snapshot: "[workflow]".into(),
+            workflow_name: Some("wf".into()),
+            status: status.into(),
+            phase: "parsing".into(),
+            dry_run: false,
+            pid: None,
+            workdir: Some(workdir.into()),
+            config_overrides: None,
+            started_at: None,
+            finished_at: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[tokio::test]
+    async fn workdir_guard_rejects_a_second_live_run() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        let pool = backend.inner_pool();
+
+        // The first insert claims the idle workdir.
+        assert!(
+            create_run_if_workdir_idle(pool, &row("r1", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
+        // A second live run for the SAME workdir is rejected — the atomic
+        // guard is what stops concurrent retries from double-spawning.
+        assert!(
+            !create_run_if_workdir_idle(pool, &row("r2", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
+        // A different workdir is unaffected.
+        assert!(
+            create_run_if_workdir_idle(pool, &row("r3", "queued", "/other"))
+                .await
+                .unwrap()
+        );
+        // Terminal runs do not hold the workdir: everything failed → free.
+        sqlx::query("UPDATE runs SET status = 'failed'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(
+            create_run_if_workdir_idle(pool, &row("r4", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
     }
 }

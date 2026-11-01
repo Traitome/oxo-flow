@@ -372,30 +372,34 @@ pub async fn login(
 
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
-    if let Ok(pool) = get_pool() {
-        let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
-        let insert_result = sqlx::query(
-            "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&result.token)
-        .bind(&session_user_id)
-        .bind(now_iso())
-        .bind(expires.to_rfc3339())
-        .execute(pool)
-        .await;
-
-        if let Err(e) = insert_result {
-            tracing::error!(
-                "Failed to persist session for user '{}': {e}",
-                result.username
-            );
+    // Both failure kinds (pool unavailable, insert failed) answer 503
+    // DB_ERROR: a token that was never stored would 401 on the very next
+    // request, landing the user on the login page with a bogus "expired"
+    // reason — failing the login outright with the real cause is honest.
+    let persisted = match get_pool() {
+        Err((status, body)) => Err(err(status, "DB_ERROR", body.message.clone())),
+        Ok(pool) => {
+            let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
+            sqlx::query(
+                "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&result.token)
+            .bind(&session_user_id)
+            .bind(now_iso())
+            .bind(expires.to_rfc3339())
+            .execute(pool)
+            .await
+            .map(|_| ())
+            .map_err(|_| {
+                err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })
         }
-    } else {
-        tracing::error!(
-            "DB pool unavailable — session NOT persisted for user '{}'",
-            result.username
-        );
-    }
+    };
+    persisted?;
 
     // A successful login resets the brute-force counter for this
     // (account, ip) bucket — one typo must not poison the next attempt.

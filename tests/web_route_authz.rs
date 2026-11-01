@@ -258,9 +258,13 @@ async fn route_authz_and_spawn_budget_gates() {
             saw_limited = true;
             break;
         }
-        assert_eq!(
-            status,
-            reqwest::StatusCode::OK,
+        // Each retry spawns into the SAME workdir; since the workdir claim
+        // was made atomic, a retry whose predecessor has not finished yet
+        // answers 409 RUN_NOT_TERMINAL instead of double-spawning. Both
+        // outcomes consume the spawn budget, so the limiter must still fire.
+        assert!(
+            status == reqwest::StatusCode::OK
+                || (status == reqwest::StatusCode::CONFLICT && body["code"] == "RUN_NOT_TERMINAL"),
             "retry {attempt} unexpected status: {body}"
         );
     }

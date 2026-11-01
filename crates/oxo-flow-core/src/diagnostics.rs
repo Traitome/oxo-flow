@@ -120,7 +120,6 @@ impl DiagnosticContext {
         self.duration_ms = duration_ms;
         self
     }
-
     /// Attach biological header introspection finding.
     #[must_use]
     pub fn with_header_mismatch(mut self, mismatch: impl Into<String>) -> Self {

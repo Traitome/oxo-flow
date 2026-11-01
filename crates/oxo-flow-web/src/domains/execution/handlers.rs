@@ -500,28 +500,6 @@ pub async fn create_run(
                 .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
         };
 
-        let run = models::RunRow {
-            id: resp.run_id.clone(),
-            user_id: user.id.clone(),
-            pipeline_id: pipeline_id.clone(),
-            pipeline_snapshot: toml.to_string(),
-            status: "queued".to_string(),
-            phase: "parsing".to_string(),
-            dry_run: config.dry_run.unwrap_or(false),
-            pid: None,
-            workdir: Some(run_dir.to_string_lossy().to_string()),
-            // Order-preserving JSON array (serde_json Vec serialization)
-            // so retry can replay the exact argv the client sent.
-            config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
-            started_at: None,
-            finished_at: None,
-            created_at: now_iso(),
-            workflow_name: Some(workflow_name),
-        };
-        if let Err(e) = backend.create_run(&run).await {
-            tracing::error!("Failed to persist run {} to database: {e}", run.id);
-        }
-
         // Save pipeline TOML to the working directory so the executor (CLI
         // subprocess) can read it. `tokio::fs` keeps the small write off
         // the async runtime's blocking threads (#268 item 4, web minor).
@@ -568,6 +546,28 @@ pub async fn create_run(
                 oxo_flow_core::plural(include_paths.len(), "include file", "include files"),
                 run_dir
             );
+        }
+
+        let run = models::RunRow {
+            id: resp.run_id.clone(),
+            user_id: user.id.clone(),
+            pipeline_id: pipeline_id.clone(),
+            pipeline_snapshot: toml.to_string(),
+            status: "queued".to_string(),
+            phase: "parsing".to_string(),
+            dry_run: config.dry_run.unwrap_or(false),
+            pid: None,
+            workdir: Some(run_dir.to_string_lossy().to_string()),
+            // Order-preserving JSON array (serde_json Vec serialization)
+            // so retry can replay the exact argv the client sent.
+            config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
+            started_at: None,
+            finished_at: None,
+            created_at: now_iso(),
+            workflow_name: Some(workflow_name),
+        };
+        if let Err(e) = backend.create_run(&run).await {
+            tracing::error!("Failed to persist run {} to database: {e}", run.id);
         }
 
         // Stage the acting user's uploaded inputs into the run workspace
@@ -1234,7 +1234,9 @@ pub async fn retry_run(
 ) -> ApiResult<RetryResponse> {
     let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    require_run_mutator(&user)?;
+    // Read-only: builds the deterministic report and returns a chart spec.
+    // It was mutator-gated, so the documented read-only viewer role got 403
+    // on a chart while report/ask answered freely from the same report.
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // A retry spawns a REAL run — it pays the same limiter + quota
@@ -1351,14 +1353,34 @@ pub async fn retry_run(
         finished_at: None,
         created_at: now.clone(),
     };
-    backend.create_run(&new_run).await.map_err(|e| {
-        tracing::error!("DB error inserting retry run {new_run_id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    // The terminal-state check above is TOCTOU: two concurrent retries both
+    // read the old row as terminal and both spawn into the same workdir.
+    // The guarded insert makes the claim atomic — the loser gets 409.
+    let claim = match crate::infra::db::sqlite::try_pool() {
+        Ok(pool) => crate::infra::db::sqlite::create_run_if_workdir_idle(pool, &new_run).await,
+        Err(e) => Err(e),
+    };
+    match claim {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_NOT_TERMINAL",
+                format!(
+                    "another run is already active in this workdir — wait for it to \
+                     finish (or cancel it) before retrying run {id}"
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::error!("DB error inserting retry run {new_run_id}: {e}");
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            ));
+        }
+    }
 
     crate::infra::quota::global_quota_tracker().record_start(
         &user.id,
@@ -2876,14 +2898,32 @@ pub async fn resume_checkpoint(
         finished_at: None,
         created_at: now.clone(),
     };
-    backend.create_run(&new_run).await.map_err(|e| {
-        tracing::error!("DB error inserting resume run: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    // Same TOCTOU as retry_run: claim the workdir atomically at insert.
+    let claim = match crate::infra::db::sqlite::try_pool() {
+        Ok(pool) => crate::infra::db::sqlite::create_run_if_workdir_idle(pool, &new_run).await,
+        Err(e) => Err(e),
+    };
+    match claim {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_NOT_TERMINAL",
+                format!(
+                    "another run is already active in this workdir — wait for it to \
+                     finish (or cancel it) before resuming run {id}"
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::error!("DB error inserting resume run: {e}");
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            ));
+        }
+    }
 
     let args: Vec<std::ffi::OsString> = vec![
         "resume".into(),

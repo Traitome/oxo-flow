@@ -1003,16 +1003,6 @@ impl ReportBuilder {
         self
     }
 
-    pub fn qc_metrics(mut self, metrics: &[QcMetric]) -> Self {
-        self.report.add_section(qc_metrics_section(metrics));
-        self
-    }
-
-    pub fn alignment_stats(mut self, stats: &[AlignmentStats]) -> Self {
-        self.report.add_section(alignment_stats_section(stats));
-        self
-    }
-
     pub fn expression(mut self, records: &[ExpressionRecord], top_n: usize) -> Self {
         self.report
             .add_section(expression_summary_section(records, top_n));
@@ -1034,12 +1024,6 @@ impl ReportBuilder {
     ) -> Self {
         self.report
             .add_section(provenance_section(wf_name, wf_version, start, end, sw));
-        self
-    }
-
-    /// Add a task summary section showing all rules with their shell commands.
-    pub fn task_summary(mut self, rules: &[crate::rule::Rule]) -> Self {
-        self.report.add_section(task_summary_section(rules));
         self
     }
 

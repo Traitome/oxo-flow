@@ -338,29 +338,6 @@ impl BioTypeSpec {
         }
     }
 
-    /// Canonical BAM with coordinate sort and BAI index.
-    #[must_use]
-    pub fn bam_coordinate(reference_build: impl Into<String>) -> Self {
-        Self {
-            format: BioFormat::Bam,
-            sort_order: Some(SortOrder::Coordinate),
-            index: Some(IndexKind::Bai),
-            reference_build: Some(reference_build.into()),
-            compression: Some(CompressionKind::Bgzip),
-            ..Default::default()
-        }
-    }
-
-    /// Canonical paired FASTQ reads with gzip compression.
-    #[must_use]
-    pub fn fastq_gzip() -> Self {
-        Self {
-            format: BioFormat::Fastq,
-            compression: Some(CompressionKind::Gzip),
-            ..Default::default()
-        }
-    }
-
     /// Canonical indexed VCF with tabix index.
     #[must_use]
     pub fn vcf_indexed(reference_build: impl Into<String>) -> Self {

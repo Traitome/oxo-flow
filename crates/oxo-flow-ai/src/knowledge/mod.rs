@@ -6,7 +6,6 @@
 //! - Best practice rules for workflow validation
 //! - Context assembly for different agent scenarios
 
-pub mod assembler;
 pub mod bioconda;
 pub mod builtin;
 pub mod meta;
