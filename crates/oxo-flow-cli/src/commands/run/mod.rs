@@ -157,40 +157,77 @@ pub(crate) fn config_placeholder_values(
     oxo_flow_core::config_impact::config_placeholder_map(config)
 }
 #[allow(clippy::too_many_arguments)]
+/// Everything one `oxo-flow run` invocation needs, as named fields — the
+/// former 27-positional-parameter signature made every call site a
+/// comment-annotated guessing game. Field order here is the contract;
+/// callers construct with `..`-free literals so the compiler flags any new
+/// field on every call site.
+pub struct RunRequest {
+    pub workflow: Option<PathBuf>,
+    pub jobs: usize,
+    pub keep_going: bool,
+    pub workdir: Option<PathBuf>,
+    pub log_file: Option<PathBuf>,
+    pub target: Vec<String>,
+    pub module: Vec<String>,
+    pub retry: u32,
+    pub timeout: String,
+    pub resume_failed: bool,
+    pub profile: Option<String>,
+    pub max_threads: u32,
+    pub max_memory: u64,
+    pub skip_env_setup: bool,
+    pub skip_ref_build: bool,
+    pub cache_dir: Option<PathBuf>,
+    pub provenance: bool,
+    pub json: bool,
+    pub cli_args: Vec<String>,
+    pub ai_recover: bool,
+    pub ai_max_retries: Option<u32>,
+    pub samples_filter: Vec<String>,
+    pub rerun: bool,
+    pub no_report_snapshot: bool,
+    pub max_submitted: Option<usize>,
+    /// #538: `resume` forwards the user-supplied checkpoint path — without
+    /// this, run_command re-derived `<workdir>`/.oxo-flow/checkpoint.json and
+    /// an explicit `resume <path>` silently resumed from a DIFFERENT (or
+    /// empty) checkpoint while the banner claimed otherwise.
+    pub checkpoint_override: Option<PathBuf>,
+    /// Issue #935 P1: proceed despite protected-tree drift (the fail-gate
+    /// above exists so damaged vendor data never silently poisons a run).
+    pub allow_protected_drift: bool,
+}
+
 pub async fn run_command(
-    workflow: Option<PathBuf>,
-    jobs: usize,
-    keep_going: bool,
-    workdir: Option<PathBuf>,
-    log_file: Option<PathBuf>,
-    target: Vec<String>,
-    module: Vec<String>,
-    retry: u32,
-    timeout: String,
-    resume_failed: bool,
-    profile: Option<String>,
-    max_threads: u32,
-    max_memory: u64,
-    skip_env_setup: bool,
-    skip_ref_build: bool,
-    cache_dir: Option<PathBuf>,
-    provenance: bool,
-    json: bool,
-    cli_args: Vec<String>,
-    ai_recover: bool,
-    ai_max_retries: Option<u32>,
-    samples_filter: Vec<String>,
-    rerun: bool,
-    no_report_snapshot: bool,
-    max_submitted: Option<usize>,
-    // #538: `resume` forwards the user-supplied checkpoint path — without
-    // this, run_command re-derived <workdir>/.oxo-flow/checkpoint.json and
-    // an explicit `resume <path>` silently resumed from a DIFFERENT (or
-    // empty) checkpoint while the banner claimed otherwise.
-    checkpoint_override: Option<PathBuf>,
-    // Issue #935 P1: proceed despite protected-tree drift (the fail-gate
-    // above exists so damaged vendor data never silently poisons a run).
-    allow_protected_drift: bool,
+    RunRequest {
+        workflow,
+        jobs,
+        keep_going,
+        workdir,
+        log_file,
+        target,
+        module,
+        retry,
+        timeout,
+        resume_failed,
+        profile,
+        max_threads,
+        max_memory,
+        skip_env_setup,
+        skip_ref_build,
+        cache_dir,
+        provenance,
+        json,
+        cli_args,
+        ai_recover,
+        ai_max_retries,
+        samples_filter,
+        rerun,
+        no_report_snapshot,
+        max_submitted,
+        checkpoint_override,
+        allow_protected_drift,
+    }: RunRequest,
 ) -> Result<()> {
     print_banner();
 
@@ -360,40 +397,15 @@ pub async fn run_command(
     // Runs AFTER expansion so engine-generated rules are covered too, and
     // before any file is touched — a typo'd key must fail the run, never
     // produce literal-placeholder outputs with exit 0.
-    let e005 = undefined_config_findings(&config);
-    if !e005.is_empty() {
-        json_summary.emit("failed", &RunCounts::default(), vec![]);
-        return Err(anyhow::anyhow!(
-            "workflow references undefined config variables — fix before running:\n  {}",
-            e005.join("\n  ")
-        ));
-    }
-
-    let mut dag = WorkflowDag::from_rules_with_config(
-        &config.rules,
-        &config_placeholder_values(&config.config),
-    )
-    .context("failed to build workflow DAG")?;
-
-    // --module partial runs (issue #112 elasticity): each module name
-    // resolves to its rules plus the host producers of its declared
-    // concrete inputs; upstream DAG dependents come via the target
-    // machinery below.
-    let mut target = target;
-    for m in &module {
-        match config.module_closure(m) {
-            Some(names) => target.extend(names),
-            None => {
-                // Pre-execution abort: nothing ran, but the summary
-                // contract still holds for --json (issue #142 H6).
-                json_summary.emit("failed", &RunCounts::default(), vec![]);
-                return Err(anyhow::anyhow!(
-                    "unknown module '{m}' — known modules: {}",
-                    known_modules_hint(&config.module_rules)
-                ));
-            }
+    let (mut dag, target) = match build_dag_and_targets(&config, target, &module) {
+        Ok(pair) => pair,
+        // Pre-execution abort: nothing ran, but the summary contract still
+        // holds for --json (issue #142 H6).
+        Err(e) => {
+            json_summary.emit("failed", &RunCounts::default(), vec![]);
+            return Err(e);
         }
-    }
+    };
     // ── Run log + workflow provenance (issue #115 pillar 1) ────────────
     // Every run (and `resume`, which re-enters this function) archives its
     // own log under the workdir with numbered rotation; the header names
@@ -4998,34 +5010,8 @@ pub async fn dry_run_command(
 
     // ── Undefined `{config.*}` gate (issue #142 H1) — the same gate run
     // applies: preview must refuse a typo'd key exactly like execution.
-    let e005 = undefined_config_findings(&config);
-    if !e005.is_empty() {
-        return Err(anyhow::anyhow!(
-            "workflow references undefined config variables — fix before running:\n  {}",
-            e005.join("\n  ")
-        ));
-    }
-
-    let mut dag = WorkflowDag::from_rules_with_config(
-        &config.rules,
-        &config_placeholder_values(&config.config),
-    )
-    .context("failed to build workflow DAG")?;
-
-    // --module partial runs (issue #112 elasticity) — same resolution as
-    // `run`.
-    let mut target = target;
-    for m in &module {
-        match config.module_closure(m) {
-            Some(names) => target.extend(names),
-            None => {
-                return Err(anyhow::anyhow!(
-                    "unknown module '{m}' — known modules: {}",
-                    known_modules_hint(&config.module_rules)
-                ));
-            }
-        }
-    }
+    // Same gate and resolution as `run` (issue #142 H1, #112).
+    let (mut dag, target) = build_dag_and_targets(&config, target, &module)?;
     // Default targets (issue #469): same seeding as `run`.
     let target = resolve_default_targets(&config, &target);
     // Targeted dry-runs close over the INSTANTIATED DAG (issue #247) —
@@ -6459,37 +6445,47 @@ pub async fn resume_command(
             .unwrap_or_else(|| "(workflow directory)".to_string())
     );
 
-    run_command(
-        Some(workflow_path),
+    run_command(RunRequest {
+        workflow: Some(workflow_path),
         jobs,
-        keep_going,        // keep_going (same semantics as `run`)
-        effective_workdir, // workdir (recorded by the original run)
-        // #538: the user's checkpoint path wins over the workdir-derived
-        // default — the banner's "Resuming… N completed" must be the truth.
-        None,       // log_file (default path)
-        Vec::new(), // target
-        Vec::new(), // module
-        0,          // retry
-        timeout,    // timeout
-        false,      // resume_failed (user can re-run with --resume-failed in 'run')
-        None,       // profile
-        0,          // max_threads
-        0,          // max_memory
-        false,      // skip_env_setup
-        true,       // skip_ref_build (resume: refs already built)
-        None,       // cache_dir
-        false,      // provenance (checkpoint already has checksums)
-        false,      // json (resume defaults to human-readable)
-        Vec::new(), // cli_args (resume reuses checkpoint state)
+        keep_going,
+        // recorded by the original run
+        workdir: effective_workdir,
+        log_file: None,
+        target: Vec::new(),
+        module: Vec::new(),
+        retry: 0,
+        timeout,
+        // user can re-run with --resume-failed in 'run'
+        resume_failed: false,
+        profile: None,
+        max_threads: 0,
+        max_memory: 0,
+        skip_env_setup: false,
+        // resume: refs already built
+        skip_ref_build: true,
+        cache_dir: None,
+        // checkpoint already has checksums
+        provenance: false,
+        // resume defaults to human-readable
+        json: false,
+        // resume reuses checkpoint state
+        cli_args: Vec::new(),
         ai_recover,
         ai_max_retries,
-        Vec::new(), // samples_filter (resume restores checkpoint state as-is)
-        false,      // rerun (resume skips completed rules by design)
+        // resume restores checkpoint state as-is
+        samples_filter: Vec::new(),
+        // resume skips completed rules by design
+        rerun: false,
         no_report_snapshot,
-        None,             // max_submitted (cluster queue cap — resume keeps the profile's)
-        Some(checkpoint), // #538: explicit checkpoint path wins
-        false,            // allow_protected_drift (resume honors the protection gate)
-    )
+        // cluster queue cap — resume keeps the profile's
+        max_submitted: None,
+        // #538: the user's checkpoint path wins over the workdir-derived
+        // default — the banner's "Resuming… N completed" must be the truth.
+        checkpoint_override: Some(checkpoint),
+        // resume honors the protection gate
+        allow_protected_drift: false,
+    })
     .await
 }
 

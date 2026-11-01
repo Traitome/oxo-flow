@@ -23,7 +23,7 @@ use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
 use crate::commands::quality::{format_command, lint_command, touch_command, validate_command};
 use crate::commands::run::{
-    debug_command, dry_run_command, handle_status, resume_command, run_command,
+    RunRequest, debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
 use crate::commands::verify_data::verify_data_command;
 use crate::commands::web::ServeMode;
@@ -1535,11 +1535,11 @@ async fn main() -> Result<()> {
             // (backward compat). Later entries win on duplicate keys.
             let mut merged_args = config_overrides;
             merged_args.extend(args);
-            run_command(
-                wf,
+            run_command(RunRequest {
+                workflow: wf,
                 jobs,
                 keep_going,
-                wd,
+                workdir: wd,
                 log_file,
                 target,
                 module,
@@ -1553,17 +1553,18 @@ async fn main() -> Result<()> {
                 skip_ref_build,
                 cache_dir,
                 provenance,
-                cli.json,
-                merged_args,
+                json: cli.json,
+                cli_args: merged_args,
                 ai_recover,
                 ai_max_retries,
                 samples_filter,
                 rerun,
                 no_report_snapshot,
                 max_submitted,
-                None, // checkpoint_override (run derives the workdir default)
+                // run derives the workdir default
+                checkpoint_override: None,
                 allow_protected_drift,
-            )
+            })
             .await?
         }
         Commands::Resume {
@@ -2025,35 +2026,41 @@ async fn main() -> Result<()> {
                 eprintln!("{} Execution...", if deep { "5." } else { "4." }.bold());
                 step!(
                     "run",
-                    run_command(
-                        Some(workflow.clone()),
+                    run_command(RunRequest {
+                        workflow: Some(workflow.clone()),
                         jobs,
-                        keep_going,      // keep_going
-                        workdir.clone(), // workdir
-                        None,            // log_file (default path)
-                        target.clone(),  // target
-                        Vec::new(),      // module
-                        retry,           // retry
-                        timeout.clone(), // timeout
-                        false,           // resume_failed
-                        profile.clone(), // profile
-                        0,               // max_threads
-                        0,               // max_memory
-                        false,           // skip_env_setup
-                        false,           // skip_ref_build
-                        None,            // cache_dir
-                        false,           // provenance
-                        false,           // json (the single test document is emitted here)
-                        vec![],          // cli_args
-                        false,           // ai_recover
-                        None,            // ai_max_retries
-                        samples_filter.clone(),
-                        false, // rerun (test mode: normal up-to-date checks)
-                        false, // no_report_snapshot (test mode keeps the standard run behavior)
-                        None,  // max_submitted (cluster queue cap — test keeps the profile's)
-                        None,  // checkpoint_override (test derives the workdir default)
-                        false, // allow_protected_drift (test honors the protection gate)
-                    )
+                        keep_going,
+                        workdir: workdir.clone(),
+                        log_file: None,
+                        target: target.clone(),
+                        module: Vec::new(),
+                        retry,
+                        timeout: timeout.clone(),
+                        resume_failed: false,
+                        profile: profile.clone(),
+                        max_threads: 0,
+                        max_memory: 0,
+                        skip_env_setup: false,
+                        skip_ref_build: false,
+                        cache_dir: None,
+                        provenance: false,
+                        // the single test document is emitted here
+                        json: false,
+                        cli_args: vec![],
+                        ai_recover: false,
+                        ai_max_retries: None,
+                        samples_filter: samples_filter.clone(),
+                        // test mode: normal up-to-date checks
+                        rerun: false,
+                        // test mode keeps the standard run behavior
+                        no_report_snapshot: false,
+                        // cluster queue cap — test keeps the profile's
+                        max_submitted: None,
+                        // test derives the workdir default
+                        checkpoint_override: None,
+                        // test honors the protection gate
+                        allow_protected_drift: false,
+                    })
                     .await
                 );
             }

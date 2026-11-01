@@ -1,5 +1,52 @@
 //! Backend pre-flight: BackendPreflightFailure, install hints, primary env spec, backend_preflight_failures (#948 P2-5).
 
+use super::config_placeholder_values;
+use super::findings::{known_modules_hint, undefined_config_findings};
+use anyhow::{Context, Result};
+use oxo_flow_core::config::WorkflowConfig;
+use oxo_flow_core::dag::WorkflowDag;
+
+/// The shared pre-DAG gate `run` and `dry-run` both apply (issue #142 H1,
+/// #112): a typo'd `{config.*}` key or an unknown `--module` must abort
+/// before any file is touched, and the DAG builds with the same
+/// placeholder expansion on both paths. Caller-specific `--json` failure
+/// emission stays with the caller.
+pub(crate) fn build_dag_and_targets(
+    config: &WorkflowConfig,
+    target: Vec<String>,
+    module: &[String],
+) -> Result<(WorkflowDag, Vec<String>)> {
+    let e005 = undefined_config_findings(config);
+    if !e005.is_empty() {
+        anyhow::bail!(
+            "workflow references undefined config variables — fix before running:\n  {}",
+            e005.join("\n  ")
+        );
+    }
+
+    let dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to build workflow DAG")?;
+
+    // --module partial runs (issue #112 elasticity): each module name
+    // resolves to its rules plus the host producers of its declared
+    // concrete inputs; upstream DAG dependents come via the target
+    // machinery below.
+    let mut target = target;
+    for m in module {
+        match config.module_closure(m) {
+            Some(names) => target.extend(names),
+            None => anyhow::bail!(
+                "unknown module '{m}' — known modules: {}",
+                known_modules_hint(&config.module_rules)
+            ),
+        }
+    }
+    Ok((dag, target))
+}
+
 /// One consolidated backend-availability failure from the run pre-flight:
 /// identical (backend, message) pairs across a cohort's instances collapse
 /// into a single entry whose `count` says how many pending rules share it.
