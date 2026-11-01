@@ -1267,16 +1267,7 @@ shell = "cp in.txt out.txt"
         config.apply_defaults();
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let wildcard_values = config
-            .config
-            .iter()
-            .map(|(k, v)| {
-                (
-                    format!("config.{k}"),
-                    v.as_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect();
+        let wildcard_values = config.config_placeholder_values();
         (config, dag, order, wildcard_values)
     }
 

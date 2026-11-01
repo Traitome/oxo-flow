@@ -498,17 +498,7 @@ fn looks_file_like(value: &str) -> bool {
 /// Map every `[config]` value to the `config.<key>` form the executor
 /// resolves in commands (`{config.data_dir}` → value).
 fn config_vars(config: &WorkflowConfig) -> HashMap<String, String> {
-    config
-        .config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect()
+    config.config_placeholder_values()
 }
 
 /// Expand `{config.x}` placeholders (simple substitution only, mirroring

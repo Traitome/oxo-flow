@@ -228,17 +228,7 @@ pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) ->
 /// Map every `[config]` value to the `config.<key>` wildcard form the
 /// executor resolves in paths (`{config.data_dir}` → value).
 fn config_vars(config: &WorkflowConfig) -> std::collections::HashMap<String, String> {
-    config
-        .config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect()
+    config.config_placeholder_values()
 }
 
 /// The longest scoped sample name mentioned in `path`.

@@ -2235,15 +2235,6 @@ impl<S> WorkflowState<S> {
 pub fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
     // Stringify every value once, then expand to a fixed point so nested
     // `{config.x}` references resolve regardless of map iteration order.
-    let stringified: HashMap<String, String> = config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect();
+    let stringified = crate::config_impact::config_placeholder_map(config);
     crate::executor::expand_to_fixed_point(path, &stringified, |value| value.to_owned())
 }

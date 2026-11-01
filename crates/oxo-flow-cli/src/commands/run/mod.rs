@@ -58,8 +58,6 @@ pub use status::handle_status;
 pub(crate) use status::*;
 pub(crate) use task::*;
 
-/// Flatten workflow config values into the `{config.key}` placeholder map
-/// used for path expansion (DAG edge matching, run-time rendering, …).
 /// Default targets (issue #469): rules marked `target = true` are what
 /// `run`/`dry-run` build when neither `-t` nor `--module` selected
 /// anything — Snakemake's rule-all semantics. No marked rule → the full
@@ -81,6 +79,8 @@ pub(crate) fn resolve_default_targets(config: &WorkflowConfig, target: &[String]
     }
 }
 
+/// Flatten workflow config values into the `{config.key}` placeholder map
+/// used for path expansion (DAG edge matching, run-time rendering, …).
 pub(crate) fn config_placeholder_values(
     config: &HashMap<String, toml::Value>,
 ) -> HashMap<String, String> {
