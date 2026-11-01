@@ -386,9 +386,15 @@ fn cli_info_json_carries_git_provenance_in_repo() {
     );
     let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(meta["git_sha"].as_str(), Some(head.as_str()));
+    // Compare against git's own view of the remote: host-level insteadOf
+    // rewrites legitimately change what `remote get-url` reports.
+    let reported_remote = String::from_utf8_lossy(&git(&["remote", "get-url", "origin"]).stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         meta["git_remote"].as_str(),
-        Some("https://github.com/example/wf.git")
+        Some(reported_remote.as_str()),
+        "git_remote must match git remote get-url origin"
     );
     assert!(
         meta["git_describe"].as_str().is_some_and(|s| !s.is_empty()),
