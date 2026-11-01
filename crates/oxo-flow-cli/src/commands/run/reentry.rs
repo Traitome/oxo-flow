@@ -117,6 +117,56 @@ pub(crate) fn replay_checkpoint_reentries(
     Ok(replayed.len())
 }
 
+/// Replay persisted runtime-discovered output_pattern domains on resume
+/// (issue #227 item 5): consumers instantiate from the recorded domain
+/// without re-running completed producers.
+pub(crate) fn replay_output_pattern_domains(
+    plan: &mut ReplayPlan<'_>,
+    checkpoint: &CheckpointState,
+    rerun: bool,
+    ordering: ReplayPlanOrdering,
+) -> anyhow::Result<usize> {
+    if checkpoint.output_pattern_domains.is_empty() || rerun {
+        return Ok(0);
+    }
+    plan.config.discovered_output_patterns = checkpoint.output_pattern_domains.clone();
+    let all_producers_complete = checkpoint.output_pattern_domains.keys().all(|template| {
+        plan.config.rules.iter().all(|r| {
+            r.output_pattern.is_none()
+                || (plan
+                    .config
+                    .expansion_templates
+                    .get(&r.name)
+                    .map(String::as_str)
+                    != Some(template.as_str())
+                    && r.name != *template)
+                || checkpoint.completed_rules.contains(&r.name)
+        })
+    });
+    let replayed = if all_producers_complete {
+        plan.config.expand_output_pattern_consumers()?
+    } else {
+        tracing::info!(
+            "deferred output_pattern consumers stay pending: a producer instance \
+             is not completed yet — the runtime discovery pass will instantiate them"
+        );
+        Vec::new()
+    };
+    tracing::info!(
+        count = replayed.len(),
+        "replayed runtime-discovered output_pattern domains"
+    );
+    if !replayed.is_empty() {
+        rebuild_replay_plan(
+            plan,
+            ordering,
+            matches!(ordering, ReplayPlanOrdering::ExecutionOrder),
+            "after output_pattern replay",
+        )?;
+    }
+    Ok(replayed.len())
+}
+
 /// Process a checkpoint rule's re-entry manifest after it completes
 /// (issue #78 P3): merge new samples, re-expand from templates, extend the
 /// plan, and record the re-entry in the checkpoint. Errors fail the rule.
@@ -319,4 +369,136 @@ pub(crate) async fn process_output_pattern_discovery(
         "output_pattern discovery expanded the plan"
     );
     Ok(new_names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_output_pattern_domains_noop_on_empty_or_rerun() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "wf"
+
+[[rules]]
+name = "step1"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let mut dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let mut order = vec!["step1".to_string()];
+        let when_false = HashSet::new();
+        let workdir = std::path::PathBuf::from(".");
+        let mut plan = ReplayPlan {
+            config: &mut config,
+            dag: &mut dag,
+            order: &mut order,
+            target: &[],
+            when_false_rules: &when_false,
+            workdir: &workdir,
+            run_log: None,
+        };
+        let mut ck = CheckpointState::new();
+        assert_eq!(
+            replay_output_pattern_domains(
+                &mut plan,
+                &ck,
+                false,
+                ReplayPlanOrdering::ExecutionOrder,
+            )
+            .unwrap(),
+            0
+        );
+        let mut combo = HashMap::new();
+        combo.insert("part".to_string(), "1".to_string());
+        ck.record_output_pattern_domain("split", vec![combo]);
+        assert_eq!(
+            replay_output_pattern_domains(
+                &mut plan,
+                &ck,
+                true,
+                ReplayPlanOrdering::ExecutionOrder,
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn replay_output_pattern_domains_replays_deferred_consumers_when_producers_completed() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "fanout"
+
+[[rules]]
+name = "split"
+output_pattern = "results/chunks/{part}.txt"
+shell = "true"
+
+[[rules]]
+name = "collect"
+input = ["results/chunks/{part}.txt"]
+output = ["results/merged/{part}.txt"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let mut dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let mut order = vec!["split".to_string()];
+        let when_false = HashSet::new();
+        let workdir = std::path::PathBuf::from(".");
+        let mut plan = ReplayPlan {
+            config: &mut config,
+            dag: &mut dag,
+            order: &mut order,
+            target: &[],
+            when_false_rules: &when_false,
+            workdir: &workdir,
+            run_log: None,
+        };
+        let mut ck = CheckpointState::new();
+        let mut combo = HashMap::new();
+        combo.insert("part".to_string(), "1".to_string());
+        ck.record_output_pattern_domain("split", vec![combo]);
+
+        // Producer incomplete -> stays pending.
+        let replayed = replay_output_pattern_domains(
+            &mut plan,
+            &ck,
+            false,
+            ReplayPlanOrdering::ExecutionOrder,
+        )
+        .unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(plan.order, &["split"]);
+
+        // Producer complete -> expands consumer.
+        ck.mark_completed_quiet("split");
+        let replayed = replay_output_pattern_domains(
+            &mut plan,
+            &ck,
+            false,
+            ReplayPlanOrdering::ExecutionOrder,
+        )
+        .unwrap();
+        assert_eq!(replayed, 1);
+        assert_eq!(plan.order.len(), 2);
+        assert!(plan.order.contains(&"split".to_string()));
+        assert!(plan.order.contains(&"collect_1".to_string()));
+        assert!(plan.config.get_rule("collect_1").is_some());
+    }
 }

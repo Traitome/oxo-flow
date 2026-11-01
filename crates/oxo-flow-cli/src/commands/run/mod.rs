@@ -1266,60 +1266,24 @@ pub async fn run_command(
     }
 
     // ── Runtime-discovered output_pattern replay (issue #227 item 5) ──────
-    // Persisted producer domains replay the deferred-consumer fan-out on
-    // resume: consumers instantiate from the recorded domain WITHOUT
-    // re-running the producer (its instances are already-completed, handled
-    // by the skip preprocessing below). A fresh run replays an empty record
-    // and adds nothing; `--rerun` deliberately skips it so the producer
-    // re-discovers the domain live.
-    // Gate (issue #296 follow-up): instantiate only when EVERY producer
-    // instance is already completed. A producer that still has to re-run
-    // keeps its consumers pending — the runtime discovery pass then
-    // instantiates them from the final domain union, so the final consumer
-    // set is the union of all per-instance slices (a partial replay would
-    // drain the pending set and silently drop the later slices).
+    // Rationale and producer completion gating live in
+    // `reentry::replay_output_pattern_domains`.
     {
         let ck = checkpoint.lock().await;
-        if !ck.output_pattern_domains.is_empty() && !rerun {
-            config.discovered_output_patterns = ck.output_pattern_domains.clone();
-            let all_producers_complete = ck.output_pattern_domains.keys().all(|template| {
-                config.rules.iter().all(|r| {
-                    r.output_pattern.is_none()
-                        || (config.expansion_templates.get(&r.name).map(String::as_str)
-                            != Some(template.as_str())
-                            && r.name != *template)
-                        || ck.completed_rules.contains(&r.name)
-                })
-            });
-            let replayed = if all_producers_complete {
-                config.expand_output_pattern_consumers()?
-            } else {
-                tracing::info!(
-                    "deferred output_pattern consumers stay pending: a producer instance \
-                     is not completed yet — the runtime discovery pass will instantiate them"
-                );
-                Vec::new()
-            };
-            tracing::info!(
-                count = replayed.len(),
-                "replayed runtime-discovered output_pattern domains"
-            );
-            if !replayed.is_empty() {
-                dag = WorkflowDag::from_rules_with_config(
-                    &config.rules,
-                    &config_placeholder_values(&config.config),
-                )
-                .context("failed to rebuild workflow DAG after output_pattern replay")?;
-                order = execution_order_skipping_with_notes(
-                    &dag,
-                    &target,
-                    &when_false_rules,
-                    workdir.as_ref().unwrap_or(&workdir_default),
-                    Some(&run_log),
-                    true,
-                )?;
-            }
-        }
+        replay_output_pattern_domains(
+            &mut ReplayPlan {
+                config: &mut config,
+                dag: &mut dag,
+                order: &mut order,
+                target: &target,
+                when_false_rules: &when_false_rules,
+                workdir: workdir.as_ref().unwrap_or(&workdir_default),
+                run_log: Some(&run_log),
+            },
+            &ck,
+            rerun,
+            ReplayPlanOrdering::ExecutionOrder,
+        )?;
     }
 
     let rule_names: Vec<String> = order.to_vec();
