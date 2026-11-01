@@ -116,8 +116,9 @@ impl WorkflowConfig {
             // Only memory is needed here; `System::new_all()` would walk all of
             // /proc (every process, disk, and network interface) just to read
             // total RAM, adding ~50ms to every parse/validate/dry-run/run call.
-            // `System::new()` is fallible since sysinfo 0.40 — degrade to 0,
-            // which only silences the capacity warnings (never blocks a run).
+            // `System::new()` is fallible since sysinfo 0.40 — 0 means unknown
+            // (init failed), and the validator skips the memory check in that
+            // case rather than warning on every rule.
             System::new()
                 .map(|mut sys| {
                     sys.refresh_memory();
