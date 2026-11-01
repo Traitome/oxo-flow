@@ -604,32 +604,17 @@ pub async fn run_command(
     // an empty state — that silently re-executes every completed rule, which
     // costs hours on real data. Fail loudly BEFORE any work is scheduled so
     // the user can back up / repair the file rather than lose the credit.
-    let mut loaded_checkpoint = if checkpoint_path.exists() {
-        match CheckpointState::load_from_file(&checkpoint_path) {
-            Ok(ck) => ck,
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "checkpoint at {} is corrupt and cannot be loaded ({}); \
-                     refusing to start — every completed rule would silently re-run. \
-                     Fix or remove the file, then retry.",
-                    checkpoint_path.display(),
-                    e
-                ));
-            }
-        }
-    } else {
-        CheckpointState::default()
-    };
-    adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs, Some(&run_log));
-    // Stale running-set cleanup (issue #685): persisted `running` entries
-    // mean the previous run died (crash / signal) between spawn and any
-    // terminal state. No task is executing those rules now — clear them
-    // once so the reuse block and resume accounting stay honest, loudly.
-    let stale_running: Vec<String> = loaded_checkpoint.running_rules().iter().cloned().collect();
+    // The shared load phase (findings.rs): corruption refuses to start
+    // (issue #432(a)), adoption notes reach the run log, stale `running`
+    // entries from a dead previous run are cleared and persisted (issue
+    // #685) so the reuse block and resume accounting stay honest, loudly.
+    let (loaded_checkpoint, stale_running) = load_checkpoint_for_command(
+        &checkpoint_path,
+        &workflow_abs,
+        CheckpointLoadMode::Execute,
+        Some(&run_log),
+    )?;
     if !stale_running.is_empty() {
-        for rule in &stale_running {
-            loaded_checkpoint.clear_running(rule);
-        }
         diagnostic_narrate(
             format_args!(
                 "  {} checkpoint lists {} as running from a previous run \
@@ -640,9 +625,6 @@ pub async fn run_command(
             ),
             Some(&run_log),
         );
-        if let Err(e) = loaded_checkpoint.save_to_file(&checkpoint_path) {
-            tracing::warn!("Failed to persist cleaned checkpoint: {e}");
-        }
     }
     let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
 
@@ -4948,22 +4930,17 @@ pub async fn dry_run_command(
     // The preview is ALWAYS computed — with an empty state when no
     // checkpoint exists. `when` conditions can skip rules even on a fresh
     // run, so "every rule will execute" would be wrong without it.
-    let mut checkpoint_state =
-        match oxo_flow_core::executor::checkpoint::CheckpointState::load_from_file(&checkpoint_path)
-        {
-            Ok(ck) => ck,
-            Err(_) => {
-                eprintln!(
-                    "{} no checkpoint at {} — treating every rule as never completed",
-                    "⚠".yellow(),
-                    checkpoint_path.display()
-                );
-                oxo_flow_core::executor::checkpoint::CheckpointState::default()
-            }
-        };
-    // Same identity gate `run` applies (audit B8): another workflow's
-    // artifacts must not be reported as up to date in the plan either.
-    adopt_checkpoint_for_workflow(&mut checkpoint_state, &workflow, None);
+    // The shared load phase (findings.rs) in its read-only form: a missing
+    // file warns and plans fresh; a CORRUPT file is named as corrupt (the
+    // old catch-all "no checkpoint" message mislabeled it) and the plan
+    // degrades to empty — dry-run stays usable as the recovery tool while
+    // run refuses to start. Nothing is persisted.
+    let (mut checkpoint_state, _stale_running) = load_checkpoint_for_command(
+        &checkpoint_path,
+        &workflow,
+        CheckpointLoadMode::ReadOnlyPreview,
+        None,
+    )?;
     let sensitive_keys = sensitive_keys_of(&config);
     // The verbose plan print must not leak sensitive values (issue #99 B1).
     let sensitive_values = sensitive_values_of(&config);

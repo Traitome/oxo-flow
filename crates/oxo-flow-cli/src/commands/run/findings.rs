@@ -62,6 +62,94 @@ pub(crate) fn adopt_checkpoint_for_workflow(
     }
 }
 
+/// How the loading command consumes a possibly-broken checkpoint.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CheckpointLoadMode {
+    /// `run`: a corrupt file refuses to start (issue #432(a) — silent
+    /// degradation would re-execute every completed rule, which costs
+    /// hours on real data), and cleanup side effects are persisted.
+    Execute,
+    /// Read-only previews: never persist; a corrupt file degrades to an
+    /// empty state with a warning that names the corruption — dry-run
+    /// stays usable as the recovery tool, but the old catch-all "no
+    /// checkpoint" message must not mislabel a corrupt file as absent.
+    ReadOnlyPreview,
+}
+
+/// The checkpoint-load phase `run` and `dry-run` share: load from `path`,
+/// adopt for `workflow` (audit B8), and clear stale `running` entries
+/// (issue #685 — the previous run died between spawn and any terminal
+/// state, so no task is executing those rules now). Returns the state and
+/// the names cleared so the caller can narrate them. Under [`CheckpointLoadMode::Execute`]
+/// the corruption check fails loudly and the cleanup is persisted; under
+/// [`CheckpointLoadMode::ReadOnlyPreview`] nothing is written. `run_log`
+/// receives the adoption notes only in Execute mode.
+pub(crate) fn load_checkpoint_for_command(
+    checkpoint_path: &Path,
+    workflow: &Path,
+    mode: CheckpointLoadMode,
+    run_log: Option<&SharedRunLog>,
+) -> anyhow::Result<(CheckpointState, Vec<String>)> {
+    let mut state = if checkpoint_path.exists() {
+        match CheckpointState::load_from_file(checkpoint_path) {
+            Ok(ck) => ck,
+            Err(e) => match mode {
+                CheckpointLoadMode::Execute => {
+                    return Err(anyhow::anyhow!(
+                        "checkpoint at {} is corrupt and cannot be loaded ({}); \
+                         refusing to start — every completed rule would silently re-run. \
+                         Fix or remove the file, then retry.",
+                        checkpoint_path.display(),
+                        e
+                    ));
+                }
+                CheckpointLoadMode::ReadOnlyPreview => {
+                    eprintln!(
+                        "{} checkpoint at {} is corrupt and cannot be loaded ({}) — \
+                         planning as if every rule never completed; fix or remove the \
+                         file for an accurate plan",
+                        "⚠".yellow(),
+                        checkpoint_path.display(),
+                        e
+                    );
+                    CheckpointState::default()
+                }
+            },
+        }
+    } else {
+        if matches!(mode, CheckpointLoadMode::ReadOnlyPreview) {
+            eprintln!(
+                "{} no checkpoint at {} — treating every rule as never completed",
+                "⚠".yellow(),
+                checkpoint_path.display()
+            );
+        }
+        CheckpointState::default()
+    };
+    match mode {
+        CheckpointLoadMode::Execute => {
+            adopt_checkpoint_for_workflow(&mut state, workflow, run_log);
+        }
+        CheckpointLoadMode::ReadOnlyPreview => {
+            adopt_checkpoint_for_workflow(&mut state, workflow, None);
+        }
+    }
+    let stale_running: Vec<String> = state.running_rules().iter().cloned().collect();
+    if !stale_running.is_empty() {
+        for rule in &stale_running {
+            state.clear_running(rule);
+        }
+        if matches!(mode, CheckpointLoadMode::Execute) {
+            // Persist the cleanup so reuse and resume accounting stay
+            // honest even if this invocation dies right after.
+            if let Err(e) = state.save_to_file(checkpoint_path) {
+                tracing::warn!("Failed to persist cleaned checkpoint: {e}");
+            }
+        }
+    }
+    Ok((state, stale_running))
+}
+
 pub(crate) fn print_truncated_list(label: &str, names: &[String]) -> String {
     // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
     // expanded rule instances (e.g. step5 × 100 samples).
@@ -464,4 +552,88 @@ pub(crate) fn missing_source_lines(
             format!("    {name} — missing: {listing}")
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn corrupt_checkpoint(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join(".oxo-flow");
+        std::fs::create_dir_all(&path).unwrap();
+        let file = path.join("checkpoint.json");
+        std::fs::write(&file, "{ not json at all").unwrap();
+        file
+    }
+
+    #[test]
+    fn execute_mode_refuses_to_start_on_a_corrupt_checkpoint() {
+        // issue #432(a): silent degradation would re-execute every
+        // completed rule — run must fail loudly instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = corrupt_checkpoint(tmp.path());
+        let err = load_checkpoint_for_command(
+            &path,
+            std::path::Path::new("t.oxoflow"),
+            CheckpointLoadMode::Execute,
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("refusing to start"), "{err}");
+    }
+
+    #[test]
+    fn preview_mode_degrades_on_corruption_and_stays_read_only() {
+        // Dry-run is the recovery tool: a corrupt file degrades to empty
+        // state with a warning that names the corruption (not "no
+        // checkpoint"), and the file on disk is left untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = corrupt_checkpoint(tmp.path());
+        let before = std::fs::read_to_string(&path).unwrap();
+        let (state, stale) = load_checkpoint_for_command(
+            &path,
+            std::path::Path::new("t.oxoflow"),
+            CheckpointLoadMode::ReadOnlyPreview,
+            None,
+        )
+        .unwrap();
+        assert!(state.completed_rules.is_empty());
+        assert!(stale.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn stale_running_entries_are_cleared_once_per_mode() {
+        // issue #685: persisted `running` entries mean the previous run
+        // died between spawn and any terminal state. Execute persists the
+        // cleanup; the read-only preview clears only its in-memory copy.
+        for mode in [
+            CheckpointLoadMode::Execute,
+            CheckpointLoadMode::ReadOnlyPreview,
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join(".oxo-flow");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("checkpoint.json");
+            let mut seeded = CheckpointState::default();
+            seeded.mark_running("gen");
+            seeded.save_to_file(&path).unwrap();
+
+            let (state, stale) =
+                load_checkpoint_for_command(&path, std::path::Path::new("t.oxoflow"), mode, None)
+                    .unwrap();
+            assert_eq!(stale, vec!["gen".to_string()]);
+            assert!(state.running_rules().is_empty());
+
+            let on_disk = CheckpointState::load_from_file(&path).unwrap();
+            match mode {
+                CheckpointLoadMode::Execute => {
+                    assert!(on_disk.running_rules().is_empty());
+                }
+                CheckpointLoadMode::ReadOnlyPreview => {
+                    assert!(on_disk.running_rules().contains("gen"));
+                }
+            }
+        }
+    }
 }
