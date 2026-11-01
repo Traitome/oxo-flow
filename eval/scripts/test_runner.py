@@ -88,12 +88,6 @@ class VersionGateTests(unittest.TestCase):
         self.assertNotIn("version_match", row)
         self.assertEqual(row["overall"], 1.0)
 
-
-class CaptureFailureTests(unittest.TestCase):
-    """A failed capture (rate limit, transport) is infrastructure, not a
-    model answer — scoring the empty string would book the rate limiter as a
-    hallucination (#172 live smoke against the school gateway)."""
-
     def test_version_scored_when_query_asks(self):
         row = self._judge("what is the latest version of fastp in bioconda", "1.3.7", "fastp 1.3.7")
         self.assertEqual(row["version_match"], 1.0)
