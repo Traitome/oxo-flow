@@ -8,6 +8,7 @@
 use crate::commands::config_comments::extract_config_descriptions;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use oxo_flow_ai::knowledge::bioconda::get_tool;
 use oxo_flow_core::config::{IncludeDirective, WorkflowConfig};
 // Canonical `{config.*}` expander — a private copy drifted once already
 // (#460 cleanup). Aliased so call sites keep their old name.
@@ -109,6 +110,24 @@ fn derive_meta(
     tools.sort();
     tools.dedup();
 
+    // Best-effort bioconda annotation (issue #1009): for each catalog tool,
+    // the embedded Bioconda database supplies the current published version
+    // and a one-line summary. Tools that are not conda-distributed (generic
+    // stems like "qc"/"analysis", R libraries, commercial software) simply
+    // stay unannotated. BTreeMap keeps the artifact key-ordered (catalog
+    // drift gate diffs stable output).
+    let bioconda: BTreeMap<&str, Value> = tools
+        .iter()
+        .filter_map(|tool| {
+            get_tool(tool).map(|t| {
+                (
+                    tool.as_str(),
+                    json!({ "version": t.version, "summary": t.summary }),
+                )
+            })
+        })
+        .collect();
+
     // Max resources across rules, computed on a defaults-applied view —
     // the same value the engine uses at run time (run/dry-run both call
     // apply_defaults before scheduling).
@@ -195,6 +214,7 @@ fn derive_meta(
         // concept (depends on sample discovery), not catalog metadata.
         "rule_count": cfg.rules.len(),
         "tools": tools,
+        "bioconda": bioconda,
         "resources": {
             "max_threads": max_threads,
             "max_memory": max_memory,
@@ -510,10 +530,18 @@ fn print_text(meta: &Value) {
         println!("  {description}");
     }
     println!("{} {}", "Rules:".bold(), meta["rule_count"]);
+    let tool_annotations: Vec<String> = str_list(&meta["tools"])
+        .unwrap_or_default()
+        .iter()
+        .map(|tool| match meta["bioconda"][tool]["version"].as_str() {
+            Some(version) => format!("{tool} (bioconda: {version})"),
+            None => (*tool).to_string(),
+        })
+        .collect();
     println!(
         "{} {}",
         "Tools:".bold(),
-        join_or_none(str_list(&meta["tools"]))
+        join_or_none(Some(tool_annotations.iter().map(String::as_str).collect()))
     );
     let mut resources = format!("{} threads", meta["resources"]["max_threads"]);
     if let Some(memory) = meta["resources"]["max_memory"].as_str() {
@@ -794,6 +822,11 @@ shell = "cp {input} {output}"
         assert_eq!(meta["version"], "1.0.0");
         assert_eq!(meta["rule_count"], 5);
         assert_eq!(meta["tools"], json!(["analysis", "bwa-mem2", "qc"]));
+        // #1009: bioconda annotation is additive — only conda-distributed
+        // tools get records; generic stems stay absent.
+        assert_eq!(meta["bioconda"]["bwa-mem2"]["version"], "2.3");
+        assert!(meta["bioconda"].get("analysis").is_none());
+        assert!(meta["bioconda"].get("qc").is_none());
         assert_eq!(meta["resources"]["max_threads"], 8);
         assert_eq!(meta["resources"]["max_memory"], "16G");
         assert_eq!(
@@ -824,6 +857,10 @@ shell = "cp {input} {output}"
         assert_eq!(meta["name"], "simple-variant-calling");
         // singularity images count as container tools ("docker://" stripped).
         assert_eq!(meta["tools"], json!(["alignment", "fastp", "gatk", "qc"]));
+        // #1009: bioconda annotation is additive.
+        assert!(meta["bioconda"]["fastp"]["version"].is_string());
+        assert!(meta["bioconda"].get("alignment").is_none());
+        assert!(meta["bioconda"].get("qc").is_none());
         // Engine-injected keys (samples_list, pairs_list, paired_pairs_*,
         // samples_*) excluded.
         assert_eq!(meta["config_keys"], json!(["known_sites", "reference"]));
