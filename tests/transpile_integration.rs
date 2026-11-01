@@ -195,7 +195,6 @@ rule bwa_mem:
 }
 
 #[test]
-#[test]
 fn test_transpile_snakemake_expand_call_inputs() {
     let smk = r#"
 rule all:
