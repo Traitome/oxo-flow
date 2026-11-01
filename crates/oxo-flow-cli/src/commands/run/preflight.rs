@@ -3,8 +3,11 @@
 use super::config_placeholder_values;
 use super::findings::{known_modules_hint, undefined_config_findings};
 use anyhow::{Context, Result};
+use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use oxo_flow_core::rule::Rule;
+use std::path::Path;
 
 /// The shared pre-DAG gate `run` and `dry-run` both apply (issue #142 H1,
 /// #112): a typo'd `{config.*}` key or an unknown `--module` must abort
@@ -164,4 +167,248 @@ pub(crate) fn backend_preflight_failures(
         }
     }
     out
+}
+
+/// Extract pending rules' environment specs (with workflow-relative paths resolved)
+/// from a preview plan. Skipped rules are excluded because this run never invokes
+/// their backend.
+pub(crate) fn pending_rule_environments(
+    plan: &[crate::commands::run_preview::PreviewRule],
+    config: &WorkflowConfig,
+    workflow_dir: &Path,
+) -> Vec<(String, oxo_flow_core::rule::EnvironmentSpec)> {
+    plan.iter()
+        .filter(|entry| !entry.status.is_skip())
+        .filter_map(|entry| {
+            config.get_rule(&entry.name).map(|rule| {
+                (
+                    entry.name.clone(),
+                    rule.environment.resolve_relative_paths(Some(workflow_dir)),
+                )
+            })
+        })
+        .filter(|(_, env)| !env.is_empty())
+        .collect()
+}
+
+/// Validate backend availability before scheduling: pending rules whose backend
+/// binary is missing fail fast with actionable install hints before executing any rules.
+pub(crate) fn validate_pending_backends(
+    pending_envs: &[(String, oxo_flow_core::rule::EnvironmentSpec)],
+    resolver: &oxo_flow_core::environment::EnvironmentResolver,
+) -> Result<()> {
+    let env_failures = backend_preflight_failures(pending_envs, resolver);
+    if env_failures.is_empty() {
+        return Ok(());
+    }
+    let detail = env_failures
+        .iter()
+        .map(|f| format!("  - {f}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let n_backends = env_failures.len();
+    let backend_desc =
+        oxo_flow_core::plural(n_backends, "environment backend", "environment backends");
+    let verb = if n_backends == 1 { "is" } else { "are" };
+    anyhow::bail!(
+        "{backend_desc} required by pending rules {verb} unavailable; no rules were run:\n{detail}"
+    )
+}
+
+/// Fail fast before any rule runs if any rule's declared resource request
+/// can never fit an explicit `--max-memory` or `--max-threads` cap.
+pub(crate) fn validate_resource_budget(
+    scheduled: &[&Rule],
+    max_threads: Option<u32>,
+    max_memory_mb: Option<u64>,
+) -> Result<()> {
+    let breaches =
+        oxo_flow_core::scheduler::check_budget_feasibility(scheduled, max_threads, max_memory_mb);
+    if breaches.is_empty() {
+        return Ok(());
+    }
+    let detail = breaches
+        .iter()
+        .map(|b| format!("  - {b}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    anyhow::bail!(
+        "resource budget too small for {}; no rules were run:\n{}",
+        oxo_flow_core::plural(breaches.len(), "rule", "rules"),
+        detail
+    )
+}
+
+/// Disk pre-flight (issue #75): warn when a rule's declared `resources.disk`
+/// exceeds available free space in the workdir, or when the workdir starts below
+/// the configured `[engine] min_free_disk` threshold (issue #843).
+pub(crate) fn warn_disk_preflight(
+    scheduled: &[&Rule],
+    workdir: &Path,
+    engine: Option<&oxo_flow_core::config::EngineConfig>,
+) {
+    let rules: Vec<Rule> = scheduled.iter().map(|r| (*r).clone()).collect();
+    let disk_warnings = oxo_flow_core::scheduler::validate_disk_requirements(&rules, workdir);
+    for warning in &disk_warnings {
+        eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
+    }
+
+    if engine.is_some_and(|e| e.min_free_disk.is_some()) {
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "  {} [engine] min_free_disk is configured but free-space monitoring is not supported on this platform — the monitor will stay inactive.",
+                "Warning:".bold().yellow()
+            );
+        }
+        #[cfg(unix)]
+        {
+            if let Some((min_mb, _reclaim_mb)) = engine.and_then(|e| e.disk_thresholds())
+                && let Some(start_mb) = oxo_flow_core::scheduler::check_available_disk_mb(workdir)
+                && start_mb < min_mb
+            {
+                eprintln!(
+                    "  {} workdir starts below [engine] min_free_disk: {}MB free, threshold {}MB — the run will hold dispatches until space is freed.",
+                    "Warning:".bold().yellow(),
+                    start_mb,
+                    min_mb
+                );
+            }
+        }
+    }
+}
+
+/// Warn when either the workdir or the system temp directory has less than 1 GB free
+/// before any rule dispatches (issue #75).
+pub(crate) fn warn_low_free_space(workdir: &Path) {
+    for (label, path) in [
+        ("workdir", workdir),
+        ("temp dir", std::env::temp_dir().as_path()),
+    ] {
+        if let Some(free_kb) = super::refs::free_kilobytes(path) {
+            let free_gb = free_kb as f64 / 1024.0 / 1024.0;
+            if free_gb < 1.0 {
+                tracing::warn!(
+                    label,
+                    path = %path.display(),
+                    free_gb = format!("{free_gb:.1}"),
+                    "less than 1 GB free disk space — the run may fail with ENOSPC mid-way"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_resource_budget_accepts_feasible_rules() {
+        let rule = Rule {
+            name: "align".to_string(),
+            resources: oxo_flow_core::rule::Resources {
+                threads: 4,
+                memory: Some("4G".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(validate_resource_budget(&[&rule], Some(8), Some(8192)).is_ok());
+    }
+
+    #[test]
+    fn validate_resource_budget_rejects_excessive_requirements() {
+        let rule = Rule {
+            name: "heavy_align".to_string(),
+            resources: oxo_flow_core::rule::Resources {
+                threads: 16,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = validate_resource_budget(&[&rule], Some(8), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("resource budget too small for 1 rule"));
+        assert!(msg.contains("heavy_align"));
+    }
+
+    #[test]
+    fn backend_install_hint_routes_by_kind_and_message() {
+        let missing_manifest = BackendPreflightFailure {
+            kind: "pixi".to_string(),
+            message: "manifest not found".to_string(),
+            example_rule: "rule_a".to_string(),
+            spec: "pixi.toml".to_string(),
+            count: 1,
+        };
+        assert!(backend_install_hint(&missing_manifest).contains("create the manifest"));
+
+        let missing_binary = BackendPreflightFailure {
+            kind: "conda".to_string(),
+            message: "conda binary unavailable".to_string(),
+            example_rule: "rule_b".to_string(),
+            spec: "environment.yaml".to_string(),
+            count: 1,
+        };
+        assert!(backend_install_hint(&missing_binary).contains("install conda"));
+    }
+    #[test]
+    fn pending_rule_environments_filters_skipped_and_empty() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "test"
+"#,
+        )
+        .unwrap();
+        let r1 = Rule {
+            name: "r1".to_string(),
+            environment: oxo_flow_core::rule::EnvironmentSpec {
+                pixi: Some("pixi.toml".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let r2 = Rule {
+            name: "r2".to_string(),
+            environment: oxo_flow_core::rule::EnvironmentSpec {
+                conda: Some("env.yaml".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let r3 = Rule {
+            name: "r3".to_string(),
+            ..Default::default()
+        };
+
+        config.rules = vec![r1, r2, r3];
+
+        let plan = vec![
+            crate::commands::run_preview::PreviewRule {
+                name: "r1".to_string(),
+                status: crate::commands::run_preview::RuleStatus::NeverCompleted,
+            },
+            crate::commands::run_preview::PreviewRule {
+                name: "r2".to_string(),
+                status: crate::commands::run_preview::RuleStatus::Skipped,
+            },
+            crate::commands::run_preview::PreviewRule {
+                name: "r3".to_string(),
+                status: crate::commands::run_preview::RuleStatus::NeverCompleted,
+            },
+        ];
+
+        let wf_dir = Path::new("/workflows");
+        let pending = pending_rule_environments(&plan, &config, wf_dir);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, "r1");
+        assert_eq!(
+            pending[0].1.pixi.as_deref(),
+            Some(Path::new("/workflows/pixi.toml").to_str().unwrap())
+        );
+    }
 }

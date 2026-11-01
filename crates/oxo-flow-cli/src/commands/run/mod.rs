@@ -31,6 +31,7 @@ mod run_log;
 mod signals;
 mod status;
 
+pub(crate) mod cluster_path;
 pub(crate) use env_knobs::*;
 pub(crate) use findings::*;
 pub(crate) use hooks::*;
@@ -674,25 +675,7 @@ pub async fn run_command(
         &workflow_dir,
     )?;
     // ── Pre-flight disk check (issue #75) ─────────────────────────────────
-    // ENOSPC mid-run is the classic silent-loss incident (live: TMPDIR full
-    // killed a scatter campaign half-way). Warn when either the workdir or
-    // the temp dir has less than 1 GB free BEFORE any rule runs.
-    for (label, path) in [
-        ("workdir", workdir_actual.as_path()),
-        ("temp dir", std::env::temp_dir().as_path()),
-    ] {
-        if let Some(free_kb) = free_kilobytes(path) {
-            let free_gb = free_kb as f64 / 1024.0 / 1024.0;
-            if free_gb < 1.0 {
-                tracing::warn!(
-                    label,
-                    path = %path.display(),
-                    free_gb = format!("{free_gb:.1}"),
-                    "less than 1 GB free disk space — the run may fail with ENOSPC mid-way"
-                );
-            }
-        }
-    }
+    warn_low_free_space(workdir_actual.as_path());
 
     // ── Input manifest comparison (issue #72) ──────────────────────────────
     // The rationale and the narration live on the shared phase
@@ -832,17 +815,11 @@ pub async fn run_command(
         })?
     };
 
-    // ── Cluster path (issue #74 phase 2) ───────────────────────────────────
-    // A `[cluster]` block in effect plus a named profile routes execution to
-    // a scheduler instead of the local executor. Both conditions are
-    // required: a workflow carrying `[cluster]` keeps running locally until
-    // the user opts in with `--profile`, so no existing workflow starts
-    // submitting jobs because of this change.
-    if profile.is_some()
-        && let Some(cluster_profile) = config.cluster.clone()
+    if let Some(cluster_profile) =
+        cluster_path::routed_cluster_profile(profile.as_deref(), config.cluster.as_ref())
     {
-        let summary = crate::commands::run_cluster::run_on_cluster(
-            &cluster_profile,
+        cluster_path::dispatch_cluster_run(
+            cluster_profile,
             crate::commands::run_cluster::ClusterRunArgs {
                 config: &config,
                 dag: &dag,
@@ -864,52 +841,11 @@ pub async fn run_command(
                 skip_env_setup,
                 ai_recover,
             },
+            &mut json_summary,
+            &workflow,
+            no_report_snapshot,
         )
         .await?;
-        // The cluster path returns before the common summary emission, so
-        // it routes through the same `--json` contract itself (issue #142
-        // H6): the document must appear on both outcomes.
-        json_summary.emit(
-            if summary.is_success() {
-                "completed"
-            } else {
-                "failed"
-            },
-            &RunCounts {
-                succeeded: summary.succeeded,
-                skipped: summary.skipped,
-                failed: summary.failed,
-                non_required_failed: summary.non_required_failed,
-                blocked: 0,
-            },
-            // Cluster per-rule resources come from sacct accounting at
-            // report time, not the live checkpoint — empty here.
-            vec![],
-        );
-        notify_webhook(
-            &config,
-            if summary.is_success() {
-                oxo_flow_core::webhook::WebhookEvent::WorkflowCompleted
-            } else {
-                oxo_flow_core::webhook::WebhookEvent::WorkflowFailed
-            },
-            Some((summary.succeeded, summary.failed, summary.skipped)),
-        )
-        .await;
-        if !summary.is_success() {
-            return Err(anyhow::anyhow!("workflow execution failed"));
-        }
-        // Report snapshot parity with the local path (issue #83 P1-14):
-        // a cluster run leaves the same `.oxo-flow/reports/` artifacts as a
-        // local one. Errors are warnings, exactly like the local call site.
-        if !no_report_snapshot {
-            let ck = checkpoint.lock().await;
-            if let Err(e) =
-                crate::commands::output::snapshot_report(&workflow, &workdir_actual, &ck)
-            {
-                eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
-            }
-        }
         return Ok(());
     }
 
@@ -1015,73 +951,18 @@ pub async fn run_command(
         .iter()
         .filter_map(|name| config.get_rule(name))
         .collect();
-    let breaches = oxo_flow_core::scheduler::check_budget_feasibility(
+    if let Err(e) = validate_resource_budget(
         &scheduled,
         exec_config.max_threads,
         exec_config.max_memory_mb,
-    );
-    if !breaches.is_empty() {
+    ) {
         progress.finish_and_clear();
-        let detail = breaches
-            .iter()
-            .map(|b| format!("  - {b}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        // Pre-execution abort: nothing ran — the summary still reports
-        // the failed run for --json consumers (issue #142 H6).
         json_summary.emit("failed", &RunCounts::default(), vec![]);
-        return Err(anyhow::anyhow!(
-            "resource budget too small for {}; no rules were run:\n{}",
-            oxo_flow_core::plural(breaches.len(), "rule", "rules"),
-            detail
-        ));
+        return Err(e);
     }
 
-    // Disk pre-flight (issue #75): warn when a rule's declared
-    // `resources.disk` exceeds the free space in the workdir — a long run
-    // should not discover this mid-pipeline.
-    let disk_warnings = oxo_flow_core::scheduler::validate_disk_requirements(
-        &scheduled.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
-        workdir_actual.as_ref(),
-    );
-    for warning in &disk_warnings {
-        eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
-    }
-
-    // #843 runtime disk-pressure monitor pre-flight: when a floor is
-    // configured and the workdir already sits below it, say so before the
-    // first rule dispatches. On non-Unix the monitor cannot measure free
-    // space (it fails open to Normal), so a configured floor would be a
-    // silent no-op — warn once instead.
-    if config
-        .engine
-        .as_ref()
-        .is_some_and(|e| e.min_free_disk.is_some())
-    {
-        #[cfg(not(unix))]
-        {
-            eprintln!(
-                "  {} [engine] min_free_disk is configured but free-space monitoring is not supported on this platform — the monitor will stay inactive.",
-                "Warning:".bold().yellow()
-            );
-        }
-        #[cfg(unix)]
-        {
-            if let Some((min_mb, _reclaim_mb)) =
-                config.engine.as_ref().and_then(|e| e.disk_thresholds())
-                && let Some(start_mb) =
-                    oxo_flow_core::scheduler::check_available_disk_mb(workdir_actual.as_ref())
-                && start_mb < min_mb
-            {
-                eprintln!(
-                    "  {} workdir starts below [engine] min_free_disk: {}MB free, threshold {}MB — the run will hold dispatches until space is freed.",
-                    "Warning:".bold().yellow(),
-                    start_mb,
-                    min_mb
-                );
-            }
-        }
-    }
+    // Disk pre-flight (issue #75) and runtime disk-pressure monitor pre-flight (#843).
+    warn_disk_preflight(&scheduled, workdir_actual.as_ref(), config.engine.as_ref());
 
     // Backend availability pre-flight: a pending rule declaring an
     // environment whose backend binary is missing used to surface only
@@ -1091,7 +972,7 @@ pub async fn run_command(
     // before executing anything when a pending rule's backend is unusable
     // — mirroring the budget pre-flight above. Skipped/cached rules do not
     // block: this run never invokes their backend.
-    let pending_envs: Vec<(String, oxo_flow_core::rule::EnvironmentSpec)> = {
+    let pending_envs = {
         let ck = checkpoint.lock().await;
         let preview = crate::commands::run_preview::preview_run_plan(
             &ck,
@@ -1106,45 +987,15 @@ pub async fn run_command(
             rerun,
             resume_failed,
         );
-        preview
-            .plan
-            .iter()
-            .filter(|entry| !entry.status.is_skip())
-            .filter_map(|entry| {
-                config.get_rule(&entry.name).map(|rule| {
-                    // Resolve against the workflow dir — same base the
-                    // executor uses (issue #848): a manifest declared
-                    // relative to the workflow file must be found from any CWD.
-                    (
-                        entry.name.clone(),
-                        rule.environment.resolve_relative_paths(Some(&workflow_dir)),
-                    )
-                })
-            })
-            .filter(|(_, env)| !env.is_empty())
-            .collect()
+        pending_rule_environments(&preview.plan, &config, &workflow_dir)
     };
-    let env_failures = backend_preflight_failures(
+    if let Err(e) = validate_pending_backends(
         &pending_envs,
         &oxo_flow_core::environment::EnvironmentResolver::new(),
-    );
-    if !env_failures.is_empty() {
+    ) {
         progress.finish_and_clear();
-        let detail = env_failures
-            .iter()
-            .map(|f| format!("  - {f}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        // Pre-execution abort: nothing ran — the summary still reports
-        // the failed run for --json consumers (issue #142 H6).
         json_summary.emit("failed", &RunCounts::default(), vec![]);
-        let n_backends = env_failures.len();
-        let backend_desc =
-            oxo_flow_core::plural(n_backends, "environment backend", "environment backends");
-        let verb = if n_backends == 1 { "is" } else { "are" };
-        return Err(anyhow::anyhow!(
-            "{backend_desc} required by pending rules {verb} unavailable; no rules were run:\n{detail}"
-        ));
+        return Err(e);
     }
 
     // Same cache dir the executor's EnvironmentResolver uses — reference
