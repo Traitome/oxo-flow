@@ -577,7 +577,19 @@ pub async fn create_run(
         // a user with no uploads (or an IO hiccup on a stale upload) must
         // not block the run; a genuinely needed missing file still fails
         // loudly inside the CLI with its normal diagnostics.
-        let staged = crate::workspace::stage_user_inputs(&user.id, &run_dir);
+        // The whole-tree mirror can walk a large uploads volume; keep the
+        // blocking IO off the async worker.
+        let staging_user = user.id.clone();
+        let staging_dir = run_dir.clone();
+        let staged = tokio::task::spawn_blocking(move || {
+            crate::workspace::stage_user_inputs(&staging_user, &staging_dir)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            Err(anyhow::Error::msg(format!(
+                "input staging task failed: {e}"
+            )))
+        });
         match staged {
             Ok(0) => {}
             Ok(n) => tracing::info!(
@@ -1144,22 +1156,28 @@ pub async fn get_run_logs(
     const MAX_LOG_ENDPOINT_BYTES: u64 = 8 * 1024 * 1024;
     let log_content = match run.workdir.as_ref() {
         Some(wd) => {
-            let log_path = format!("{wd}/execution.log");
-            let path = std::path::Path::new(&log_path);
-            match std::fs::metadata(path)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len())
-            {
-                Some(len) if len > MAX_LOG_ENDPOINT_BYTES => {
-                    let tail = checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES);
-                    format!(
-                        "[log truncated — showing the newest {MAX_LOG_ENDPOINT_BYTES} of {len} bytes; read the full file from the run workdir]\n{tail}"
-                    )
+            let log_path = std::path::PathBuf::from(wd).join("execution.log");
+            tokio::task::spawn_blocking(move || {
+                match std::fs::metadata(&log_path)
+                    .ok()
+                    .filter(|m| m.is_file())
+                    .map(|m| m.len())
+                {
+                    Some(len) if len > MAX_LOG_ENDPOINT_BYTES => {
+                        let tail =
+                            checkpoint_status::read_tail_bounded(&log_path, MAX_LOG_ENDPOINT_BYTES);
+                        format!(
+                            "[log truncated — showing the newest {MAX_LOG_ENDPOINT_BYTES} of {len} bytes; read the full file from the run workdir]\n{tail}"
+                        )
+                    }
+                    Some(_) => {
+                        checkpoint_status::read_tail_bounded(&log_path, MAX_LOG_ENDPOINT_BYTES)
+                    }
+                    None => "No execution log available.".to_string(),
                 }
-                Some(_) => checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES),
-                None => "No execution log available.".to_string(),
-            }
+            })
+            .await
+            .unwrap_or_else(|e| format!("Log read failed: {e}"))
         }
         None => "No execution log available.".to_string(),
     };

@@ -791,7 +791,12 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // before any rule executes — a tail window would miss them, and the
     // old whole-file read buffered a multi-GB log at every run's terminal
     // path (issue #734).
-    let log_content = checkpoint_status::read_head_bounded(log_path, 16 * 1024 * 1024);
+    let head_path = log_path.to_path_buf();
+    let log_content = tokio::task::spawn_blocking(move || {
+        checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
+    })
+    .await
+    .unwrap_or_default();
     let log = (!log_content.is_empty()).then_some(log_content);
     // Persist the dry-run preview (instance-level plan) next to the log so
     // /api/runs/{id}/preview can serve it without re-parsing the log.
