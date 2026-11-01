@@ -1680,13 +1680,14 @@ async fn main() -> Result<()> {
             ai_team_profile,
             ai_attempts,
         } => {
-            // CLI flag wins over `[ai] team_profile` in the resolved config.
+            // CLI flag wins over `[ai] team_profile` — the resolved-config
+            // value is merged inside generate_workflow from the config chain.
             let team_profile = match ai_team_profile.as_deref() {
                 Some(flag) => Some(
                     flag.parse::<oxo_flow_ai::agent::team::TeamProfile>()
                         .map_err(|e| anyhow::anyhow!(e))?,
                 ),
-                None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
+                None => None,
             };
             template_command(
                 template,

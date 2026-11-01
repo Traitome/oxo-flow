@@ -288,6 +288,21 @@ export default function MonitorReport() {
       es.onmessage = (evt) => {
         try {
           const event = JSON.parse(evt.data);
+          // Broadcast overflow (sse.rs ships {type:"lagged", data:{missed}}):
+          // any buffered event may have been dropped, so the selected run's
+          // state can no longer be trusted — refetch unconditionally via the
+          // same path terminal events use, instead of showing stale status
+          // until the next manual action.
+          if (event.type === 'lagged') {
+            void refreshRuns();
+            setLogs(null);
+            setInstances(null);
+            selectAbort.current?.abort();
+            const ctrl = new AbortController();
+            selectAbort.current = ctrl;
+            void fetchDetail(selId, ctrl.signal);
+            return;
+          }
           // Events are scoped to the run owner's canonical users.id (sse.rs),
           // which the login response never exposes — comparing it against the
           // stored login username dropped every live update. The loaded run row

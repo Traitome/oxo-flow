@@ -326,22 +326,26 @@ pub fn rule_fingerprint(
     rule_fingerprint_impl(rule, interpreter_map, shell_prelude, None, &mut cache, true)
 }
 
-/// Same fingerprint with the `input` field EXCLUDED (issue #142 M1): for an
-/// expand_inputs-over-injected-key rule the baked input list IS the
-/// `--samples` selection, so the full fingerprint differs on every subset
-/// run while this one stays identical. A match proves the rule definition —
-/// shell, outputs, env, conditions, everything else — is unchanged.
-pub fn rule_fingerprint_without_input(
+/// Same fingerprint as [`rule_fingerprint`] with the `input` field EXCLUDED
+/// (issue #142 M1): for an expand_inputs-over-injected-key rule the baked
+/// input list IS the `--samples` selection, so the full fingerprint differs
+/// on every subset run while this one stays identical. A match proves the
+/// rule definition — shell, outputs, env, conditions, everything else — is
+/// unchanged. Single source for every input-excluded comparison in this
+/// module: callers pass the same `base_dir` they hashed the full
+/// fingerprint with.
+fn rule_fingerprint_no_input(
     rule: &Rule,
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
+    base_dir: Option<&Path>,
 ) -> String {
     let mut cache = EnvTagCache::new();
     rule_fingerprint_impl(
         rule,
         interpreter_map,
         shell_prelude,
-        None,
+        base_dir,
         &mut cache,
         false,
     )
@@ -733,13 +737,11 @@ pub fn detect_config_changes_with_replay(
             // input-excluded fingerprints — those keep invalidating.
             let selection_only = expand_inputs_refs_engine_injected(rule, config)
                 && checkpoint.rule_fingerprints_no_input.get(&rule.name)
-                    == Some(&rule_fingerprint_impl(
+                    == Some(&rule_fingerprint_no_input(
                         rule,
                         interpreter_map,
                         shell_prelude,
                         base_dir,
-                        &mut env_tag_cache,
-                        false,
                     ));
             if selection_only {
                 sample_selection_exempt.push(rule.name.clone());
@@ -750,14 +752,7 @@ pub fn detect_config_changes_with_replay(
         current_fingerprints.insert(rule.name.clone(), fingerprint);
         current_no_input_fingerprints.insert(
             rule.name.clone(),
-            rule_fingerprint_impl(
-                rule,
-                interpreter_map,
-                shell_prelude,
-                base_dir,
-                &mut env_tag_cache,
-                false,
-            ),
+            rule_fingerprint_no_input(rule, interpreter_map, shell_prelude, base_dir),
         );
     }
     fingerprint_mismatches.sort();
@@ -2630,8 +2625,7 @@ mod env_content_tests {
     }
 
     fn fingerprint_without_input_with(rule: &Rule, base_dir: Option<&Path>) -> String {
-        let mut cache = EnvTagCache::new();
-        rule_fingerprint_impl(rule, &HashMap::new(), None, base_dir, &mut cache, false)
+        rule_fingerprint_no_input(rule, &HashMap::new(), None, base_dir)
     }
 
     fn write_pixi_env(base: &Path, manifest: &str, lock: Option<&str>) {

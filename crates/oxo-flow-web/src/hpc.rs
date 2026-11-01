@@ -8,12 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 /// Detected HPC scheduler type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum SchedulerType {
     Slurm,
     Pbs,
     Lsf,
     Sge,
+    #[default]
     None,
 }
 
@@ -67,7 +68,7 @@ pub struct JobInfo {
 }
 
 /// HPC system summary.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HpcStatus {
     pub scheduler: String,
     pub scheduler_type: SchedulerType,

@@ -2037,11 +2037,7 @@ impl LocalExecutor {
         // both POSIX (TMPDIR) and legacy (TEMP/TMP) readers land on the same
         // scratch volume. Applied to rule.envvars before spawn, which covers
         // reference builds too — they execute as ordinary DAG rules.
-        if let Some(tmp) = self.config.tmp_dir.as_deref() {
-            for var in ["TMPDIR", "TMP", "TEMP"] {
-                rule_envs.insert(var.to_string(), tmp.display().to_string());
-            }
-        }
+        insert_tmpdir_vars(&mut rule_envs, self.config.tmp_dir.as_deref());
 
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
@@ -2423,11 +2419,7 @@ impl LocalExecutor {
             // pre_exec runs with the same scratch routing as the rule shell
             // itself (issue #907): a hook that stages temp files must land
             // on the configured volume, not the system default.
-            if let Some(tmp) = self.config.tmp_dir.as_deref() {
-                for var in ["TMPDIR", "TMP", "TEMP"] {
-                    pre_envs.insert(var.to_string(), tmp.display().to_string());
-                }
-            }
+            insert_tmpdir_vars(&mut pre_envs, self.config.tmp_dir.as_deref());
             let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
@@ -3862,6 +3854,18 @@ async fn discard_scratch(scratch: Option<&Path>) {
 /// `tmp_dir` is the run's global scratch dir (issue #907) — hooks get the
 /// same TMPDIR/TMP/TEMP routing as the rule shell so tools they invoke
 /// spill to the configured volume too.
+/// Route the global scratch directory (`[engine] tmp_dir`, issue #907) into
+/// `TMPDIR`/`TMP`/`TEMP` like Snakemake's tmpdir resource, so both POSIX
+/// (TMPDIR) and legacy (TEMP/TMP) readers land on the same scratch volume.
+/// `None` leaves `envs` untouched.
+fn insert_tmpdir_vars(envs: &mut HashMap<String, String>, tmp_dir: Option<&std::path::Path>) {
+    if let Some(tmp) = tmp_dir {
+        for var in ["TMPDIR", "TMP", "TEMP"] {
+            envs.insert(var.to_string(), tmp.display().to_string());
+        }
+    }
+}
+
 async fn run_hook(
     cmd: &str,
     rule: &Rule,
@@ -3872,11 +3876,7 @@ async fn run_hook(
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = rule.envvars.clone();
-    if let Some(tmp) = tmp_dir {
-        for var in ["TMPDIR", "TMP", "TEMP"] {
-            envs.insert(var.to_string(), tmp.display().to_string());
-        }
-    }
+    insert_tmpdir_vars(&mut envs, tmp_dir);
     let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {
@@ -3922,11 +3922,7 @@ pub async fn run_workflow_hook(
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = HashMap::new();
-    if let Some(tmp) = tmp_dir {
-        for var in ["TMPDIR", "TMP", "TEMP"] {
-            envs.insert(var.to_string(), tmp.display().to_string());
-        }
-    }
+    insert_tmpdir_vars(&mut envs, tmp_dir);
     let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {

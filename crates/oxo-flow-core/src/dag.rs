@@ -479,6 +479,39 @@ impl WorkflowDag {
     }
 
     /// Returns rule names in topological order.
+    /// Validate target names with exact match first, then prefix matching for
+    /// convenience. Shared by every target-filtered ordering method so the
+    /// resolution semantics (and the `RuleNotFound` diagnostics listing the
+    /// available base names) cannot drift between them.
+    fn resolve_targets(&self, targets: &[&str]) -> Result<Vec<String>> {
+        let mut resolved_targets: Vec<String> = Vec::new();
+        for &target in targets {
+            if self.name_to_node.contains_key(target) {
+                resolved_targets.push(target.to_string());
+            } else {
+                // Try prefix matching: find all rules whose names start with the target
+                let matches: Vec<&String> = self
+                    .name_to_node
+                    .keys()
+                    .filter(|name| name.starts_with(target))
+                    .collect();
+                if matches.is_empty() {
+                    // Collect available rule base names (before _expansion suffix)
+                    let base_names: Vec<&str> =
+                        self.name_to_node.keys().map(|s| s.as_str()).collect();
+                    return Err(OxoFlowError::RuleNotFound {
+                        name: target.to_string(),
+                        available_rules: base_names.into_iter().map(String::from).collect(),
+                    });
+                }
+                for m in matches {
+                    resolved_targets.push(m.clone());
+                }
+            }
+        }
+        Ok(resolved_targets)
+    }
+
     #[must_use = "execution ordering returns a Result that must be used"]
     pub fn execution_order(&self) -> Result<Vec<String>> {
         Ok(self
@@ -513,32 +546,7 @@ impl WorkflowDag {
             return self.execution_order();
         }
 
-        // Validate all target names first, with prefix matching for convenience
-        let mut resolved_targets: Vec<String> = Vec::new();
-        for &target in targets {
-            if self.name_to_node.contains_key(target) {
-                resolved_targets.push(target.to_string());
-            } else {
-                // Try prefix matching: find all rules whose names start with the target
-                let matches: Vec<&String> = self
-                    .name_to_node
-                    .keys()
-                    .filter(|name| name.starts_with(target))
-                    .collect();
-                if matches.is_empty() {
-                    // Collect available rule base names (before _expansion suffix)
-                    let base_names: Vec<&str> =
-                        self.name_to_node.keys().map(|s| s.as_str()).collect();
-                    return Err(OxoFlowError::RuleNotFound {
-                        name: target.to_string(),
-                        available_rules: base_names.into_iter().map(String::from).collect(),
-                    });
-                }
-                for m in matches {
-                    resolved_targets.push(m.clone());
-                }
-            }
-        }
+        let resolved_targets = self.resolve_targets(targets)?;
 
         // Transitive dependency collection using BFS/DFS
         let mut included: HashSet<NodeIndex> = HashSet::new();
@@ -691,31 +699,7 @@ impl WorkflowDag {
             return Ok((order, pruned_names));
         }
 
-        // Resolve targets (same validation + prefix matching as the
-        // unfiltered method).
-        let mut resolved_targets: Vec<String> = Vec::new();
-        for &target in targets {
-            if self.name_to_node.contains_key(target) {
-                resolved_targets.push(target.to_string());
-            } else {
-                let matches: Vec<&String> = self
-                    .name_to_node
-                    .keys()
-                    .filter(|name| name.starts_with(target))
-                    .collect();
-                if matches.is_empty() {
-                    let base_names: Vec<&str> =
-                        self.name_to_node.keys().map(|s| s.as_str()).collect();
-                    return Err(OxoFlowError::RuleNotFound {
-                        name: target.to_string(),
-                        available_rules: base_names.into_iter().map(String::from).collect(),
-                    });
-                }
-                for m in matches {
-                    resolved_targets.push(m.clone());
-                }
-            }
-        }
+        let resolved_targets = self.resolve_targets(targets)?;
 
         // Dead-node propagation to a fixpoint under OR-per-output
         // semantics (issue #340): a node is un-runnable only when one of

@@ -3,7 +3,9 @@
 use super::*;
 
 /// Long-form names of `oxo-flow run` flags (plus clap's global --help/
-/// --version). Keep in sync with the `Run` variant in main.rs.
+/// --version), derived from the `Run` subcommand definition itself so the
+/// list cannot drift from main.rs — the hand-maintained copy had already
+/// missed `--allow-protected-drift` (#935).
 ///
 /// clap's trailing `config_overrides` positional (`allow_hyphen_values`)
 /// cannot distinguish `--json` the run flag from `--json` a hyphen-value
@@ -11,43 +13,47 @@ use super::*;
 /// in the override list (issue #71). Matching them here turns a confusing
 /// "invalid config flag" error — or a silently wrong override — into
 /// actionable guidance.
-pub(crate) const RUN_FLAG_NAMES: &[&str] = &[
-    "jobs",
-    "keep-going",
-    "workdir",
-    "target",
-    "module",
-    "retry",
-    "timeout",
-    "log-file",
-    "resume-failed",
-    "profile",
-    "max-threads",
-    "max-memory",
-    "max-submitted",
-    "skip-env-setup",
-    "skip-ref-build",
-    "cache-dir",
-    "provenance",
-    "bundle",
-    "yes",
-    "arg",
-    "ai-recover",
-    "ai-max-retries",
-    "samples",
-    "rerun",
-    "no-report-snapshot",
-    "background",
-    "json",
-    "quiet",
-    "verbose",
-    "no-color",
-    "help",
-    "version",
-];
+pub(crate) fn run_long_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| run_subcommand_flags().0)
+}
 
-/// Short-form run flag names (same contract as [`RUN_FLAG_NAMES`]).
-pub(crate) const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
+/// Short-form run flag names (same contract as [`run_long_flags`]).
+pub(crate) fn run_short_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| run_subcommand_flags().1)
+}
+
+/// One clap introspection pass backing both flag sets. `build()` first so
+/// clap's implicit `--help`/`--version` flags are part of the result.
+fn run_subcommand_flags() -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    use clap::CommandFactory;
+    let mut cmd = <crate::Cli as CommandFactory>::command();
+    cmd.build();
+    let run = cmd
+        .find_subcommand("run")
+        .expect("the Cli enum must keep a `run` subcommand");
+    let mut longs: std::collections::BTreeSet<String> = run
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .map(String::from)
+        .collect();
+    // clap adds --version/-V only to the top-level command; subcommands
+    // inherit it at parse time, so keep both classifiable here.
+    longs.insert("version".to_string());
+    let mut shorts = run
+        .get_arguments()
+        .filter_map(|arg| arg.get_short())
+        .map(String::from)
+        .collect::<std::collections::BTreeSet<String>>();
+    shorts.insert("V".to_string());
+    (longs, shorts)
+}
 
 /// Run flags that `dry-run` also accepts as real command flags (issue
 /// #441: `--cache-dir` was added for run→dry-run transcription parity).
@@ -57,7 +63,7 @@ pub(crate) const DRY_RUN_SHARED_FLAGS: &[&str] = &["cache-dir"];
 
 /// Flags removed from `run`, mapped to their replacement.
 ///
-/// They must NOT live in [`RUN_FLAG_NAMES`]: that list names real command
+/// They must NOT live in [`run_long_flags`]: that list names real command
 /// flags, and a workflow declaring a config key with one of these names
 /// (`sample = {...}`) would have its `--sample VALUE` override rejected as a
 /// command flag (audit finding). Reaching the unknown-argument path instead
@@ -256,14 +262,14 @@ pub(crate) fn parse_cli_overrides(
         let swallowed_flag = arg_str
             .strip_prefix("--")
             .map(|flag| flag.split('=').next().unwrap_or(flag))
-            .filter(|name| RUN_FLAG_NAMES.contains(name))
+            .filter(|name| run_long_flags().contains(*name))
             .map(|name| format!("--{name}"))
             .or_else(|| {
                 arg_str
                     .strip_prefix('-')
                     .filter(|rest| !rest.starts_with('-'))
                     .map(|flag| flag.split('=').next().unwrap_or(flag))
-                    .filter(|name| RUN_SHORT_FLAGS.contains(name))
+                    .filter(|name| run_short_flags().contains(*name))
                     .map(|name| format!("-{name}"))
             });
         if let Some(flag) = swallowed_flag {
@@ -273,8 +279,8 @@ pub(crate) fn parse_cli_overrides(
             // command does not support at all, so the message is
             // command-aware.
             let flag_name = flag.trim_start_matches('-');
-            let is_run_flag = RUN_FLAG_NAMES.contains(&flag_name)
-                || (flag_name.len() == 2 && RUN_SHORT_FLAGS.contains(&&flag_name[1..]));
+            let is_run_flag = run_long_flags().contains(flag_name)
+                || (flag_name.len() == 2 && run_short_flags().contains(&flag_name[1..]));
             let hint = if command == "run" {
                 format!(
                     "'{flag}' is a command flag, not a config override.\n  \
@@ -598,4 +604,40 @@ pub(crate) fn nearest_rule_names(name: &str, candidates: &[&str], limit: usize) 
         .into_iter()
         .map(|(_, name)| name.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_run_flags_track_the_clap_definition() {
+        // The hand-maintained copy of this list drifted: `run` gained
+        // --allow-protected-drift (#935) but the list was never updated,
+        // so the swallowed-flag guidance rejected it as an unknown
+        // argument. Derivation closes that sync point permanently.
+        let flags = run_long_flags();
+        for name in [
+            "jobs",
+            "arg",
+            "samples",
+            "allow-protected-drift",
+            "help",
+            "version",
+        ] {
+            assert!(flags.contains(name), "run flags must contain --{name}");
+        }
+        let shorts = run_short_flags();
+        for name in ["j", "k", "d", "t", "r", "h", "V"] {
+            assert!(shorts.contains(name), "run shorts must contain -{name}");
+        }
+    }
+
+    #[test]
+    fn removed_flags_stay_out_of_the_derived_run_flags() {
+        // `--sample` is retired (replacement --samples): it must not be
+        // classified as a live command flag, or a config key named
+        // `sample` would have its override rejected as a command flag.
+        assert!(!run_long_flags().contains("sample"));
+    }
 }

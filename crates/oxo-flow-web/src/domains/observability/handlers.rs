@@ -310,7 +310,13 @@ pub async fn get_audit_logs(
 )]
 /// GET /api/hpc — scheduler status (hpc mode only).
 pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
-    axum::Json(crate::hpc::get_hpc_status())
+    // get_hpc_status shells out synchronously to scheduler CLIs
+    // (sinfo/squeue/…); on a loaded controller that takes seconds, so keep
+    // it off the async worker the dashboard polls with.
+    let status = tokio::task::spawn_blocking(crate::hpc::get_hpc_status)
+        .await
+        .unwrap_or_default();
+    axum::Json(status)
 }
 
 // ---------------------------------------------------------------------------

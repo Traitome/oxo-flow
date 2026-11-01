@@ -165,6 +165,34 @@ fn check_budget(
     ))
 }
 
+/// Checkpoint re-entry (`checkpoint = true` rules that expand into new
+/// instances mid-run) is wired on the local executor only. The driver
+/// accepts the hooks, but the cluster path passes `None` — the manifest
+/// would be silently ignored and the dynamically discovered instances
+/// would never execute. Reject at plan time, naming every offender,
+/// instead of under-executing.
+fn reject_checkpoint_reentry(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        if sr.rule.checkpoint {
+            offenders.push(name.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "checkpoint re-entry is not supported on the cluster path yet — {} would \
+         silently skip the dynamically discovered instances; remove `checkpoint = true` \
+         or run these on the local path (`oxo-flow run`) instead:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -379,6 +407,7 @@ pub(crate) async fn run_on_cluster(
     if let Some(budget) = args.config.resource_budget.as_ref() {
         check_budget(&plan, &to_run, budget)?;
     }
+    reject_checkpoint_reentry(&plan, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
     let driver_config = DriverConfig {
@@ -495,6 +524,7 @@ pub(crate) async fn run_on_cluster(
 mod tests {
     use super::check_budget;
     use super::cluster_env_cache_dir;
+    use super::reject_checkpoint_reentry;
     use oxo_flow_core::backend::ScheduledPlan;
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
@@ -610,6 +640,58 @@ mod tests {
             max_jobs: None,
         };
         assert!(check_budget(&plan, &std::collections::HashSet::new(), &budget).is_ok());
+    }
+
+    /// A plan whose single rule declares checkpoint re-entry.
+    fn checkpoint_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"checkpoint\"\n[[rules]]\nname = \"discover\"\n\
+                    checkpoint = true\ncheckpoint_manifest = \"manifest.toml\"\n\
+                    shell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn checkpoint_reentry_is_rejected_on_the_cluster_plan() {
+        // The driver accepts the hooks but the cluster path passes None —
+        // without this gate the manifest would be silently ignored.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = checkpoint_plan(dir.path());
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_checkpoint_reentry(&plan, &to_run)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("discover") && msg.contains("oxo-flow run"),
+            "the rejection must name the rule and the workaround: {msg}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_reentry_gate_passes_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_checkpoint_reentry(&plan, &to_run).is_ok());
+    }
+
+    #[test]
+    fn checkpoint_reentry_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = checkpoint_plan(dir.path());
+        assert!(reject_checkpoint_reentry(&plan, &std::collections::HashSet::new()).is_ok());
     }
 
     #[test]

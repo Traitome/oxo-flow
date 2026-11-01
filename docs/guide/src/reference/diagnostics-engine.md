@@ -32,10 +32,11 @@ list).
 
 ## Error Pattern Library
 
-30 patterns total across five categories — Tool (5), Resource (5), Data (7),
-System (6), Config (7). The tables below cover the most common; the
-authoritative list is
-`crates/oxo-flow-web/src/domains/execution/diagnostics.rs`.
+31 patterns total across five categories — Tool (5), Resource (5), Data (7),
+System (6), Config (8). The tables below cover the most common; the
+authoritative list is `crates/oxo-flow-core/src/diagnostics.rs` (the web
+crate re-exports it via
+`crates/oxo-flow-web/src/domains/execution/diagnostics.rs`).
 
 ### Tool Errors
 
@@ -143,8 +144,8 @@ resource_bottlenecks: [{
 
 ## Extending the Pattern Library
 
-Add new patterns in `crates/oxo-flow-web/src/domains/execution/diagnostics.rs`
-(inside `DiagnosticsEngine::new()`):
+Add new patterns in `crates/oxo-flow-core/src/diagnostics.rs` (inside
+`DiagnosticsEngine::new()`):
 
 ```rust
 Pattern {

@@ -153,6 +153,8 @@ title bar.
 | Generate Pipeline with AI… | `oxo-flow template "<description>" --ai -o <file>` |
 | Show AI Provider Status | `oxo-flow ai` |
 | Export JSON Schema | `oxo-flow schema > oxo-flow-schema.json` |
+| Open Documentation | opens the guide in the system browser |
+| Open Settings | jumps to `oxo-flow.executablePath` in VS Code settings |
 | Report Issue / Suggest Improvement | opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached) |
 
 Pipeline commands surface in the command palette only while an `.oxoflow`
@@ -192,6 +194,7 @@ the description.
 | `oxo-flow.runArgs` | `[]` | Extra arguments for Run Pipeline |
 | `oxo-flow.formatOnSave` | `false` | Format the document with `oxo-flow format` on every save |
 | `oxo-flow.autoOpenGraph` | `false` | Open the DAG graph after a successful run (last picked format, default ASCII) |
+| `oxo-flow.ai.backend` | `auto` | Backend for **Generate Pipeline with AI**: `auto` uses the CLI provider when configured, else the editor language model; `cli` / `ide` force one path (the `ide` path always grounds drafts through `oxo-flow validate` with one repair round) |
 | `oxo-flow.trace` | `false` | Log CLI invocations to the *oxo-flow* output channel |
 
 ## Remote and untrusted workspaces

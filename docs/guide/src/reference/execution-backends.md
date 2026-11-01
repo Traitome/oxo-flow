@@ -161,6 +161,8 @@ reports state alone.
 See [Workflow Format](workflow-format.md#checkpoint-re-entry) for the config
 surface. A `checkpoint = true` rule writes a re-entry manifest at runtime;
 when it completes, the engine merges the new values, re-expands the rule
-templates, and executes the new instances in the same run — on the local
-path (`run`) and on the driver path alike. Every round is still a static
-plan, so previews stay deterministic and resumes reconstruct the same plan.
+templates, and executes the new instances in the same run. This works on the
+local path (`oxo-flow run`); cluster submissions reject `checkpoint = true`
+rules at plan time instead of silently skipping the dynamically discovered
+instances. Every round is still a static plan, so previews stay deterministic
+and resumes reconstruct the same plan.

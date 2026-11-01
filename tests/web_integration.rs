@@ -1661,6 +1661,11 @@ async fn team_mode_anonymous_endpoints_require_auth() {
         .await
         .unwrap();
     assert_eq!(ai_config.status(), 200, "GET /api/ai/config stays public");
+    let ai_config_body: serde_json::Value = ai_config.json().await.unwrap();
+    assert_eq!(
+        ai_config_body["provider"], "",
+        "anonymous callers must not read the deployment's AI endpoint/model: {ai_config_body}"
+    );
 }
 
 /// P0-5 + P1-16: AI provider writes are admin-only; env-password logins
@@ -1713,6 +1718,7 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
     // their config is stored per-user and resolved per call.
     let server_before: serde_json::Value = client
         .get(format!("{base}/api/ai/config"))
+        .bearer_auth(&server.admin_token)
         .send()
         .await
         .unwrap()
@@ -1735,6 +1741,7 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
     // The shared config is byte-identical after bob's write.
     let server_after: serde_json::Value = client
         .get(format!("{base}/api/ai/config"))
+        .bearer_auth(&server.admin_token)
         .send()
         .await
         .unwrap()

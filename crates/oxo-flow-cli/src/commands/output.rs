@@ -752,9 +752,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
                 }),
             };
             if wkhtmltopdf_available() {
-                let rt = tokio::runtime::Runtime::new()?;
-                let pdf_result = rt.block_on(async { report.to_pdf(&pdf_output).await });
-                pdf_result?;
+                report.to_pdf(&pdf_output).await?;
                 if let Some(file) = scratch_pdf {
                     // Read back and stream to stdout; the guard removes the
                     // scratch file afterwards (success or error).

@@ -748,7 +748,11 @@ pub fn list_files_recursive(root: &std::path::Path) -> Vec<FileListingEntry> {
                 continue;
             }
             let path = entry.path();
-            let Ok(meta) = path.metadata() else {
+            // symlink_metadata deliberately does not follow symlinks — the
+            // same rule the zip path (files.rs) applies: a rule-created link
+            // may point outside the workdir, and both views of the tree must
+            // agree on what is exposed.
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
             let is_dir = meta.is_dir();

@@ -188,7 +188,11 @@ async fn spa_fallback() -> impl IntoResponse {
 
 /// JSON 404 for unknown API paths — API clients must never receive HTML.
 async fn api_not_found() -> impl IntoResponse {
-    crate::ApiError::not_found("API endpoint not found", None)
+    crate::domains::workflow::handlers::err(
+        StatusCode::NOT_FOUND,
+        "NOT_FOUND",
+        "API endpoint not found".to_string(),
+    )
 }
 
 /// `GET /api/openapi.json` — the code-generated OpenAPI 3.1 specification
@@ -764,6 +768,7 @@ pub fn build_router(mode: &str) -> Router {
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
                     axum::http::header::AUTHORIZATION,
+                    axum::http::HeaderName::from_static("x-api-key"),
                 ])
         } else {
             // User-specified origins (comma-separated)
@@ -782,6 +787,7 @@ pub fn build_router(mode: &str) -> Router {
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
                     axum::http::header::AUTHORIZATION,
+                    axum::http::HeaderName::from_static("x-api-key"),
                 ])
         }
     };

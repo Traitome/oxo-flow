@@ -218,28 +218,32 @@ memory = \"64G\"
 /// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
 /// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
 /// real run, so all of them must respect the same budgets, #519).
+fn rate_limited_error(wait_secs: u64) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiError {
+            code: "RUN_RATE_LIMITED".into(),
+            message: format!("Too many runs created recently; retry in {wait_secs}s."),
+            detail: Some(format!(
+                "Default allowance: {} runs per minute (override with \
+                 OXO_FLOW_RUNS_RATE_LIMIT).",
+                run_rate_limit::DEFAULT_LIMIT
+            )),
+            suggestion: Some(
+                "Wait for the window to reset, or batch work via `oxo-flow batch` \
+                 instead of many small runs."
+                    .into(),
+            ),
+        }),
+    )
+}
+
 fn check_spawn_budget(
     user_id: &str,
     usage: (u32, u64),
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     if let Err(wait_secs) = run_rate_limit::check(user_id) {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiError {
-                code: "RUN_RATE_LIMITED".into(),
-                message: format!("Too many runs created recently; retry in {wait_secs}s."),
-                detail: Some(format!(
-                    "Default allowance: {} runs per minute (override with \
-                     OXO_FLOW_RUNS_RATE_LIMIT).",
-                    run_rate_limit::DEFAULT_LIMIT
-                )),
-                suggestion: Some(
-                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
-                     instead of many small runs."
-                        .into(),
-                ),
-            }),
-        ));
+        return Err(rate_limited_error(wait_secs));
     }
     let quota = crate::infra::quota::global_quota_tracker().check(user_id, usage.0, usage.1);
     if !quota.allowed {
@@ -368,23 +372,7 @@ pub async fn create_run(
             .map(|e| e.0.id.as_str())
             .unwrap_or("anonymous"),
     ) {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiError {
-                code: "RUN_RATE_LIMITED".into(),
-                message: format!("Too many runs created recently; retry in {wait_secs}s."),
-                detail: Some(format!(
-                    "Default allowance: {} runs per minute (override with \
-                     OXO_FLOW_RUNS_RATE_LIMIT).",
-                    run_rate_limit::DEFAULT_LIMIT
-                )),
-                suggestion: Some(
-                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
-                     instead of many small runs."
-                        .into(),
-                ),
-            }),
-        ));
+        return Err(rate_limited_error(wait_secs));
     }
 
     let user = current_user::resolve(authenticated.as_ref());

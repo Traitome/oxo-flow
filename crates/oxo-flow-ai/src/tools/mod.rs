@@ -7,7 +7,6 @@
 pub mod builtin;
 
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::AiError;
@@ -95,7 +94,9 @@ pub fn sanitize_tool_name(name: &str) -> String {
 /// let result = registry.execute("read_file", r#"{"path": "/tmp/test.txt"}"#).await?;
 /// ```
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    // BTreeMap, not HashMap: `to_defs` sends the tool list to the model in
+    // map order, and prompt contents must be stable run-to-run.
+    tools: std::collections::BTreeMap<String, Arc<dyn Tool>>,
 }
 
 impl Clone for ToolRegistry {
@@ -109,7 +110,7 @@ impl Clone for ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: std::collections::BTreeMap::new(),
         }
     }
 

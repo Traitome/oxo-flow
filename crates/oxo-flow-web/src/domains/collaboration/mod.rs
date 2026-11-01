@@ -8,5 +8,4 @@
 //! OXO_FLOW_PUBLIC_URL declares a public HTTPS origin; issue #907 R16).
 
 pub mod handlers;
-pub mod service;
 pub mod types;

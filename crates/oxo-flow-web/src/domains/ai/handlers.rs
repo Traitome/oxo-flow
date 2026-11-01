@@ -424,8 +424,24 @@ pub async fn optimize(
     )
 )]
 /// GET /api/ai/config
-pub async fn get_ai_config() -> ApiResult<AiConfigResponse> {
+pub async fn get_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<AiConfigResponse> {
     let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+    // Anonymous discoverability stays public, but the deployment's internal
+    // AI endpoint and model are not world-readable: outside personal mode
+    // (loopback, single local user) only `is_configured` is returned unless
+    // the caller is an authenticated admin.
+    if crate::server::running_mode() != "personal"
+        && !authenticated.as_ref().is_some_and(|u| u.0.is_admin())
+    {
+        return Ok(Json(AiConfigResponse {
+            provider: String::new(),
+            model: None,
+            api_url: None,
+            is_configured: config.is_configured,
+        }));
+    }
     Ok(Json(AiConfigResponse {
         provider: config.provider,
         model: config.model,
