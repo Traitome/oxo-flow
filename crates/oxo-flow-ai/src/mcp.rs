@@ -272,10 +272,7 @@ enum McpScreenTarget {
     Resolve { host: String, port: u16 },
 }
 
-fn preflight_mcp_endpoint(
-    base_url: &str,
-    allow: &[String],
-) -> Result<McpScreenTarget, AiError> {
+fn preflight_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<McpScreenTarget, AiError> {
     use crate::tools::builtin::{BLOCKED_HOST_SUFFIXES, ip_is_forbidden};
 
     let parsed = reqwest::Url::parse(base_url).map_err(|e| AiError::Config {
@@ -1716,12 +1713,32 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_endpoints_are_ssrf_screened_async() {
-        assert!(screen_mcp_endpoint_async("mcp://localhost:8080", &[]).await.is_err());
-        assert!(screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &[]).await.is_err());
-        assert!(screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &[]).await.is_err());
+        assert!(
+            screen_mcp_endpoint_async("mcp://localhost:8080", &[])
+                .await
+                .is_err()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &[])
+                .await
+                .is_err()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &[])
+                .await
+                .is_err()
+        );
         let allow = vec!["10.0.0.5".to_string(), "127.0.0.1".to_string()];
-        assert!(screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &allow).await.is_ok());
-        assert!(screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &allow).await.is_ok());
+        assert!(
+            screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &allow)
+                .await
+                .is_ok()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &allow)
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
