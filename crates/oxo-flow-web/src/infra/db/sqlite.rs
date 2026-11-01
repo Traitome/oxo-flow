@@ -575,7 +575,12 @@ impl StorageBackend for SqliteBackend {
     // Users
     // -----------------------------------------------------------------------
 
-    async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String> {
+    async fn create_user(
+        &self,
+        username: &str,
+        role: &str,
+        password_hash: Option<&str>,
+    ) -> Result<models::UserRow, String> {
         // The username becomes a workspace path component — reject anything
         // that could escape the per-user tree before it reaches the DB.
         crate::workspace::validate_username(username).map_err(|e| e.to_string())?;
@@ -590,13 +595,14 @@ impl StorageBackend for SqliteBackend {
             created_at: now.clone(),
         };
         sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, role, auth_type, os_user, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.username)
         .bind(&row.role)
         .bind(&row.auth_type)
         .bind(&row.os_user)
+        .bind(password_hash)
         .bind(&row.created_at)
         .execute(&self.pool)
         .await
@@ -1075,6 +1081,134 @@ impl StorageBackend for SqliteBackend {
     // Sessions
     // -----------------------------------------------------------------------
 
+    async fn get_ai_provider_config(
+        &self,
+        user_id: Option<&str>,
+    ) -> Result<Option<models::AiProviderConfigRow>, String> {
+        match user_id {
+            Some(user_id) => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id = ? \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+            None => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id IS NULL \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+        }
+    }
+
+    async fn save_ai_provider_config(
+        &self,
+        config: &models::AiProviderConfigRow,
+        preserve_api_key: bool,
+    ) -> Result<models::AiProviderConfigRow, String> {
+        let id = if config.id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            config.id.clone()
+        };
+        let now = Self::now();
+        let saved = models::AiProviderConfigRow {
+            id,
+            updated_at: now,
+            ..config.clone()
+        };
+
+        if let Some(user_id) = &saved.user_id {
+            sqlx::query(
+                r#"
+                INSERT INTO ai_provider_config (
+                    id, user_id, provider, api_key, api_url, model,
+                    search_enabled, monitor_enabled, auto_retry_enabled,
+                    max_correction_rounds, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    api_key = CASE WHEN ? = 1 THEN ai_provider_config.api_key
+                                   ELSE excluded.api_key END,
+                    api_url = excluded.api_url,
+                    model = excluded.model,
+                    search_enabled = excluded.search_enabled,
+                    monitor_enabled = excluded.monitor_enabled,
+                    auto_retry_enabled = excluded.auto_retry_enabled,
+                    max_correction_rounds = excluded.max_correction_rounds,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(&saved.id)
+            .bind(user_id)
+            .bind(&saved.provider)
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.created_at)
+            .bind(&saved.updated_at)
+            .bind(i64::from(preserve_api_key))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            let updated = sqlx::query(
+                "UPDATE ai_provider_config SET provider = ?, \
+                 api_key = CASE WHEN ? = 1 THEN ai_provider_config.api_key ELSE ? END, \
+                 api_url = ?, model = ?, search_enabled = ?, monitor_enabled = ?, \
+                 auto_retry_enabled = ?, max_correction_rounds = ?, updated_at = ? \
+                 WHERE user_id IS NULL",
+            )
+            .bind(&saved.provider)
+            .bind(i64::from(preserve_api_key))
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if updated.rows_affected() == 0 {
+                sqlx::query(
+                    "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
+                     search_enabled, monitor_enabled, auto_retry_enabled, \
+                     max_correction_rounds, created_at, updated_at) \
+                     VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&saved.id)
+                .bind(&saved.provider)
+                .bind(&saved.api_key)
+                .bind(&saved.api_url)
+                .bind(&saved.model)
+                .bind(saved.search_enabled)
+                .bind(saved.monitor_enabled)
+                .bind(saved.auto_retry_enabled)
+                .bind(saved.max_correction_rounds)
+                .bind(&saved.created_at)
+                .bind(&saved.updated_at)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+        }
+
+        self.get_ai_provider_config(saved.user_id.as_deref())
+            .await?
+            .ok_or_else(|| "AI provider config disappeared after save".to_string())
+    }
+
     async fn create_session(
         &self,
         user_id: &str,
@@ -1360,7 +1494,7 @@ mod tests {
     async fn create_test_user(backend: &SqliteBackend, username: &str) -> models::UserRow {
         let role = if username == "admin" { "admin" } else { "user" };
         backend
-            .create_user(username, role)
+            .create_user(username, role, None)
             .await
             .unwrap_or_else(|e| panic!("Failed to create user '{username}': {e}"))
     }
@@ -1932,7 +2066,7 @@ mod tests {
         backend.init().await.expect("init");
 
         let user = backend
-            .create_user("alice", "user")
+            .create_user("alice", "user", None)
             .await
             .expect("user create");
 
@@ -2068,5 +2202,108 @@ mod workdir_guard_tests {
                 .await
                 .unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod ai_provider_config_tests {
+    use super::*;
+    use crate::infra::db::models;
+
+    async fn backend() -> SqliteBackend {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        backend
+    }
+
+    fn row(user_id: Option<&str>, provider: &str, api_key: &str) -> models::AiProviderConfigRow {
+        let now = chrono::Utc::now().to_rfc3339();
+        models::AiProviderConfigRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: user_id.map(str::to_string),
+            provider: provider.to_string(),
+            api_key: Some(api_key.to_string()),
+            api_url: Some("https://ai.example.test".to_string()),
+            model: Some("test-model".to_string()),
+            search_enabled: 1,
+            monitor_enabled: 1,
+            auto_retry_enabled: 0,
+            max_correction_rounds: 3,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_config_upsert_is_idempotent_and_can_preserve_key() {
+        let backend = backend().await;
+
+        let saved = backend
+            .save_ai_provider_config(&row(None, "openai", "first-key"), false)
+            .await
+            .expect("first server save");
+        assert_eq!(saved.provider, "openai");
+
+        let update = row(None, "claude", "ignored-new-key");
+        let saved = backend
+            .save_ai_provider_config(&update, true)
+            .await
+            .expect("server update");
+        assert_eq!(saved.provider, "claude");
+        assert_eq!(saved.api_key.as_deref(), Some("first-key"));
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ai_provider_config WHERE user_id IS NULL")
+                .fetch_one(backend.inner_pool())
+                .await
+                .expect("server row count");
+        assert_eq!(count.0, 1);
+
+        let replaced = backend
+            .save_ai_provider_config(&row(None, "ollama", "replacement"), false)
+            .await
+            .expect("server key replacement");
+        assert_eq!(replaced.api_key.as_deref(), Some("replacement"));
+    }
+
+    #[tokio::test]
+    async fn user_configs_upsert_without_cross_scope_leakage() {
+        let backend = backend().await;
+        let alice = backend.create_user("alice", "user", None).await.unwrap();
+        let bob = backend.create_user("bob", "user", None).await.unwrap();
+
+        backend
+            .save_ai_provider_config(&row(Some(&alice.id), "openai", "alice-key"), false)
+            .await
+            .unwrap();
+        let update = row(Some(&alice.id), "claude", "ignored");
+        let saved = backend
+            .save_ai_provider_config(&update, true)
+            .await
+            .unwrap();
+        assert_eq!(saved.provider, "claude");
+        assert_eq!(saved.api_key.as_deref(), Some("alice-key"));
+
+        backend
+            .save_ai_provider_config(&row(Some(&bob.id), "openai", "bob-key"), false)
+            .await
+            .unwrap();
+        let alice_row = backend
+            .get_ai_provider_config(Some(&alice.id))
+            .await
+            .unwrap()
+            .expect("alice row");
+        let bob_row = backend
+            .get_ai_provider_config(Some(&bob.id))
+            .await
+            .unwrap()
+            .expect("bob row");
+        assert_eq!(alice_row.api_key.as_deref(), Some("alice-key"));
+        assert_eq!(bob_row.api_key.as_deref(), Some("bob-key"));
+
+        let server = backend.get_ai_provider_config(None).await.unwrap();
+        assert!(server.is_none(), "user writes must not create a server row");
     }
 }

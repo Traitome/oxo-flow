@@ -588,7 +588,7 @@ pub async fn create_user(
 
     // The account must be able to sign in: hash the password (bcrypt) into
     // users.password_hash, verified by the login handler's DB fallback.
-    let _password_hash = req
+    let password_hash = req
         .password
         .as_deref()
         .map(service::hash_password)
@@ -596,7 +596,7 @@ pub async fn create_user(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "BAD_PASSWORD", e))?;
 
     let row = backend
-        .create_user(&req.username, role)
+        .create_user(&req.username, role, password_hash.as_deref())
         .await
         .map_err(|e| {
             tracing::error!("DB error creating user: {e}");

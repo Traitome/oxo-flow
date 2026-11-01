@@ -12,9 +12,9 @@ use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{
-    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_pool,
+    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_backend, get_pool,
 };
-use crate::infra::db::models;
+use crate::infra::db::{global_backend, models};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -26,6 +26,17 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
         user,
         "admin",
         "Admin role required to change the server AI provider",
+    )
+}
+
+/// One owner for every AI-provider storage failure so logs and HTTP errors
+/// cannot drift between config endpoints.
+fn ai_db_error(operation: &'static str, error: String) -> (StatusCode, Json<ApiError>) {
+    tracing::error!("DB error {operation}: {error}");
+    err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "DB_ERROR",
+        "Internal database error".to_string(),
     )
 }
 
@@ -531,58 +542,52 @@ pub async fn test_ai_config(
 /// then server row) fills in when env did not configure a provider. Without
 /// this, a key saved through the settings UI would be lost on restart.
 pub async fn restore_ai_config_from_db() {
-    let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+    // Startup restoration is best-effort: an uninitialized database leaves
+    // env/default resolution in control rather than blocking server boot.
+    let Some(backend) = global_backend() else {
         return;
     };
-    // Skip when env explicitly configured a provider — env is the top tier.
+    // Env explicitly configured a provider and remains the top tier.
     if std::env::var("OXO_FLOW_AI_PROVIDER").is_ok() {
         return;
     }
-    let user_row = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
-         FROM ai_provider_config WHERE user_id = 'default' \
-         ORDER BY updated_at DESC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    // Server tier fallback: rows with user_id IS NULL.
-    let row = match user_row {
-        Some(r) => Some(r),
-        None => sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
-             FROM ai_provider_config WHERE user_id IS NULL \
-             ORDER BY updated_at DESC LIMIT 1",
-        )
-        .fetch_optional(pool)
+    let user_row = backend
+        .get_ai_provider_config(Some("default"))
         .await
         .ok()
-        .flatten(),
+        .flatten();
+    let row = match user_row {
+        Some(row) => Some(row),
+        None => backend.get_ai_provider_config(None).await.ok().flatten(),
     };
-    if let Some((provider, api_key, api_url, model)) = row
-        && !api_key.is_empty()
-    {
-        // A sealed credential that cannot be read back (missing or rotated
-        // OXO_FLOW_MASTER_KEY) must not be registered as an empty-key
-        // provider: the config would look configured while every AI call
-        // fails. Leaving it unset keeps the "needs re-entry" state visible.
-        if !crate::infra::crypto::is_recoverable(&api_key) {
-            tracing::error!(
-                "AI provider '{provider}' is saved but its credential cannot be \
-                 decrypted with the current OXO_FLOW_MASTER_KEY; re-enter the API \
-                 key in the settings UI to restore AI features"
-            );
-            return;
-        }
-        let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-            &provider,
-            Some(crate::infra::crypto::open(&api_key)),
-            Some(api_url),
-            Some(model),
-        );
-        tracing::info!("AI registry restored from DB tier: provider={provider}");
+    let Some(row) = row else { return };
+    let api_key = row.api_key.unwrap_or_default();
+    if api_key.is_empty() {
+        return;
     }
+    // A sealed credential that cannot be read back (missing or rotated
+    // OXO_FLOW_MASTER_KEY) must not be registered as an empty-key provider:
+    // the config would look configured while every AI call fails. Leaving it
+    // unset keeps the "needs re-entry" state visible.
+    if !crate::infra::crypto::is_recoverable(&api_key) {
+        tracing::error!(
+            "AI provider '{}' is saved but its credential cannot be decrypted with \
+             the current OXO_FLOW_MASTER_KEY; re-enter the API key in the settings UI \
+             to restore AI features",
+            row.provider
+        );
+        return;
+    }
+    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+        &row.provider,
+        Some(crate::infra::crypto::open(&api_key)),
+        Some(row.api_url.unwrap_or_default()),
+        Some(row.model.unwrap_or_default()),
+    );
+    tracing::info!(
+        "AI registry restored from DB tier: provider={}",
+        row.provider
+    );
 }
 
 #[utoipa::path(
@@ -603,25 +608,12 @@ pub async fn get_ai_config_effective(
     let user = resolve(authenticated.as_ref());
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
-    let env_provider = std::env::var("OXO_FLOW_AI_PROVIDER").ok();
-    let env_model = std::env::var("OXO_FLOW_AI_MODEL").ok();
-    let env_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
-
-    // The user tier is the acting user's saved row ('default' in personal
-    // mode) — the settings UI reads/writes it via PUT /api/ai/config/user.
-    let user_row: Option<(String, Option<String>, Option<String>)> =
-        match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-                "SELECT provider, model, api_url FROM ai_provider_config WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-            )
-            .bind(&user.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None),
-            Err(_) => None,
-        };
+    let user_row = get_backend()?
+        .get_ai_provider_config(Some(&user.id))
+        .await
+        .map_err(|e| ai_db_error("loading effective AI provider config", e))?;
     let (user_provider, user_model, user_url) = match user_row {
-        Some((p, m, u)) => (Some(p), m, u),
+        Some(row) => (Some(row.provider), row.model, row.api_url),
         None => (None, None, None),
     };
 
@@ -633,9 +625,9 @@ pub async fn get_ai_config_effective(
             "is_configured": config.is_configured,
         },
         "tiers": {
-            "env_provider": env_provider,
-            "env_model": env_model,
-            "env_url": env_url,
+            "env_provider": std::env::var("OXO_FLOW_AI_PROVIDER").ok(),
+            "env_model": std::env::var("OXO_FLOW_AI_MODEL").ok(),
+            "env_url": std::env::var("OXO_FLOW_AI_API_URL").ok(),
             "server_provider": config.provider,
             "server_model": config.model,
             "user_provider": user_provider,
@@ -657,42 +649,31 @@ pub async fn get_ai_config_effective(
 )]
 /// GET /api/ai/config/server
 pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
-    let row: Option<(String, String, String, String, i64)> =
-        match crate::infra::db::sqlite::try_pool() {
-            Ok(p) => sqlx::query_as(
-                "SELECT provider, api_url, model, api_key, search_enabled \
-                 FROM ai_provider_config WHERE user_id IS NULL \
-                 ORDER BY updated_at DESC LIMIT 1",
-            )
-            .fetch_optional(p)
-            .await
-            .ok()
-            .flatten(),
-            Err(_) => None,
-        };
+    let row = get_backend()?
+        .get_ai_provider_config(None)
+        .await
+        .map_err(|e| ai_db_error("loading server AI provider config", e))?;
     // Split "a row exists" from "that row is usable": the api_key is sealed
-    // (issue #205) and only readable with the same OXO_FLOW_MASTER_KEY. After
-    // a key rotation the ciphertext stays in place but cannot be opened —
-    // reporting `configured: true` would let the settings UI advertise a
-    // provider that fails on every call.
-    let (configured, requires_reauth) = match &row {
+    // and only readable with the same OXO_FLOW_MASTER_KEY. After a key
+    // rotation the ciphertext stays in place but cannot be opened.
+    let (configured, requires_reauth) = match row.as_ref().and_then(|row| row.api_key.as_deref()) {
         None => (false, false),
-        Some((_, _, _, api_key, _)) => {
+        Some(api_key) => {
             let usable = api_key.is_empty() || crate::infra::crypto::is_recoverable(api_key);
             (usable, !usable)
         }
     };
-    let config = row.map(|(provider, api_url, model, _, search_enabled)| {
+    let server_config = row.map(|row| {
         serde_json::json!({
-            "provider": provider,
-            "api_url": api_url,
-            "model": model,
-            "search_enabled": search_enabled == 1,
+            "provider": row.provider,
+            "api_url": row.api_url.unwrap_or_default(),
+            "model": row.model.unwrap_or_default(),
+            "search_enabled": row.search_enabled != 0,
         })
     });
 
     let mut body = serde_json::json!({
-        "server_config": config,
+        "server_config": server_config,
         "configured": configured,
         "requires_reauth": requires_reauth,
     });
@@ -722,14 +703,11 @@ pub async fn update_server_ai_config(
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
-    crate::ai_provider::invalidate_provider_cache();
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
+    let existing = backend
+        .get_ai_provider_config(None)
+        .await
+        .map_err(|e| ai_db_error("loading server AI provider config", e))?;
 
     let provider = req
         .get("provider")
@@ -738,63 +716,34 @@ pub async fn update_server_ai_config(
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-    // Issue #205: encrypt third-party credentials at rest when a master
-    // key is configured; plaintext passthrough keeps legacy behavior.
-    let stored_api_key = crate::infra::crypto::seal(api_key);
     // An absent/empty key means "keep the stored one" — the API never returns
     // the key, so a settings save that omits it must not wipe it.
-    let keep_key = i64::from(api_key.is_empty());
-
-    // Server config is the `user_id IS NULL` row. `ON CONFLICT(user_id)`
-    // never fires for a NULL user_id (SQLite treats NULLs as distinct), so
-    // the old upsert appended a row on every save; update-then-insert is
-    // explicit and idempotent.
+    let stored_api_key = crate::infra::crypto::seal(api_key);
     let now = chrono::Utc::now().to_rfc3339();
-    let updated = sqlx::query(
-        "UPDATE ai_provider_config SET provider = ?, api_url = ?, model = ?, \
-         api_key = CASE WHEN ? = 1 THEN api_key ELSE ? END, updated_at = ? \
-         WHERE user_id IS NULL",
-    )
-    .bind(provider)
-    .bind(api_url)
-    .bind(model)
-    .bind(keep_key)
-    .bind(&stored_api_key)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error saving server AI provider config: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
-    if updated.rows_affected() == 0 {
-        sqlx::query(
-            "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, 1, 1, 0, 3, ?, ?)",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(provider)
-        .bind(api_url)
-        .bind(model)
-        .bind(&stored_api_key)
-        .bind(&now)
-        .bind(&now)
-        .execute(pool)
+    let row = models::AiProviderConfigRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        user_id: None,
+        provider: provider.to_string(),
+        api_key: Some(stored_api_key),
+        api_url: Some(api_url.to_string()),
+        model: Some(model.to_string()),
+        search_enabled: existing.as_ref().map_or(1, |row| row.search_enabled),
+        monitor_enabled: existing.as_ref().map_or(1, |row| row.monitor_enabled),
+        auto_retry_enabled: existing.as_ref().map_or(0, |row| row.auto_retry_enabled),
+        max_correction_rounds: existing.as_ref().map_or(3, |row| row.max_correction_rounds),
+        created_at: existing
+            .as_ref()
+            .map_or_else(|| now.clone(), |row| row.created_at.clone()),
+        updated_at: now,
+    };
+    backend
+        .save_ai_provider_config(&row, api_key.is_empty())
         .await
-        .map_err(|e| {
-            tracing::error!("DB error inserting server AI provider config: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?;
-    }
+        .map_err(|e| ai_db_error("saving server AI provider config", e))?;
 
-    // Apply to runtime
+    // Apply only after durable persistence so a failed save cannot leave the
+    // runtime pointing at a configuration that disappears on restart.
+    crate::ai_provider::invalidate_provider_cache();
     let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
         provider,
         Some(api_key.into()),
@@ -825,32 +774,28 @@ pub async fn update_server_ai_config(
 pub async fn get_user_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
-    type UserConfigRow = (String, String, String, Option<String>, i64, i64, i64, i64);
     let user = resolve(authenticated.as_ref());
-    let row: Option<UserConfigRow> = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => sqlx::query_as(
-                "SELECT provider, api_url, model, api_key, search_enabled, monitor_enabled,                  auto_retry_enabled, max_correction_rounds FROM ai_provider_config                  WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-            )
-            .bind(&user.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None),
-            Err(_) => None,
-        };
+    let row = get_backend()?
+        .get_ai_provider_config(Some(&user.id))
+        .await
+        .map_err(|e| ai_db_error("loading user AI provider config", e))?;
 
     let user_config = match row {
-        Some((provider, api_url, model, api_key, search, monitor, auto_retry, rounds)) => {
-            let key_present = api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+        Some(row) => {
+            let key_present = row
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty());
             serde_json::json!({
-                "provider": provider,
-                "api_url": api_url,
-                "model": model,
+                "provider": row.provider,
+                "api_url": row.api_url.unwrap_or_default(),
+                "model": row.model.unwrap_or_default(),
                 "api_key_set": key_present,
-                "is_configured": provider != "disabled" && key_present,
-                "search_enabled": search != 0,
-                "monitor_enabled": monitor != 0,
-                "auto_retry_enabled": auto_retry != 0,
-                "max_correction_rounds": rounds,
+                "is_configured": row.provider != "disabled" && key_present,
+                "search_enabled": row.search_enabled != 0,
+                "monitor_enabled": row.monitor_enabled != 0,
+                "auto_retry_enabled": row.auto_retry_enabled != 0,
+                "max_correction_rounds": row.max_correction_rounds,
             })
         }
         None => {
@@ -892,13 +837,7 @@ pub async fn update_user_ai_config(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
 
     let provider = req
         .get("provider")
@@ -907,13 +846,10 @@ pub async fn update_user_ai_config(
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-    // Issue #205: encrypt third-party credentials at rest when a master
-    // key is configured; plaintext passthrough keeps legacy behavior.
-    let stored_api_key = crate::infra::crypto::seal(api_key);
     // An absent/empty key means "keep the stored one". Compared as a flag,
-    // not by the sealed value: with a master key configured `seal("")` is a
+    // not by the sealed value: with a master key configured seal("") is a
     // non-empty ciphertext.
-    let keep_key = i64::from(api_key.is_empty());
+    let stored_api_key = crate::infra::crypto::seal(api_key);
     let search_enabled = req
         .get("search_enabled")
         .and_then(|v| v.as_bool())
@@ -930,44 +866,29 @@ pub async fn update_user_ai_config(
         .get("max_correction_rounds")
         .and_then(|v| v.as_i64())
         .unwrap_or(3);
-
-    // The row belongs to the acting user, never a hardcoded 'default'
-    // (issue #82 P0-4). An absent/empty api_key keeps the stored one: the
-    // API never returns the key, so a settings save that omits it must not
-    // wipe it (the old `api_key=excluded.api_key` did).
-    sqlx::query(
-        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=CASE WHEN ? = 1 THEN ai_provider_config.api_key ELSE excluded.api_key END, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&user.id)
-    .bind(provider)
-    .bind(api_url)
-    .bind(model)
-    .bind(&stored_api_key)
-    .bind(search_enabled as i64)
-    .bind(monitor_enabled as i64)
-    .bind(auto_retry_enabled as i64)
-    .bind(max_correction_rounds)
-    .bind(chrono::Utc::now().to_rfc3339())
-    .bind(chrono::Utc::now().to_rfc3339())
-    .bind(keep_key)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error saving user AI provider config: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let row = models::AiProviderConfigRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        user_id: Some(user.id.clone()),
+        provider: provider.to_string(),
+        api_key: Some(stored_api_key),
+        api_url: Some(api_url.to_string()),
+        model: Some(model.to_string()),
+        search_enabled: i64::from(search_enabled),
+        monitor_enabled: i64::from(monitor_enabled),
+        auto_retry_enabled: i64::from(auto_retry_enabled),
+        max_correction_rounds,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    backend
+        .save_ai_provider_config(&row, api_key.is_empty())
+        .await
+        .map_err(|e| ai_db_error("saving user AI provider config", e))?;
 
     // The runtime serves ONE provider registry per process: in personal
-    // mode (or for admins) applying it immediately is exactly what the
-    // user expects. For non-admin team users the row is stored per-user
-    // and resolved by provider_for() on every AI call — their key never
-    // reconfigures the shared runtime (isolation fix, was "applied=false
-    // and silently ignored").
+    // mode (or for admins) applying it immediately is expected. Non-admin
+    // team users' rows are resolved per user by provider_for().
     let applied = crate::server::running_mode() == "personal" || user.is_admin();
     crate::ai_provider::invalidate_provider_for(&user.id);
     if applied {

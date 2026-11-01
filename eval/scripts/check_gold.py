@@ -163,12 +163,36 @@ def reference_graph(path, oxo_flow_bin):
     return nodes, edges, None
 
 
+_DIRECT_FAILED = False
+
 def _fetch(url, dest):
+    global _DIRECT_FAILED
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        data = resp.read()
-    with open(dest, "wb") as fh:
-        fh.write(data)
+    mirror_prefix = os.environ.get("OXO_GITHUB_MIRROR", "")
+    candidates = []
+    if mirror_prefix and url.startswith("https://"):
+        candidates.append(f"{mirror_prefix.rstrip('/')}/{url}")
+    elif _DIRECT_FAILED and "raw.githubusercontent.com" in url:
+        candidates.append(f"https://ghfast.top/{url}")
+    candidates.append(url)
+    if not mirror_prefix and "raw.githubusercontent.com" in url and f"https://ghfast.top/{url}" not in candidates:
+        candidates.append(f"https://ghfast.top/{url}")
+
+    last_exc = None
+    for target in candidates:
+        try:
+            timeout = 5 if target == url and ("raw.githubusercontent.com" in url) else 15
+            with urllib.request.urlopen(target, timeout=timeout) as resp:
+                data = resp.read()
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            return
+        except Exception as exc:
+            if target == url and "raw.githubusercontent.com" in url:
+                _DIRECT_FAILED = True
+            last_exc = exc
+    if last_exc:
+        raise last_exc
 
 
 def materialize_community_reference(ref_repo, ref_file, workdir):

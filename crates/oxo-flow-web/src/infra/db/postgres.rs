@@ -263,7 +263,12 @@ impl StorageBackend for PostgresBackend {
             .map_err(|e| e.to_string())
     }
 
-    async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String> {
+    async fn create_user(
+        &self,
+        username: &str,
+        role: &str,
+        password_hash: Option<&str>,
+    ) -> Result<models::UserRow, String> {
         // Same rule as the SQLite backend: the username becomes a workspace
         // path component.
         crate::workspace::validate_username(username).map_err(|e| e.to_string())?;
@@ -278,13 +283,14 @@ impl StorageBackend for PostgresBackend {
             created_at: now.clone(),
         };
         sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO users (id, username, role, auth_type, os_user, password_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&row.id)
         .bind(&row.username)
         .bind(&row.role)
         .bind(&row.auth_type)
         .bind(&row.os_user)
+        .bind(password_hash)
         .bind(&row.created_at)
         .execute(&self.pool)
         .await
@@ -778,6 +784,134 @@ impl StorageBackend for PostgresBackend {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| e.to_string())
+    }
+
+    async fn get_ai_provider_config(
+        &self,
+        user_id: Option<&str>,
+    ) -> Result<Option<models::AiProviderConfigRow>, String> {
+        match user_id {
+            Some(user_id) => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id = $1 \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+            None => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id IS NULL \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+        }
+    }
+
+    async fn save_ai_provider_config(
+        &self,
+        config: &models::AiProviderConfigRow,
+        preserve_api_key: bool,
+    ) -> Result<models::AiProviderConfigRow, String> {
+        let id = if config.id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            config.id.clone()
+        };
+        let now = Self::now();
+        let saved = models::AiProviderConfigRow {
+            id,
+            updated_at: now,
+            ..config.clone()
+        };
+
+        if let Some(user_id) = &saved.user_id {
+            sqlx::query(
+                r#"
+                INSERT INTO ai_provider_config (
+                    id, user_id, provider, api_key, api_url, model,
+                    search_enabled, monitor_enabled, auto_retry_enabled,
+                    max_correction_rounds, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    api_key = CASE WHEN $13 = 1 THEN ai_provider_config.api_key
+                                   ELSE excluded.api_key END,
+                    api_url = excluded.api_url,
+                    model = excluded.model,
+                    search_enabled = excluded.search_enabled,
+                    monitor_enabled = excluded.monitor_enabled,
+                    auto_retry_enabled = excluded.auto_retry_enabled,
+                    max_correction_rounds = excluded.max_correction_rounds,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(&saved.id)
+            .bind(user_id)
+            .bind(&saved.provider)
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.created_at)
+            .bind(&saved.updated_at)
+            .bind(i64::from(preserve_api_key))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            let updated = sqlx::query(
+                "UPDATE ai_provider_config SET provider = $1, \
+                 api_key = CASE WHEN $2 = 1 THEN ai_provider_config.api_key ELSE $3 END, \
+                 api_url = $4, model = $5, search_enabled = $6, monitor_enabled = $7, \
+                 auto_retry_enabled = $8, max_correction_rounds = $9, updated_at = $10 \
+                 WHERE user_id IS NULL",
+            )
+            .bind(&saved.provider)
+            .bind(i64::from(preserve_api_key))
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if updated.rows_affected() == 0 {
+                sqlx::query(
+                    "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
+                     search_enabled, monitor_enabled, auto_retry_enabled, \
+                     max_correction_rounds, created_at, updated_at) \
+                     VALUES ($1, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                )
+                .bind(&saved.id)
+                .bind(&saved.provider)
+                .bind(&saved.api_key)
+                .bind(&saved.api_url)
+                .bind(&saved.model)
+                .bind(saved.search_enabled)
+                .bind(saved.monitor_enabled)
+                .bind(saved.auto_retry_enabled)
+                .bind(saved.max_correction_rounds)
+                .bind(&saved.created_at)
+                .bind(&saved.updated_at)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+        }
+
+        self.get_ai_provider_config(saved.user_id.as_deref())
+            .await?
+            .ok_or_else(|| "AI provider config disappeared after save".to_string())
     }
 
     async fn create_session(

@@ -184,7 +184,7 @@ Server process environment:
 | **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
 | **dag** | `domains/dag/` | DAG-specific types and operations |
 | **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
-| **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations |
+| **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations; migrated metadata surfaces and the startup PostgreSQL capability matrix |
 | **infra/license** | `infra/license.rs` | License notice text, banner, X-OxoFlow-License header middleware (the web UI footer label lives in the SPA, `frontend/src/components/Layout.tsx`) |
 | **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
 | **hpc** | `src/hpc.rs` (crate root) | Slurm script generation, scheduler detection |

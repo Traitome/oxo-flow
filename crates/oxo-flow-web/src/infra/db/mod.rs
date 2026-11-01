@@ -68,20 +68,24 @@ pub struct Paginated<T: serde::Serialize> {
 /// The #207 migration surface: one storage abstraction the domains route
 /// through, so a PostgreSQL backend becomes a matter of wiring, not rewrites.
 ///
-/// HONEST SCOPE — today only the runs domain plus the guarded run insert
-/// consume this trait; every other domain (auth sessions, users, pipelines,
-/// templates, shares, clusters, audit, chat, AI config) still reads the
-/// SQLite pool directly, which is why a PostgreSQL deployment serves
-/// health/license/OpenAPI/SPA only (`PG_CAPABILITY_MATRIX` in lib.rs logs
-/// the served/gated split at startup). The unrouted methods below are the
-/// scaffolding each domain migrates onto — a new domain handler must call
-/// the trait, not add another raw-SQL path.
+/// HONEST SCOPE — runs/auth-session/user, pipeline/template, share, cluster
+/// lookup, and AI provider configuration operations consume this trait.
+/// Remaining chat, OAuth/API-key, audit, webhook, observability, and some
+/// workflow/list queries still read the SQLite pool directly, so PostgreSQL
+/// deployments retain a published served/gated matrix (`PG_CAPABILITY_MATRIX`
+/// in lib.rs). A new domain handler must call the trait, not add another
+/// raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<(), String>;
     async fn health(&self) -> Result<bool, String>;
 
-    async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String>;
+    async fn create_user(
+        &self,
+        username: &str,
+        role: &str,
+        password_hash: Option<&str>,
+    ) -> Result<models::UserRow, String>;
     async fn get_user_by_id(&self, id: &str) -> Result<Option<models::UserRow>, String>;
     async fn get_user_by_username(&self, username: &str)
     -> Result<Option<models::UserRow>, String>;
@@ -146,4 +150,14 @@ pub trait StorageBackend: Send + Sync {
     async fn revoke_share(&self, id: &str) -> Result<(), String>;
 
     async fn log_action(&self, user_id: &str, action: &str, target: &str) -> Result<(), String>;
+
+    async fn get_ai_provider_config(
+        &self,
+        user_id: Option<&str>,
+    ) -> Result<Option<models::AiProviderConfigRow>, String>;
+    async fn save_ai_provider_config(
+        &self,
+        config: &models::AiProviderConfigRow,
+        preserve_api_key: bool,
+    ) -> Result<models::AiProviderConfigRow, String>;
 }

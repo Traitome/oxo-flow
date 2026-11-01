@@ -136,6 +136,24 @@ pub struct ClusterRow {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AiProviderConfigRow {
+    pub id: String,
+    /// `None` selects the process-wide server configuration; otherwise this
+    /// is the owning user. NULL and populated IDs intentionally coexist.
+    pub user_id: Option<String>,
+    pub provider: String,
+    pub api_key: Option<String>,
+    pub api_url: Option<String>,
+    pub model: Option<String>,
+    pub search_enabled: i64,
+    pub monitor_enabled: i64,
+    pub auto_retry_enabled: i64,
+    pub max_correction_rounds: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ChatSessionRow {
     pub id: String,
     pub user_id: String,

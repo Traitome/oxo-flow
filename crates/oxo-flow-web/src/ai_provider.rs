@@ -13,9 +13,6 @@ pub use oxo_flow_ai::provider::{
     create_provider_from_env, save_ai_config,
 };
 
-/// A saved per-user AI row: (provider kind, api_url, model, api_key).
-type UserAiRow = (String, Option<String>, Option<String>, Option<String>);
-
 /// Per-user provider cache (issue #82 follow-up): non-admin users' saved
 /// AI keys resolve to THEIR provider, never reconfiguring the shared
 /// runtime. Entries are invalidated whenever a config write lands.
@@ -53,31 +50,26 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
     }
 
     let mut resolved: Option<AiProvider> = None;
-    if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        let row: Option<UserAiRow> = sqlx::query_as(
-            "SELECT provider, api_url, model, api_key FROM ai_provider_config \
-                 WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-        if let Some((provider_kind, api_url, model, api_key)) = row
-            && provider_kind != "disabled"
-        {
-            // Rows are written through infra::crypto::seal (issue #205), so
-            // the stored value may be a `v1:` ciphertext — decrypt here too,
-            // never hand the encoded form to a provider.
-            let key = crate::infra::crypto::open(&api_key.unwrap_or_default());
-            // A per-user row without a key is not a usable configuration.
-            // Fall back to the shared runtime so the user gets the global
-            // provider (or Noop if none is configured) instead of a provider
-            // carrying an empty key that fails with a cryptic builder error.
-            if !key.trim().is_empty() {
-                let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
-                resolved = Some(create_provider(kind, Some(key), api_url, model));
-            }
+    let row = match crate::infra::db::global_backend() {
+        Some(backend) => backend
+            .get_ai_provider_config(Some(user_id))
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    if let Some(row) = row
+        && row.provider != "disabled"
+    {
+        // Rows are written through infra::crypto::seal, so the stored value
+        // may be a `v1:` ciphertext — decrypt before provider creation.
+        let key = crate::infra::crypto::open(&row.api_key.unwrap_or_default());
+        // A per-user row without a usable key falls back to the shared
+        // runtime rather than creating a provider that fails with a cryptic
+        // empty-credential builder error.
+        if !key.trim().is_empty() {
+            let kind: ProviderKind = row.provider.parse().unwrap_or(ProviderKind::OpenAi);
+            resolved = Some(create_provider(kind, Some(key), row.api_url, row.model));
         }
     }
 

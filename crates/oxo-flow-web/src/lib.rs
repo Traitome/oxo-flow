@@ -325,18 +325,18 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
 /// Capability matrix advertised at startup when `DATABASE_URL` selects
 /// PostgreSQL.
 ///
-/// It must describe what this build actually serves: the HTTP layer is not
-/// yet PostgreSQL-aware — every domain handler (auth sessions included)
-/// reads the SQLite pool, so a PG deployment answers 503 `DB_ERROR` on
-/// DB-backed routes instead of silently handing out session tokens that are
-/// never persisted (logins then 401 forever).
+/// It must describe what this build actually serves: storage-backed routes
+/// use `StorageBackend`, while domains that have not completed migration
+/// still read the embedded SQLite pool and answer 503 on PostgreSQL.
 pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
-     available: /api/health · /api/license · /api/openapi.json · SPA assets\n  \
-     unavailable 503 DB_ERROR (SQLite-only handlers): auth sessions — login tokens are \
-     NOT persisted, later requests 401 — plus pipelines, templates, shares, clusters, \
-     audit, AI, chat\n  \
-     gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
-     (run execution is SQLite-only)";
+     available: /api/health · /api/license · /api/openapi.json · SPA assets; \
+     storage-backed users, login sessions, pipelines, templates, shares, run records, \
+     cluster lookup, and AI provider configuration\n  \
+     unavailable 503 DB_ERROR (remaining SQLite-only handlers): OAuth state, API keys, \
+     credential cascades, full chat history, audit/webhook/observability lists, and \
+     other unmigrated workflow queries\n  \
+     gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* execution endpoint \
+     (record metadata is storage-backed; execution is SQLite-only)";
 
 /// Whether a database URL selects the PostgreSQL backend.
 pub fn is_postgres_url(url: &str) -> bool {
@@ -634,10 +634,10 @@ pub async fn shutdown_signal() {
 mod effective_bind_host_tests {
     use super::*;
 
-    /// The PG capability log is the operator-facing contract; it must not
-    /// advertise SQLite-only surfaces (auth sessions) as available.
+    /// The PG capability log is the operator-facing contract; it must
+    /// distinguish migrated storage surfaces from SQLite-only remnants.
     #[test]
-    fn pg_capability_matrix_is_truthful_about_auth() {
+    fn pg_capability_matrix_is_truthful_about_storage_migration() {
         let line = |prefix: &str| {
             PG_CAPABILITY_MATRIX
                 .lines()
@@ -647,13 +647,15 @@ mod effective_bind_host_tests {
 
         let available = line("available:");
         assert!(
-            !available.contains("auth"),
-            "auth sessions are SQLite-only and must not be advertised as available: {available}"
+            available.contains("login sessions") && available.contains("AI provider"),
+            "storage-backed session and AI configuration surfaces must be advertised: {available}"
         );
         let unavailable = line("unavailable");
         assert!(
-            unavailable.contains("auth sessions"),
-            "the SQLite-only auth limitation must be spelled out: {unavailable}"
+            unavailable.contains("OAuth state")
+                && unavailable.contains("API keys")
+                && unavailable.contains("SQLite-only"),
+            "unmigrated credential and chat surfaces must be spelled out: {unavailable}"
         );
         assert!(
             PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),

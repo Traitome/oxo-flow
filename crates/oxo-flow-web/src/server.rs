@@ -1281,8 +1281,8 @@ fn runs_gate_verdict(sqlite_ready: bool) -> Result<(), (StatusCode, axum::Json<A
             code: "RUNS_REQUIRE_SQLITE".into(),
             message: "Workflow run execution is not available on this deployment.".into(),
             detail: Some(
-                "Run lifecycle bookkeeping uses the embedded SQLite store; \
-                 PostgreSQL servers serve library/AI/auth features only."
+                "Run execution uses the embedded SQLite engine; \
+                 PostgreSQL serves storage-backed metadata and configuration surfaces only."
                     .into(),
             ),
             suggestion: Some(
