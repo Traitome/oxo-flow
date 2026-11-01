@@ -1009,6 +1009,11 @@ mod tests {
                     .iter()
                     .filter_map(|r| r.error_pattern.as_deref())
                     .filter(|id| *id != "unknown_error")
+                    // Exit 137 is classified content-independently as
+                    // SIGKILL/OOM by design: cgroup OOM kills produce no
+                    // matching stderr, so the shell exit code is the only
+                    // evidence. Every other exit must stay silent.
+                    .filter(|id| !(*id == "oom_killed" && exit == Some(137)))
                     .collect();
                 assert!(
                     hits.is_empty(),
@@ -1016,6 +1021,14 @@ mod tests {
                 );
             }
         }
+        // Pin the deliberate semantics: benign content at exit 137 still
+        // classifies as oom_killed and nothing else.
+        let kill_results = engine.analyze("rule", BENIGN_LOG_LINES[0], Some(137));
+        let kill_hits: Vec<&str> = kill_results
+            .iter()
+            .filter_map(|r| r.error_pattern.as_deref())
+            .collect();
+        assert_eq!(kill_hits, vec!["oom_killed"]);
     }
 
     #[test]

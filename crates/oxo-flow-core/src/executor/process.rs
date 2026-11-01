@@ -6536,8 +6536,10 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
         let rule = Rule {
             name: "heavy_sort".to_string(),
             scratch: true,
+            // Sized below any host's free disk: the tier must be selected on
+            // free-space grounds alone, not on the machine's capacity.
             resources: crate::rule::Resources {
-                disk: Some("50G".to_string()),
+                disk: Some("64M".to_string()),
                 ..Default::default()
             },
             ..Default::default()
