@@ -26,6 +26,17 @@ fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<Api
     )
 }
 
+fn get_backend()
+-> Result<std::sync::Arc<dyn crate::infra::db::StorageBackend>, (StatusCode, Json<ApiError>)> {
+    crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/api/clusters",
@@ -104,9 +115,9 @@ pub async fn upsert_cluster(
         )
     })?;
 
-    let row: models::ClusterRow = sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
-        .bind(&req.id)
-        .fetch_one(pool)
+    let backend = get_backend()?;
+    let row = backend
+        .get_cluster(&req.id)
         .await
         .map_err(|e| {
             tracing::error!("DB error re-reading cluster {}: {e}", req.id);
@@ -114,6 +125,13 @@ pub async fn upsert_cluster(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DB_ERROR",
                 "Internal database error".into(),
+            )
+        })?
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                format!("Cluster '{}' missing after insert", req.id),
             )
         })?;
     Ok(Json(cluster_from_row(row)))
@@ -178,10 +196,9 @@ pub async fn probe_cluster(
 ) -> ApiResult<ClusterProbeResult> {
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;
-    let pool = get_pool()?;
-    let row: Option<models::ClusterRow> = sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
+    let backend = get_backend()?;
+    let row = backend
+        .get_cluster(&id)
         .await
         .map_err(|e| {
             tracing::error!("DB error fetching cluster {id} for probe: {e}");
@@ -190,14 +207,14 @@ pub async fn probe_cluster(
                 "DB_ERROR",
                 "Internal database error".into(),
             )
+        })?
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                format!("Cluster {id} not found"),
+            )
         })?;
-    let row = row.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Cluster {id} not found"),
-        )
-    })?;
     Ok(Json(service::probe(&cluster_from_row(row)).await))
 }
 

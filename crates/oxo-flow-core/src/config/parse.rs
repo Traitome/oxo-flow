@@ -42,7 +42,8 @@ impl WorkflowConfig {
 
     /// Extract declarative `ConfigDef` entries from inline-table `[config]` values.
     fn extract_declarative_config(&mut self) -> Result<()> {
-        for (key, val) in self.config.clone().iter() {
+        let mut updates = Vec::new();
+        for (key, val) in self.config.iter() {
             let toml::Value::Table(t) = val else {
                 continue;
             };
@@ -62,11 +63,13 @@ impl WorkflowConfig {
                         .map_err(|e| OxoFlowError::Config {
                             message: format!("invalid declarative [config] entry '{key}': {e}"),
                         })?;
-                self.config_meta.insert(key.clone(), def);
-                let runtime_val = self.config_meta[key].default.clone().unwrap_or_default();
-                self.config
-                    .insert(key.clone(), toml::Value::String(runtime_val));
+                let runtime_val = def.default.clone().unwrap_or_default();
+                updates.push((key.clone(), def, runtime_val));
             }
+        }
+        for (key, def, runtime_val) in updates {
+            self.config_meta.insert(key.clone(), def);
+            self.config.insert(key, toml::Value::String(runtime_val));
         }
         Ok(())
     }
