@@ -81,7 +81,8 @@ pub enum Commands {
         #[arg(
             value_name = "WORKFLOW",
             help = "Path to the .oxoflow workflow file, or a repository to run \
-                    (gh:owner/repo[@ref], owner/repo[@ref], *.git URL, or file://dir)"
+                    (gh:owner/repo[@ref], owner/repo[@ref], *.git URL, or file://dir); \
+                    omitted = auto-discover main.oxoflow (else the first *.oxoflow) in the current directory"
         )]
         workflow: Option<PathBuf>,
         #[arg(
@@ -165,14 +166,15 @@ pub enum Commands {
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable; \
+                    if the same key is also set positionally, this flag wins"
         )]
         args: Vec<String>,
         #[arg(
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected; a duplicate key set via --arg wins"
         )]
         config_overrides: Vec<String>,
         /// Enable AI error recovery on rule failure.
@@ -187,7 +189,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Re-execute every rule selected for this run even if outputs are
@@ -281,7 +284,11 @@ pub enum Commands {
     /// Preview execution without running any commands (alias: plan).
     #[command(alias = "plan")]
     DryRun {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
+        #[arg(
+            value_name = "WORKFLOW",
+            help = "Path to the .oxoflow workflow file; omitted = auto-discover \
+                    main.oxoflow (else the first *.oxoflow) in the current directory"
+        )]
         workflow: Option<PathBuf>,
         #[arg(
             short = 't',
@@ -306,7 +313,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         #[arg(
@@ -334,7 +342,8 @@ pub enum Commands {
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable; \
+                    if the same key is also set positionally, this flag wins"
         )]
         args: Vec<String>,
         /// Direct config overrides in the same trailing positional form
@@ -344,7 +353,7 @@ pub enum Commands {
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected; a duplicate key set via --arg wins"
         )]
         config_overrides: Vec<String>,
         /// Force re-execution of this run's rules (ignore up-to-date
@@ -873,7 +882,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Run deep health checks (script files, environment definition files,
