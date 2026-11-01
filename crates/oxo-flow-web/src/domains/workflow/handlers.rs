@@ -26,13 +26,14 @@ fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
 
 /// Snapshot a pipeline into `pipeline_revisions` (issue #82 P1-14). Keeps
 /// the last 50 revisions per pipeline; older snapshots are pruned.
-async fn record_revision(
-    pool: &sqlx::SqlitePool,
-    pipeline_id: &str,
-    user_id: &str,
-    version: &str,
-    toml_content: &str,
-) {
+async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_content: &str) {
+    if let Some(backend) = crate::infra::db::global_backend() {
+        let _ = backend
+            .record_pipeline_revision(pipeline_id, user_id, version, toml_content)
+            .await;
+        return;
+    }
+    let Ok(pool) = get_pool() else { return };
     let now = chrono::Utc::now().to_rfc3339();
     let _ = sqlx::query(
         "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at) \
@@ -436,40 +437,23 @@ pub async fn search_pipelines(
     ApiJson(req): ApiJson<SearchRequest>,
 ) -> ApiResult<SearchResponse> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
     // Search saved pipelines from DB. The visibility predicate rides in the
     // SQL (audit #664): filtering AFTER `LIMIT 50` let foreign private rows
     // crowd the caller's own results out of the window entirely. The
     // in-memory `can_read_pipeline` filter below stays as defense-in-depth.
-    let pattern = format!("%{}%", req.query);
-    let pipeline_rows: Vec<models::PipelineRow> = if user.is_admin() {
-        sqlx::query_as(
-            "SELECT * FROM pipelines WHERE name LIKE ? OR toml_content LIKE ? ORDER BY updated_at DESC LIMIT 50",
-        )
-        .bind(&pattern)
-        .bind(&pattern)
-        .fetch_all(pool)
+    let pipeline_rows = backend
+        .search_pipelines(&req.query, Some(&user.id), user.is_admin(), 50)
         .await
-    } else {
-        sqlx::query_as(
-            "SELECT * FROM pipelines WHERE (user_id = ? OR visibility = 'workspace') \
-             AND (name LIKE ? OR toml_content LIKE ?) ORDER BY updated_at DESC LIMIT 50",
-        )
-        .bind(&user.id)
-        .bind(&pattern)
-        .bind(&pattern)
-        .fetch_all(pool)
-        .await
-    }
-    .map_err(|e| {
-        tracing::error!("DB error searching pipelines: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+        .map_err(|e| {
+            tracing::error!("DB error searching pipelines: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let pipelines: Vec<Pipeline> = pipeline_rows
         .into_iter()
@@ -488,23 +472,27 @@ pub async fn search_pipelines(
         })
         .collect();
 
-    // Search templates from DB
-    let template_rows: Vec<models::TemplateRow> = sqlx::query_as(
-        "SELECT * FROM templates WHERE name LIKE ? OR description LIKE ? OR category LIKE ? ORDER BY usage_count DESC LIMIT 20",
-    )
-    .bind(format!("%{}%", req.query))
-    .bind(format!("%{}%", req.query))
-    .bind(format!("%{}%", req.query))
-    .fetch_all(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error searching templates: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    // Search templates from DB via backend
+    let query_lower = req.query.to_lowercase();
+    let template_rows: Vec<models::TemplateRow> = backend
+        .list_templates()
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error searching templates: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?
+        .into_iter()
+        .filter(|r| {
+            r.name.to_lowercase().contains(&query_lower)
+                || r.description.to_lowercase().contains(&query_lower)
+                || r.category.to_lowercase().contains(&query_lower)
+        })
+        .take(20)
+        .collect();
 
     let templates: Vec<Template> = template_rows
         .into_iter()
@@ -617,9 +605,7 @@ pub async fn save_pipeline(
     })?;
 
     // The initial save is revision 1 of the pipeline's history.
-    if let Ok(pool) = get_pool() {
-        record_revision(pool, &id, &user_id, &version, toml_content).await;
-    }
+    record_revision(&id, &user_id, &version, toml_content).await;
 
     Ok(Json(Pipeline {
         id,
@@ -650,31 +636,21 @@ pub async fn list_pipelines(
     authenticated: Option<Extension<CurrentUser>>,
 ) -> ApiResult<Vec<Pipeline>> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
     // Ownership scoping (issue #82 P0-4): non-admins see their own
     // pipelines plus workspace-visible ones; admins see everything.
-    let rows: Vec<models::PipelineRow> = if user.is_admin() {
-        sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT 100")
-            .fetch_all(pool)
-            .await
-    } else {
-        sqlx::query_as(
-            "SELECT * FROM pipelines WHERE user_id = ? OR visibility = 'workspace' \
-             ORDER BY updated_at DESC LIMIT 100",
-        )
-        .bind(&user.id)
-        .fetch_all(pool)
+    let rows = backend
+        .list_pipelines_visible(&user.id, user.is_admin(), 100)
         .await
-    }
-    .map_err(|e| {
-        tracing::error!("DB error listing pipelines: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+        .map_err(|e| {
+            tracing::error!("DB error listing pipelines: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let list: Vec<Pipeline> = rows
         .into_iter()
@@ -850,16 +826,7 @@ pub async fn update_pipeline(
 
     let now = now_iso();
     // Snapshot the pre-update content so rollback can restore it.
-    if let Ok(pool) = get_pool() {
-        record_revision(
-            pool,
-            &id,
-            &user.id,
-            &existing.version,
-            &existing.toml_content,
-        )
-        .await;
-    }
+    record_revision(&id, &user.id, &existing.version, &existing.toml_content).await;
 
     let updated_pipeline = models::PipelineRow {
         id: id.clone(),
@@ -1563,21 +1530,16 @@ pub async fn list_revisions(
     Path(id): Path<String>,
 ) -> ApiResult<Vec<serde_json::Value>> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id}: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".to_string(),
-                )
-            })?;
+    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1593,30 +1555,26 @@ pub async fn list_revisions(
         ));
     }
 
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT id, version, user_id, created_at FROM pipeline_revisions \
-         WHERE pipeline_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50",
-    )
-    .bind(&id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error listing revisions: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let rows = backend
+        .list_pipeline_revisions(&id, 50)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error listing revisions: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            )
+        })?;
 
     let revisions: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(rid, version, user_id, created_at)| {
+        .map(|r| {
             serde_json::json!({
-                "id": rid,
-                "version": version,
-                "actor": user_id,
-                "created_at": created_at,
+                "id": r.id,
+                "version": r.version,
+                "actor": r.user_id,
+                "created_at": r.created_at,
             })
         })
         .collect();
@@ -1638,21 +1596,16 @@ pub async fn get_revision(
     Path((id, rev)): Path<(String, String)>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id}: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".to_string(),
-                )
-            })?;
+    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1668,23 +1621,18 @@ pub async fn get_revision(
         ));
     }
 
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        "SELECT id, version, user_id, toml_content FROM pipeline_revisions \
-         WHERE id = ? AND pipeline_id = ?",
-    )
-    .bind(&rev)
-    .bind(&id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error fetching revision: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
-    let (rid, version, actor, toml_content) = row.ok_or_else(|| {
+    let row = backend
+        .get_pipeline_revision(&id, &rev)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching revision: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            )
+        })?;
+    let r = row.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1692,11 +1640,11 @@ pub async fn get_revision(
         )
     })?;
     Ok(Json(serde_json::json!({
-        "id": rid,
+        "id": r.id,
         "pipeline_id": id,
-        "version": version,
-        "actor": actor,
-        "toml_content": toml_content,
+        "version": r.version,
+        "actor": r.user_id,
+        "toml_content": r.toml_content,
     })))
 }
 
@@ -1720,21 +1668,16 @@ pub async fn rollback_pipeline(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id}: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".to_string(),
-                )
-            })?;
+    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1760,22 +1703,18 @@ pub async fn rollback_pipeline(
                 "revision_id required".into(),
             )
         })?;
-    let rev: Option<(String,)> = sqlx::query_as(
-        "SELECT toml_content FROM pipeline_revisions WHERE id = ? AND pipeline_id = ?",
-    )
-    .bind(revision_id)
-    .bind(&id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error fetching revision: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
-    let toml_content = rev.map(|r| r.0).ok_or_else(|| {
+    let rev_row = backend
+        .get_pipeline_revision(&id, revision_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching revision: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            )
+        })?;
+    let toml_content = rev_row.map(|r| r.toml_content).ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1801,26 +1740,21 @@ pub async fn rollback_pipeline(
     let version = parsed.workflow.version.clone();
 
     // Restore = snapshot current + write the old content back.
-    record_revision(
-        pool,
-        &id,
-        &user.id,
-        &pipeline.version,
-        &pipeline.toml_content,
-    )
-    .await;
+    record_revision(&id, &user.id, &pipeline.version, &pipeline.toml_content).await;
     let now = now_iso();
-    sqlx::query(
-        "UPDATE pipelines SET toml_content = ?, version = ?, rules_count = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(&toml_content)
-    .bind(&version)
-    .bind(rules_count)
-    .bind(&now)
-    .bind(&id)
-    .execute(pool)
-    .await
-    .map_err(|e| {
+    let updated = models::PipelineRow {
+        id: id.clone(),
+        user_id: pipeline.user_id.clone(),
+        name: pipeline.name.clone(),
+        version: version.clone(),
+        toml_content: toml_content.clone(),
+        rules_count,
+        forked_from: pipeline.forked_from.clone(),
+        visibility: pipeline.visibility.clone(),
+        created_at: pipeline.created_at.clone(),
+        updated_at: now.clone(),
+    };
+    backend.save_pipeline(&updated).await.map_err(|e| {
         tracing::error!("DB error rolling back pipeline {id}: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -24,31 +24,43 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// yet (will be created below) or is already owned by the caller. A foreign
 /// session id must neither hijack the row nor attach messages to another
 /// user's history.
-async fn session_writable(pool: &sqlx::SqlitePool, session_id: &str, user_id: &str) -> bool {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ? AND user_id != ?)",
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(true)
+async fn session_writable(session_id: &str, user_id: &str) -> bool {
+    if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .is_chat_session_writable(session_id, user_id)
+            .await
+            .unwrap_or(true)
+    } else if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ? AND user_id != ?)",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(true)
+    } else {
+        true
+    }
 }
 
 /// append the user's message. Best-effort — chat works without a DB.
-async fn persist_user_message(
-    pool: Option<&sqlx::SqlitePool>,
-    user: &CurrentUser,
-    session_id: &str,
-    message: &str,
-) {
-    let Some(pool) = pool else { return };
-    if !session_writable(pool, session_id, &user.id).await {
+async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &str) {
+    let title: String = message.chars().take(60).collect();
+    if let Some(backend) = crate::infra::db::global_backend() {
+        let _ = backend
+            .save_chat_user_message(session_id, &user.id, &title, message)
+            .await;
+        return;
+    }
+    let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
+        return;
+    };
+    if !session_writable(session_id, &user.id).await {
         tracing::warn!("session {session_id} belongs to another user — message dropped");
         return;
     }
     let now = chrono::Utc::now().to_rfc3339();
-    let title: String = message.chars().take(60).collect();
     let _ = sqlx::query(
         "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?) \
@@ -75,14 +87,17 @@ async fn persist_user_message(
 }
 
 /// Append the assistant's final answer to the session.
-async fn persist_assistant_message(
-    pool: Option<&sqlx::SqlitePool>,
-    user: &CurrentUser,
-    session_id: &str,
-    content: &str,
-) {
-    let Some(pool) = pool else { return };
-    if !session_writable(pool, session_id, &user.id).await {
+async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content: &str) {
+    if let Some(backend) = crate::infra::db::global_backend() {
+        let _ = backend
+            .save_chat_assistant_message(session_id, &user.id, content)
+            .await;
+        return;
+    }
+    let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
+        return;
+    };
+    if !session_writable(session_id, &user.id).await {
         return;
     }
     let now = chrono::Utc::now().to_rfc3339();
@@ -137,9 +152,8 @@ pub async fn chat_send(
 
     // Server-side persistence (issue #81): the session + user message are
     // recorded up front; the assistant's answer is appended on completion.
-    let pool = crate::infra::db::sqlite::try_pool().ok();
     if !empty_message {
-        persist_user_message(pool, &user, &session_id, &message).await;
+        persist_user_message(&user, &session_id, &message).await;
     }
 
     // Chat runs on the acting user's own AI provider (isolation fix). The
@@ -250,7 +264,7 @@ pub async fn chat_send(
                             "rounds": outcome.rounds,
                         }).to_string()));
                     if let Some(content) = outcome.content.as_deref() {
-                        persist_assistant_message(pool, &user, &session_id, content).await;
+                        persist_assistant_message(&user, &session_id, content).await;
                     }
                 }
             }
@@ -290,7 +304,16 @@ pub async fn chat_send_json(
         ));
     }
 
-    let templates: Vec<String> = if let Ok(pool) = get_pool() {
+    let templates: Vec<String> = if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .list_templates()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(20)
+            .map(|t| t.name)
+            .collect()
+    } else if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
         )
@@ -308,8 +331,7 @@ pub async fn chat_send_json(
         .session_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let pool = crate::infra::db::sqlite::try_pool().ok();
-    persist_user_message(pool, &user, &session_id, &req.message).await;
+    persist_user_message(&user, &session_id, &req.message).await;
 
     // Chat runs on the acting user's own AI provider (isolation fix).
     // Usability is judged on the RESOLVED provider: the caller's own key
@@ -338,7 +360,7 @@ pub async fn chat_send_json(
     .await
     {
         Ok((text, data)) => {
-            persist_assistant_message(pool, &user, &session_id, &text).await;
+            persist_assistant_message(&user, &session_id, &text).await;
             Ok(Json(data))
         }
         Err(e) => Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", e)),
@@ -360,7 +382,20 @@ pub async fn list_sessions(
     authenticated: Option<Extension<CurrentUser>>,
 ) -> ApiResult<Vec<ChatSession>> {
     let user = resolve(authenticated.as_ref());
-    let sessions = if let Ok(pool) = get_pool() {
+    let sessions = if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .list_chat_sessions(&user.id, 20)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| ChatSession {
+                id: r.id,
+                title: r.title,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+            })
+            .collect()
+    } else if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::ChatSessionRow>(
             "SELECT * FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
         )

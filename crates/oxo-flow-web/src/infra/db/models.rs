@@ -180,3 +180,34 @@ pub struct OAuthStateRow {
     pub state: String,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ChatMessageRow {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub meta: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct WebhookConfigRow {
+    pub id: i64,
+    pub url: String,
+    pub secret: Option<String>,
+    pub enabled: i64,
+    pub events: String,
+    pub signature_scheme: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PipelineRevisionRow {
+    pub id: String,
+    pub pipeline_id: String,
+    pub user_id: String,
+    pub version: String,
+    pub toml_content: String,
+    pub created_at: String,
+}

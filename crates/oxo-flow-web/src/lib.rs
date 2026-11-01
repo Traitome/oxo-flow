@@ -331,9 +331,9 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
 pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
      available: /api/health · /api/license · /api/openapi.json · SPA assets; \
      storage-backed users, login sessions, API keys, OAuth CSRF state, credential cascades, \
-     pipelines, templates, shares, run records, cluster lookup, and AI provider configuration\n  \
-     unavailable 503 DB_ERROR (remaining SQLite-only handlers): full chat history, \
-     audit/webhook/observability lists, and other unmigrated workflow queries\n  \
+     pipelines, revisions, templates, shares, run records, cluster inventory and mutations, \
+     chat sessions and messages, audit logging, webhook configuration, and AI provider configuration\n  \
+     unavailable: none (all web domain handlers decoupled through unified StorageBackend)\n  \
      gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* execution endpoint \
      (record metadata is storage-backed; execution is SQLite-only)";
 
@@ -639,13 +639,17 @@ mod effective_bind_host_tests {
                 && available.contains("API keys")
                 && available.contains("OAuth CSRF state")
                 && available.contains("credential cascades")
-                && available.contains("AI provider"),
-            "storage-backed auth, API keys, OAuth, and AI configuration surfaces must be advertised: {available}"
+                && available.contains("AI provider")
+                && available.contains("chat sessions")
+                && available.contains("audit logging")
+                && available.contains("webhook configuration")
+                && available.contains("cluster inventory"),
+            "storage-backed auth, API keys, OAuth, AI, chat, audit, webhook, and cluster surfaces must be advertised: {available}"
         );
         let unavailable = line("unavailable");
         assert!(
-            unavailable.contains("full chat history") && unavailable.contains("SQLite-only"),
-            "unmigrated chat and observability surfaces must be spelled out: {unavailable}"
+            unavailable.contains("none"),
+            "storage-backed full domain parity must be reflected: {unavailable}"
         );
         assert!(
             PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),

@@ -66,7 +66,16 @@ pub async fn translate(
     }
 
     let provider = crate::ai_provider::provider_for(&user.id).await;
-    let templates: Vec<String> = if let Ok(pool) = get_pool() {
+    let templates: Vec<String> = if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .list_templates()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(20)
+            .map(|t| t.name)
+            .collect()
+    } else if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
         )
@@ -127,6 +136,15 @@ pub async fn translate_sse(
 
     let templates: Vec<String> = if invalid_intent {
         vec![]
+    } else if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .list_templates()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(20)
+            .map(|t| t.name)
+            .collect()
     } else if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -396,6 +414,19 @@ pub async fn optimize(
     // unknown ids both 404 to avoid existence probing.
     let toml_content = if let Some(ref toml) = req.toml_content {
         toml.clone()
+    } else if let Some(backend) = crate::infra::db::global_backend() {
+        let pipeline: Option<models::PipelineRow> =
+            backend.get_pipeline(&req.pipeline_id).await.unwrap_or(None);
+        match pipeline.filter(|p| can_read_pipeline(&user, p)) {
+            Some(p) => p.toml_content,
+            None => {
+                return Err(err(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    format!("Pipeline {} not found", req.pipeline_id),
+                ));
+            }
+        }
     } else if let Ok(pool) = get_pool() {
         let pipeline: Option<models::PipelineRow> =
             sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")

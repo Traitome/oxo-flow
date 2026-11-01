@@ -30,6 +30,18 @@ impl Default for WebhookSettings {
 }
 
 pub async fn load_settings() -> Option<WebhookSettings> {
+    if let Some(backend) = crate::infra::db::global_backend()
+        && let Ok(Some(row)) = backend.get_webhook_config().await
+    {
+        let events: Vec<String> = serde_json::from_str(&row.events).unwrap_or_default();
+        return Some(WebhookSettings {
+            url: row.url,
+            secret: row.secret.map(|s| crate::infra::crypto::open(&s)),
+            enabled: row.enabled != 0,
+            events,
+            signature_scheme: row.signature_scheme,
+        });
+    }
     let pool = crate::infra::db::sqlite::try_pool().ok()?;
     let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
         "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",

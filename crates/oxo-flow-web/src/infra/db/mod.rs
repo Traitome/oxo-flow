@@ -193,4 +193,94 @@ pub trait StorageBackend: Send + Sync {
         target: &str,
         metadata: Option<&str>,
     ) -> Result<(), String>;
+
+    async fn record_audit_log(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        result: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String>;
+    async fn list_audit_logs(
+        &self,
+        cutoff: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<models::AuditLogRow>, i64), String>;
+    async fn list_recent_audit_logs(&self, limit: u32) -> Result<Vec<models::AuditLogRow>, String>;
+    async fn get_run_metrics(&self) -> Result<(i64, u64), String>;
+
+    async fn get_webhook_config(&self) -> Result<Option<models::WebhookConfigRow>, String>;
+    async fn save_webhook_config(
+        &self,
+        url: &str,
+        secret: Option<&str>,
+        enabled: bool,
+        events: &str,
+        signature_scheme: &str,
+    ) -> Result<(), String>;
+
+    async fn is_chat_session_writable(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<bool, String>;
+    async fn save_chat_user_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        title: &str,
+        message: &str,
+    ) -> Result<bool, String>;
+    async fn save_chat_assistant_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        content: &str,
+    ) -> Result<bool, String>;
+    async fn list_chat_sessions(
+        &self,
+        user_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::ChatSessionRow>, String>;
+
+    async fn list_clusters(&self) -> Result<Vec<models::ClusterRow>, String>;
+    async fn save_cluster(&self, cluster: &models::ClusterRow) -> Result<(), String>;
+    async fn delete_cluster(&self, id: &str) -> Result<bool, String>;
+
+    async fn get_latest_terminal_run_for_pipeline(
+        &self,
+        pipeline_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, String>;
+    async fn record_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        user_id: &str,
+        version: &str,
+        toml_content: &str,
+    ) -> Result<(), String>;
+    async fn list_pipeline_revisions(
+        &self,
+        pipeline_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRevisionRow>, String>;
+    async fn get_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<models::PipelineRevisionRow>, String>;
+    async fn search_pipelines(
+        &self,
+        query: &str,
+        user_id: Option<&str>,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String>;
+    async fn list_pipelines_visible(
+        &self,
+        user_id: &str,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String>;
 }

@@ -90,7 +90,7 @@ impl StorageBackend for PostgresBackend {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 ssh_host TEXT NOT NULL,
-                ssh_port INTEGER NOT NULL DEFAULT 22,
+                ssh_port BIGINT NOT NULL DEFAULT 22,
                 ssh_user TEXT,
                 ssh_key TEXT,
                 scheduler TEXT,
@@ -230,6 +230,26 @@ impl StorageBackend for PostgresBackend {
                 state TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS webhook_config (
+                id BIGINT PRIMARY KEY CHECK (id = 1),
+                url TEXT NOT NULL DEFAULT '',
+                secret TEXT,
+                enabled BIGINT NOT NULL DEFAULT 0,
+                events TEXT NOT NULL DEFAULT '[]',
+                signature_scheme TEXT NOT NULL DEFAULT 'sha256-keyed',
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_revisions (
+                id TEXT PRIMARY KEY,
+                pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                version TEXT NOT NULL DEFAULT '0.1.0',
+                toml_content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
             "#,
         )
         .execute(&self.pool)
@@ -1092,15 +1112,11 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn get_share_by_token(&self, token: &str) -> Result<Option<models::ShareRow>, String> {
-        let now = Self::now();
-        sqlx::query_as::<_, models::ShareRow>(
-            "SELECT * FROM shares WHERE token = $1 AND (expires_at IS NULL OR expires_at > $2)",
-        )
-        .bind(token)
-        .bind(&now)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())
+        sqlx::query_as::<_, models::ShareRow>("SELECT * FROM shares WHERE token = $1")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn list_shares(&self, pipeline_id: &str) -> Result<Vec<models::ShareRow>, String> {
@@ -1134,21 +1150,8 @@ impl StorageBackend for PostgresBackend {
         target: &str,
         metadata: Option<&str>,
     ) -> Result<(), String> {
-        let id = Uuid::new_v4().to_string();
-        let now = Self::now();
-        sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES ($1, $2, $3, $4, 'success', $5, $6)",
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(action)
-        .bind(target)
-        .bind(metadata)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
+        self.record_audit_log(user_id, action, target, "success", metadata)
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -1352,6 +1355,391 @@ impl StorageBackend for PostgresBackend {
                 .map_err(|e| format!("Failed to create OAuth user record: {e}"))?;
                 Ok(fallback_username.to_string())
             }
+        }
+    }
+
+    async fn record_audit_log(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        result: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Self::now();
+        let _ = sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (, , 'viewer', 'audit', NULL, )              ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(&now)
+        .execute(&self.pool)
+        .await;
+
+        sqlx::query(
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (, , , , , , )",
+        )
+        .bind(&id)
+        .bind(user_id)
+        .bind(action)
+        .bind(target)
+        .bind(result)
+        .bind(metadata)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn list_audit_logs(
+        &self,
+        cutoff: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<models::AuditLogRow>, i64), String> {
+        let rows: Vec<models::AuditLogRow> = sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs WHERE timestamp >=  ORDER BY timestamp DESC LIMIT  OFFSET ",
+        )
+        .bind(cutoff)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ")
+            .bind(cutoff)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok((rows, total))
+    }
+
+    async fn list_recent_audit_logs(&self, limit: u32) -> Result<Vec<models::AuditLogRow>, String> {
+        sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT ",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_run_metrics(&self) -> Result<(i64, u64), String> {
+        let active: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'queued')")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+        Ok((active, total as u64))
+    }
+
+    async fn get_webhook_config(&self) -> Result<Option<models::WebhookConfigRow>, String> {
+        sqlx::query_as(
+            "SELECT id, url, secret, enabled, events, signature_scheme, updated_at FROM webhook_config WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn save_webhook_config(
+        &self,
+        url: &str,
+        secret: Option<&str>,
+        enabled: bool,
+        events: &str,
+        signature_scheme: &str,
+    ) -> Result<(), String> {
+        let now = Self::now();
+        sqlx::query(
+            "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at)              VALUES (1, , , , , , )              ON CONFLICT(id) DO UPDATE SET              url = EXCLUDED.url,              secret = COALESCE(EXCLUDED.secret, webhook_config.secret),              enabled = EXCLUDED.enabled,              events = EXCLUDED.events,              signature_scheme = EXCLUDED.signature_scheme,              updated_at = EXCLUDED.updated_at",
+        )
+        .bind(url)
+        .bind(secret)
+        .bind(enabled as i64)
+        .bind(events)
+        .bind(signature_scheme)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn is_chat_session_writable(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<bool, String> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id =  AND user_id != )",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn save_chat_user_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        title: &str,
+        message: &str,
+    ) -> Result<bool, String> {
+        if !self.is_chat_session_writable(session_id, user_id).await? {
+            return Ok(false);
+        }
+        let now = Self::now();
+        let msg_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)              VALUES (, , , , )              ON CONFLICT(id) DO UPDATE SET title = EXCLUDED.title, updated_at = EXCLUDED.updated_at              WHERE chat_sessions.user_id = EXCLUDED.user_id",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(title)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (, , 'user', , NULL, )",
+        )
+        .bind(&msg_id)
+        .bind(session_id)
+        .bind(message)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(true)
+    }
+
+    async fn save_chat_assistant_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        content: &str,
+    ) -> Result<bool, String> {
+        if !self.is_chat_session_writable(session_id, user_id).await? {
+            return Ok(false);
+        }
+        let now = Self::now();
+        let msg_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (, , 'assistant', , NULL, )",
+        )
+        .bind(&msg_id)
+        .bind(session_id)
+        .bind(content)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query("UPDATE chat_sessions SET updated_at =  WHERE id = ")
+            .bind(&now)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(true)
+    }
+
+    async fn list_chat_sessions(
+        &self,
+        user_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::ChatSessionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, user_id, title, created_at, updated_at FROM chat_sessions WHERE user_id =  ORDER BY updated_at DESC LIMIT ",
+        )
+        .bind(user_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn list_clusters(&self) -> Result<Vec<models::ClusterRow>, String> {
+        sqlx::query_as("SELECT * FROM clusters ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn save_cluster(&self, cluster: &models::ClusterRow) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at)              VALUES (, , , , , , , , , )              ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, ssh_host = EXCLUDED.ssh_host,              ssh_port = EXCLUDED.ssh_port, ssh_user = EXCLUDED.ssh_user, ssh_key = EXCLUDED.ssh_key,              scheduler = EXCLUDED.scheduler, remote_dir = EXCLUDED.remote_dir, enabled = EXCLUDED.enabled",
+        )
+        .bind(&cluster.id)
+        .bind(&cluster.name)
+        .bind(&cluster.ssh_host)
+        .bind(cluster.ssh_port)
+        .bind(&cluster.ssh_user)
+        .bind(&cluster.ssh_key)
+        .bind(&cluster.scheduler)
+        .bind(&cluster.remote_dir)
+        .bind(cluster.enabled)
+        .bind(&cluster.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn delete_cluster(&self, id: &str) -> Result<bool, String> {
+        let affected = sqlx::query("DELETE FROM clusters WHERE id = ")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
+    async fn get_latest_terminal_run_for_pipeline(
+        &self,
+        pipeline_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, String> {
+        sqlx::query_as(
+            "SELECT status, finished_at FROM runs WHERE pipeline_id =               AND status IN ('completed', 'failed', 'cancelled')              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(pipeline_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn record_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        user_id: &str,
+        version: &str,
+        toml_content: &str,
+    ) -> Result<(), String> {
+        let now = Self::now();
+        let rev_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES (, , , , , )",
+        )
+        .bind(&rev_id)
+        .bind(pipeline_id)
+        .bind(user_id)
+        .bind(version)
+        .bind(toml_content)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "DELETE FROM pipeline_revisions WHERE pipeline_id =  AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id =                ORDER BY created_at DESC, id DESC LIMIT 50)",
+        )
+        .bind(pipeline_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    async fn list_pipeline_revisions(
+        &self,
+        pipeline_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRevisionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id =  ORDER BY created_at DESC, id DESC LIMIT ",
+        )
+        .bind(pipeline_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<models::PipelineRevisionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id =  AND id = ",
+        )
+        .bind(pipeline_id)
+        .bind(revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn search_pipelines(
+        &self,
+        query: &str,
+        user_id: Option<&str>,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String> {
+        let pattern = format!("%{}%", query);
+        if is_admin {
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE name ILIKE  OR toml_content ILIKE  ORDER BY updated_at DESC LIMIT ",
+            )
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+        } else {
+            let uid = user_id.unwrap_or("");
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE (user_id =  OR visibility = 'workspace')                  AND (name ILIKE  OR toml_content ILIKE ) ORDER BY updated_at DESC LIMIT ",
+            )
+            .bind(uid)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+        }
+    }
+
+    async fn list_pipelines_visible(
+        &self,
+        user_id: &str,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String> {
+        if is_admin {
+            sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT ")
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE user_id =  OR visibility = 'workspace' ORDER BY updated_at DESC LIMIT ",
+            )
+            .bind(user_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
         }
     }
 }

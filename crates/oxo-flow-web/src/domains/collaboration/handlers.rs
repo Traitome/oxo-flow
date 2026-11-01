@@ -7,7 +7,7 @@ use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
+use crate::domains::workflow::handlers::{ApiError, err, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -420,19 +420,10 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
         .unwrap_or_default();
 
     // Most recent terminal run as provenance evidence.
-    let recent: Option<(String, Option<String>)> = if let Ok(pool) = get_pool() {
-        sqlx::query_as(
-            "SELECT status, finished_at FROM runs WHERE pipeline_id = ? \
-             AND status IN ('completed', 'failed', 'cancelled') \
-             ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(&share.pipeline_id)
-        .fetch_optional(pool)
+    let recent: Option<(String, Option<String>)> = backend
+        .get_latest_terminal_run_for_pipeline(&share.pipeline_id)
         .await
-        .unwrap_or(None)
-    } else {
-        None
-    };
+        .unwrap_or(None);
 
     let owner_username: Option<String> = backend
         .get_user_by_id(&share.owner_id)

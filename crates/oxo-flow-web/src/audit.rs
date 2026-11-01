@@ -49,12 +49,20 @@ pub async fn audit_middleware(
     // PostgreSQL deployments never initialize the legacy audit store. A
     // missing audit backend must degrade explicitly, not panic the request
     // path — the structured log event below remains the machine trail.
-    if crate::db::try_pool().is_none() {
-        tracing::warn!("audit store unavailable (PostgreSQL backend?): {action} not audited");
-    } else if let Err(e) =
-        crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await
-    {
-        tracing::error!("audit insert failed for {action}: {e}");
+    if let Some(backend) = crate::infra::db::global_backend() {
+        if let Err(e) = backend
+            .record_audit_log(&user, &action, &path, result, Some(&metadata))
+            .await
+        {
+            tracing::error!("audit insert failed for {action}: {e}");
+        }
+    } else if let Some(_pool) = crate::db::try_pool() {
+        if let Err(e) = crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await
+        {
+            tracing::error!("audit insert failed for {action}: {e}");
+        }
+    } else {
+        tracing::warn!("audit store unavailable: {action} not audited");
     }
     // Structured event stream for machine consumers (issue #81).
     crate::domains::observability::logging::log_event(
