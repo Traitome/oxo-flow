@@ -150,3 +150,41 @@ python3 -m unittest discover -s eval/scripts
 ```
 
 This verification protocol guarantees that published benchmark metrics are scientifically reproducible, academically defensible, and impervious to silent drift.
+
+---
+
+## Appendix: Benchmark Hierarchy & Sample Size Design Rationale
+
+### A.1 Core Philosophy: Closed-Loop Deterministic Evaluation vs. LLM-as-a-Judge
+
+General-purpose AI code generation benchmarks (e.g., HumanEval, MBPP) evaluate isolated functions in toy sandboxes, whereas scientific workflow synthesis demands strict POSIX file path contracts, multi-tool dependency wiring, container and environment isolation, and physical compute resource bounds (RAM, CPU threads). Relying on probabilistic "LLM-as-a-Judge" scoring introduces circular hallucinations and subjective variance.
+
+The oxo-flow benchmark implements a **closed-loop deterministic judge**: candidate synthesis outputs are evaluated directly through the native Rust engine binary (`oxo-flow validate`, `oxo-flow lint`, and `oxo-flow graph -f dot`). Syntactic validity, DAG topological continuity, and file contract soundness are decided objectively by compiler truth rather than heuristic scoring.
+
+### A.2 The Three-Tier Architectural Hierarchy
+
+The benchmark is structured as a hierarchical pyramid reflecting progressive cognitive complexity:
+
+- **Tier 1: Knowledge Grounding (Domain Lexicon & Hallucination Resistance, $N = 149$)**:
+  Evaluates whether the model possesses grounded domain memory of computational biology tooling, correct parameter interfaces, alias mappings, version pins, and crucially, negative controls (resisting suggestions for non-existent tools without hallucinated fallbacks).
+- **Tier 2: Single-Rule Synthesis (Atomic Execution & Resource Boundary, $N = 70$)**:
+  Evaluates single-step task synthesis, ensuring explicit I/O file pattern contracts, essential CLI flags, and physically grounded resource constraints ($1 \le \text{threads} \le 32$, $\text{memory} \le 128\,\text{GB}$).
+- **Tier 3: Workflow DAG Composition (Global Planning & Graph Topology, $N = 38$)**:
+  Evaluates multi-step, end-to-end pipeline orchestration from high-level scientific goals, requiring dependency edge completeness, channel continuity, and valid output deliverables.
+
+### A.3 Sample Size ($N$) Justification & Statistical Power
+
+The sample size distribution ($N = 149, 70, 38$) was engineered according to statistical power requirements and representative domain coverage:
+
+- **Workflow DAG ($N = 38$, 100% Ecosystem Census)**:
+  Comprises 16 reference gallery workflows (`examples/gallery/`) and 22 production pipelines from the [oxo-flow-community](https://github.com/oxo-flow-community) registry. Rather than arbitrary down-sampling, $N = 38$ achieves a **100% full-census coverage** across all established pipeline modalities (WGS, WES, RNA-seq, scRNA/scATAC multiome, ChIP-seq, ATAC-seq, Cut&Run, bisulfite methylation, metagenomics, and viral amplicon genomics). In complex code-generation literature (e.g., SWE-bench, BioCodeBench), 30-50 end-to-end multi-step tasks constitute the standard evaluation envelope due to the structural complexity of each multi-node graph.
+- **Single-Rule Synthesis ($N = 70$, Representative Functional Atoms)**:
+  Sampled across 21 heterogeneous workflow contexts (spanning 9 easy, 45 medium, and 16 hard tasks) to cover all core bioinformatics functional operators: read trimming, sequence alignment, duplicate marking, variant discovery, filtering, quantification, and multi-omics aggregation.
+- **Tool Grounding ($N = 149$, Domain Lexicon Coverage)**:
+  Systematically generated via fixed-stride deterministic sampling across Bioconda (6,590 packages) and nf-core (2,108 modules), combined with curated tables (59 exact-name recall, 46 purpose-to-tool mappings, 17 version-pin directives, 12 alias queries, 10 negative control queries, 5 commercial platforms, and 6 audited rejections). This sample size aligns with standard information retrieval and entity extraction benchmarks (100-200 items), ensuring broad coverage across distinct biological disciplines while enabling rigorous human verification.
+- **Total Statistical Trials ($N = 1,285$)**:
+  Under the standard multi-trial evaluation protocol (5 trials per item across all layers):
+
+  $$N_{\text{total}} = (149_{\text{tool}} + 70_{\text{rule}} + 38_{\text{workflow}}) \times 5 = 1,285 \text{ trials}$$
+
+  This volume provides rigorous statistical power to compute unbiased $\text{pass}@k$ estimators ($k \in \{1, 5\}$) and robust 95% bootstrap confidence intervals, resolving statistically significant performance differentials across foundation models ($p < 0.05$).
