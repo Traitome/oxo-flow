@@ -10,6 +10,113 @@ pub(crate) const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
 /// beyond this threshold the human output switches to a warning.
 pub(crate) const SNAPSHOT_STALE_SECS: i64 = 300;
 
+/// Mutable plan state carried through a recorded-replay rebuild. This is the
+/// deliberate shared-state boundary between run and dry-run: both replay
+/// against the same config/DAG/order triple, while their caller-specific
+/// valid-rule, ordering, and narration policies stay explicit.
+pub(crate) struct ReplayPlan<'a> {
+    pub(crate) config: &'a mut WorkflowConfig,
+    pub(crate) dag: &'a mut WorkflowDag,
+    pub(crate) order: &'a mut Vec<String>,
+    pub(crate) target: &'a [String],
+    pub(crate) when_false_rules: &'a std::collections::HashSet<String>,
+    pub(crate) workdir: &'a std::path::Path,
+    pub(crate) run_log: Option<&'a SharedRunLog>,
+}
+
+/// Which deterministic order a replayed plan uses. Run executes in raw
+/// dependency order; dry-run groups independent rules for readability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayPlanOrdering {
+    ExecutionOrder,
+    ParallelDisplay,
+}
+
+fn rebuild_replay_plan(
+    plan: &mut ReplayPlan<'_>,
+    ordering: ReplayPlanOrdering,
+    print_notes: bool,
+    context: &str,
+) -> anyhow::Result<()> {
+    (|| -> anyhow::Result<()> {
+        *plan.dag = WorkflowDag::from_rules_with_config(
+            &plan.config.rules,
+            &config_placeholder_values(&plan.config.config),
+        )
+        .context("failed to rebuild workflow DAG")?;
+        *plan.order = match ordering {
+            ReplayPlanOrdering::ExecutionOrder => execution_order_skipping_with_notes(
+                plan.dag,
+                plan.target,
+                plan.when_false_rules,
+                plan.workdir,
+                plan.run_log,
+                print_notes,
+            )?,
+            ReplayPlanOrdering::ParallelDisplay if plan.target.is_empty() => {
+                parallel_display_order(
+                    plan.dag,
+                    plan.target,
+                    plan.when_false_rules,
+                    plan.workdir,
+                    plan.run_log,
+                    print_notes,
+                )?
+            }
+            ReplayPlanOrdering::ParallelDisplay => execution_order_skipping_with_notes(
+                plan.dag,
+                plan.target,
+                plan.when_false_rules,
+                plan.workdir,
+                plan.run_log,
+                print_notes,
+            )?,
+        };
+        Ok(())
+    })()
+    .context(context.to_string())
+}
+
+/// Replay checkpoint-recorded re-entries and rebuild the static plan when any
+/// survive. `valid` encodes the caller's freshness policy (run checks output
+/// existence and tombstones; dry-run reuses its preview classification), so
+/// the two surfaces cannot drift on the replay mechanics while keeping their
+/// intentional semantic differences visible.
+pub(crate) fn replay_checkpoint_reentries(
+    plan: &mut ReplayPlan<'_>,
+    reentries: &[oxo_flow_core::reentry::ReentryRecord],
+    valid: &std::collections::HashSet<String>,
+    ordering: ReplayPlanOrdering,
+    source_label: &str,
+    narrate_growth: bool,
+) -> anyhow::Result<usize> {
+    let replayed = oxo_flow_core::reentry::replay_valid_reentries(plan.config, reentries, valid)?;
+    if replayed.is_empty() {
+        return Ok(0);
+    }
+    tracing::info!(
+        count = replayed.len(),
+        source = source_label,
+        "replayed checkpoint re-entries"
+    );
+    let old_order_len = plan.order.len();
+    rebuild_replay_plan(
+        plan,
+        ordering,
+        matches!(ordering, ReplayPlanOrdering::ExecutionOrder),
+        "after re-entry replay",
+    )?;
+    if narrate_growth && plan.order.len() != old_order_len {
+        narrate_console_line(format_args!(
+            "  {} re-entry replay: plan grew from {} to {} rules",
+            "Replay:".bold().cyan(),
+            old_order_len,
+            plan.order.len()
+        ));
+    }
+    Ok(replayed.len())
+}
+
 /// Process a checkpoint rule's re-entry manifest after it completes
 /// (issue #78 P3): merge new samples, re-expand from templates, extend the
 /// plan, and record the re-entry in the checkpoint. Errors fail the rule.

@@ -124,6 +124,39 @@ pub(crate) fn execution_order_skipping_with_notes(
     }
 }
 
+/// Dry-run's display ordering for a full-plan recomputation: execution-order
+/// filtering first, then deterministic parallel-group adjacency. Re-entry
+/// replay uses the same helper so a replayed preview keeps the exact order
+/// the initial preview showed.
+pub(crate) fn parallel_display_order(
+    dag: &WorkflowDag,
+    target: &[String],
+    when_false_rules: &std::collections::HashSet<String>,
+    workdir: &std::path::Path,
+    run_log: Option<&SharedRunLog>,
+    print_notes: bool,
+) -> anyhow::Result<Vec<String>> {
+    let filtered_order = execution_order_skipping_with_notes(
+        dag,
+        target,
+        when_false_rules,
+        workdir,
+        run_log,
+        print_notes,
+    )?;
+    let order_set: std::collections::HashSet<String> = filtered_order.iter().cloned().collect();
+    let mut ordered = Vec::new();
+    for group in dag.parallel_groups()? {
+        let mut level: Vec<String> = group
+            .into_iter()
+            .filter(|name| order_set.contains(name))
+            .collect();
+        level.sort();
+        ordered.extend(level);
+    }
+    Ok(ordered)
+}
+
 /// Per-rule staleness reasons for `status` (issue #432(c)).
 ///
 /// Answers "why will this rule re-run?" with the SAME classification the
@@ -283,4 +316,43 @@ pub(crate) fn reconcile_failed_rules<'a>(
         }
     }
     (real_failed, skipped_when_false)
+}
+
+#[cfg(test)]
+mod parallel_display_order_tests {
+    use super::*;
+
+    #[test]
+    fn full_plan_orders_a_parallel_level_deterministically() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "order"
+
+[[rules]]
+name = "zeta"
+shell = "true"
+
+[[rules]]
+name = "alpha"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = parallel_display_order(
+            &dag,
+            &[],
+            &HashSet::new(),
+            std::path::Path::new("."),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(order, ["alpha", "zeta"]);
+    }
 }

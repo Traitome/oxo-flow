@@ -673,7 +673,7 @@ pub async fn run_command(
         config.engine.as_ref().and_then(|e| e.tmp_dir.clone()),
         &workflow_dir,
     )?;
-    // ── Pre-flight disk check (issue #75, wired 2026-08-23) ────────────────
+    // ── Pre-flight disk check (issue #75) ─────────────────────────────────
     // ENOSPC mid-run is the classic silent-loss incident (live: TMPDIR full
     // killed a scatter campaign half-way). Warn when either the workdir or
     // the temp dir has less than 1 GB free BEFORE any rule runs.
@@ -1246,21 +1246,21 @@ pub async fn run_command(
                 })
                 .map(|r| r.name.clone())
                 .collect();
-            let replayed =
-                oxo_flow_core::reentry::replay_valid_reentries(&mut config, &ck.reentries, &valid)?;
-            tracing::info!(count = replayed.len(), "replayed checkpoint re-entries");
-            dag = WorkflowDag::from_rules_with_config(
-                &config.rules,
-                &config_placeholder_values(&config.config),
-            )
-            .context("failed to rebuild workflow DAG after re-entry replay")?;
-            order = execution_order_skipping_with_notes(
-                &dag,
-                &target,
-                &when_false_rules,
-                workdir.as_ref().unwrap_or(&workdir_default),
-                Some(&run_log),
-                true,
+            replay_checkpoint_reentries(
+                &mut ReplayPlan {
+                    config: &mut config,
+                    dag: &mut dag,
+                    order: &mut order,
+                    target: &target,
+                    when_false_rules: &when_false_rules,
+                    workdir: workdir.as_ref().unwrap_or(&workdir_default),
+                    run_log: Some(&run_log),
+                },
+                &ck.reentries,
+                &valid,
+                ReplayPlanOrdering::ExecutionOrder,
+                "run",
+                false,
             )?;
         }
     }
@@ -4160,25 +4160,7 @@ pub async fn dry_run_command(
     // Independent rules at the same level appear adjacent, so the listing
     // reflects actual concurrency instead of an arbitrary topological order.
     let mut order = if target.is_empty() {
-        let filtered_order = execution_order_skipping_with_notes(
-            &dag,
-            &target,
-            &when_false_rules,
-            base_dir,
-            None,
-            true,
-        )?;
-        let order_set: std::collections::HashSet<String> = filtered_order.iter().cloned().collect();
-        let mut ordered: Vec<String> = Vec::new();
-        for group in dag.parallel_groups()? {
-            let mut level: Vec<String> = group
-                .into_iter()
-                .filter(|name| order_set.contains(name))
-                .collect();
-            level.sort();
-            ordered.extend(level);
-        }
-        ordered
+        parallel_display_order(&dag, &target, &when_false_rules, base_dir, None, true)?
     } else {
         execution_order_skipping_with_notes(&dag, &target, &when_false_rules, base_dir, None, true)?
     };
@@ -4235,67 +4217,23 @@ pub async fn dry_run_command(
             .filter(|p| p.status == RuleStatus::Skipped)
             .map(|p| p.name.clone())
             .collect();
-        let replayed = oxo_flow_core::reentry::replay_valid_reentries(
-            &mut config,
+        let replayed = replay_checkpoint_reentries(
+            &mut ReplayPlan {
+                config: &mut config,
+                dag: &mut dag,
+                order: &mut order,
+                target: &target,
+                when_false_rules: &when_false_rules,
+                workdir: base_dir,
+                run_log: None,
+            },
             &checkpoint_state.reentries,
             &valid,
+            ReplayPlanOrdering::ParallelDisplay,
+            "dry-run",
+            true,
         )?;
-        if !replayed.is_empty() {
-            tracing::info!(
-                count = replayed.len(),
-                "dry-run replayed checkpoint re-entries"
-            );
-            dag = WorkflowDag::from_rules_with_config(
-                &config.rules,
-                &config_placeholder_values(&config.config),
-            )
-            .context("failed to rebuild workflow DAG after re-entry replay")?;
-            let new_order: Vec<String> = if target.is_empty() {
-                // When-aware closure (#882/#883), same as the main dry-run
-                // plan: raw `execution_order` would resurrect consumers of
-                // when-gated producers on the replayed DAG.
-                let filtered = execution_order_skipping_with_notes(
-                    &dag,
-                    &target,
-                    &when_false_rules,
-                    base_dir,
-                    None,
-                    true,
-                )?;
-                let order_set: std::collections::HashSet<String> =
-                    filtered.iter().cloned().collect();
-                let mut ordered: Vec<String> = Vec::new();
-                for group in dag.parallel_groups()? {
-                    let mut level: Vec<String> = group
-                        .into_iter()
-                        .filter(|n| order_set.contains(n))
-                        .collect();
-                    level.sort();
-                    ordered.extend(level);
-                }
-                ordered
-            } else {
-                // Targets were already noted in the initial plan; re-printing
-                // identical notes after the replay reads as noise.
-                execution_order_skipping_with_notes(
-                    &dag,
-                    &target,
-                    &when_false_rules,
-                    base_dir,
-                    None,
-                    false,
-                )?
-            };
-            let old_order_len = order.len();
-            order = new_order;
-            if order.len() != old_order_len {
-                eprintln!(
-                    "  {} re-entry replay: plan grew from {} to {} rules",
-                    "Replay:".bold().cyan(),
-                    old_order_len,
-                    order.len()
-                );
-            }
+        if replayed > 0 {
             preview = crate::commands::run_preview::preview_run_plan(
                 &checkpoint_state,
                 &config,
