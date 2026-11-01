@@ -487,15 +487,22 @@ pub(crate) async fn auto_build_references(
             // (spawn_rule_shell): `set -o pipefail` in a shell prelude
             // is invalid under dash, which /bin/sh is on Debian-family
             // systems (review finding on issue #92).
-            let spawn_ref_build = |shell: &str| {
-                std::process::Command::new(shell)
+            async fn run_ref_shell(
+                shell: &str,
+                cmd: &str,
+                dir: &Path,
+            ) -> std::io::Result<std::process::ExitStatus> {
+                tokio::process::Command::new(shell)
                     .arg("-c")
-                    .arg(&build_cmd)
-                    .current_dir(ref_workdir)
+                    .arg(cmd)
+                    .current_dir(dir)
                     .status()
-            };
-            let status = match spawn_ref_build("bash") {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => spawn_ref_build("sh"),
+                    .await
+            }
+            let status = match run_ref_shell("bash", &build_cmd, ref_workdir).await {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    run_ref_shell("sh", &build_cmd, ref_workdir).await
+                }
                 other => other,
             };
             match status {

@@ -36,7 +36,7 @@ impl AiRuntime {
         let provider = super::ai_template::resolve_ai_provider()?;
 
         // Resolve config chain
-        let global = load_global_config();
+        let global = AiConfig::from_global_file();
         let project = project_dir.and_then(AiConfig::from_project_file);
         let workflow = workflow_path.and_then(|p| {
             std::fs::read_to_string(p).ok().and_then(|c| {
@@ -150,24 +150,6 @@ impl AiRuntime {
             skill_context,
         })
     }
-}
-
-fn load_global_config() -> Option<AiConfig> {
-    // Shared resolver so the legacy `~/.config/oxo-flow/ai_config.json`
-    // fallback behaves identically to `ai status` — an `ai setup`-written
-    // config used to be invisible to runtime-dependent commands.
-    let path = oxo_flow_ai::provider::resolved_ai_config_path()?;
-    let content = std::fs::read_to_string(&path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let provider_str = json["provider"].as_str().unwrap_or("");
-    let provider: oxo_flow_ai::provider::ProviderKind = provider_str.parse().ok()?;
-    Some(AiConfig {
-        enabled: true,
-        provider,
-        model: json["model"].as_str().map(String::from),
-        api_url: json["api_url"].as_str().map(String::from),
-        ..Default::default()
-    })
 }
 
 /// Discover user-defined skills (home + project level) and return the

@@ -166,6 +166,20 @@ impl AiConfig {
         }
     }
 
+    /// Create a config parsed from the global config file (`~/.oxo-flow/ai_config.json`).
+    pub fn from_global_file() -> Option<Self> {
+        let (provider_str, api_key, api_url, model) = crate::provider::load_ai_config()?;
+        let provider: ProviderKind = provider_str.parse().ok()?;
+        Some(Self {
+            enabled: true,
+            provider,
+            model: (!model.is_empty()).then_some(model),
+            api_key: (!api_key.is_empty()).then_some(api_key),
+            api_url: (!api_url.is_empty()).then_some(api_url),
+            ..Default::default()
+        })
+    }
+
     /// Create a config from environment variables.
     pub fn from_env() -> Self {
         let provider_str = std::env::var("OXO_FLOW_AI_PROVIDER").unwrap_or_default();
@@ -633,5 +647,14 @@ auto_fix = "never"
         // Arrange + Act: read the shipped default.
         // Assert: it is the calibrated budget.
         assert_eq!(default_max_retries(), 10);
+    }
+
+    #[test]
+    fn from_global_file_returns_none_or_valid_config() {
+        // When no config file exists or when one exists, from_global_file()
+        // must not panic and must return an AiConfig with matching provider.
+        if let Some(config) = AiConfig::from_global_file() {
+            assert!(config.enabled);
+        }
     }
 }

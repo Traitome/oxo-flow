@@ -267,12 +267,15 @@ pub struct McpHttpClient {
 /// change between here and `rpc` cannot re-point the connection into
 /// internal space. Allowlisted hosts and IP literals skip DNS and need no
 /// pin (`None`).
-fn screen_mcp_endpoint(
+enum McpScreenTarget {
+    ExemptOrLiteral,
+    Resolve { host: String, port: u16 },
+}
+
+fn preflight_mcp_endpoint(
     base_url: &str,
     allow: &[String],
-) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
-    use std::net::ToSocketAddrs;
-
+) -> Result<McpScreenTarget, AiError> {
     use crate::tools::builtin::{BLOCKED_HOST_SUFFIXES, ip_is_forbidden};
 
     let parsed = reqwest::Url::parse(base_url).map_err(|e| AiError::Config {
@@ -290,7 +293,7 @@ fn screen_mcp_endpoint(
         ),
     };
     if allow.iter().any(|a| a == &host) {
-        return Ok(None);
+        return Ok(McpScreenTarget::ExemptOrLiteral);
     }
     if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
         return Err(blocked(format!("host {host:?} is site-local")));
@@ -303,16 +306,27 @@ fn screen_mcp_endpoint(
         } else {
             // Literal IP: no name resolution happens, so there is nothing
             // to pin.
-            Ok(None)
+            Ok(McpScreenTarget::ExemptOrLiteral)
         };
     }
     let port = parsed
         .port()
         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let addrs: Vec<_> = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|e| blocked(format!("host {host:?} does not resolve: {e}")))?
-        .collect();
+    Ok(McpScreenTarget::Resolve { host, port })
+}
+
+fn validate_mcp_resolved_addrs(
+    base_url: &str,
+    host: String,
+    addrs: &[std::net::SocketAddr],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    use crate::tools::builtin::ip_is_forbidden;
+
+    let blocked = |why: String| AiError::Config {
+        message: format!(
+            "MCP endpoint '{base_url}' refused: {why} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
+        ),
+    };
     if let Some(offender) = addrs.iter().map(|a| a.ip()).find(|ip| ip_is_forbidden(*ip)) {
         return Err(blocked(format!(
             "host {host:?} resolves into forbidden address space ({offender})"
@@ -329,6 +343,51 @@ fn screen_mcp_endpoint(
         )));
     };
     Ok(Some((host, first)))
+}
+
+fn screen_mcp_endpoint(
+    base_url: &str,
+    allow: &[String],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    use std::net::ToSocketAddrs;
+
+    let target = preflight_mcp_endpoint(base_url, allow)?;
+    let (host, port) = match target {
+        McpScreenTarget::ExemptOrLiteral => return Ok(None),
+        McpScreenTarget::Resolve { host, port } => (host, port),
+    };
+    let addrs: Vec<_> = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|e| AiError::Config {
+            message: format!(
+                "MCP endpoint '{base_url}' refused: host {host:?} does not resolve: {e} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
+            ),
+        })?
+        .collect();
+    validate_mcp_resolved_addrs(base_url, host, &addrs)
+}
+
+/// Async variant of [`screen_mcp_endpoint`] using [`tokio::net::lookup_host`]
+/// so the redirect loop in [`McpHttpClient::rpc`] does not block worker threads
+/// on DNS lookups.
+pub(crate) async fn screen_mcp_endpoint_async(
+    base_url: &str,
+    allow: &[String],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    let target = preflight_mcp_endpoint(base_url, allow)?;
+    let (host, port) = match target {
+        McpScreenTarget::ExemptOrLiteral => return Ok(None),
+        McpScreenTarget::Resolve { host, port } => (host, port),
+    };
+    let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| AiError::Config {
+            message: format!(
+                "MCP endpoint '{base_url}' refused: host {host:?} does not resolve: {e} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
+            ),
+        })?
+        .collect();
+    validate_mcp_resolved_addrs(base_url, host, &addrs)
 }
 
 /// Build an MCP HTTP client, optionally pinned to a vetted address.
@@ -517,7 +576,7 @@ impl McpHttpClient {
                         message: format!("MCP redirect Location '{location}' is invalid: {e}"),
                     })?;
                 let next_url = next.to_string();
-                current_pin = screen_mcp_endpoint(&next_url, &self.allow)?;
+                current_pin = screen_mcp_endpoint_async(&next_url, &self.allow).await?;
                 tracing::info!("MCP endpoint {current_url} redirected to {next_url}");
                 current_url = next_url;
                 continue;
@@ -1653,6 +1712,16 @@ mod tests {
         assert!(McpHttpClient::new_with_allowlist("mcp://127.0.0.1:8080", allow.clone()).is_ok());
         assert!(McpHttpClient::new_with_allowlist("mcp://10.0.0.5:8080", allow).is_ok());
         assert!(McpHttpClient::new("mcp://localhost:8080").is_err());
+    }
+
+    #[tokio::test]
+    async fn mcp_endpoints_are_ssrf_screened_async() {
+        assert!(screen_mcp_endpoint_async("mcp://localhost:8080", &[]).await.is_err());
+        assert!(screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &[]).await.is_err());
+        assert!(screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &[]).await.is_err());
+        let allow = vec!["10.0.0.5".to_string(), "127.0.0.1".to_string()];
+        assert!(screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &allow).await.is_ok());
+        assert!(screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &allow).await.is_ok());
     }
 
     #[test]
