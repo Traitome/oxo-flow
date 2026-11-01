@@ -271,7 +271,7 @@ The `oxo-flow` binary provides **32 subcommands** covering the complete workflow
 | Category | Commands |
 |----------|----------|
 | **Execution** | `run`, `resume`, `dry-run` (alias `plan`), `test`, `batch` |
-| **Development** | `init`, `validate`, `format`, `lint`, `debug`, `template` |
+| **Development** | `init`, `validate`, `format`, `lint`, `debug`, `template`, `import` |
 | **Inspection** | `graph`, `info`, `report`, `status`, `config` (alias `check`), `diff`, `provenance`, `schema`, `verify-data` |
 | **Environment** | `env`, `export`, `clean`, `touch` |
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |

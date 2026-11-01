@@ -51,6 +51,9 @@ export interface ValidateResponse {
   valid: boolean;
   errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>;
   warnings?: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>;
+  rules: number;
+  dependencies: number;
+  missing_inputs: string[];
 }
 export interface WorkflowStats {
   rule_count: number;
@@ -165,6 +168,7 @@ export interface ShareLanding {
 export interface RunStatus {
   status: string; phase: string;
   nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
+  timeline: Array<{ timestamp: string; event: string; node: string | null; message: string | null }>;
   resources: { cpu_pct: number; memory_mb: number; disk_mb: number };
 }
 export interface DagStatus {
