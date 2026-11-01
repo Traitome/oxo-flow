@@ -96,52 +96,54 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
             toml.push_str(&format!("protected_output = [{p_str}]\n"));
         }
 
-        // Inputs
-        let rendered_inputs = if r.inputs.is_empty() {
-            vec![format!("data/{{sample}}_{}_input", r.name)]
-        } else {
-            r.inputs.clone()
-        };
-        let in_str = rendered_inputs
-            .iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(", ");
-        toml.push_str(&format!("input = [{in_str}]\n"));
+        // Snakemake sink rules (`rule all` aggregating final targets) have no
+        // output, and pure-source rules may have no input; oxo-flow validates
+        // both shapes, so emit the keys only when present instead of
+        // fabricating {sample}-templated placeholders that fail E003.
+        if !r.inputs.is_empty() {
+            let in_str = r
+                .inputs
+                .iter()
+                .map(|s| format!("\"{}\"", s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("input = [{in_str}]\n"));
+        }
 
-        // Outputs
-        let rendered_outputs = if r.outputs.is_empty() {
-            vec![format!("results/{{sample}}/{}.out", r.name)]
-        } else {
-            r.outputs.clone()
-        };
-        let out_str = rendered_outputs
-            .iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(", ");
-        toml.push_str(&format!("output = [{out_str}]\n"));
+        if !r.outputs.is_empty() {
+            let out_str = r
+                .outputs
+                .iter()
+                .map(|s| format!("\"{}\"", s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("output = [{out_str}]\n"));
+        }
 
         // Shell script
         let cleaned_shell = r.shell.trim();
-        if cleaned_shell.contains('\n') {
-            toml.push_str("shell = '''\n");
-            toml.push_str(cleaned_shell);
-            toml.push_str("\n'''\n");
-        } else {
-            let escaped = cleaned_shell.replace("\"", "\\\"");
-            toml.push_str(&format!("shell = \"{escaped}\"\n"));
+        if !cleaned_shell.is_empty() {
+            if cleaned_shell.contains('\n') {
+                toml.push_str("shell = '''\n");
+                toml.push_str(cleaned_shell);
+                toml.push_str("\n'''\n");
+            } else {
+                let escaped = cleaned_shell.replace("\"", "\\\"");
+                toml.push_str(&format!("shell = \"{escaped}\"\n"));
+            }
         }
 
         // Inferred biological types
-        let (in_type, out_type) =
-            infer_snakemake_types(&r.name, &rendered_inputs, &rendered_outputs);
+        let (in_type, out_type) = infer_snakemake_types(&r.name, &r.inputs, &r.outputs);
         if let Some(it) = in_type
             && let Some(ot) = out_type
         {
             toml.push_str(&format!(
                 "types = {{ inputs = {{ \"{}\" = \"{}\" }}, outputs = {{ \"{}\" = \"{}\" }} }}\n",
-                rendered_inputs[0], it, rendered_outputs[0], ot
+                r.inputs.first().unwrap_or(&String::new()),
+                it,
+                r.outputs.first().unwrap_or(&String::new()),
+                ot
             ));
         }
         toml.push('\n');
@@ -378,7 +380,65 @@ pub fn parse_snakemake_rules(source: &str) -> Result<Vec<SnakemakeRule>> {
     Ok(rules)
 }
 
+/// Snakemake `expand("pattern/{wildcard}", values=[...])` carries the path
+/// pattern in its quoted arguments. Extract those patterns and remove the
+/// whole call before comma tokenization, whose argument separators would
+/// otherwise splice tokens mid-string and corrupt the generated TOML.
+fn strip_expand_calls(line: &str, collected: &mut Vec<String>) -> String {
+    let mut result = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(pos) = rest.find("expand(") {
+        result.push_str(&rest[..pos]);
+        let after_open = &rest[pos + "expand(".len()..];
+        let mut depth = 1usize;
+        let mut close = None;
+        for (idx, ch) in after_open.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            result.push_str("expand(");
+            result.push_str(after_open);
+            rest = "";
+            break;
+        };
+        let inner = &after_open[..close];
+        let mut chars = inner.char_indices();
+        while let Some((start, ch)) = chars.next() {
+            if ch != '"' && ch != '\'' {
+                continue;
+            }
+            let Some(stop) = inner[start + ch.len_utf8()..].find(ch) else {
+                break;
+            };
+            let pattern = &inner[start + ch.len_utf8()..start + ch.len_utf8() + stop];
+            if pattern.contains('/') || pattern.contains('{') || pattern.contains('.') {
+                collected.push(pattern.to_string());
+            }
+            let closing = start + ch.len_utf8() + stop;
+            for (idx, _) in chars.by_ref() {
+                if idx > closing {
+                    break;
+                }
+            }
+        }
+        rest = &after_open[close + 1..];
+    }
+    result.push_str(rest);
+    result
+}
+
 fn extract_paths_from_line(line: &str, target: &mut Vec<String>) {
+    let line = strip_expand_calls(line, target);
     for token in line.split(',') {
         let part = token.trim();
         if part.is_empty() {
@@ -427,6 +487,15 @@ fn extract_output_paths(
     temp: &mut Vec<String>,
     prot: &mut Vec<String>,
 ) {
+    let is_temp_call = line.contains("temp(");
+    let mut expand_patterns = Vec::new();
+    let line = strip_expand_calls(line, &mut expand_patterns);
+    for pattern in &expand_patterns {
+        outputs.push(pattern.clone());
+        if is_temp_call {
+            temp.push(pattern.clone());
+        }
+    }
     for token in line.split(',') {
         let part = token.trim();
         if part.is_empty() {

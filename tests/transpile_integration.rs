@@ -195,6 +195,57 @@ rule bwa_mem:
 }
 
 #[test]
+#[test]
+fn test_transpile_snakemake_expand_call_inputs() {
+    let smk = r#"
+rule all:
+    input:
+        "results/report.txt"
+
+rule trim:
+    input:
+        "raw/{sample}.fastq"
+    output:
+        temp("trimmed/{sample}.fastq")
+    shell:
+        "cutadapt {input} -o {output}"
+
+rule report:
+    input:
+        expand("trimmed/{sample}.fastq", sample=["A", "B"])
+    output:
+        "results/report.txt"
+    shell:
+        "wc -l {input} > {output}"
+    "#;
+
+    let toml_str = transpile(smk, SourceFormat::Snakemake).expect("transpile should succeed");
+    assert!(
+        toml_str.contains("trimmed/{sample}.fastq"),
+        "expand pattern must survive transpilation: {toml_str}"
+    );
+    assert!(
+        !toml_str.contains("expand("),
+        "the expand() call must not leak into the generated TOML: {toml_str}"
+    );
+    assert!(
+        !toml_str.contains("results/{sample}"),
+        "sink rules must not receive fabricated outputs: {toml_str}"
+    );
+    let config =
+        WorkflowConfig::parse(&toml_str).expect("generated toml must parse as valid workflow");
+    assert_eq!(config.rules.len(), 3);
+    assert!(
+        config.rules[0].output.is_empty(),
+        "rule all must stay a sink rule without fabricated outputs"
+    );
+    assert!(
+        config.rules[1].temporary,
+        "temp() output must set the tombstone flag"
+    );
+}
+
+#[test]
 fn test_transpile_snakemake_temp_protected_flags() {
     let smk = r#"
 rule call_variants:
