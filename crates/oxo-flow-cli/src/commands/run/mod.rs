@@ -491,44 +491,20 @@ pub async fn run_command(
     // Default targets (issue #469): `target = true` rules seed the build
     // when nothing explicit was selected. Explicit -t/--module wins.
     let target = resolve_default_targets(&config, &target);
-    let mut order = if target.is_empty() {
-        let (filtered_order, pruned) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &[],
-                &when_false_rules,
-                // Pre-built inputs (atacseq bwa_mem finding): an input whose
-                // concrete file already exists in the run workdir is
-                // satisfiable — a when-false producer must not gate it.
-                &|path| run_workdir_check(Some(workdir.as_ref().unwrap_or(&workdir_default)), path),
-            )
-            .with_context(|| "failed to compute full-run execution order")?;
-        for rule_name in &pruned {
-            print_when_pruned_note(rule_name, Some(&run_log));
-        }
-        filtered_order
-    } else {
-        let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-        let (filtered_order, skipped_targets) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &target_refs,
-                &when_false_rules,
-                // Pre-built inputs (atacseq bwa_mem finding): an input whose
-                // concrete file already exists in the run workdir is
-                // satisfiable — a when-false producer must not gate it.
-                &|path| run_workdir_check(Some(workdir.as_ref().unwrap_or(&workdir_default)), path),
-            )
-            .with_context(|| "failed to resolve target rules")?;
-        for skipped in &skipped_targets {
-            print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
-        }
-        if filtered_order.is_empty() {
-            json_summary.emit("failed", &RunCounts::default(), vec![]);
-            return Err(anyhow::anyhow!(
-                "all requested targets are when-gated false — nothing to run"
-            ));
-        }
-        filtered_order
-    };
+    let mut order = execution_order_skipping_with_notes(
+        &dag,
+        &target,
+        &when_false_rules,
+        workdir.as_ref().unwrap_or(&workdir_default),
+        Some(&run_log),
+        true,
+    )?;
+    if !target.is_empty() && order.is_empty() {
+        json_summary.emit("failed", &RunCounts::default(), vec![]);
+        return Err(anyhow::anyhow!(
+            "all requested targets are when-gated false — nothing to run"
+        ));
+    }
     // ── Workdir source linking (issue #837) ────────────────────────────
     // In the two-directory mode (shared workflow repo + separate workdir)
     // rules run with CWD = workdir, so relative paths resolve against the
@@ -2058,42 +2034,14 @@ pub async fn run_command(
                 &config_placeholder_values(&config.config),
             )
             .context("failed to rebuild workflow DAG after re-entry replay")?;
-            order = if target.is_empty() {
-                let (filtered, pruned) = dag
-                    .execution_order_for_targets_skipping_with_source_check(
-                        &[],
-                        &when_false_rules,
-                        &|path| {
-                            run_workdir_check(
-                                Some(workdir.as_ref().unwrap_or(&workdir_default)),
-                                path,
-                            )
-                        },
-                    )
-                    .with_context(|| "failed to compute full-run execution order")?;
-                for rule_name in &pruned {
-                    print_when_pruned_note(rule_name, Some(&run_log));
-                }
-                filtered
-            } else {
-                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                let (filtered, skipped_targets) = dag
-                    .execution_order_for_targets_skipping_with_source_check(
-                        &target_refs,
-                        &when_false_rules,
-                        &|path| {
-                            run_workdir_check(
-                                Some(workdir.as_ref().unwrap_or(&workdir_default)),
-                                path,
-                            )
-                        },
-                    )
-                    .with_context(|| "failed to resolve target rules")?;
-                for skipped in &skipped_targets {
-                    print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
-                }
-                filtered
-            };
+            order = execution_order_skipping_with_notes(
+                &dag,
+                &target,
+                &when_false_rules,
+                workdir.as_ref().unwrap_or(&workdir_default),
+                Some(&run_log),
+                true,
+            )?;
         }
     }
 
@@ -2142,42 +2090,14 @@ pub async fn run_command(
                     &config_placeholder_values(&config.config),
                 )
                 .context("failed to rebuild workflow DAG after output_pattern replay")?;
-                order = if target.is_empty() {
-                    let (filtered, pruned) = dag
-                        .execution_order_for_targets_skipping_with_source_check(
-                            &[],
-                            &when_false_rules,
-                            &|path| {
-                                run_workdir_check(
-                                    Some(workdir.as_ref().unwrap_or(&workdir_default)),
-                                    path,
-                                )
-                            },
-                        )
-                        .with_context(|| "failed to compute full-run execution order")?;
-                    for rule_name in &pruned {
-                        print_when_pruned_note(rule_name, Some(&run_log));
-                    }
-                    filtered
-                } else {
-                    let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                    let (filtered, skipped_targets) = dag
-                        .execution_order_for_targets_skipping_with_source_check(
-                            &target_refs,
-                            &when_false_rules,
-                            &|path| {
-                                run_workdir_check(
-                                    Some(workdir.as_ref().unwrap_or(&workdir_default)),
-                                    path,
-                                )
-                            },
-                        )
-                        .with_context(|| "failed to resolve target rules")?;
-                    for skipped in &skipped_targets {
-                        print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
-                    }
-                    filtered
-                };
+                order = execution_order_skipping_with_notes(
+                    &dag,
+                    &target,
+                    &when_false_rules,
+                    workdir.as_ref().unwrap_or(&workdir_default),
+                    Some(&run_log),
+                    true,
+                )?;
             }
         }
     }
@@ -5032,19 +4952,14 @@ pub async fn dry_run_command(
     // Independent rules at the same level appear adjacent, so the listing
     // reflects actual concurrency instead of an arbitrary topological order.
     let mut order = if target.is_empty() {
-        let (filtered_order, pruned) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &[],
-                &when_false_rules,
-                // Pre-built inputs (atacseq bwa_mem finding): see the main
-                // target-closure call — existence in the dry-run base dir
-                // keeps the consumer plannable.
-                &|path| run_workdir_check(Some(base_dir), path),
-            )
-            .with_context(|| "failed to compute full-run execution order")?;
-        for rule_name in &pruned {
-            print_when_pruned_note(rule_name, None);
-        }
+        let filtered_order = execution_order_skipping_with_notes(
+            &dag,
+            &target,
+            &when_false_rules,
+            base_dir,
+            None,
+            true,
+        )?;
         let order_set: std::collections::HashSet<String> = filtered_order.iter().cloned().collect();
         let mut ordered: Vec<String> = Vec::new();
         for group in dag.parallel_groups()? {
@@ -5057,21 +4972,7 @@ pub async fn dry_run_command(
         }
         ordered
     } else {
-        let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-        let (filtered, skipped_targets) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &target_refs,
-                &when_false_rules,
-                // Pre-built inputs (atacseq bwa_mem finding): see the main
-                // target-closure call — existence in the dry-run base dir
-                // keeps the consumer plannable.
-                &|path| run_workdir_check(Some(base_dir), path),
-            )
-            .with_context(|| "failed to resolve target rules")?;
-        for skipped in &skipped_targets {
-            print_target_skipped_note(skipped, &when_false_rules, None);
-        }
-        filtered
+        execution_order_skipping_with_notes(&dag, &target, &when_false_rules, base_dir, None, true)?
     };
 
     // All config values (including CLI --arg overrides) become {config.key} in templates.
@@ -5155,19 +5056,14 @@ pub async fn dry_run_command(
                 // When-aware closure (#882/#883), same as the main dry-run
                 // plan: raw `execution_order` would resurrect consumers of
                 // when-gated producers on the replayed DAG.
-                let (filtered, pruned) = dag
-                    .execution_order_for_targets_skipping_with_source_check(
-                        &[],
-                        &when_false_rules,
-                        // Pre-built inputs (atacseq bwa_mem finding): see
-                        // the main target-closure call — existence in the
-                        // dry-run base dir keeps the consumer plannable.
-                        &|path| run_workdir_check(Some(base_dir), path),
-                    )
-                    .with_context(|| "failed to compute full-run execution order")?;
-                for rule_name in &pruned {
-                    print_when_pruned_note(rule_name, None);
-                }
+                let filtered = execution_order_skipping_with_notes(
+                    &dag,
+                    &target,
+                    &when_false_rules,
+                    base_dir,
+                    None,
+                    true,
+                )?;
                 let order_set: std::collections::HashSet<String> =
                     filtered.iter().cloned().collect();
                 let mut ordered: Vec<String> = Vec::new();
@@ -5181,15 +5077,16 @@ pub async fn dry_run_command(
                 }
                 ordered
             } else {
-                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                let (filtered, _) = dag
-                    .execution_order_for_targets_skipping_with_source_check(
-                        &target_refs,
-                        &when_false_rules,
-                        &|path| run_workdir_check(Some(base_dir), path),
-                    )
-                    .with_context(|| "failed to resolve target rules")?;
-                filtered
+                // Targets were already noted in the initial plan; re-printing
+                // identical notes after the replay reads as noise.
+                execution_order_skipping_with_notes(
+                    &dag,
+                    &target,
+                    &when_false_rules,
+                    base_dir,
+                    None,
+                    false,
+                )?
             };
             let old_order_len = order.len();
             order = new_order;

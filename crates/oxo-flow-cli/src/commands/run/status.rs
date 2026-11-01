@@ -75,6 +75,55 @@ pub(crate) fn run_workdir_check(workdir: Option<&std::path::Path>, path: &str) -
     }
 }
 
+/// The when-gated/targeted execution-order computation shared by `run`'s
+/// initial planning, both replay rebuilds, and both dry-run plans. The
+/// context messages and narration notes are part of the contract — they
+/// were diverging across the five hand-copied sites. `print_notes: false`
+/// is only for a replay recomputation whose targets were already noted in
+/// the initial plan (re-printing identical notes reads as noise).
+pub(crate) fn execution_order_skipping_with_notes(
+    dag: &WorkflowDag,
+    target: &[String],
+    when_false_rules: &std::collections::HashSet<String>,
+    workdir: &std::path::Path,
+    run_log: Option<&SharedRunLog>,
+    print_notes: bool,
+) -> anyhow::Result<Vec<String>> {
+    if target.is_empty() {
+        let (filtered_order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(
+                &[],
+                when_false_rules,
+                // Pre-built inputs (atacseq bwa_mem finding): an input whose
+                // concrete file already exists in the run workdir is
+                // satisfiable — a when-false producer must not gate it.
+                &|path| run_workdir_check(Some(workdir), path),
+            )
+            .with_context(|| "failed to compute full-run execution order")?;
+        if print_notes {
+            for rule_name in &pruned {
+                print_when_pruned_note(rule_name, run_log);
+            }
+        }
+        Ok(filtered_order)
+    } else {
+        let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+        let (filtered_order, skipped_targets) = dag
+            .execution_order_for_targets_skipping_with_source_check(
+                &target_refs,
+                when_false_rules,
+                &|path| run_workdir_check(Some(workdir), path),
+            )
+            .with_context(|| "failed to resolve target rules")?;
+        if print_notes {
+            for skipped in &skipped_targets {
+                print_target_skipped_note(skipped, when_false_rules, run_log);
+            }
+        }
+        Ok(filtered_order)
+    }
+}
+
 /// Per-rule staleness reasons for `status` (issue #432(c)).
 ///
 /// Answers "why will this rule re-run?" with the SAME classification the
