@@ -989,7 +989,10 @@ fn cli_info_text_format_and_errors() {
         "{stdout}"
     );
     assert!(stdout.contains("Rules: 5"), "{stdout}");
-    assert!(stdout.contains("Tools: analysis, bwa-mem2, qc"), "{stdout}");
+    assert!(
+        stdout.contains("Tools: analysis, bwa-mem2 (bioconda: 2.3), qc"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("Environments: conda=2, docker=1, system=1, venv=1"),
         "{stdout}"

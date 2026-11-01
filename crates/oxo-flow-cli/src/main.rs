@@ -15,6 +15,7 @@ use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
 use crate::commands::info::info_command;
 use crate::commands::infra::{env_command, handle_license};
+use crate::commands::knowledge::{KnowledgeAction, knowledge_command};
 use crate::commands::output::{
     GraphFormat, MetroArg, handle_diff, handle_export, handle_graph, handle_report,
 };
@@ -68,8 +69,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// schema, verify-data, license, and ai; every other command rejects the
-    /// flag instead of silently ignoring it.
+    /// knowledge, schema, verify-data, license, and ai; every other command
+    /// rejects the flag instead of silently ignoring it.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -408,6 +409,18 @@ pub enum Commands {
             help = "Output .oxoflow file (prints to stdout if omitted)"
         )]
         output: Option<PathBuf>,
+    },
+    /// Query the embedded knowledge base (Bioconda, nf-core, skills, docs).
+    Knowledge {
+        #[command(subcommand)]
+        action: KnowledgeAction,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            global = true,
+            help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
+        )]
+        format: Option<String>,
     },
     /// Initialize a new workflow project.
     Init {
@@ -1180,6 +1193,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Status { .. }
         | Commands::Batch { .. }
         | Commands::Info { .. }
+        | Commands::Knowledge { .. }
         | Commands::Schema
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
@@ -1332,8 +1346,8 @@ async fn main() -> Result<()> {
             "`oxo-flow {name}` does not support --json yet{hint}.\n  \
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
-             status, batch, info, schema, license, ai, provenance verify, \
-             verify-data)."
+             status, batch, info, knowledge, schema, license, ai, \
+             provenance verify, verify-data)."
         );
     }
     // A background run never executes the workflow in the foreground
@@ -1670,6 +1684,7 @@ async fn main() -> Result<()> {
             };
             crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
         }
+        Commands::Knowledge { action, format } => knowledge_command(action, format)?,
         Commands::Init { name, dir, force } => init_command(name, dir, force)?,
         Commands::Template {
             template,

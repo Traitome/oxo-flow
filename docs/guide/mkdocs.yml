@@ -173,6 +173,7 @@ nav:
       - import: commands/import.md
       - init: commands/init.md
       - info: commands/info.md
+      - knowledge: commands/knowledge.md
       - license: commands/license.md
       - lint: commands/lint.md
       - provenance: commands/provenance.md

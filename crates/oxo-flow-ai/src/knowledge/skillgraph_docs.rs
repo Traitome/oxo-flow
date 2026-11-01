@@ -95,6 +95,11 @@ pub fn format_doc(doc: &SkillDoc) -> String {
     )
 }
 
+/// All doc ids in embedding order (id-sorted), for structured indexing.
+pub fn doc_ids() -> Vec<&'static str> {
+    DOCS.docs.iter().map(|d| d.id).collect()
+}
+
 /// Compact index of all embedded docs (id — title, one line each).
 pub fn list_docs() -> String {
     let mut s = format!(
