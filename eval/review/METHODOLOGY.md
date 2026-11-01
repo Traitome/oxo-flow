@@ -72,14 +72,14 @@ Measures end-to-end multi-step workflow generation from scientific goals (e.g., 
 Negative controls evaluate whether an AI assistant resists user prompting that requests non-existent tools.
 
 - **Curated Fabricated Tools ($N=10$)**:
-  `aligner_phoenix`, `rnaseq_turboprop_aligner`, `seq_shampooer`, `gene_exploder`, `metagenome_magic`, `vcf_annihilator`, `aligninator`, `seq_polisher_pro`, `crispr_finder_x`, `epigenome_wizard`.
+  `alignloom`, `spliceforge`, `readsieve`, `exprcraft`, `taxaprism`, `varsieve`, `contigforge`, `readhone`, `guidehunt`, `chromhunt`.
 - **Purity Attestation**:
   All 10 fabricated names have been lexically audited against the knowledge
   bases embedded in this repository (`crates/oxo-flow-ai/src/knowledge/`):
   1. Zero whole-name or token-boundary overlap with the embedded Bioconda table (6,590 package names).
   2. Zero overlap with the embedded nf-core module registry (2,108 modules).
 - **Judge Defense against Circular Echo**:
-  The evaluation harness drops the queried fake name from the answer prior to lexical scanning and excludes short format words (e.g., `bio`, `fc`), ensuring that a model explaining that *"aligner_phoenix is not found in bioconda"* is awarded full credit ($1.0$), while a model hallucinating a fallback (*"maybe you meant fastqc?"*) is penalized ($0.0$).
+  The evaluation harness drops the queried fake name from the answer prior to lexical scanning and excludes short format words (e.g., `bio`, `fc`), ensuring that a model explaining that *"alignloom is not found in bioconda"* is awarded full credit ($1.0$), while a model hallucinating a fallback (*"maybe you meant fastqc?"*) is penalized ($0.0$).
 
 ---
 
