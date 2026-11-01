@@ -4,6 +4,7 @@ use crate::extract::ApiJson;
 use axum::extract::Path;
 use axum::{Extension, Json, http::StatusCode};
 
+use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
@@ -18,14 +19,11 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// (issue #82 P0-5); listing and probing stay available to any
 /// authenticated user so they can pick a cluster for their runs.
 fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to manage cluster connections".into(),
-        ));
-    }
-    Ok(())
+    current_user::require_role_outside_personal(
+        user,
+        "admin",
+        "Admin role required to manage cluster connections",
+    )
 }
 
 #[utoipa::path(

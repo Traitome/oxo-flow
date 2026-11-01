@@ -8,6 +8,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json, http::StatusCode};
 
 use crate::domains::ai::types::*;
+use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{
@@ -21,14 +22,11 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// P0-5): reconfiguring the runtime AI provider affects every user's AI
 /// calls and their cost.
 fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to change the server AI provider".into(),
-        ));
-    }
-    Ok(())
+    current_user::require_role_outside_personal(
+        user,
+        "admin",
+        "Admin role required to change the server AI provider",
+    )
 }
 
 #[utoipa::path(

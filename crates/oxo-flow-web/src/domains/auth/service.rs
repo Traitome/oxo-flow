@@ -245,19 +245,37 @@ pub async fn store_pending_state(state: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Verify a callback's CSRF state was issued by this server and consume it
-/// (single use).
+/// A CSRF state is short-lived by design: the daily cleanup prunes the
+/// table, but without a consumption-time freshness check a leaked state
+/// would stay replayable for up to that full 24h window.
+const OAUTH_STATE_TTL_MINS: i64 = 10;
+
+/// Verify a callback's CSRF state was issued by this server, is fresh, and
+/// consume it (single use).
 pub async fn verify_and_consume_state(state: &str) -> Result<(), String> {
     let pool =
         crate::infra::db::sqlite::try_pool().map_err(|_| "Database unavailable".to_string())?;
-    let deleted = sqlx::query("DELETE FROM oauth_states WHERE state = ?")
+    let created: Option<(String,)> =
+        sqlx::query_as("SELECT created_at FROM oauth_states WHERE state = ?")
+            .bind(state)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("State verification failed: {e}"))?;
+    let Some((created,)) = created else {
+        return Err("Invalid or expired CSRF state".into());
+    };
+    // Single use — purge the row whatever the freshness verdict says.
+    sqlx::query("DELETE FROM oauth_states WHERE state = ?")
         .bind(state)
         .execute(pool)
         .await
-        .map_err(|e| format!("State verification failed: {e}"))?
-        .rows_affected();
-    if deleted == 0 {
-        return Err("Invalid or expired CSRF state".into());
+        .map_err(|e| format!("State verification failed: {e}"))?;
+    let created_ts = chrono::DateTime::parse_from_rfc3339(&created)
+        .map_err(|_| "Invalid or expired CSRF state".to_string())?;
+    if chrono::Utc::now() - created_ts.with_timezone(&chrono::Utc)
+        > chrono::Duration::minutes(OAUTH_STATE_TTL_MINS)
+    {
+        return Err("OAuth state expired — restart the sign-in flow".into());
     }
     Ok(())
 }
@@ -573,5 +591,37 @@ mod tests {
         let pool = users_pool().await;
         let result = ensure_oauth_user(&pool, "", "orcid:Wei", "orcid:").await;
         assert!(result.is_err(), "empty id must fail closed");
+    }
+
+    #[tokio::test]
+    async fn test_oauth_state_single_use_and_freshness() {
+        // The state store rides the process-global pool; initialize it with
+        // a throwaway in-memory DB (first caller wins, like production).
+        crate::infra::db::sqlite::init_pool("sqlite::memory:").await;
+
+        store_pending_state("state-fresh")
+            .await
+            .expect("store fresh");
+        verify_and_consume_state("state-fresh")
+            .await
+            .expect("a fresh state verifies");
+        // Single use: the row is gone.
+        assert!(
+            verify_and_consume_state("state-fresh").await.is_err(),
+            "a consumed state must not verify twice"
+        );
+
+        // A leaked state does not stay replayable until the daily purge:
+        // consumption rejects anything older than the TTL.
+        sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
+            .bind("state-stale")
+            .bind((chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339())
+            .execute(crate::infra::db::sqlite::try_pool().unwrap())
+            .await
+            .unwrap();
+        let err = verify_and_consume_state("state-stale")
+            .await
+            .expect_err("a stale state must be rejected");
+        assert!(err.contains("expired"), "unexpected error: {err}");
     }
 }

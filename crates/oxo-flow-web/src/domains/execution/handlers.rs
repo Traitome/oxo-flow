@@ -72,14 +72,11 @@ pub(crate) async fn load_owned_run(
 pub(crate) fn require_run_mutator(
     user: &current_user::CurrentUser,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if crate::server::running_mode() != "personal" && user.role == "viewer" {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Viewer role is read-only — the user role (or admin) is required to mutate runs".into(),
-        ));
-    }
-    Ok(())
+    current_user::require_role_outside_personal(
+        user,
+        "user",
+        "Viewer role is read-only — the user role (or admin) is required to mutate runs",
+    )
 }
 
 /// Pre-flight quota usage (threads, memory MB) for a pipeline TOML — the

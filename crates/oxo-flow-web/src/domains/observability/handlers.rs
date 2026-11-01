@@ -341,13 +341,11 @@ pub async fn get_webhook_config(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to read the webhook configuration".into(),
-        ));
-    }
+    crate::domains::auth::current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required to read the webhook configuration",
+    )?;
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -394,13 +392,11 @@ pub async fn put_webhook_config(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to configure webhooks".into(),
-        ));
-    }
+    crate::domains::auth::current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required to configure webhooks",
+    )?;
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,

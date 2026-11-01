@@ -8,6 +8,7 @@ use axum::{Extension, Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
+use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
@@ -871,13 +872,11 @@ pub async fn upload_license(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<LicenseResponse> {
     let user = resolve(authenticated.as_ref());
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required for license operations".into(),
-        ));
-    }
+    current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required for license operations",
+    )?;
     const MAX_LICENSE_BYTES: usize = 64 * 1024;
     let license_data = req
         .get("license_data")
