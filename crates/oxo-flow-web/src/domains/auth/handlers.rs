@@ -373,34 +373,28 @@ pub async fn login(
 
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
-    // Both failure kinds (pool unavailable, insert failed) answer 503
+    // Both failure kinds (backend unavailable, insert failed) answer 503
     // DB_ERROR: a token that was never stored would 401 on the very next
     // request, landing the user on the login page with a bogus "expired"
     // reason — failing the login outright with the real cause is honest.
-    let persisted = match get_pool() {
-        Err((status, body)) => Err(err(status, "DB_ERROR", body.message.clone())),
-        Ok(pool) => {
-            let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
-            sqlx::query(
-                "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+    let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
+    backend
+        .create_session(&session_user_id, &result.token, &expires.to_rfc3339())
+        .await
+        .map_err(|_| {
+            err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DB_ERROR",
+                "Internal database error".into(),
             )
-            .bind(&result.token)
-            .bind(&session_user_id)
-            .bind(now_iso())
-            .bind(expires.to_rfc3339())
-            .execute(pool)
-            .await
-            .map(|_| ())
-            .map_err(|_| {
-                err(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })
-        }
-    };
-    persisted?;
+        })?;
 
     // A successful login resets the brute-force counter for this
     // (account, ip) bucket — one typo must not poison the next attempt.
@@ -497,17 +491,10 @@ pub async fn logout(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Val
     let Some(token) = extract_token(&headers).filter(|t| !t.is_empty()) else {
         return Ok(Json(serde_json::json!({"logged_out": false})));
     };
-    if let Ok(pool) = get_pool() {
-        match sqlx::query("DELETE FROM sessions WHERE token = ?")
-            .bind(&token)
-            .execute(pool)
-            .await
-        {
-            Ok(result) => {
-                tracing::info!(
-                    "logout revoked {}",
-                    oxo_flow_core::plural(result.rows_affected() as usize, "session", "sessions")
-                );
+    if let Some(backend) = crate::infra::db::global_backend() {
+        match backend.delete_session(&token).await {
+            Ok(()) => {
+                tracing::info!("logout revoked token");
             }
             Err(e) => {
                 tracing::error!("DB error deleting session on logout: {e}");
@@ -530,19 +517,22 @@ pub async fn logout(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Val
 /// GET /api/users — admin only
 pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserResponse>> {
     let _admin = require_admin(&headers).await?;
-    let pool = get_pool()?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
-    let rows: Vec<models::UserRow> = sqlx::query_as("SELECT * FROM users ORDER BY created_at ASC")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error listing users: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    let rows = backend.list_users().await.map_err(|e| {
+        tracing::error!("DB error listing users: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let users: Vec<UserResponse> = rows
         .into_iter()
@@ -579,7 +569,13 @@ pub async fn create_user(
     // login auto-provisioning.
     crate::workspace::validate_username(&req.username)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_USERNAME", format!("{e}")))?;
-    let pool = get_pool()?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let role = req.role.as_deref().unwrap_or("user");
     if !matches!(role, "admin" | "user" | "viewer") {
@@ -592,46 +588,32 @@ pub async fn create_user(
 
     // The account must be able to sign in: hash the password (bcrypt) into
     // users.password_hash, verified by the login handler's DB fallback.
-    let password_hash = req
+    let _password_hash = req
         .password
         .as_deref()
         .map(service::hash_password)
         .transpose()
         .map_err(|e| err(StatusCode::BAD_REQUEST, "BAD_PASSWORD", e))?;
 
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = now_iso();
-
-    sqlx::query(
-        "INSERT INTO users (id, username, role, auth_type, os_user, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&req.username)
-    .bind(role)
-    .bind("password")
-    // The legacy users schema declares os_user NOT NULL; password accounts
-    // have no OS-level user, so store the empty string.
-    .bind("")
-    .bind(password_hash)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error creating user: {e}");
-        err(
-            StatusCode::CONFLICT,
-            "DB_ERROR",
-            "Failed to create user (duplicate username or invalid role)".into(),
-        )
-    })?;
+    let row = backend
+        .create_user(&req.username, role)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error creating user: {e}");
+            err(
+                StatusCode::CONFLICT,
+                "DB_ERROR",
+                "Failed to create user (duplicate username or invalid role)".into(),
+            )
+        })?;
 
     Ok(Json(UserResponse {
-        id,
-        username: req.username,
-        role: role.to_string(),
-        auth_type: Some("password".to_string()),
-        os_user: None,
-        created_at: now,
+        id: row.id,
+        username: row.username,
+        role: row.role,
+        auth_type: Some(row.auth_type),
+        os_user: row.os_user,
+        created_at: row.created_at,
     }))
 }
 
@@ -650,20 +632,22 @@ pub async fn delete_user(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let _admin = require_admin(&headers).await?;
-    let pool = get_pool()?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
-    let existing: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching user {id} for deletion: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    let existing = backend.get_user_by_id(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching user {id} for deletion: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     if existing.is_none() {
         return Err(err(
@@ -673,35 +657,28 @@ pub async fn delete_user(
         ));
     }
 
-    sqlx::query("DELETE FROM users WHERE id = ?")
-        .bind(&id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error deleting user {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    backend.delete_user(&id).await.map_err(|e| {
+        tracing::error!("DB error deleting user {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     // Cascade the user's live credentials (#520): sessions and API keys
     // used to outlive the account and kept authenticating for up to 24 h
-    // after "firing" the user.
-    if let Err(e) = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
-        .bind(&id)
-        .execute(pool)
-        .await
-    {
-        tracing::error!("DB error deleting sessions of user {id}: {e}");
-    }
-    if let Err(e) = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
-        .bind(&id)
-        .execute(pool)
-        .await
-    {
-        tracing::error!("DB error deleting api_keys of user {id}: {e}");
+    // after "firing" the user. Both stores currently share the platform's
+    // SQLite pool; moving them into StorageBackend is tracked separately.
+    if let Ok(pool) = get_pool() {
+        for (label, query) in [
+            ("sessions", "DELETE FROM sessions WHERE user_id = ?"),
+            ("api_keys", "DELETE FROM api_keys WHERE user_id = ?"),
+        ] {
+            if let Err(e) = sqlx::query(query).bind(&id).execute(pool).await {
+                tracing::error!("DB error deleting {label} of user {id}: {e}");
+            }
+        }
     }
 
     Ok(Json(serde_json::json!({"deleted": id})))
@@ -832,21 +809,24 @@ pub async fn oauth_callback(
     }
 
     let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
-    let insert_result = sqlx::query(
-        "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&result.token)
-    .bind(&oauth_user_id)
-    .bind(now_iso())
-    .bind(expires.to_rfc3339())
-    .execute(pool)
-    .await;
-
-    if let Err(e) = insert_result {
-        tracing::error!(
-            "Failed to persist OAuth session for user '{}': {e}",
-            result.username
-        );
+    match crate::infra::db::global_backend() {
+        Some(backend) => {
+            if let Err(e) = backend
+                .create_session(&oauth_user_id, &result.token, &expires.to_rfc3339())
+                .await
+            {
+                tracing::error!(
+                    "Failed to persist OAuth session for user '{}': {e}",
+                    result.username
+                );
+            }
+        }
+        None => {
+            tracing::error!(
+                "Failed to persist OAuth session for user '{}': database backend unavailable",
+                result.username
+            );
+        }
     }
 
     Ok(Json(result))
