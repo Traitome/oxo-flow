@@ -91,7 +91,7 @@ An explicit non-workflow CHECKPOINT path is never second-guessed.
 ## Output
 
 ```
-oxo-flow v0.26.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.27.0 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   State as of 118s ago (checkpoint written 14:32:07 local)
   Completed: 3

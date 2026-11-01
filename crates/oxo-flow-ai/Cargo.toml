@@ -20,6 +20,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+http = { workspace = true }
 tracing = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }

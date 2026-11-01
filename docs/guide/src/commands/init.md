@@ -25,6 +25,7 @@ oxo-flow init [OPTIONS] <NAME>
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--dir` | `-d` | `./<NAME>` | Output directory (defaults to the project name) |
+| `--force` | — | off | Overwrite an existing workflow file (its current contents are lost) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
@@ -48,12 +49,24 @@ oxo-flow init my-pipeline
 oxo-flow init my-pipeline -d /projects/genomics/my-pipeline
 ```
 
+### Re-scaffold an existing project
+
+```bash
+# Refuses while my-pipeline.oxoflow exists — nothing is touched:
+oxo-flow init my-pipeline
+# error: workflow file 'my-pipeline/my-pipeline.oxoflow' already exists.
+#        Re-run with --force to overwrite it ...
+
+# Explicit overwrite (your edits to the generated files are lost):
+oxo-flow init my-pipeline --force
+```
+
 ---
 
 ## Output
 
 ```
-oxo-flow v0.26.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.27.0 — Rust-native bioinformatics pipeline engine
 ✓ Created new project at my-pipeline
   my-pipeline/my-pipeline.oxoflow
   my-pipeline/envs/example.yaml
@@ -114,5 +127,5 @@ shell = "echo \"$GREETING\" > {output[0]}"
 ## Notes
 
 - The output directory is created if it does not exist
-- If the directory already exists, oxo-flow prints a warning and files may be overwritten
+- If the workflow file already exists, oxo-flow refuses to run unless `--force` is given — a re-init can never silently destroy manual edits. With `--force` (or a fresh directory), the scaffold is regenerated; every other starter file (`envs/example.yaml`, `scripts/example.sh`, `data/input.txt`, `.gitignore`) is only written when absent, so existing files are always kept
 - The generated `.gitignore` includes common bioinformatics file types and oxo-flow internal directories

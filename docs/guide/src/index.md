@@ -11,7 +11,7 @@ oxo-flow run pipeline.oxoflow -j 8
 ```
 
 ```
-oxo-flow v0.26.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.27.0 — Rust-native bioinformatics pipeline engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads
@@ -44,13 +44,29 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | Capability | Description |
 |---|---|
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
+| **AI Companion & Scientist Team** | Natural language pipeline generation, intelligent refinement, 30+ domain diagnostic patterns, automated recovery, and multi-agent review profile |
+| **Disk-pressure & scratch safety** | Multi-stage runtime disk-pressure guard (Normal → Reclaim → Hold → Abort) with cascade reclamation, plus global `tmp_dir` scratch isolation |
+| **Cryptographic provenance** | Checkpoint truth anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
 | **Reporting** | Generate structured HTML, JSON, Markdown, and PDF reports from checkpoint data — execution truth, failure diagnosis, and file checksums |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
-| **VS Code extension** | First-party `traitome.oxo-flow` IDE for `.oxoflow` — schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (published to Open VSX; also attached as a VSIX to every release) |
+| **VS Code extension** | First-party `traitome.oxo-flow` IDE for `.oxoflow` — schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (published to [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow); also attached as a VSIX to every release) |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
 | **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
+
+---
+
+## Built from First Principles
+
+oxo-flow rethinks bioinformatics workflow orchestration from the ground up:
+
+1. **DAG as pure declarative data, not imperative code** — `.oxoflow` TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.
+2. **Cryptographic determinism over file timestamps** — Exact reproducibility through SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old `mtime` heuristics as the source of truth.
+3. **Physical resource boundaries as first-class constraints** — Built-in multi-stage runtime disk-pressure protection and scratch volume isolation (`tmp_dir`) prevent catastrophic out-of-disk failures on long-running pipelines.
+4. **Hermetic environment isolation** — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) guarantee tool versions never collide.
+5. **Rust-native compiled performance & safety** — Compiled native binary with no external runtime dependencies, `#![forbid(unsafe_code)]`, and sub-second startup with zero JVM or Python overhead.
+6. **AI as an architectural citizen** — Grounded on deterministic engine APIs with structured `{code, message, detail, suggestion}` error contracts, unified validation feedback loops, and 30+ domain diagnostic patterns.
 
 ---
 
@@ -209,7 +225,7 @@ A **DAG** is a mathematical representation of your workflow. It is a "map" that 
 
 ## Project Status
 
-oxo-flow is under active development. The current release (`v0.26.0`) includes the complete core engine, CLI, and web API. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
+oxo-flow is under active development. The current release (`v0.27.0`) includes the complete core engine, CLI, and web API. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
 
 ---
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-pub fn init_command(name: String, dir: Option<PathBuf>) -> Result<()> {
+pub fn init_command(name: String, dir: Option<PathBuf>, force: bool) -> Result<()> {
     print_banner();
 
     // Validate project name: must be non-empty and a valid identifier
@@ -32,10 +32,20 @@ pub fn init_command(name: String, dir: Option<PathBuf>) -> Result<()> {
 
     let project_dir = dir.unwrap_or_else(|| PathBuf::from(&name));
 
-    // Warn if project directory already exists
-    if project_dir.exists() {
+    let workflow_path = project_dir.join(format!("{name}.oxoflow"));
+    // Never clobber a user's edits: an existing workflow file aborts the
+    // init unless --force says otherwise. The other starter files below
+    // are only written when absent, so a re-init can never destroy work.
+    if workflow_path.exists() && !force {
+        anyhow::bail!(
+            "workflow file '{}' already exists. Re-run with --force to overwrite it \
+             (its current contents will be lost), or pick another name.",
+            workflow_path.display()
+        );
+    }
+    if project_dir.exists() && !force {
         eprintln!(
-            "{} Directory '{}' already exists. Files may be overwritten.",
+            "{} Directory '{}' already exists. Existing files are kept.",
             "Warning:".bold().yellow(),
             project_dir.display()
         );
@@ -93,7 +103,6 @@ shell = "echo \"$GREETING\" > {{output[0]}}"
 "#
     );
 
-    let workflow_path = project_dir.join(format!("{name}.oxoflow"));
     std::fs::write(&workflow_path, workflow_content)?;
 
     // Create additional directories
@@ -107,10 +116,10 @@ shell = "echo \"$GREETING\" > {{output[0]}}"
     std::fs::create_dir_all(&results_dir)?;
 
     // Create initial input file
-    std::fs::write(
-        data_dir.join("input.txt"),
-        "This is your starting input data.\n",
-    )?;
+    let input_path = data_dir.join("input.txt");
+    if !input_path.exists() {
+        std::fs::write(&input_path, "This is your starting input data.\n")?;
+    }
 
     // Create starter environment file with China mirror channels
     let env_content = "\
@@ -127,7 +136,10 @@ dependencies:
   - fastp=0.24.0
   - samtools=1.20
 ";
-    std::fs::write(envs_dir.join("example.yaml"), env_content)?;
+    let env_path = envs_dir.join("example.yaml");
+    if !env_path.exists() {
+        std::fs::write(&env_path, env_content)?;
+    }
 
     // Create starter script
     let script_content = "\
@@ -135,7 +147,10 @@ dependencies:
 # Example helper script
 echo \"Running helper script for $1\"
 ";
-    std::fs::write(scripts_dir.join("example.sh"), script_content)?;
+    let script_path = scripts_dir.join("example.sh");
+    if !script_path.exists() {
+        std::fs::write(&script_path, script_content)?;
+    }
 
     // Create a .gitignore with common bioinformatics patterns
     let gitignore_content = "\
@@ -169,7 +184,9 @@ benchmarks/
 Thumbs.db
 ";
     let gitignore_path = project_dir.join(".gitignore");
-    std::fs::write(&gitignore_path, gitignore_content)?;
+    if !gitignore_path.exists() {
+        std::fs::write(&gitignore_path, gitignore_content)?;
+    }
 
     eprintln!(
         "{} Created new project at {}",

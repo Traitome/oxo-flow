@@ -189,6 +189,52 @@ fn strip_dependency(rule: &mut Table, target: &str) {
     }
 }
 
+/// Rewrite every reference to rule `old` as `new` inside one rule table:
+/// `depends_on` entries, `extends`, and `scatter.gather` (table or inline).
+fn rename_references(rule: &mut Table, old: &str, new: &str) {
+    if let Some(arr) = rule
+        .get_mut("depends_on")
+        .and_then(Item::as_value_mut)
+        .and_then(Value::as_array_mut)
+    {
+        for v in arr.iter_mut() {
+            if v.as_str() == Some(old) {
+                let decor = v.decor().clone();
+                *v = Value::from(new.to_string());
+                *v.decor_mut() = decor;
+            }
+        }
+    }
+    if rule.get("extends").and_then(Item::as_str) == Some(old) {
+        rule.insert("extends", Item::Value(Value::from(new.to_string())));
+    }
+    if let Some(scatter) = rule.get_mut("scatter").and_then(Item::as_table_like_mut)
+        && scatter.get("gather").and_then(Item::as_str) == Some(old)
+    {
+        scatter.insert("gather", Item::Value(Value::from(new.to_string())));
+    }
+}
+
+/// Reject a `connect` that would make the workflow cyclic. Uses the core
+/// DAG builder (the same one `run` uses, with config expansion) so file-
+/// inferred edges participate: `a → b` via files plus a drawn `b → a` is a
+/// cycle even though neither `depends_on` alone is.
+fn ensure_acyclic_after_connect(new_toml: &str, from: &str, to: &str) -> Result<(), String> {
+    let Ok(config) = WorkflowConfig::parse(new_toml) else {
+        // Parse failures are reported by the validation gate below.
+        return Ok(());
+    };
+    match oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config.config_placeholder_values(),
+    ) {
+        Err(oxo_flow_core::OxoFlowError::CycleDetected { details }) => Err(format!(
+            "Connecting '{from}' → '{to}' would create a cycle ({details})"
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Parse TOML, apply edit on the document, validate.
 pub fn execute_edit(
     toml_content: &str,
@@ -269,6 +315,12 @@ pub fn execute_edit(
         "connect" => {
             let from = command.payload["from"].as_str().ok_or("Missing from")?;
             let to = command.payload["to"].as_str().ok_or("Missing to")?;
+            if from == to {
+                // The core DAG builder drops self-edges on purpose (directory
+                // write-back patterns), so cycle detection cannot see this —
+                // guard at the edit boundary instead.
+                return Err("Cannot connect a rule to itself".into());
+            }
             let rules = rules_array_of_tables_mut(&mut doc)?;
             let target = rules
                 .iter_mut()
@@ -287,6 +339,39 @@ pub fn execute_edit(
                 let mut arr = toml_edit::Array::new();
                 arr.push(Value::from(from.to_string()));
                 target.insert("depends_on", Item::Value(Value::Array(arr)));
+            }
+        }
+        "rename_rule" => {
+            let name = command.payload["name"].as_str().ok_or("Missing name")?;
+            let new_name = command.payload["new_name"]
+                .as_str()
+                .ok_or("Missing new_name")?;
+            if new_name.trim().is_empty() {
+                return Err("Rule name cannot be empty".into());
+            }
+            let rules = rules_array_of_tables_mut(&mut doc)?;
+            let mut renamed = false;
+            for rule in rules.iter_mut() {
+                if rule_name(rule) == Some(name) {
+                    if let Some(item) = rule.get_mut("name") {
+                        // Keep the value decor so a trailing inline comment on
+                        // the name line survives the rename.
+                        let decor = item.as_value().map(|v| v.decor().clone());
+                        let mut val = Value::from(new_name.to_string());
+                        if let Some(d) = decor {
+                            *val.decor_mut() = d;
+                        }
+                        *item = Item::Value(val);
+                    }
+                    renamed = true;
+                }
+            }
+            if !renamed {
+                return Err(format!("Rule '{name}' not found"));
+            }
+            let rules = rules_array_of_tables_mut(&mut doc)?;
+            for rule in rules.iter_mut() {
+                rename_references(rule, name, new_name);
             }
         }
         "disconnect" => {
@@ -344,6 +429,17 @@ pub fn execute_edit(
     // re-serialization through format_workflow.
     let new_toml = doc.to_string();
 
+    // A drawn edge must not close a cycle — including one formed with
+    // file-inferred edges, which `depends_on` alone cannot see.
+    if command.operation == "connect"
+        && let (Some(from), Some(to)) = (
+            command.payload["from"].as_str(),
+            command.payload["to"].as_str(),
+        )
+    {
+        ensure_acyclic_after_connect(&new_toml, from, to)?;
+    }
+
     // Validate: the edited document must still parse as a WorkflowConfig
     // (validate_pipeline re-parses it) and pass the workflow lints.
     let validation = crate::domains::workflow::service::validate_pipeline(&new_toml, None)?;
@@ -352,6 +448,17 @@ pub fn execute_edit(
         .iter()
         .map(|e| e.message.clone())
         .collect();
+
+    // Validation failures roll back atomically: the caller's TOML is echoed
+    // unchanged, so a client that adopts `toml_content` never desyncs from
+    // a document the engine would reject (e.g. buildDag 400s on cycles).
+    if !validation.valid {
+        return Ok(DagEditResponse {
+            success: false,
+            toml_content: toml_content.to_string(),
+            validation_errors: errors,
+        });
+    }
 
     // Record the (from, to) transition only now — rejected edits leave the
     // history untouched (atomic rollback).
@@ -845,5 +952,118 @@ shell = \"echo s2\"
         };
         let err = execute_edit(TEST_TOML, "p2-connect-missing", &cmd).unwrap_err();
         assert_eq!(err, "Target rule 'nope' not found");
+    }
+
+    #[test]
+    fn connect_rejects_self_loop() {
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "connect".into(),
+            payload: serde_json::json!({"from": "s1", "to": "s1"}),
+        };
+        let err = execute_edit(TEST_TOML, "p2-self-loop", &cmd).unwrap_err();
+        assert_eq!(err, "Cannot connect a rule to itself");
+    }
+
+    #[test]
+    fn connect_rejects_declared_cycle_and_leaves_undo_stack_untouched() {
+        // TEST_TOML already has s1 → s2; the reverse edge closes the cycle.
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "connect".into(),
+            payload: serde_json::json!({"from": "s2", "to": "s1"}),
+        };
+        let err = execute_edit(TEST_TOML, "p2-cycle", &cmd).unwrap_err();
+        assert!(err.contains("cycle"), "unexpected error: {err}");
+        assert!(
+            undo("p2-cycle", TEST_TOML).unwrap().is_none(),
+            "a rejected edit must not enter the undo stack"
+        );
+    }
+
+    #[test]
+    fn connect_rejects_cycle_formed_with_file_inferred_edges() {
+        let toml = "[workflow]\n\
+                    name = \"file-cycle\"\n\
+\n\
+                    [[rules]]\n\
+                    name = \"produce\"\n\
+                    output = [\"out.txt\"]\n\
+                    shell = \"echo hi > {output[0]}\"\n\
+\n\
+                    [[rules]]\n\
+                    name = \"consume\"\n\
+                    input = [\"out.txt\"]\n\
+                    output = [\"final.txt\"]\n\
+                    shell = \"cp {input[0]} {output[0]}\"\n";
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "connect".into(),
+            payload: serde_json::json!({"from": "consume", "to": "produce"}),
+        };
+        let err = execute_edit(toml, "p2-file-cycle", &cmd).unwrap_err();
+        assert!(
+            err.contains("cycle"),
+            "file-inferred edge + drawn edge must be caught: {err}"
+        );
+    }
+
+    #[test]
+    fn validation_failed_edit_returns_original_toml() {
+        // E007: depends_on references an unknown rule → success:false and the
+        // caller's content echoed back (no partial state to adopt).
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "update_rule".into(),
+            payload: serde_json::json!({"name": "s1", "patch": {"depends_on": ["ghost"]}}),
+        };
+        let r = execute_edit(TEST_TOML, "p2-invalid", &cmd).unwrap();
+        assert!(!r.success);
+        assert!(!r.validation_errors.is_empty());
+        assert_eq!(r.toml_content, TEST_TOML, "failed edit must roll back");
+    }
+
+    #[test]
+    fn rename_rule_updates_references_and_keeps_comments() {
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "rename_rule".into(),
+            payload: serde_json::json!({"name": "trim", "new_name": "trim_reads"}),
+        };
+        let r = execute_edit(COMMENTED_TOML, "p2-rename", &cmd).unwrap();
+        assert!(r.success, "{:?}", r.validation_errors);
+        assert!(
+            r.toml_content
+                .contains("name = \"trim_reads\"  # the trimming rule")
+        );
+        assert!(!r.toml_content.contains("\"trim\""));
+        let config = WorkflowConfig::parse(&r.toml_content).unwrap();
+        let align = config.rules.iter().find(|r| r.name == "align").unwrap();
+        assert_eq!(align.depends_on, vec!["trim_reads"]);
+    }
+
+    #[test]
+    fn rename_rule_rejects_unknown_rule() {
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "rename_rule".into(),
+            payload: serde_json::json!({"name": "nope", "new_name": "x"}),
+        };
+        let err = execute_edit(TEST_TOML, "p2-rename-missing", &cmd).unwrap_err();
+        assert_eq!(err, "Rule 'nope' not found");
+    }
+
+    #[test]
+    fn rename_rule_rejects_duplicate_target_name() {
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "rename_rule".into(),
+            payload: serde_json::json!({"name": "s1", "new_name": "s2"}),
+        };
+        let err = execute_edit(TEST_TOML, "p2-rename-dup", &cmd).unwrap_err();
+        assert!(
+            err.contains("duplicate rule name"),
+            "unexpected error: {err}"
+        );
     }
 }

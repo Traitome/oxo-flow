@@ -406,6 +406,11 @@ pub enum Commands {
         name: String,
         #[arg(short = 'd', long, help = "Target directory")]
         dir: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Overwrite an existing workflow file (its contents are lost)"
+        )]
+        force: bool,
     },
     /// Generate a workflow from a predefined template or via AI.
     Template {
@@ -1654,7 +1659,7 @@ async fn main() -> Result<()> {
             };
             crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
         }
-        Commands::Init { name, dir } => init_command(name, dir)?,
+        Commands::Init { name, dir, force } => init_command(name, dir, force)?,
         Commands::Template {
             template,
             output,

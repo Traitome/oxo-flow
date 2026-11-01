@@ -4,6 +4,50 @@ import { test, expect } from '@playwright/test';
 // build a workflow on the canvas — palette, inspector, connect, delete —
 // and see the TOML stay in sync with the engine's canonical formatting.
 
+// Simulate a handle-to-handle drag between two nodes (or the same node for
+// the self-connect case).
+async function dragHandle(
+  page: import('@playwright/test').Page,
+  fromNode: ReturnType<import('@playwright/test').Locator>,
+  toNode: ReturnType<import('@playwright/test').Locator>,
+) {
+  await waitForCanvasStable(page);
+  const from = await fromNode.locator('.react-flow__handle.source').boundingBox();
+  const to = await toNode.locator('.react-flow__handle.target').boundingBox();
+  if (!from || !to) throw new Error('handle not rendered');
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 });
+  await page.mouse.up();
+}
+
+// Click exactly on an edge's geometry: a bezier edge's bounding-box center
+// can sit off the line, so compute the path's midpoint in screen coords.
+async function clickEdgeMidpoint(page: import('@playwright/test').Page) {
+  await waitForCanvasStable(page);
+  const mid = await page
+    .locator('.react-flow__edge-path')
+    .first()
+    .evaluate((el) => {
+      const path = el as SVGPathElement;
+      const p = path.getPointAtLength(path.getTotalLength() / 2);
+      const ctm = path.getScreenCTM();
+      if (!ctm) return null;
+      const sp = new DOMPoint(p.x, p.y).matrixTransform(ctm);
+      return { x: sp.x, y: sp.y };
+    });
+  if (!mid) throw new Error('edge path geometry unavailable');
+  await page.mouse.click(mid.x, mid.y);
+}
+
+// The canvas fits the graph once node dimensions settle and marks itself
+// with data-fitted; coordinates are only stable to read from then on.
+async function waitForCanvasStable(page: import('@playwright/test').Page) {
+  await expect(page.locator('.workflow-canvas')).toHaveAttribute('data-fitted', 'true', {
+    timeout: 10_000,
+  });
+}
+
 test.describe('Graphical workflow editor (canvas)', () => {
   test.beforeEach(async ({ page }) => {
     // The editor defaults to Guided mode for new users (issue #82 P1-5);
@@ -139,5 +183,44 @@ test.describe('Graphical workflow editor (canvas)', () => {
     await page.locator('.modal-dialog input[type="number"]').fill('3');
     await page.locator('.modal-dialog').getByRole('button', { name: /Dry-Run/ }).click();
     await expect(page.locator('.result-bar')).toContainText('Dry-Run started', { timeout: 15_000 });
+  });
+
+  test('drag-connect adds a declared edge; self-connect is blocked', async ({ page }) => {
+    await page.goto('/editor');
+    const fastqc = page.locator('.rf-rule-node', { hasText: 'fastqc' });
+    const align = page.locator('.rf-rule-node', { hasText: 'align' });
+    await fastqc.waitFor();
+
+    // fastqc dragged onto itself must not touch the document.
+    await dragHandle(page, fastqc, fastqc);
+    await expect(page.locator('.cm-content')).not.toContainText('depends_on');
+
+    // fastqc → align lands as an explicit depends_on in the TOML. The drag
+    // retries as a whole: a first-frame font re-measure can shift the
+    // handles between coordinate read and mouse-up.
+    await expect(async () => {
+      await dragHandle(page, fastqc, align);
+      await expect(page.locator('.cm-content')).toContainText('depends_on = ["fastqc"]');
+    }).toPass({ timeout: 15_000 });
+  });
+
+  test('selecting an edge and pressing Delete disconnects it', async ({ page }) => {
+    await page.goto('/editor');
+    const fastqc = page.locator('.rf-rule-node', { hasText: 'fastqc' });
+    const align = page.locator('.rf-rule-node', { hasText: 'align' });
+    await fastqc.waitFor();
+    await expect(async () => {
+      await dragHandle(page, fastqc, align);
+      await expect(page.locator('.cm-content')).toContainText('depends_on = ["fastqc"]');
+    }).toPass({ timeout: 15_000 });
+
+    // Wait for the debounced canvas rebuild so the drawn edge exists.
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+    await clickEdgeMidpoint(page);
+    await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
+    await page.keyboard.press('Delete');
+    await expect(page.locator('.cm-content')).not.toContainText('depends_on', {
+      timeout: 10_000,
+    });
   });
 });

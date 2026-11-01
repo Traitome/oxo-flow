@@ -13,12 +13,14 @@ The DAG Edit domain (`crates/oxo-flow-web/src/domains/dag/service.rs`) provides 
 3. **Validated** — the edited document is re-parsed and validated through the workflow validation pipeline
 
 Edits that fail *validation* — error-severity findings such as a
-`depends_on` reference to an unknown rule — are still applied and returned:
-the response reports `success: false` with `validation_errors` populated, so
-the problematic state can be inspected and fixed with a follow-up edit. Edits
-that break *parsing* of the edited document — invalid TOML syntax, unknown
-fields, or duplicate rule names — are rejected instead: they return HTTP
-`400` (`DAG_EDIT_ERROR`) and the previous state is kept.
+`depends_on` reference to an unknown rule — roll back atomically: the
+response reports `success: false` with `validation_errors` populated and
+`toml_content` echoes the caller's **unchanged** input, so a client that
+adopts the returned TOML never holds a document the engine would reject.
+Edits that break *parsing* of the edited document — invalid TOML syntax,
+unknown fields, or duplicate rule names — are rejected with HTTP `400`
+(`DAG_EDIT_ERROR`) and the previous state is kept. Rejected edits never
+enter the undo/redo history.
 
 ## Endpoint
 
@@ -38,8 +40,9 @@ current TOML content (`toml_content`) plus the command.
 
 > The commands below reflect the v0.11+ extended API: `add_rule` accepts a
 > complete rule table, `update_rule` patches any rule fields through a TOML
-> table (with `null` meaning "remove this key"), and `update_workflow`
-> replaces top-level sections. `update_params` remains as a legacy alias of
+> table (with `null` meaning "remove this key"), `rename_rule` renames a
+> rule and rewrites every reference to it, and `update_workflow` replaces
+> top-level sections. `update_params` remains as a legacy alias of
 > `update_rule`.
 
 ```json
@@ -53,7 +56,7 @@ current TOML content (`toml_content`) plus the command.
 
 `source` is one of `dag_editor` (the interactive editor), `chat`, or `proposal`.
 `operation` is one of `add_rule`, `remove_rule`, `connect`, `disconnect`,
-`update_rule`/`update_params`, or `update_workflow`.
+`rename_rule`, `update_rule`/`update_params`, or `update_workflow`.
 
 ### `add_rule`
 
@@ -139,7 +142,7 @@ Add an explicit dependency edge between two rules.
 }
 ```
 
-**Result:** `"fastqc"` is added to `trim_reads`'s `depends_on` list. If the dependency already exists, the command is idempotent (no duplicate). Returns an error if the target rule doesn't exist.
+**Result:** `"fastqc"` is added to `trim_reads`'s `depends_on` list. If the dependency already exists, the command is idempotent (no duplicate). Returns an error if the target rule doesn't exist, if `from` equals `to`, or if the edge would close a cycle — including cycles formed with file-inferred edges (an output→input match plus the drawn edge). Self-connections and cyclic connections are rejected before the document is touched, so the workflow stays valid.
 
 ---
 
@@ -166,6 +169,36 @@ Remove an explicit dependency edge between two rules.
 ```
 
 **Result:** `"fastqc"` is removed from `trim_reads`'s `depends_on` list. File-based dependencies (inferred from input/output matching) are **not** affected — only explicit `depends_on` entries are managed by connect/disconnect.
+
+---
+
+### `rename_rule`
+
+Rename a rule and rewrite every reference to it.
+
+**Payload:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | **Yes** | Current name of the rule |
+| `new_name` | String | **Yes** | New rule name (must stay unique; the usual rule-name charset applies) |
+
+**Example:**
+
+```json
+{
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
+  "operation": "rename_rule",
+  "payload": { "name": "fastqc", "new_name": "fastqc_qc" }
+}
+```
+
+**Result:** The rule's `name` key is rewritten in place (inline comments on
+that line are preserved), and every `depends_on` entry, `extends` reference,
+and `scatter.gather` target that pointed at the old name now points at the
+new one. Renaming to an existing rule's name fails with a parse error; an
+unknown `name` fails with `Rule '<name>' not found`.
 
 ---
 
@@ -215,7 +248,7 @@ into that table (comments preserved); everything else is replaced wholesale.
   "source": "dag_editor",
   "operation": "update_workflow",
   "payload": {
-    "patch": {"workflow": {"name": "renamed", "version": "0.26.0", "description": "d"}}
+    "patch": {"workflow": {"name": "renamed", "version": "0.27.0", "description": "d"}}
   }
 }
 ```
@@ -284,7 +317,7 @@ All edit commands return a `DagEditResponse`:
 | `toml_content` | String | The complete workflow TOML after the edit |
 | `validation_errors` | Array of String | Validation **error**-severity messages (lint warnings such as a missing description are collected separately and are not part of this response) |
 
-If validation fails, `success` is `false` and the edit is **still applied** to the returned TOML (so the user can see the problematic state), with `validation_errors` populated.
+If validation fails, `success` is `false`, `validation_errors` is populated, and the edit is **rolled back atomically**: `toml_content` echoes the caller's unchanged input (see [Overview](#overview)). Rejected edits never enter the undo/redo history.
 
 Malformed commands (unknown operation, missing required payload fields such as the rule `name`, an `update_rule` target rule that does not exist, or a `connect`/`disconnect`/`update_params` target rule that does not exist) are rejected with HTTP `400` and code `DAG_EDIT_ERROR`; the edit is not applied. The same applies to edits whose resulting document no longer parses as a workflow (invalid TOML syntax, unknown fields, duplicate rule names).
 
@@ -294,14 +327,15 @@ Malformed commands (unknown operation, missing required payload fields such as t
 
 - **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules, which the edit API cannot currently modify.
 - **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a `depends_on` entry naming an unknown rule) are
-returned in `validation_errors` with `success: false`, while the edit is still
-applied. Edits that break parsing — invalid TOML syntax, unknown fields, or
+returned in `validation_errors` with `success: false`, and the edit is rolled
+back atomically — `toml_content` echoes the caller's unchanged input and the
+undo/redo history is untouched. Edits that break parsing — invalid TOML syntax, unknown fields, or
 duplicate rule names — are rejected with HTTP `400` instead. Cycle detection
 **is** part of the edit validation path: since issue #466, `validate_format`
 builds the DAG with parsed config values on every edit, so a cycle introduced
 via `depends_on` edits surfaces immediately as `success: false` with the
-`DAG error:` (E006) message in `validation_errors` (the edit itself is still
-applied). See [DAG Engine](./dag-engine.md).
+`DAG error:` (E006) message in `validation_errors` (the edit is rolled back
+atomically). See [DAG Engine](./dag-engine.md).
 - **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.
 - **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.
 

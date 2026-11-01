@@ -2710,6 +2710,58 @@ fn cli_init_creates_project() {
     assert!(wf.contains("[workflow]"));
 }
 
+#[test]
+fn cli_init_refuses_to_clobber_existing_workflow() {
+    // A real-user disaster class: re-running init in an existing project
+    // used to silently overwrite the workflow file, destroying manual
+    // edits. It must refuse without --force, keep every existing file,
+    // and only honor --force as an explicit overwrite.
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = dir.path().join("demo");
+
+    oxo_flow_cmd()
+        .args(["init", "demo", "-d", project_dir.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let wf_path = project_dir.join("demo.oxoflow");
+    fs::write(&wf_path, "# USER EDIT — precious\n").unwrap();
+    fs::write(project_dir.join("envs/example.yaml"), "# custom env\n").unwrap();
+
+    oxo_flow_cmd()
+        .args(["init", "demo", "-d", project_dir.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("already exists"));
+
+    assert_eq!(
+        fs::read_to_string(&wf_path).unwrap(),
+        "# USER EDIT — precious\n",
+        "re-init must not clobber the workflow file"
+    );
+    assert_eq!(
+        fs::read_to_string(project_dir.join("envs/example.yaml")).unwrap(),
+        "# custom env\n",
+        "re-init must keep existing starter files"
+    );
+
+    oxo_flow_cmd()
+        .args([
+            "init",
+            "demo",
+            "-d",
+            project_dir.to_str().unwrap(),
+            "--force",
+        ])
+        .assert()
+        .success();
+    let wf = fs::read_to_string(&wf_path).unwrap();
+    assert!(
+        wf.contains("[workflow]") && !wf.contains("USER EDIT"),
+        "--force regenerates the scaffold"
+    );
+}
+
 /// The gallery is embedded in the binary (issue #76): `template` must work
 /// from an arbitrary directory with no repo checkout around — the binary
 /// lives in target/, CWD is a temp dir, so filesystem discovery would fail.
