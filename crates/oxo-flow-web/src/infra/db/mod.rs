@@ -98,6 +98,7 @@ pub trait StorageBackend: Send + Sync {
     async fn delete_pipeline(&self, id: &str) -> Result<(), String>;
 
     async fn create_run(&self, run: &models::RunRow) -> Result<models::RunRow, String>;
+    async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String>;
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String>;
     async fn get_run(&self, id: &str) -> Result<Option<models::RunRow>, String>;
     async fn list_runs(

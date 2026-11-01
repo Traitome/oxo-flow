@@ -1371,10 +1371,7 @@ pub async fn retry_run(
     // The terminal-state check above is TOCTOU: two concurrent retries both
     // read the old row as terminal and both spawn into the same workdir.
     // The guarded insert makes the claim atomic — the loser gets 409.
-    let claim = match crate::infra::db::sqlite::try_pool() {
-        Ok(pool) => crate::infra::db::sqlite::create_run_if_workdir_idle(pool, &new_run).await,
-        Err(e) => Err(e),
-    };
+    let claim = backend.create_run_if_workdir_idle(&new_run).await;
     match claim {
         Ok(true) => {}
         Ok(false) => {
@@ -2913,10 +2910,7 @@ pub async fn resume_checkpoint(
         created_at: now.clone(),
     };
     // Same TOCTOU as retry_run: claim the workdir atomically at insert.
-    let claim = match crate::infra::db::sqlite::try_pool() {
-        Ok(pool) => crate::infra::db::sqlite::create_run_if_workdir_idle(pool, &new_run).await,
-        Err(e) => Err(e),
-    };
+    let claim = backend.create_run_if_workdir_idle(&new_run).await;
     match claim {
         Ok(true) => {}
         Ok(false) => {

@@ -477,6 +477,33 @@ impl StorageBackend for PostgresBackend {
         Ok(row)
     }
 
+    async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        let result = sqlx::query(
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 \
+             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = $15 AND status IN ('queued', 'running', 'paused'))",
+        )
+        .bind(&run.id)
+        .bind(&run.user_id)
+        .bind(&run.pipeline_id)
+        .bind(&run.pipeline_snapshot)
+        .bind(&run.workflow_name)
+        .bind(&run.status)
+        .bind(&run.phase)
+        .bind(run.dry_run)
+        .bind(run.pid)
+        .bind(&run.workdir)
+        .bind(&run.config_overrides)
+        .bind(&run.started_at)
+        .bind(&run.finished_at)
+        .bind(&run.created_at)
+        .bind(&run.workdir)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
         let now = Self::now();
         let is_terminal = status == "completed" || status == "failed" || status == "cancelled";

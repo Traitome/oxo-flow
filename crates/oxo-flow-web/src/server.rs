@@ -1173,21 +1173,18 @@ async fn require_auth(
     };
 
     // Validate the token against the sessions table
-    let session = match crate::infra::db::sqlite::try_pool() {
-        Ok(pool) => {
-            let now = chrono::Utc::now().to_rfc3339();
-            sqlx::query_as::<_, crate::infra::db::models::SessionRow>(
-                "SELECT * FROM sessions WHERE token = ? AND expires_at > ?",
-            )
-            .bind(&token)
-            .bind(&now)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
-        }
-        Err(_) => {
+    let backend = crate::infra::db::global_backend();
+    let session = match &backend {
+        Some(backend) => match backend.get_session(&token).await {
+            Ok(session) => session,
+            Err(e) => {
+                tracing::error!("require_auth: failed to query session: {e}");
+                None
+            }
+        },
+        None => {
             // DB not available — reject all tokens (fail-secure)
-            tracing::error!("require_auth: DB pool not available, rejecting request");
+            tracing::error!("require_auth: DB backend not available, rejecting request");
             None
         }
     };
@@ -1207,37 +1204,41 @@ async fn require_auth(
         // pre-upgrade username-keyed session) is rejected fail-closed; the
         // old `user_id == "admin"` literal fallback is gone for the same
         // reason.
-        let (user_id, role) = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => {
-                let row: Option<(String, String)> =
-                    sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
-                        .bind(&session.user_id)
-                        .fetch_optional(pool)
-                        .await
-                        .unwrap_or(None);
-                match row {
-                    Some((id, role)) => (id, role),
-                    None => {
-                        tracing::warn!(
-                            "require_auth: session references unknown user '{}'; rejecting",
-                            session.user_id
-                        );
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            [(axum::http::header::CONTENT_TYPE, "application/json")],
-                            axum::Json(serde_json::json!({
-                                "code": "INVALID_TOKEN",
-                                "message": "Session is no longer valid; sign in again",
-                                "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
-                            })),
-                        )
-                            .into_response();
-                    }
+        let (user_id, role) = match &backend {
+            Some(backend) => match backend.get_user_by_id(&session.user_id).await {
+                Ok(Some(user)) => (user.id, user.role),
+                Ok(None) => {
+                    tracing::warn!(
+                        "require_auth: session references unknown user '{}'; rejecting",
+                        session.user_id
+                    );
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        axum::Json(serde_json::json!({
+                            "code": "INVALID_TOKEN",
+                            "message": "Session is no longer valid; sign in again",
+                            "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
+                        })),
+                    )
+                        .into_response();
                 }
-            }
+                Err(e) => {
+                    tracing::error!("require_auth: failed to query user: {e}");
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        axum::Json(serde_json::json!({
+                            "code": "AUTH_REQUIRED",
+                            "message": "Authentication required in team/hpc mode",
+                        })),
+                    )
+                        .into_response();
+                }
+            },
             // DB unavailable — reject everything (fail-secure).
-            Err(_) => {
-                tracing::error!("require_auth: DB pool not available, rejecting request");
+            None => {
+                tracing::error!("require_auth: DB backend not available, rejecting request");
                 return (
                     axum::http::StatusCode::UNAUTHORIZED,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],

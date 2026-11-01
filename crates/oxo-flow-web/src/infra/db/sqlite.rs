@@ -797,6 +797,10 @@ impl StorageBackend for SqliteBackend {
         Ok(row)
     }
 
+    async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        create_run_if_workdir_idle(&self.pool, run).await
+    }
+
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
         let now = Self::now();
         // If transitioning to a terminal state, set finished_at
@@ -2028,22 +2032,25 @@ mod workdir_guard_tests {
         backend.init().await.expect("schema init");
         let pool = backend.inner_pool();
 
-        // The first insert claims the idle workdir.
+        // The first insert claims the idle workdir via the StorageBackend trait.
         assert!(
-            create_run_if_workdir_idle(pool, &row("r1", "queued", "/wd"))
+            backend
+                .create_run_if_workdir_idle(&row("r1", "queued", "/wd"))
                 .await
                 .unwrap()
         );
         // A second live run for the SAME workdir is rejected — the atomic
         // guard is what stops concurrent retries from double-spawning.
         assert!(
-            !create_run_if_workdir_idle(pool, &row("r2", "queued", "/wd"))
+            !backend
+                .create_run_if_workdir_idle(&row("r2", "queued", "/wd"))
                 .await
                 .unwrap()
         );
         // A different workdir is unaffected.
         assert!(
-            create_run_if_workdir_idle(pool, &row("r3", "queued", "/other"))
+            backend
+                .create_run_if_workdir_idle(&row("r3", "queued", "/other"))
                 .await
                 .unwrap()
         );
@@ -2053,7 +2060,8 @@ mod workdir_guard_tests {
             .await
             .unwrap();
         assert!(
-            create_run_if_workdir_idle(pool, &row("r4", "queued", "/wd"))
+            backend
+                .create_run_if_workdir_idle(&row("r4", "queued", "/wd"))
                 .await
                 .unwrap()
         );

@@ -7,15 +7,6 @@ use oxo_flow_core::webhook::{
     HttpMethod, SignatureScheme, WebhookClient, WebhookConfig, WebhookEvent, WebhookPayload,
 };
 
-/// The runs row fields notify_terminal needs (workflow name, timestamps,
-/// workdir).
-type RunSummaryRow = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
-
 /// One config row (id=1) persisted by PUT /api/webhook.
 pub struct WebhookSettings {
     pub enabled: bool,
@@ -84,20 +75,18 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         WebhookEvent::WorkflowFailed
     };
 
-    let pool = match crate::infra::db::sqlite::try_pool() {
-        Ok(p) => p,
-        Err(_) => return,
+    let backend = match crate::infra::db::global_backend() {
+        Some(b) => b,
+        None => return,
     };
-    let row: Option<RunSummaryRow> = sqlx::query_as(
-        "SELECT workflow_name, started_at, finished_at, workdir FROM runs WHERE id = ?",
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-    let Some((workflow_name, started_at, finished_at, workdir)) = row else {
-        return;
+    let run = match backend.get_run(run_id).await {
+        Ok(Some(r)) => r,
+        _ => return,
     };
+    let workflow_name = run.workflow_name;
+    let started_at = run.started_at;
+    let finished_at = run.finished_at;
+    let workdir = run.workdir;
     let workflow_name = workflow_name.unwrap_or_else(|| "pipeline".to_string());
 
     // Rule counts from the engine's checkpoint (single source of truth).
