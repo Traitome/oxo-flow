@@ -1,8 +1,9 @@
 //! Audit schema unification + complete run inserts (B3, B4).
 //!
-//! Production boots `db::init_db` (creates the audit_logs table first) and
-//! then `infra::db::sqlite::init_pool`. The two schemas used to disagree on
-//! columns, so the sqlite backend's `log_action` INSERT failed at runtime.
+//! `db::init_db` used to carry its own second schema; the two boot paths
+//! disagreed on columns and the sqlite backend's `log_action` INSERT failed
+//! at runtime. `db::init_db` now delegates to the canonical sqlite backend —
+//! these tests pin that the unified schema keeps accepting both writers.
 
 use oxo_flow_web::db;
 use oxo_flow_web::infra::db::StorageBackend;
@@ -24,9 +25,9 @@ fn db_url() -> &'static str {
 #[tokio::test]
 async fn audit_log_action_survives_both_init_paths() {
     let url = db_url();
-    // Production order: the legacy db::init_db creates audit_logs first.
+    // Production order: db::init_db (canonical schema + template seed).
     db::init_db(url).await.expect("db init");
-    // Second init path must no-op cleanly and share the same schema.
+    // A directly-constructed backend must share the same schema.
     let backend = SqliteBackend::new(url).await.expect("backend connect");
 
     backend

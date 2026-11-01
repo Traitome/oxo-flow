@@ -109,6 +109,18 @@ impl SqliteBackend {
     /// connection so that all queries share the same schema and data.
     /// Otherwise the pool is configured with up to 5 connections.
     pub async fn new(database_url: &str) -> Result<Self, String> {
+        // Create the database file if missing — `SqlitePoolOptions::connect`
+        // only opens an existing file (code 14 otherwise). The legacy boot
+        // layer used to do this before delegating here.
+        use sqlx::migrate::MigrateDatabase;
+        if !sqlx::Sqlite::database_exists(database_url)
+            .await
+            .unwrap_or(false)
+        {
+            sqlx::Sqlite::create_database(database_url)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
         let is_memory = database_url.contains(":memory:");
         let mut opts = SqlitePoolOptions::new().max_connections(if is_memory { 1 } else { 5 });
         if is_memory {

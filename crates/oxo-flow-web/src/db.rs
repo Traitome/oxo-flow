@@ -1,256 +1,27 @@
+//! Legacy web-boot entry points over the canonical SQLite layer.
+//!
+//! Schema and pool ownership live in [`crate::infra::db::sqlite`] — one
+//! definition, one pool. `init_db` delegates to it and then layers the
+//! web-boot-only seed (the system template library) on top. The second
+//! schema/pool pair that used to live here let the two boot paths drift
+//! until `tests/audit_integration.rs` pinned them together; the delegation
+//! makes that pin true by construction.
+//!
+//! Failure-mode note: schema/pool initialization aborts via the canonical
+//! `init_pool` retry-then-panic contract instead of returning `Err` — the
+//! server boot terminates either way.
+
 use anyhow::Result;
 use chrono::Utc;
-use sqlx::migrate::MigrateDatabase;
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
-use std::sync::OnceLock;
-use tokio::sync::Mutex;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
-/// Global SQLite connection pool.
-static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
-
-/// Guard to ensure initialization happens atomically across threads.
-static INIT_GUARD: Mutex<()> = Mutex::const_new(());
-
-/// Initialize the database, run migrations, and seed the default admin user.
-///
-/// When called a second time (e.g., from a later `#[tokio::test]`) this
-/// function is a no-op: the existing pool is reused.  For in-memory SQLite
-/// the pool is configured with a single persistent connection so all
-/// concurrent queries share the same schema and data.
+/// Initialize the canonical SQLite backend (schema, global pool, global
+/// storage backend) and seed the system templates. Idempotent: a second
+/// call only re-runs the (INSERT OR IGNORE) template seed.
 pub async fn init_db(database_url: &str) -> Result<()> {
-    // Pool already initialized — no-op.
-    if DB_POOL.get().is_some() {
-        return Ok(());
-    }
-
-    // Acquire lock to ensure only one thread initializes at a time.
-    let _guard = INIT_GUARD.lock().await;
-
-    // Double-check after acquiring lock (another thread may have initialized).
-    if DB_POOL.get().is_some() {
-        return Ok(());
-    }
-
-    if !sqlx::Sqlite::database_exists(database_url)
-        .await
-        .unwrap_or(false)
-    {
-        sqlx::Sqlite::create_database(database_url).await?;
-    }
-
-    // In-memory SQLite databases are per-connection: use a single persistent
-    // connection so all queries share the same schema and data.
-    let is_memory = database_url.contains(":memory:");
-    let mut opts = SqlitePoolOptions::new();
-    if is_memory {
-        opts = opts
-            .max_connections(1)
-            .min_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None);
-    } else {
-        opts = opts.max_connections(5);
-    }
-    let pool = opts.connect(database_url).await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            role TEXT NOT NULL,
-            auth_type TEXT NOT NULL,
-            os_user TEXT NOT NULL,
-            password_hash TEXT,
-            created_at DATETIME NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            pipeline_id TEXT,
-            pipeline_snapshot TEXT NOT NULL DEFAULT '',
-            workflow_name TEXT,
-            status TEXT NOT NULL,
-            phase TEXT NOT NULL DEFAULT 'parsing',
-            -- #907 P3-14: must match the fresh schema in infra::db::sqlite::init_pool
-            -- (tests/audit_integration.rs pins the two boot paths to one schema).
-            dry_run INTEGER NOT NULL DEFAULT 0,
-            pid INTEGER,
-            workdir TEXT,
-            config_overrides TEXT,
-            started_at DATETIME,
-            finished_at DATETIME,
-            created_at DATETIME,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            action TEXT NOT NULL,
-            target TEXT NOT NULL,
-            result TEXT NOT NULL DEFAULT 'success',
-            metadata TEXT,
-            timestamp DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS chat_sessions (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            title TEXT NOT NULL DEFAULT 'New Chat',
-            created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-            updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
-        CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-        CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
-
-        CREATE TABLE IF NOT EXISTS workflows (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            version TEXT NOT NULL,
-            toml_content TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            expires_at DATETIME NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS scheduled_runs (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            workflow_id TEXT NOT NULL,
-            workflow_name TEXT NOT NULL,
-            cron_expression TEXT NOT NULL,
-            next_run_at DATETIME NOT NULL,
-            last_run_at DATETIME,
-            status TEXT NOT NULL DEFAULT 'active',
-            created_at DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_scheduled_runs_next_run ON scheduled_runs(next_run_at);
-        CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status);
-
-        CREATE TABLE IF NOT EXISTS templates (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            category TEXT NOT NULL DEFAULT 'general',
-            description TEXT NOT NULL DEFAULT '',
-            tags TEXT NOT NULL DEFAULT '',
-            toml_content TEXT NOT NULL,
-            is_system INTEGER NOT NULL DEFAULT 0,
-            created_by TEXT,
-            usage_count INTEGER NOT NULL DEFAULT 0,
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS hpc_jobs (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            scheduler TEXT NOT NULL,
-            job_id TEXT,
-            partition_name TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            submitted_at DATETIME,
-            completed_at DATETIME,
-            FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_hpc_jobs_run_id ON hpc_jobs(run_id);
-
-        CREATE TABLE IF NOT EXISTS clusters (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            ssh_host TEXT NOT NULL,
-            ssh_port INTEGER NOT NULL DEFAULT 22,
-            ssh_user TEXT,
-            ssh_key TEXT,
-            scheduler TEXT,
-            remote_dir TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at DATETIME NOT NULL
-        );
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    // Migration (issue #79 P1-06): password hashes for DB-created accounts.
-    // Idempotent — safe to run on every init.
-    sqlx::query("ALTER TABLE users ADD COLUMN password_hash TEXT")
-        .execute(&pool)
-        .await
-        .ok();
-
-    // Migration: config overrides persisted per run (JSON array of KEY=VALUE
-    // strings) so retry re-executes with the same configuration. Idempotent.
-    sqlx::query("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
-        .execute(&pool)
-        .await
-        .ok();
-
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
-        .fetch_one(&pool)
-        .await?;
-
-    if count.0 == 0 {
-        let admin_id = Uuid::new_v4().to_string();
-        let now = Utc::now();
-        sqlx::query(
-            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(admin_id)
-        .bind("admin")
-        .bind("admin")
-        .bind("sudo")
-        .bind("oxo-flow")
-        .bind(now)
-        .execute(&pool)
-        .await?;
-    }
-
-    // `default` is the pseudo-user for personal-mode runs; runs.user_id is
-    // a foreign key, so the row must exist.
-    sqlx::query(
-        "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    )
-    .bind("default")
-    .bind("default")
-    .bind("user")
-    .bind("local")
-    .bind("oxo-flow")
-    .bind(Utc::now())
-    .execute(&pool)
-    .await?;
-
-    // Seed system templates if empty
-    let template_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM templates")
-        .fetch_one(&pool)
-        .await?;
-    if template_count.0 == 0 {
-        seed_system_templates(&pool).await?;
-    }
-
-    // `set` will fail if another thread beat us here; that is fine since we
-    // already checked `is_some()` above and both pools point to the same DB.
-    let _ = DB_POOL.set(pool);
-    Ok(())
+    crate::infra::db::sqlite::init_pool(database_url).await;
+    seed_system_templates(crate::infra::db::sqlite::pool()).await
 }
 
 /// Obtain a reference to the global pool.
@@ -258,9 +29,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
 /// # Panics
 /// Panics if `init_db` has not been called yet.
 pub fn pool() -> &'static SqlitePool {
-    DB_POOL
-        .get()
-        .expect("Database pool not initialized — call init_db() first")
+    crate::infra::db::sqlite::pool()
 }
 
 /// Obtain a reference to the global pool, or `None` when it was never
@@ -268,7 +37,7 @@ pub fn pool() -> &'static SqlitePool {
 /// under `tokio::spawn`, where a panic here would leave runs stuck in
 /// 'running' forever — those callers must degrade gracefully instead.
 pub fn try_pool() -> Option<&'static SqlitePool> {
-    DB_POOL.get()
+    crate::infra::db::sqlite::try_pool().ok()
 }
 
 /// Recover runs left in flight ('running'/'paused') after a server crash

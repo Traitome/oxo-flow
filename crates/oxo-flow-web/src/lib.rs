@@ -373,10 +373,10 @@ pub async fn init_database() -> anyhow::Result<()> {
             anyhow::bail!("PostgreSQL support not compiled in — rebuild with --features postgres");
         }
     } else {
+        // One schema, one pool: init_db delegates to the canonical sqlite
+        // backend and layers the web-boot template seed on top of it.
         crate::db::init_db(&database_url).await?;
         crate::db::recover_orphaned_runs().await?;
-        // Also initialize the v0.8 domain-driven DB pool for domain handlers.
-        crate::infra::db::sqlite::init_pool(&database_url).await;
     }
     Ok(())
 }
