@@ -2265,7 +2265,6 @@ pub async fn visualize_report(
         .unwrap_or("volcano");
     let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    require_run_mutator(&user)?;
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Real data sources: the run's file tree, or per-rule timings from the

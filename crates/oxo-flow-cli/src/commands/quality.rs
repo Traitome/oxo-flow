@@ -7,12 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-/// `"1 rule"` / `"2 rules"` — the summary counts read "1 rules" before the
-/// CLI grew pluralisation (audit P4-1d). Now a thin alias for the shared
-/// core helper (reuse-never-retype).
-fn plural(count: usize, singular: &str, plural_form: &str) -> String {
-    oxo_flow_core::plural(count, singular, plural_form)
-}
+use oxo_flow_core::plural;
 
 pub async fn validate_command(
     workflow: PathBuf,
@@ -819,7 +814,7 @@ pub fn touch_command(
         anyhow::bail!(
             "{} not found in '{}' — nothing was touched for them.\n  \
              Run `oxo-flow dry-run {}` to list the expanded rule names.",
-            oxo_flow_core::plural(
+            plural(
                 unknown_rules.len(),
                 "requested rule name",
                 "requested rule names"
@@ -835,7 +830,7 @@ pub fn touch_command(
     if failed_touched > 0 {
         anyhow::bail!(
             "touch: {} failed to mark in {}",
-            oxo_flow_core::plural(failed_touched, "output path", "output paths"),
+            plural(failed_touched, "output path", "output paths"),
             workflow.display()
         );
     }
