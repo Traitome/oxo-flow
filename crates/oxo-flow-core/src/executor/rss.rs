@@ -93,7 +93,14 @@ impl RssSampler {
                         // instance (a fresh instance per tick would always
                         // report 0). Dead processes are dropped each
                         // refresh so the table stays bounded over long runs.
-                        let mut system = sysinfo::System::new();
+                        // sysinfo 0.40 made construction fallible; a failure
+                        // here disables peak-RSS metering for the whole run
+                        // (degrade, not panic — same stance as the thread
+                        // spawn failure right below).
+                        let Ok(mut system) = sysinfo::System::new() else {
+                            tracing::warn!("sysinfo init failed — peak-RSS metering disabled");
+                            return;
+                        };
                         loop {
                             tokio::select! {
                                 () = wake.notified() => {}
