@@ -669,9 +669,10 @@ impl DiagnosticsEngine {
             });
         }
 
-        // 2. Telemetry and signal-based causal classification (e.g. SIGKILL 137, SIGXCPU 140, ENOSPC)
+        // 2. Telemetry and signal-based causal classification (e.g. SIGKILL -> shell 137,
+        // SIGXCPU -> shell 152 = 128 + signal 24, ENOSPC)
         let is_explicit_sigkill_oom = ctx.signal == Some(9) || ctx.exit_code == Some(137);
-        let is_explicit_sigxcpu_timeout = ctx.signal == Some(24) || ctx.exit_code == Some(140);
+        let is_explicit_sigxcpu_timeout = ctx.signal == Some(24) || ctx.exit_code == Some(152);
 
         // 3. Match against static pattern table
         for p in &self.patterns {
@@ -798,7 +799,7 @@ impl DiagnosticsEngine {
                     memory_multiplier: 1.0,
                     time_multiplier: 2.0,
                 }),
-                relevant_log_lines: vec!["Exit code 124/140 or SIGXCPU received".into()],
+                relevant_log_lines: vec!["Exit code 124/152 or SIGXCPU received".into()],
             });
         }
 

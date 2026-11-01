@@ -18,7 +18,7 @@ Controlled Fault Categories:
   * SCI_MUTECT2_TUMOR_ONLY: Somatic Mutect2 executed without panel of normals (SCI-MUTECT2-TUMOR-ONLY).
 - Infrastructure Resource & System Faults:
   * INFRA_OOM_SIGNAL: Task terminated via SIGKILL / exit code 137 (OOM Killer).
-  * INFRA_TIMEOUT_SIGNAL: Task terminated via SIGXCPU / exit code 140 (Walltime limit).
+  * INFRA_TIMEOUT_SIGNAL: Task terminated via SIGXCPU (signal 24; shell exit 152 = 128+24).
   * INFRA_DISK_PRESSURE: Temporary scratch volume capacity exhaustion (ENOSPC).
 
 Usage:
@@ -265,7 +265,7 @@ memory = "4G"
     FaultCase(
         fault_id="infra_timeout_failure",
         category="infrastructure",
-        description="Process exceeded wallclock allocation and terminated with exit code 140",
+        description="Process exceeded wallclock allocation and received SIGXCPU (shell exit 152)",
         target_rule="compute_heavy_step",
         expected_diagnostic_code="timeout",
         expected_repair_action="ScaleResources",
@@ -275,7 +275,7 @@ name = "fault_test_timeout"
 [[rules]]
 name = "compute_heavy_step"
 output = ["summary.txt"]
-shell = "bash -c 'echo Time limit exceeded >&2; exit 140'"
+shell = "bash -c 'echo Time limit exceeded >&2; exit 152'"
 
 [rules.resources]
 time_limit = "10m"

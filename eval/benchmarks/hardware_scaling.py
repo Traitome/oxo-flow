@@ -152,6 +152,9 @@ def generate_svg_chart(results: List[HardwareBenchmarkResult]) -> str:
     gap = 45
 
     max_val = max(r.samples_per_hour for r in results) * 1.25
+    base_throughput = results[0].samples_per_hour if results and results[0].samples_per_hour else 1.0
+    best_throughput = max(r.samples_per_hour for r in results) if results else 0.0
+    gain_pct = (best_throughput / base_throughput - 1.0) * 100.0
 
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
@@ -173,7 +176,7 @@ def generate_svg_chart(results: List[HardwareBenchmarkResult]) -> str:
 
     # Axis and footer notes
     svg.append(f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" stroke="#334155" stroke-width="2" />')
-    svg.append(f'<text x="{width/2}" y="{height - 25}" text-anchor="middle" font-size="11" fill="#64748b">Measured on simulated cohort N=10,000 WGS pipelines. Throughput gain: +112.8% via NUMA pinning and NVMe scratch tiering.</text>')
+    svg.append(f'<text x="{width/2}" y="{height - 25}" text-anchor="middle" font-size="11" fill="#64748b">Simulated cohort of N=10,000 WGS pipelines (modeled telemetry, not hardware measurement). Throughput gain: +{gain_pct:.1f}% via NUMA pinning and NVMe scratch tiering.</text>')
     svg.append('</svg>')
 
     return "\n".join(svg)

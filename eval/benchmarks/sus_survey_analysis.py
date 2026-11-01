@@ -203,8 +203,24 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
     m = report["metrics"]
     c = report["comparisons"]
 
+    def fmt_p(p_val: float) -> str:
+        # Float underflow renders ultra-small p-values as exactly 0.0; report a
+        # scientific bound instead of an impossible exact zero.
+        if p_val <= 0.0 or p_val < 1e-300:
+            return "p < 1.0e-300"
+        return f"p = {p_val:.4e}"
+
+    oxo, nf, sm = m["oxoflow"], m["nextflow"], m["snakemake"]
+
     lines = [
         "# Quantitative Human-Factors & System Usability Study Report",
+        "",
+        "> **Data provenance**: the numbers below are produced by a seeded,",
+        "> reproducible *synthetic response simulator* (fixed RNG seed) that exercises",
+        "> the scoring and statistical pipeline. They are projections of the protocol",
+        "> defined in `ux_eval_protocol.md`, **not** measurements from a conducted",
+        "> human-subjects study; substitute real participant responses before any",
+        "> manuscript submission.",
         "",
         "## 1. Usability Scale & Cognitive Load Summary ($N=30$ Bioinformaticians)",
         "",
@@ -226,16 +242,16 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         "",
         "| Comparison Pair | Dependent Measure | $t$-statistic (df=29) | Two-Tailed $p$-value | Significance Threshold |",
         "| :--- | :---: | :---: | :---: | :---: |",
-        f"| **oxo-flow vs Nextflow** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_nextflow']['t_stat']}$ | $p = {c['sus_oxoflow_vs_nextflow']['p_value']:.4e}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Snakemake** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_snakemake']['t_stat']}$ | $p = {c['sus_oxoflow_vs_snakemake']['p_value']:.4e}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Nextflow** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_nextflow']['t_stat']}$ | $p = {c['ttfp_oxoflow_vs_nextflow']['p_value']:.4e}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Snakemake** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_snakemake']['t_stat']}$ | $p = {c['ttfp_oxoflow_vs_snakemake']['p_value']:.4e}$ | **Significant ($p < 0.001$)** |",
+        f"| **oxo-flow vs Nextflow** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_nextflow']['t_stat']}$ | ${fmt_p(c['sus_oxoflow_vs_nextflow']['p_value'])}$ | **Significant ($p < 0.001$)** |",
+        f"| **oxo-flow vs Snakemake** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_snakemake']['t_stat']}$ | ${fmt_p(c['sus_oxoflow_vs_snakemake']['p_value'])}$ | **Significant ($p < 0.001$)** |",
+        f"| **oxo-flow vs Nextflow** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_nextflow']['t_stat']}$ | ${fmt_p(c['ttfp_oxoflow_vs_nextflow']['p_value'])}$ | **Significant ($p < 0.001$)** |",
+        f"| **oxo-flow vs Snakemake** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_snakemake']['t_stat']}$ | ${fmt_p(c['ttfp_oxoflow_vs_snakemake']['p_value'])}$ | **Significant ($p < 0.001$)** |",
         "",
         "## 3. Human Factors Conclusions",
         "",
-        "- **Empirical Grade A+ Usability**: `oxo-flow` achieved a mean SUS score of **88.2 (Grade A+, 'Best Imaginable')**, compared to 58.7 (Grade D) for Nextflow and 61.8 (Grade D) for Snakemake.",
-        "- **Cognitive Load Reduction**: The NASA-TLX total cognitive burden was reduced by **>55%** through visual Metro-DAG layout, sub-millisecond biological header inspection, and 1-Click Remediation.",
-        "- **Time-to-First-Pass Acceleration**: Novice and intermediate bioinformaticians reached verified working pipelines in **<4.0 minutes** on `oxo-flow`, vs >14 minutes on incumbent scripting DSLs.",
+        f"- **Grade A+ Usability (simulated projection)**: `oxo-flow` achieved a mean SUS score of **{oxo['sus_mean']:.1f} (Grade {oxo['grade']}, '{oxo['adjective']}')**, compared to {nf['sus_mean']:.1f} (Grade {nf['grade']}) for Nextflow and {sm['sus_mean']:.1f} (Grade {sm['grade']}) for Snakemake.",
+        f"- **Cognitive Load Reduction (simulated projection)**: the NASA-TLX burden dropped by **{(1 - oxo['nasa_tlx_mean'] / nf['nasa_tlx_mean']) * 100:.0f}%** vs Nextflow ({oxo['nasa_tlx_mean']:.1f} vs {nf['nasa_tlx_mean']:.1f}) through visual Metro-DAG layout, sub-millisecond biological header inspection, and 1-Click Remediation.",
+        f"- **Time-to-First-Pass Acceleration (simulated projection)**: participants reached verified working pipelines in **{oxo['ttfp_mean_secs']/60.0:.1f} minutes** on `oxo-flow`, vs {nf['ttfp_mean_secs']/60.0:.1f} minutes on Nextflow and {sm['ttfp_mean_secs']/60.0:.1f} minutes on Snakemake.",
     ])
 
     return "\n".join(lines)
@@ -252,7 +268,7 @@ def main() -> None:
     report = analyze_survey_results(dataset)
 
     print("=" * 80)
-    print("oxo-flow Human Factors & System Usability Scale (SUS) Study Analysis")
+    print("oxo-flow Human Factors & SUS Analysis (SIMULATED pilot data — see ux_eval_protocol.md)")
     print(f"Cohort Size: N={args.participants} Bioinformaticians")
     print("=" * 80)
 
@@ -267,7 +283,7 @@ def main() -> None:
     print("Inferential Paired t-tests (df=29):")
     for pair, test in report["comparisons"].items():
         p_val = test["p_value"]
-        p_str = f"{p_val:.4e}" if p_val < 0.001 else f"{p_val:.4f}"
+        p_str = "< 1.0e-300" if p_val <= 0.0 or p_val < 1e-300 else (f"{p_val:.4e}" if p_val < 0.001 else f"{p_val:.4f}")
         print(f"  {pair:<28}: t = {test['t_stat']:6.2f}, p = {p_str} (p < 0.001)")
     print("=" * 80)
 

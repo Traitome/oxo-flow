@@ -23,11 +23,11 @@ import os
 import random
 import shutil
 import subprocess
-import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -235,5 +235,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    import tempfile
     main()
