@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use sysinfo::{ProcessesToUpdate, System};
 
-static SYS: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new_all()));
+static SYS: LazyLock<Mutex<Option<System>>> = LazyLock::new(|| Mutex::new(System::new_all().ok()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostResources {
@@ -18,9 +18,20 @@ pub struct HostResources {
 pub fn get_host_resources() -> HostResources {
     // Recover from a poisoned lock instead of panicking: the System payload is
     // plain metrics data and remains usable after another thread panicked.
-    let mut sys = SYS
+    // `System::new_all()` is fallible since sysinfo 0.40 — a `None` payload
+    // (init failure) reports zeroed metrics instead of panicking the caller.
+    let mut sys_guard = SYS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(sys) = sys_guard.as_mut() else {
+        return HostResources {
+            cpu_usage_percent: 0.0,
+            total_memory_mb: 0,
+            used_memory_mb: 0,
+            total_swap_mb: 0,
+            used_swap_mb: 0,
+        };
+    };
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
@@ -45,7 +56,8 @@ pub fn get_host_resources() -> HostResources {
 ///
 /// Returns `(memory_mb, cpu_pct, process_count)`.
 pub fn process_tree_usage(root_pid: u32) -> Option<(f64, f64, usize)> {
-    let mut sys = SYS.lock().ok()?;
+    let mut guard = SYS.lock().ok()?;
+    let sys = guard.as_mut()?;
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     // parent map: pid -> parent pid

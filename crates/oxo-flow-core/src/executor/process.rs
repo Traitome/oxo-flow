@@ -458,14 +458,17 @@ pub struct LocalExecutor {
 /// on the current platform. On Linux, falls back to parsing `/proc/meminfo`
 /// if the sysinfo crate returns unexpected results.
 pub(crate) fn detect_total_memory_mb() -> u64 {
-    // Primary: sysinfo crate (cross-platform)
-    if let Ok(mb) = std::panic::catch_unwind(|| {
+    // Primary: sysinfo crate (cross-platform). `System::new()` is fallible
+    // since sysinfo 0.40; an init error falls through to the /proc fallback.
+    if let Some(mb) = std::panic::catch_unwind(|| -> Option<u64> {
         use sysinfo::System;
         // Only memory is needed; avoid `System::new_all()` scanning all of /proc.
-        let mut sys = System::new();
+        let mut sys = System::new().ok()?;
         sys.refresh_memory();
-        sys.total_memory() / 1024 / 1024
-    }) && mb > 0
+        Some(sys.total_memory() / 1024 / 1024)
+    })
+    .unwrap_or(None)
+        && mb > 0
     {
         return mb;
     }
@@ -498,12 +501,14 @@ pub(crate) fn detect_total_memory_mb() -> u64 {
 /// container `--memory` clamp use the whole backable budget on
 /// small-memory boxes (live: tx-ubuntu's 3.7G RAM + 6G swap).
 pub(crate) fn detect_swap_mb() -> u64 {
-    if let Ok(mb) = std::panic::catch_unwind(|| {
+    if let Some(mb) = std::panic::catch_unwind(|| -> Option<u64> {
         use sysinfo::System;
-        let mut sys = System::new();
+        let mut sys = System::new().ok()?;
         sys.refresh_memory();
-        sys.total_swap() / 1024 / 1024
-    }) && mb > 0
+        Some(sys.total_swap() / 1024 / 1024)
+    })
+    .unwrap_or(None)
+        && mb > 0
     {
         return mb;
     }
