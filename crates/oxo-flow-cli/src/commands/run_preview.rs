@@ -958,6 +958,21 @@ pub(crate) fn when_condition_false(
     config.when_condition_false(rule, wildcard_values)
 }
 
+/// Every rule whose template `when` evaluates false under the merged
+/// config — the seed set both `run` and `dry-run` prune their plans with
+/// (#882/#883, issue #247).
+pub(crate) fn when_false_rules(
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    config
+        .rules
+        .iter()
+        .filter(|rule| when_condition_false(rule, config, wildcard_values))
+        .map(|rule| rule.name.clone())
+        .collect()
+}
+
 /// The profile names available in `<workflow-dir>/profiles/` — `<NAME>`
 /// from every `<NAME>.toml` / `<NAME>.oxoflow` file, sorted and deduped.
 fn available_profiles(workflow_dir: &Path) -> Vec<String> {

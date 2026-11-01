@@ -15,6 +15,17 @@ pub(crate) fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
         .collect()
 }
 
+/// The NAMES of the sensitive config keys — the snapshot-drift warning and
+/// config-change detection compare keys, not values (issue #99 B1).
+pub(crate) fn sensitive_keys_of(config: &WorkflowConfig) -> std::collections::HashSet<String> {
+    config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
 /// Adopt a loaded checkpoint for the workflow about to run (audit B8).
 ///
 /// A checkpoint lives at `<workdir>/.oxo-flow/checkpoint.json`, so two

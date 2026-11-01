@@ -479,14 +479,8 @@ pub async fn run_command(
     // not expand through them. Full runs apply the same seeds so consumers
     // of when-skipped producers get pruned instead of failing at runtime.
     let wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
-    let when_false_rules: std::collections::HashSet<String> = config
-        .rules
-        .iter()
-        .filter(|rule| {
-            crate::commands::run_preview::when_condition_false(rule, &config, &wildcard_values)
-        })
-        .map(|rule| rule.name.clone())
-        .collect();
+    let when_false_rules =
+        crate::commands::run_preview::when_false_rules(&config, &wildcard_values);
 
     // Default targets (issue #469): `target = true` rules seed the build
     // when nothing explicit was selected. Explicit -t/--module wins.
@@ -602,10 +596,7 @@ pub async fn run_command(
     // An explicit checkpoint path (resume) wins over the workdir-derived
     // default (#538); load AND save both use it.
     let checkpoint_path = checkpoint_override.unwrap_or_else(|| {
-        workdir
-            .as_ref()
-            .unwrap_or(&workdir_default)
-            .join(".oxo-flow/checkpoint.json")
+        CheckpointState::default_path(workdir.as_ref().unwrap_or(&workdir_default))
     });
     // Retention for failed-output aside files (issue #194 C2): stale
     // `.oxo-failed` evidence ages out at run start instead of accumulating
@@ -669,12 +660,7 @@ pub async fn run_command(
 
     // Sensitive keys are needed by the snapshot-drift warning below and by
     // config-change detection.
-    let sensitive_keys: std::collections::HashSet<String> = config
-        .config_meta
-        .iter()
-        .filter(|(_, def)| def.sensitive)
-        .map(|(key, _)| key.clone())
-        .collect();
+    let sensitive_keys = sensitive_keys_of(&config);
 
     // ── Snapshot drift warning (issue #243) ──────────────────────────────
     // The checkpoint records the EFFECTIVE config of the original run
@@ -4938,14 +4924,8 @@ pub async fn dry_run_command(
     // the same when-gate filter `run` applies, so the preview cannot list
     // instances that would never execute.
     let dry_wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
-    let when_false_rules: std::collections::HashSet<String> = config
-        .rules
-        .iter()
-        .filter(|rule| {
-            crate::commands::run_preview::when_condition_false(rule, &config, &dry_wildcard_values)
-        })
-        .map(|rule| rule.name.clone())
-        .collect();
+    let when_false_rules =
+        crate::commands::run_preview::when_false_rules(&config, &dry_wildcard_values);
 
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
@@ -4982,7 +4962,7 @@ pub async fn dry_run_command(
     // Read-only: the preview classifies every rule in the execution set
     // exactly as `run` would — invalidation sources, downstream cascade,
     // and the protected remainder — without touching the checkpoint on disk.
-    let checkpoint_path = base_dir.join(".oxo-flow/checkpoint.json");
+    let checkpoint_path = CheckpointState::default_path(base_dir);
     // The preview is ALWAYS computed — with an empty state when no
     // checkpoint exists. `when` conditions can skip rules even on a fresh
     // run, so "every rule will execute" would be wrong without it.
@@ -5002,12 +4982,7 @@ pub async fn dry_run_command(
     // Same identity gate `run` applies (audit B8): another workflow's
     // artifacts must not be reported as up to date in the plan either.
     adopt_checkpoint_for_workflow(&mut checkpoint_state, &workflow, None);
-    let sensitive_keys: std::collections::HashSet<String> = config
-        .config_meta
-        .iter()
-        .filter(|(_, def)| def.sensitive)
-        .map(|(key, _)| key.clone())
-        .collect();
+    let sensitive_keys = sensitive_keys_of(&config);
     // The verbose plan print must not leak sensitive values (issue #99 B1).
     let sensitive_values = sensitive_values_of(&config);
     let interpreter_map = config.workflow.interpreter_map.clone();
@@ -5932,7 +5907,7 @@ pub async fn handle_status(
                 .filter(|p| !p.as_os_str().is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let sibling = base.join(".oxo-flow/checkpoint.json");
+            let sibling = CheckpointState::default_path(&base);
             if sibling.exists() {
                 eprintln!(
                     "{} '{}' is a workflow file — using its sibling checkpoint '{}'.",
@@ -5966,7 +5941,7 @@ pub async fn handle_status(
     // CHECKPOINT argument wins.
     let checkpoint_path = match (&checkpoint, &workdir) {
         (Some(p), _) => p.clone(),
-        (None, Some(dir)) => dir.join(".oxo-flow/checkpoint.json"),
+        (None, Some(dir)) => CheckpointState::default_path(dir),
         (None, None) => PathBuf::from(DEFAULT_CHECKPOINT),
     };
     let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
