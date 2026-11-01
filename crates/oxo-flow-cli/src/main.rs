@@ -15,6 +15,7 @@ use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
 use crate::commands::info::info_command;
 use crate::commands::infra::{env_command, handle_license};
+use crate::commands::knowledge::{KnowledgeAction, knowledge_command};
 use crate::commands::output::{
     GraphFormat, MetroArg, handle_diff, handle_export, handle_graph, handle_report,
 };
@@ -68,8 +69,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// schema, verify-data, license, and ai; every other command rejects the
-    /// flag instead of silently ignoring it.
+    /// knowledge, schema, verify-data, license, and ai; every other command
+    /// rejects the flag instead of silently ignoring it.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -376,6 +377,18 @@ pub enum Commands {
         #[arg(
             long,
             value_name = "FORMAT",
+            help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
+        )]
+        format: Option<String>,
+    },
+    /// Query the embedded knowledge base (Bioconda, nf-core, skills, docs).
+    Knowledge {
+        #[command(subcommand)]
+        action: KnowledgeAction,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            global = true,
             help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
         )]
         format: Option<String>,
@@ -1150,6 +1163,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Status { .. }
         | Commands::Batch { .. }
         | Commands::Info { .. }
+        | Commands::Knowledge { .. }
         | Commands::Schema
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
@@ -1620,6 +1634,7 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include, cli.json, ai).await?;
         }
         Commands::Info { workflow, format } => info_command(workflow, format)?,
+        Commands::Knowledge { action, format } => knowledge_command(action, format)?,
         Commands::Init { name, dir, force } => init_command(name, dir, force)?,
         Commands::Template {
             template,
