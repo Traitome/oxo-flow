@@ -23,6 +23,7 @@ pub(crate) mod cluster_path;
 pub mod debug;
 pub mod dry_run;
 mod env_knobs;
+mod failure;
 mod findings;
 mod hooks;
 mod narrate;
@@ -39,6 +40,7 @@ mod task;
 pub use debug::debug_command;
 pub use dry_run::dry_run_command;
 pub(crate) use env_knobs::*;
+pub(crate) use failure::*;
 pub(crate) use findings::*;
 pub(crate) use hooks::*;
 pub(crate) use narrate::*;
@@ -2140,425 +2142,54 @@ pub async fn run_command(
                 || status == oxo_flow_core::executor::JobStatus::Cancelled)
         {
             progress.finish_and_clear();
-            // Kill in-flight rule processes before cancelling their tasks —
-            // `abort_all()` alone orphans the OS children, which keep
-            // consuming the machine after the run exits (issue #131).
-            // Clear the pool's FIFO waiter queue first so cancelled waiters
-            // cannot hold the line hostage (issue #123 100% guarantee).
-            executor.clear_resource_waiters().await;
-            // The grace poll inside kill_process_tree sleeps up to 10 s —
-            // run the sweep on the blocking pool, not a runtime worker
-            // (#524; the timeout path already follows this rule). The
-            // snapshot also records WHICH rules the abort actually killed:
-            // the #498 demotion below keys on that evidence, not on bare
-            // signal deaths — a sibling the kernel OOM-killer shot carries
-            // the same signal signature and must keep its failed record
-            // (#525).
-            let snapshot = executor.active_pids();
-            let mut abort_killed: std::collections::HashSet<String> =
-                snapshot.iter().map(|(r, _)| r.clone()).collect();
-            tokio::task::spawn_blocking(move || {
-                for (rule_name, pid) in snapshot {
-                    if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
-                        tracing::warn!(
-                            rule = %rule_name,
-                            pid,
-                            error = %e,
-                            "failed to signal in-flight rule process during abort"
-                        );
-                    }
-                }
-            })
-            .await
-            .ok();
-            join_set.abort_all();
-            // Re-snapshot and sweep again: a retry task could wake during
-            // the first sweep and spawn its next attempt; those late
-            // children escape the stale first snapshot (#524).
-            let late = executor.active_pids();
-            abort_killed.extend(late.iter().map(|(r, _)| r.clone()));
-            if !late.is_empty() {
-                tokio::task::spawn_blocking(move || {
-                    for (rule_name, pid) in late {
-                        if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
-                            tracing::warn!(
-                                rule = %rule_name,
-                                pid,
-                                error = %e,
-                                "failed to signal late-spawned rule process during abort"
-                            );
-                        }
-                    }
-                })
-                .await
-                .ok();
-            }
-
-            // The killed siblings would otherwise surface as bare
-            // "✗ rule 'X' failed" with no exit code and an empty stderr
-            // tail: the process-tree kill makes their shells die by signal,
-            // so their command loops record exit_code None and no
-            // diagnostics. Record them as honest Cancelled entries instead
-            // — never in failed_rules, they are collateral cancellations,
-            // not failures — and narrate them like skips.
-            {
-                let verb = if status == oxo_flow_core::executor::JobStatus::Cancelled {
-                    "cancelled"
-                } else {
-                    "failed"
-                };
-                let killed: Vec<String> = task_rule
-                    .values()
-                    .filter(|name| *name != &completed_rule)
-                    .cloned()
-                    .collect();
-                if !killed.is_empty() {
-                    // A rule that already finished its closure (result still
-                    // unreaped in the JoinSet) has written its own record —
-                    // never overwrite a genuine Success/Failed. BUT a failure
-                    // whose only evidence is a signal death with no exit code
-                    // IS the abort's kill, not a self-caused failure: demote
-                    // it out of failed_rules/metrics (issue #498). Pure
-                    // signal deaths with no exit code are exactly what the
-                    // process-tree kill produces; a rule that failed on its
-                    // own (exit code, or a pre-abort signal like OOM-kill
-                    // whose result was reaped first) keeps its record.
-                    let already_failed = failed_rules_set.lock().await.clone();
-                    let mut ck = checkpoint.lock().await;
-                    for rule_name in &killed {
-                        if ck.is_completed(rule_name) {
-                            continue;
-                        }
-                        // The kill-snapshot membership is the demotion
-                        // evidence (#525): a signal death alone cannot
-                        // distinguish the abort's kill from a kernel
-                        // OOM-kill that merely reaped around the same time.
-                        // A rule that already failed on its own and was NOT
-                        // in the kill snapshots keeps its genuine failure
-                        // record untouched — never demoted, never
-                        // overwritten with a cancellation.
-                        if already_failed.contains(rule_name) && !abort_killed.contains(rule_name) {
-                            continue;
-                        }
-                        if already_failed.contains(rule_name) {
-                            let skip_reason = format!(
-                                "run aborted before this rule finished — required rule \
-'{completed_rule}' {verb}"
-                            );
-                            if ck.demote_failed_to_cancelled(rule_name, skip_reason) {
-                                let required =
-                                    config.get_rule(rule_name).is_some_and(|r| r.required);
-                                if required {
-                                    fail_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                                } else {
-                                    non_required_fail_count
-                                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                failures.lock().await.retain(|(n, _)| n != rule_name);
-                                if !is_tty {
-                                    diagnostic_narrate(
-                                        format_args!(
-                                            "  {} {} (run aborted — required rule '{}' {})",
-                                            "⊝".dimmed(),
-                                            rule_name,
-                                            completed_rule,
-                                            verb
-                                        ),
-                                        Some(&run_log),
-                                    );
-                                }
-                            }
-                            continue;
-                        }
-                        let record = oxo_flow_core::executor::JobRecord {
-                            signal: None,
-                            rule: rule_name.clone(),
-                            status: oxo_flow_core::executor::JobStatus::Cancelled,
-                            enqueued_at: None,
-                            started_at: None,
-                            finished_at: Some(chrono::Utc::now()),
-                            exit_code: None,
-                            stdout: None,
-                            stderr: None,
-                            command: None,
-                            retries: 0,
-                            skip_reason: Some(format!(
-                                "run aborted before this rule finished — required rule \
-'{completed_rule}' {verb}"
-                            )),
-                            max_rss_mb: None,
-                            cpu_seconds: None,
-                            caption: None,
-                        };
-                        ck.record_run(&record, output_tail_bytes_from_env());
-                        if !is_tty {
-                            diagnostic_narrate(
-                                format_args!(
-                                    "  {} {} (run aborted — required rule '{}' {})",
-                                    "⊝".dimmed(),
-                                    rule_name,
-                                    completed_rule,
-                                    verb
-                                ),
-                                Some(&run_log),
-                            );
-                        }
-                    }
-                    if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
-                        tracing::warn!(error = %e, "failed to save checkpoint after abort");
-                    }
-                }
-            }
-
-            // Deterministic diagnostics & 1-key remediation
-            {
-                let failures_guard = failures.lock().await;
-                let failure = failures_guard
-                    .iter()
-                    .find(|(name, _)| name == &completed_rule)
-                    .or_else(|| failures_guard.first());
-                if let Some((rule, error)) = failure {
-                    let exit_code = failure_exit_code(error);
-                    let code_opt = if exit_code == -1 {
-                        None
-                    } else {
-                        Some(exit_code)
-                    };
-                    let ctx =
-                        oxo_flow_core::diagnostics::DiagnosticContext::new(rule, error, code_opt);
-                    let diags = oxo_flow_core::diagnostics::DiagnosticsEngine::global()
-                        .analyze_context(&ctx);
-                    if let Some(d) = diags.first() {
-                        narrate_console_line(format_args!(
-                            "  {} Root Cause: {} ({:?})",
-                            "🔍".bold(),
-                            d.likely_cause.yellow(),
-                            d.category
-                        ));
-                        for s in &d.suggestions {
-                            narrate_console_line(format_args!(
-                                "     {} {}",
-                                "💡 Suggestion:".cyan(),
-                                s
-                            ));
-                        }
-                        if d.repair_action.is_some() {
-                            narrate_console_line(format_args!(
-                                "     {} Remediation: [R] Auto-scale & resume  [D] Debug with AI  [A] Abort",
-                                "⚡".bold()
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // AI error recovery
-            let should_recover =
-                ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);
-            if should_recover {
-                let failures_guard = failures.lock().await;
-                // Diagnose the rule that actually aborted the run — a
-                // non-required failure recorded earlier must not shadow it.
-                let failure = failures_guard
-                    .iter()
-                    .find(|(name, _)| name == &completed_rule)
-                    .or_else(|| failures_guard.first());
-                if let Some((rule, error)) = failure
-                    && let Some(provider) =
-                        crate::commands::ai_template::try_resolve_ai(Some(&workflow), true)
-                {
-                    // `--ai-max-retries` bounds the recovery attempts: a
-                    // failed diagnosis call is retried up to the flag's
-                    // value, a successful one is never repeated.
-                    let attempts = ai_attempts(ai_max_retries);
-                    let mut result: Result<crate::commands::ai_recover::DiagnoseResult> =
-                        Err(anyhow::anyhow!("AI recovery did not run"));
-                    for attempt in 1..=attempts {
-                        // Feed the real exit code when the failure record has
-                        // one: the banner previously always showed -1, and the
-                        // prompt's exit-code→category triage (137=OOM,
-                        // 139=segfault, 127=command not found) needs the true
-                        // value to classify correctly. Panics/aborts keep -1.
-                        let exit_code = failure_exit_code(error);
-                        result = crate::commands::ai_recover::diagnose_failure(
-                            &workflow, rule, exit_code, error, &provider,
-                        )
-                        .await;
-                        if result.is_ok() || attempt == attempts {
-                            break;
-                        }
-                        if let Err(e) = &result {
-                            narrate_console_line(format_args!(
-                                "  AI diagnosis attempt {attempt}/{attempts} failed: {e} — retrying"
-                            ));
-                        }
-                    }
-                    match result {
-                        Ok(diag) => {
-                            if let Some(ref toml) = diag.modified_toml {
-                                // Only write AI-generated TOML when the model itself
-                                // assessed it safe AND it parses as a valid workflow.
-                                // Anything else is shown, never auto-applied — the
-                                // content can carry injected instructions just like
-                                // any other model output.
-                                if !diag.safe_to_auto_apply {
-                                    narrate_console_line(format_args!(
-                                        "  AI fix not auto-applied: flagged unsafe by the \
-                                         safety assessment. Review the suggestion manually."
-                                    ));
-                                } else if let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
-                                    narrate_console_line(format_args!(
-                                        "  AI fix not auto-applied: generated TOML failed \
-                                         validation ({e}). Review the suggestion manually."
-                                    ));
-                                } else if let Err(e) = crate::commands::ai_recover::apply_fix(
-                                    &workflow, toml, "recovery",
-                                ) {
-                                    narrate_console_line(format_args!(
-                                        "  Failed to apply AI fix: {e}"
-                                    ));
-                                }
-                            }
-                        }
-                        Err(e) => narrate_console_line(format_args!("  AI diagnosis failed: {e}")),
-                    }
-                }
-            }
-
-            // The plain-failure abort: emit the summary BEFORE returning,
-            // mirroring the keep-going path's document (issue #142 H6).
-            let ck = checkpoint.lock().await;
-            json_summary.emit(
-                "failed",
-                &RunCounts {
-                    succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
-                    skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
-                    failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                    non_required_failed: non_required_fail_count
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    blocked: blocked.lock().await.len(),
+            return handle_run_failure_abort(
+                &completed_rule,
+                status,
+                AbortContext {
+                    executor: &executor,
+                    join_set: &mut join_set,
+                    task_rule: &task_rule,
+                    failed_rules_set: &failed_rules_set,
+                    checkpoint: &checkpoint,
+                    checkpoint_path: &checkpoint_path,
+                    failures: &failures,
+                    fail_count: &fail_count,
+                    non_required_fail_count: &non_required_fail_count,
+                    success_count: &success_count,
+                    skipped_count: &skipped_count,
+                    blocked: &blocked,
+                    config: &config,
+                    workflow: &workflow,
+                    workdir_actual: workdir_actual.as_ref(),
+                    tmp_dir_resolved: tmp_dir_resolved.as_deref(),
+                    run_log: &run_log,
+                    json_summary: &mut json_summary,
+                    is_tty,
+                    ai_recover,
+                    ai_max_retries,
                 },
-                rule_resource_rows(&ck),
-            );
-            // on_error fires on the plain-failure abort too (issue #227).
-            run_terminal_hook(
-                &config,
-                &workdir_actual,
-                tmp_dir_resolved.as_deref(),
-                success_count.load(std::sync::atomic::Ordering::Relaxed),
-                fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                skipped_count.load(std::sync::atomic::Ordering::Relaxed),
             )
             .await;
-            notify_webhook(
-                &config,
-                oxo_flow_core::webhook::WebhookEvent::WorkflowFailed,
-                Some((
-                    success_count.load(std::sync::atomic::Ordering::Relaxed),
-                    fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                    skipped_count.load(std::sync::atomic::Ordering::Relaxed),
-                )),
-            )
-            .await;
-            return Err(anyhow::anyhow!("workflow execution failed"));
         }
 
         // Propagate failure transitively: every rule that (transitively)
-        // depends on a failed rule is marked as skipped/blocked. Uses a
-        // worklist to ensure transitive propagation (grandchild of a
-        // failed rule is also blocked). Runs when the loop continues past
-        // failures: keep_going with any failure, or a non-required failure
-        // in either mode (issue #99 B2).
+        // depends on a failed rule is marked as skipped/blocked.
         let nrf = non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed);
         if (fc > 0 && keep_going) || nrf > 0 {
-            // Seed the worklist with every rule that directly depends on a
-            // failed rule and has not been submitted yet.
-            let frs = failed_rules_set.lock().await;
-            let mut worklist: Vec<String> = Vec::new();
-            for rule_name in &rule_names {
-                if submitted.contains(rule_name) {
-                    continue;
-                }
-                let deps = dag.dependencies(rule_name).unwrap_or_default();
-                if deps.iter().any(|d| frs.contains(d.as_str())) {
-                    worklist.push(rule_name.to_string());
-                }
-            }
-            drop(frs);
-
-            // Process transitively: when a rule is blocked, its own dependents
-            // may also become blockable.
-            let mut idx = 0;
-            while idx < worklist.len() {
-                let name = &worklist[idx];
-                if submitted.contains(name.as_str()) {
-                    idx += 1;
-                    continue;
-                }
-                submitted.insert(name.clone());
-                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                {
-                    let mut frs = failed_rules_set.lock().await;
-                    frs.insert(name.clone());
-                }
-                sched.mark_completed(oxo_flow_core::executor::JobRecord {
-                    signal: None,
-                    rule: name.clone(),
-                    status: oxo_flow_core::executor::JobStatus::Skipped,
-                    enqueued_at: None,
-                    started_at: None,
-                    finished_at: None,
-                    exit_code: None,
-                    stdout: None,
-                    stderr: None,
-                    command: None,
-                    retries: 0,
-                    skip_reason: Some("blocked by failed upstream dependency".into()),
-                    max_rss_mb: None,
-                    cpu_seconds: None,
-                    caption: config.get_rule(name).and_then(|r| {
-                        oxo_flow_core::executor::process::rule_report_caption(
-                            r,
-                            workdir_actual.as_ref(),
-                        )
-                    }),
-                });
-                progress.inc(1);
-                if !is_tty {
-                    narrate_console_line(format_args!(
-                        "  {} {} (blocked by failed dependency)",
-                        "⊘".yellow(),
-                        name
-                    ));
-                }
-
-                // Find transitive dependents of this newly-blocked rule.
-                {
-                    let frs = failed_rules_set.lock().await;
-                    for other in &rule_names {
-                        if submitted.contains(other) || worklist.contains(other) {
-                            continue;
-                        }
-                        let deps = dag.dependencies(other).unwrap_or_default();
-                        if deps.iter().any(|d| frs.contains(d.as_str())) {
-                            worklist.push(other.to_string());
-                        }
-                    }
-                }
-
-                idx += 1;
-            }
-
-            // Record blocked rules for final summary
-            {
-                let frs = failed_rules_set.lock().await;
-                for name in &worklist {
-                    let deps = dag.dependencies(name).unwrap_or_default();
-                    if let Some(dep) = deps.into_iter().find(|d| frs.contains(d.as_str())) {
-                        blocked.lock().await.push((name.clone(), dep));
-                    }
-                }
-            }
+            propagate_transitive_failures(TransitiveFailureContext {
+                dag: &dag,
+                rule_names: &rule_names,
+                submitted: &mut submitted,
+                failed_rules_set: &failed_rules_set,
+                skipped_count: &skipped_count,
+                blocked: &blocked,
+                sched: &mut sched,
+                config: &config,
+                workdir_actual: workdir_actual.as_ref(),
+                is_tty,
+                progress: &progress,
+            })
+            .await;
         }
     }
 
