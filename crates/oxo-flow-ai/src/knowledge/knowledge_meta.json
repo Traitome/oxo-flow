@@ -1,12 +1,12 @@
 {
   "sources": {
     "bioconda_tools": {
-      "count": 6590,
+      "count": 6667,
       "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6214,
+      "excluded": 6222,
       "description": "",
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-10-16T07:57:17Z",
+      "generated_at": "2026-11-01T10:10:45Z",
       "auto": true
     },
     "skills_index": {
@@ -15,15 +15,15 @@
       "domains": 64,
       "description": "",
       "data_file": "skills_index.jsonl",
-      "generated_at": "2026-10-16T08:18:03Z",
+      "generated_at": "2026-11-01T10:28:28Z",
       "auto": true
     },
     "nfcore_modules": {
-      "count": 2108,
+      "count": 2125,
       "url": "https://github.com/nf-core/modules",
       "description": "",
       "data_file": "nfcore_modules.jsonl",
-      "generated_at": "2026-10-16T08:17:39Z",
+      "generated_at": "2026-11-01T10:28:17Z",
       "auto": true
     },
     "commercial_tools": {
@@ -37,7 +37,7 @@
       ],
       "description": "",
       "data_file": "commercial_tools.jsonl",
-      "generated_at": "2026-10-16T08:16:16Z",
+      "generated_at": "2026-11-01T10:27:38Z",
       "auto": true
     },
     "pipeline_graph": {
@@ -52,18 +52,18 @@
       },
       "description": "",
       "data_file": "pipeline_graph.jsonl",
-      "generated_at": "2026-10-16T08:17:49Z",
+      "generated_at": "2026-11-01T10:28:22Z",
       "auto": true
     },
     "biotools_overlay": {
-      "count": 1918,
+      "count": 1931,
       "url": "https://bio.tools/api/tool/",
-      "targets": 8405,
-      "seen": 32292,
+      "targets": 8494,
+      "seen": 32294,
       "stop_reason": "max-pages reached",
       "description": "",
       "data_file": "biotools_overlay.jsonl",
-      "generated_at": "2026-10-16T08:16:12Z",
+      "generated_at": "2026-11-01T10:27:36Z",
       "auto": true
     },
     "edam_terms": {
@@ -73,7 +73,7 @@
       "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
       "description": "",
       "data_file": "edam_terms.jsonl",
-      "generated_at": "2026-10-16T08:16:17Z",
+      "generated_at": "2026-11-01T10:27:38Z",
       "auto": true
     },
     "skillgraph_docs": {
@@ -81,9 +81,9 @@
       "url": "https://skillgraph.pipette.bio/mcp",
       "description": "full SKILL.md docs per skill, served via lookup_doc",
       "data_file": "skillgraph_docs.jsonl",
-      "generated_at": "2026-10-16T08:17:49Z",
+      "generated_at": "2026-11-01T10:28:22Z",
       "auto": true
     }
   },
-  "generated_at": "2026-10-16T08:18:03Z"
+  "generated_at": "2026-11-01T10:28:28Z"
 }
