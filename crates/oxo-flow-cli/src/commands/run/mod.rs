@@ -27,6 +27,7 @@ mod overrides;
 mod preflight;
 mod reentry;
 mod refs;
+mod run_log;
 mod signals;
 mod status;
 
@@ -38,6 +39,7 @@ pub(crate) use overrides::*;
 pub(crate) use preflight::*;
 pub(crate) use reentry::*;
 pub(crate) use refs::*;
+pub(crate) use run_log::*;
 pub(crate) use signals::*;
 pub(crate) use status::*;
 
@@ -405,60 +407,19 @@ pub async fn run_command(
     // (issue #99 B1 / #136 fix 3). Computed once here; the executor's
     // capture masking below reuses the same list.
     let sensitive_values = sensitive_values_of(&config);
-    let workflow_abs = absolutize(&workflow)?;
-    let workflow_git_sha =
-        oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs);
-    let effective_workdir_log = workdir.as_ref().unwrap_or(&workdir_default);
-    let run_log_path = match &log_file {
-        // Relative --log-file paths resolve against the workdir, matching
-        // the default log location (issue #136 fix 4).
-        Some(p) if p.is_absolute() => p.clone(),
-        Some(p) => effective_workdir_log.join(p),
-        None => effective_workdir_log.join(".oxo-flow/logs/oxo-flow.log"),
-    };
-    let run_log_header = format!(
-        "oxo-flow run log\nstarted_at: {}\noxo-flow: v{}\ncommand: {}\nworkflow: {}\nworkflow_name: {}\nworkflow_version: {}\ngit_sha: {}\nworkdir: {}\n\n",
-        chrono::Local::now().to_rfc3339(),
-        env!("CARGO_PKG_VERSION"),
-        oxo_flow_core::executor::process::mask_sensitive(
-            &std::env::args().collect::<Vec<_>>().join(" "),
-            &sensitive_values,
-        ),
-        workflow_abs.display(),
-        config.workflow.name,
-        config.workflow.version,
-        workflow_git_sha
-            .as_deref()
-            .unwrap_or("(not inside a git repository)"),
-        effective_workdir_log.display(),
-    );
-    // Background runs (issue #194 A3): `spawn_detached` already redirected
-    // this process's stdout/stderr onto the run log, so arming the tracing
-    // tee here would write every event TWICE into the same file. In that
-    // mode the header is printed to stderr (→ the redirect) and the tee is
-    // skipped entirely; foreground runs arm the tee as before.
-    let run_log: SharedRunLog = Arc::new(std::sync::Mutex::new(
-        if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some() {
-            eprintln!("{run_log_header}");
-            None
-        } else {
-            match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
-                Ok(guard) => Some(guard),
-                Err(e) => {
-                    tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
-                    None
-                }
-            }
-        },
-    ));
-    tracing::info!(
-        workflow = %config.workflow.name,
-        version = %config.workflow.version,
-        git_sha = workflow_git_sha.as_deref().unwrap_or("(none)"),
-        workdir = %effective_workdir_log.display(),
-        "workflow run started (log: {})",
-        run_log_path.display()
-    );
+    // The startup phase lives in run_log.rs (path resolution + masked
+    // header + tee arming are unit-tested there).
+    let RunLogStart {
+        run_log,
+        workflow_abs,
+        workflow_git_sha,
+    } = start_run_log(
+        &workflow,
+        &config,
+        workdir.as_ref().unwrap_or(&workdir_default),
+        log_file.as_deref(),
+        &sensitive_values,
+    )?;
 
     // When-aware planning (#882/#883): rules whose template `when` evaluates
     // false under the effective config seed the pruned set. Targeted runs
