@@ -1,8 +1,12 @@
 import csv
+import contextlib
+import io
+import json
 import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -215,6 +219,54 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(common.loose_step_match("qc::fastqc", "qc::fastqc"))
         self.assertTrue(common.loose_step_match("fastqc", "qc::fastqc"))
         self.assertFalse(common.loose_step_match("star", "starfish_alignment"))
+
+
+class JsonRequestRetryTests(unittest.TestCase):
+    @staticmethod
+    def _http_error(code, body):
+        return urllib.error.HTTPError(
+            url="http://test", code=code, msg="err", hdrs=None, fp=io.BytesIO(body.encode())
+        )
+
+    def test_transient_empty_502_is_replayed_then_succeeds(self):
+        responses = [
+            self._http_error(502, ""),
+            {"content": [{"type": "text", "text": "ok"}]},
+        ]
+
+        def fake_urlopen(req, timeout):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return contextlib.nullcontext(io.BytesIO(json.dumps(item).encode()))
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            data = common._json_request("http://test", {}, {})
+        self.assertEqual(data["content"][0]["text"], "ok")
+
+    def test_parseable_error_payload_surfaces_immediately(self):
+        calls = []
+
+        def fake_urlopen(req, timeout):
+            calls.append(1)
+            raise self._http_error(503, '{"error":"model_not_found"}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, "model_not_found"):
+                common._json_request("http://test", {}, {})
+        self.assertEqual(len(calls), 1)
+
+    def test_client_error_is_never_replayed(self):
+        calls = []
+
+        def fake_urlopen(req, timeout):
+            calls.append(1)
+            raise self._http_error(401, "")
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+                common._json_request("http://test", {}, {})
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

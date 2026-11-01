@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -275,14 +276,37 @@ def resolve_provider():
     return {"kind": kind, "api_url": api_url, "api_key": api_key, "model": model}
 
 
-def _json_request(url, body, headers, timeout=120):
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        headers=headers,
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+DEFAULT_TIMEOUT_SECS = 300
+# Mirror the Rust provider's send_with_retry contract: a transient status
+# answering with an EMPTY body is the proxy-outage signature and is replayed;
+# a parseable error payload surfaces immediately and 4xx never replays.
+# GLM thinking rounds measured 145s — the old 120s default killed them
+# mid-round (same calibration as OXO_FLOW_AI_TIMEOUT_SECS=300).
+TRANSIENT_EMPTY_STATUS = frozenset({408, 502, 503, 504, 522, 524})
+
+
+def _json_request(url, body, headers, timeout=DEFAULT_TIMEOUT_SECS, retries=3):
+    last_error = ""
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = exc.read().decode("utf-8", "replace").strip()
+            except Exception:
+                payload = ""
+            last_error = f"HTTP {exc.code}: {payload[:200] or 'empty body'}"
+            if exc.code in TRANSIENT_EMPTY_STATUS and not payload and attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise RuntimeError(f"chat completion failed ({last_error})") from exc
+    raise RuntimeError(f"chat completion failed after {retries} attempts ({last_error})")
 
 
 def _ensure_openai_chat_url(api_url):
@@ -323,7 +347,7 @@ def _claude_payload(messages, model, max_tokens, temperature):
     }
 
 
-def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
+def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None, timeout=DEFAULT_TIMEOUT_SECS):
     """One non-streaming chat call against the configured provider."""
     kind = provider["kind"]
     api_url = provider["api_url"]
@@ -340,11 +364,20 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                 },
+                timeout=timeout,
             )
             blocks = data.get("content") or []
             text = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
             if not text:
-                raise KeyError("missing Claude text content")
+                # Thinking backends can burn the whole budget on reasoning
+                # blocks (stop_reason=max_tokens, zero text) — a plain
+                # "missing content" hides the fix (raise --max-tokens).
+                stop = data.get("stop_reason", "")
+                raise RuntimeError(
+                    f"no text content in response (stop_reason={stop!r}); "
+                    "for thinking models this usually means reasoning consumed "
+                    "max_tokens before any text was emitted"
+                )
             return {
                 "content": text.strip(),
                 "meta": {
@@ -370,6 +403,7 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                     "options": options,
                 },
                 {"Content-Type": "application/json"},
+                timeout=timeout,
             )
             return {
                 "content": data["message"]["content"].strip(),
@@ -404,6 +438,7 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + api_key,
             },
+            timeout=timeout,
         )
         choice = data["choices"][0]
         return {
