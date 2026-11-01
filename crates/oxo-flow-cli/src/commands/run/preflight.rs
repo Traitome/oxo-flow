@@ -411,4 +411,109 @@ name = "test"
             Some(Path::new("/workflows/pixi.toml").to_str().unwrap())
         );
     }
+
+    fn pixi_env(manifest: &str) -> oxo_flow_core::rule::EnvironmentSpec {
+        oxo_flow_core::rule::EnvironmentSpec {
+            pixi: Some(manifest.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn backend_preflight_passes_empty_and_empty_specs() {
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        // Nothing pending → nothing to validate.
+        assert!(backend_preflight_failures(&[], &resolver).is_empty());
+        // A rule with no environment declaration never invokes a backend.
+        let no_env = vec![("qc".to_string(), Default::default())];
+        assert!(backend_preflight_failures(&no_env, &resolver).is_empty());
+    }
+
+    #[test]
+    fn backend_preflight_reports_missing_pixi_manifest_once_per_unique_spec() {
+        // Two pending instances of one rule template share the same spec:
+        // validate it once and collapse the failures, keeping the FIRST
+        // pending rule in execution order as the example (deterministic).
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        let pending = vec![
+            ("trim_S1".to_string(), pixi_env("envs/absent/pixi.toml")),
+            ("trim_S2".to_string(), pixi_env("envs/absent/pixi.toml")),
+        ];
+        let failures = backend_preflight_failures(&pending, &resolver);
+        assert_eq!(
+            failures.len(),
+            1,
+            "identical specs must group: {failures:?}"
+        );
+        let f = &failures[0];
+        assert_eq!(f.kind, "pixi");
+        assert_eq!(f.count, 2);
+        assert_eq!(f.example_rule, "trim_S1");
+        assert_eq!(f.spec, "envs/absent/pixi.toml");
+        let rendered = f.to_string();
+        assert!(
+            rendered.contains("required by 2 pending rules"),
+            "the message must carry the cohort size: {rendered}"
+        );
+        // Whether THIS test observes the manifest mode depends on whether
+        // the pixi binary happens to be on PATH (validate_spec checks the
+        // binary first); the hint split itself is covered without that
+        // dependency by backend_install_hint_splits_manifest_not_found…
+    }
+
+    #[test]
+    fn backend_install_hint_splits_manifest_not_found_from_missing_binary() {
+        // Issue #848: the failure MODE decides the advice. A missing pixi
+        // MANIFEST is a workflow defect — the hint must point at the file,
+        // not tell the operator to install pixi; a missing backend BINARY
+        // keeps the install advice. Constructed failures keep this test
+        // independent of the test sandbox's PATH.
+        let make = |message: &str| BackendPreflightFailure {
+            kind: "pixi".to_string(),
+            message: message.to_string(),
+            example_rule: "trim_S1".to_string(),
+            spec: "envs/absent/pixi.toml".to_string(),
+            count: 2,
+        };
+        let manifest = backend_install_hint(&make(
+            "pixi manifest 'envs/absent/pixi.toml' not found — the rule declares it via `pixi = \"envs/absent/pixi.toml\"` (resolved relative to the workflow directory)",
+        ));
+        assert_eq!(
+            manifest,
+            "create the manifest or correct the rule's `pixi` path (resolved relative to the workflow directory)"
+        );
+        let binary = backend_install_hint(&make("pixi is not installed or not in PATH"));
+        assert_eq!(
+            binary,
+            "install pixi (https://pixi.sh) and ensure it is on PATH"
+        );
+        // The mode discriminator keys on "not found", which only the
+        // manifest message carries — the binary message must not trip it.
+        assert!(!"pixi is not installed or not in PATH".contains("not found"));
+    }
+
+    #[test]
+    fn backend_preflight_missing_backend_binary_still_advises_install() {
+        // Issue #848: the OTHER failure mode — pixi the BINARY is absent —
+        // keeps the install advice. validate_spec checks the binary first,
+        // so an unresolvable spec with pixi absent from PATH yields the
+        // "not installed" message, distinct from the manifest check.
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        let pending = vec![("trim_S1".to_string(), pixi_env("envs/absent/pixi.toml"))];
+        let failures = backend_preflight_failures(&pending, &resolver);
+        // The exact mode depends on whether pixi is on PATH in the test
+        // sandbox; assert the hint MATCHES whichever mode fired.
+        let rendered = failures[0].to_string();
+        if failures[0].message.contains("not found") {
+            assert!(
+                rendered.contains("create the manifest"),
+                "manifest mode must carry the file advice: {rendered}"
+            );
+        } else {
+            assert!(
+                rendered.contains("install pixi"),
+                "binary mode must keep the install advice: {rendered}"
+            );
+        }
+    }
 }

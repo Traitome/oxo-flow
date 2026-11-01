@@ -874,3 +874,47 @@ pub async fn dry_run_command(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+
+    // ── Issue #432: dry-run headline + status --workdir / staleness ──────
+
+    #[test]
+    fn dry_run_headline_reports_run_skip_completed_not_dag_size() {
+        // The headline must answer "what happens next" (issue #432b): the
+        // old `DAG: (dry-run) N rules would execute` read as "everything
+        // re-runs" while the checkpoint said most rules were up to date.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "headline"
+
+[[rules]]
+name = "step"
+input = []
+output = ["out.txt"]
+shell = "touch out.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["dry-run", wf.to_str().unwrap()])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+        assert!(
+            stderr.contains("Plan: would run: 1 | skip: 0 | completed: 0 (DAG size: 1)"),
+            "headline must lead with would-run/skip/completed, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("rules would execute"),
+            "the old misleading headline must be gone, got: {stderr}"
+        );
+    }
+}

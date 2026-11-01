@@ -847,6 +847,8 @@ pub(crate) fn missing_source_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxo_flow_core::dag::WorkflowDag;
+    use std::collections::{HashMap, HashSet};
 
     fn workflow_config_with(toml_body: &str) -> WorkflowConfig {
         let toml = format!(
@@ -993,5 +995,430 @@ samples_list = "new"
                 }
             }
         }
+    }
+
+    fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
+        oxo_flow_core::config::WorkflowConfig::parse(rules_toml).unwrap()
+    }
+
+    fn source_gate_fixture(
+        dir: &std::path::Path,
+    ) -> (
+        oxo_flow_core::config::WorkflowConfig,
+        WorkflowDag,
+        Vec<String>,
+        HashMap<String, String>,
+    ) {
+        let toml = r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threshold = 5
+empty = []
+
+[[rules]]
+name = "gen"
+input = []
+output = ["out.txt"]
+shell = "echo x > {output[0]}"
+
+[[rules]]
+name = "use"
+input = ["out.txt", "ext.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "gated"
+input = ["gated_missing.txt"]
+output = ["gated.txt"]
+when = "config.threshold >= 10"
+shell = "true"
+
+[[rules]]
+name = "scatter_zero"
+input = ["scatter_missing.txt"]
+output = ["scatter.txt"]
+scatter = { variable = "chunk", values_from = "config.empty" }
+shell = "true"
+
+[[rules]]
+name = "opt"
+input = ["optional_missing.txt"]
+output = ["opt.txt"]
+optional = true
+shell = "true"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        std::fs::create_dir_all(dir).unwrap();
+        (config, dag, order, wildcard_values)
+    }
+
+    fn source_gate_call(
+        config: &oxo_flow_core::config::WorkflowConfig,
+        dag: &WorkflowDag,
+        order: &[String],
+        workdir: &std::path::Path,
+        workflow_dir: &std::path::Path,
+        wildcard_values: &HashMap<String, String>,
+    ) -> Vec<String> {
+        missing_source_findings(config, dag, order, workdir, workflow_dir, wildcard_values)
+    }
+
+    #[test]
+    fn missing_source_gate_flags_only_unproduced_required_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert_eq!(
+            findings,
+            vec!["rule 'use': input 'ext.txt' does not exist and no rule produces it".to_string()],
+            "'out.txt' has a producer (gen) and belongs to the cascade path; when-false, \
+             zero-fan-out scatter, and optional rules are all skipped"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_passes_when_sources_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        std::fs::write(dir.path().join("ext.txt"), b"data").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn missing_source_gate_silent_with_full_checkpoint_is_the_regressed_scenario() {
+        // The reported bug: every rule completed, raw/ deleted, re-run exited
+        // 0. At gate time (pre-checkpoint) the completed state is irrelevant
+        // — the missing external source must be flagged regardless.
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        std::fs::write(dir.path().join("out.txt"), b"stale").unwrap();
+        std::fs::write(dir.path().join("final.txt"), b"stale").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(!findings.is_empty(), "missing ext.txt must gate the run");
+    }
+
+    #[test]
+    fn missing_source_gate_skips_reference_outputs() {
+        // [[references]] outputs are built by the reference machinery after
+        // this gate and are not DAG nodes — a missing one must not gate.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "refgate"
+
+[[references]]
+name = "idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat genome.fa > genome.idx"
+
+[[rules]]
+name = "use_ref"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        std::fs::write(dir.path().join("genome.fa"), b"ACGT").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "reference-built output must not gate the run: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_accepts_sample_pattern_dir_inputs() {
+        // Bare relative input whose data lives in the sample_pattern
+        // discovery directory (absolute pattern, sibling of the workdir) —
+        // the web instance-table shape.
+        let dir = tempfile::tempdir().unwrap(); // workflow dir
+        let data = tempfile::tempdir().unwrap(); // sample_pattern root
+        let toml = format!(
+            r#"
+[workflow]
+name = "samplegate"
+sample_pattern = "{root}/data/{{{{sample}}}}.fq"
+
+[[rules]]
+name = "qc"
+input = ["{{{{sample}}}}.fq"]
+output = ["qc_{{{{sample}}}}.txt"]
+shell = "cat {{{{input}}}} > {{{{output}}}}"
+"#,
+            root = data.path().display(),
+        );
+        let mut config = config_with_rules(&toml);
+        config.apply_defaults();
+        std::fs::create_dir_all(data.path().join("data")).unwrap();
+        std::fs::write(data.path().join("data").join("S1.fq"), b"read").unwrap();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "input present in the sample_pattern dir must not gate: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_input_of_when_false_shared_output_producer() {
+        // Issue #915 Bug 3 (complementary when gates on one shared output):
+        // in a tumor-only cohort the fanned paired instance is vetoed by its
+        // `when` at expansion, so `shared.txt` has NO producer in the DAG and
+        // no declaring rule survives in config.rules. The preflight gate must
+        // still not flag inputs that belong to the dead side of the
+        // complementary pair: expansion recorded the vetoed outputs in
+        // `when_skipped_outputs` (#882), and that exemption alone resolves
+        // this — mutation-detectable (deleting the clause fails the test).
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "sharedout"
+version = "1.0"
+
+[config]
+mode = "tumoronly"
+
+[[rules]]
+name = "consumer"
+input = ["shared.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Production-faithful post-expansion state: the paired instance was
+        // fully vetoed at fan-out — expansion removed it from config.rules
+        // AND recorded its outputs (so no DAG producer for shared.txt).
+        config.when_skipped_outputs.insert("shared.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("shared.txt").is_none(),
+            "fixture precondition: the vetoed side must leave shared.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "the gated-off producer's input must not gate the satisfiable consumer: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_pattern_recorded_in_when_skipped_outputs() {
+        // Issue #915 (expansion half): an instance vetoed at fan-out
+        // records its would-be outputs in when_skipped_outputs (#882).
+        // A consumer missing such a pattern must not gate — the producer
+        // never existed for this cohort by design.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "skipped"
+version = "1.0"
+
+[config]
+mode = "off"
+
+[[rules]]
+name = "consumer"
+input = ["morphed.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        config
+            .when_skipped_outputs
+            .insert("morphed.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        // The vetoed morph rule is gone from config.rules entirely (as a
+        // fully-vetoed fan-out leaves nothing behind), so the DAG has no
+        // producer for morphed.txt and the when_skipped_outputs exemption
+        // is the only path to an empty gate.
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("morphed.txt").is_none(),
+            "fixture precondition: the vetoed producer must leave morphed.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a when_skipped_outputs pattern must not gate its consumers: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_expands_config_tokens_in_when_skipped_outputs() {
+        // Issue #915 review NIT-1: the record site (#882) expands only `\w+`
+        // wildcards and `{values.*}`, so a `{config.*}`-bearing vetoed output
+        // stays RAW in when_skipped_outputs while the gate's patterns are
+        // config-expanded. The compare-time expansion must bridge that gap.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "cfgtoken"
+version = "1.0"
+
+[config]
+genome = "hg38"
+
+[[rules]]
+name = "consumer"
+input = ["ref_hg38.fai"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Recorded exactly as expand_rule_patterns leaves it: raw token.
+        config
+            .when_skipped_outputs
+            .insert("ref_{config.genome}.fai".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a raw {{config.*}} recorded entry must match after compare-time expansion: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_lines_lists_rule_names_and_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, _dag, _order, wildcard_values) = source_gate_fixture(dir.path());
+        let mut missing = HashSet::new();
+        missing.insert("use".to_string());
+        let lines = missing_source_lines(&missing, &config, dir.path(), &wildcard_values);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("use"), "{:?}", lines[0]);
+        assert!(lines[0].contains("ext.txt"), "{:?}", lines[0]);
+    }
+
+    #[test]
+    fn source_placeholder_quotes_paths_with_spaces() {
+        // A `{source}` path containing spaces must survive the reference
+        // build as ONE shell argument (issue #136 tier-2 audit — the raw
+        // splice broke on spaces/metacharacters).
+        let rendered =
+            substitute_source_placeholder("STAR --genomeDir {source}", "refs/genome data/hg38");
+        assert_eq!(rendered, "STAR --genomeDir 'refs/genome data/hg38'");
+    }
+
+    #[test]
+    fn source_placeholder_escapes_embedded_quotes() {
+        // POSIX-safe: an embedded quote closes and reopens the quoting
+        // (the `'\''` idiom the environment wrapper also uses).
+        let rendered = substitute_source_placeholder("--in {source}", "dir/we'ird");
+        assert_eq!(rendered, "--in 'dir/we'\\''ird'");
+    }
+
+    #[test]
+    fn source_placeholder_without_placeholder_is_unchanged() {
+        let rendered = substitute_source_placeholder("echo built", "ignored");
+        assert_eq!(rendered, "echo built");
+    }
+
+    #[test]
+    fn known_modules_hint_names_the_empty_case() {
+        // Dry-run must print the same explicit "(none — no [[include]]
+        // modules)" hint `run` does instead of a trailing empty list
+        // (issue #136 tier-2 audit).
+        let empty: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        assert_eq!(
+            known_modules_hint(&empty),
+            "(none — no [[include]] modules)"
+        );
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        map.insert("qc".to_string(), vec!["qc".to_string()]);
+        assert_eq!(known_modules_hint(&map), "qc");
     }
 }

@@ -606,3 +606,155 @@ pub(crate) async fn auto_build_references(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxo_flow_core::config::WorkflowConfig;
+    use std::collections::HashSet;
+
+    fn config_with_rules(rules_toml: &str) -> WorkflowConfig {
+        WorkflowConfig::parse(rules_toml).unwrap()
+    }
+
+    #[test]
+    fn suggest_jobs_evaluates_each_wave_against_its_own_heaviest_rule() {
+        // Waves: 20×t1, 2×t16, 20×t1 on a 64-core box. The old global
+        // formula suggested 4; the per-group form keeps the wide light
+        // waves at 20 (issue #361 measured 11.0 s vs 3.0 s makespan on
+        // this exact shape).
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"a{i}\"\noutput = [\"a{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        for i in 0..2 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"b{i}\"\noutput = [\"b{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 16\n"
+            ));
+        }
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"c{i}\"\noutput = [\"c{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![
+            (0..20).map(|i| format!("a{i}")).collect::<Vec<_>>(),
+            (0..2).map(|i| format!("b{i}")).collect::<Vec<_>>(),
+            (0..20).map(|i| format!("c{i}")).collect::<Vec<_>>(),
+        ];
+        assert_eq!(suggest_jobs(&config, &groups, 64), 20);
+        // The old global formula would have said 4 here.
+        assert_ne!(suggest_jobs(&config, &groups, 64), 4);
+    }
+
+    #[test]
+    fn suggest_jobs_clamps_to_the_wave_width_and_system_threads() {
+        // A single wave of 5 heavy rules on 4 cores: 4/16 → 0 → clamped
+        // to at least 1 job, and never above the wave width (5).
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..5 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"h{i}\"\noutput = [\"h{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 16\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![(0..5).map(|i| format!("h{i}")).collect::<Vec<_>>()];
+        assert_eq!(suggest_jobs(&config, &groups, 4), 1);
+        // Wide light wave on a big machine: the 16-job legacy ceiling is gone.
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"l{i}\"\noutput = [\"l{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![(0..20).map(|i| format!("l{i}")).collect::<Vec<_>>()];
+        assert_eq!(suggest_jobs(&config, &groups, 64), 20);
+    }
+
+    #[test]
+    fn suggest_jobs_defaults_to_one_without_rules() {
+        let config = config_with_rules("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        assert_eq!(suggest_jobs(&config, &[], 64), 1);
+        assert_eq!(suggest_jobs(&config, &[vec![]], 64), 1);
+    }
+
+    fn map_of(pairs: &[(&str, i32)]) -> std::collections::HashMap<String, i32> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    fn set_of(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn age_ready_list_orders_by_declared_priority_then_name() {
+        // Arrange
+        let priority = map_of(&[("high", 20), ("low", 10)]);
+        // Act
+        let ready = age_ready_list(
+            vec!["low".into(), "high".into()],
+            &set_of(&["high", "low"]),
+            &HashSet::new(),
+            &priority,
+            &std::collections::HashMap::new(),
+        );
+        // Assert
+        assert_eq!(ready, vec!["high", "low"]);
+    }
+
+    #[test]
+    fn age_ready_list_aged_rule_overtakes_higher_declared_priority() {
+        // The starvation cure (issue #123): a producer passed over for many
+        // rounds must eventually outrank the higher-priority rules that keep
+        // re-occupying the slots.
+        // Arrange
+        let priority = map_of(&[("merge", 20), ("dump", 10)]);
+        let waited = map_of(&[("dump", 15)]);
+        // Act
+        let ready = age_ready_list(
+            vec!["merge".into(), "dump".into()],
+            &set_of(&["merge", "dump"]),
+            &HashSet::new(),
+            &priority,
+            &waited,
+        );
+        // Assert
+        assert_eq!(ready, vec!["dump", "merge"]);
+    }
+
+    #[test]
+    fn age_ready_list_drops_submitted_and_out_of_scope_rules() {
+        // Arrange
+        let priority = map_of(&[("a", 5), ("b", 5), ("c", 5)]);
+        let submitted = set_of(&["b"]);
+        // Act
+        let ready = age_ready_list(
+            vec!["c".into(), "b".into(), "a".into()],
+            &set_of(&["a", "b", "c"]),
+            &submitted,
+            &priority,
+            &std::collections::HashMap::new(),
+        );
+        // Assert — b is already submitted, so it cannot be dispatched again.
+        assert_eq!(ready, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn age_ready_list_treats_missing_priority_and_waits_as_zero() {
+        // Arrange — neither rule appears in the maps.
+        // Act
+        let ready = age_ready_list(
+            vec!["z".into(), "a".into()],
+            &set_of(&["a", "z"]),
+            &HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        // Assert — equal effective priority (0), name tie-break.
+        assert_eq!(ready, vec!["a", "z"]);
+    }
+}

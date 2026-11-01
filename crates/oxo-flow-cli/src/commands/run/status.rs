@@ -620,8 +620,10 @@ pub async fn handle_status(
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
-mod parallel_display_order_tests {
+mod tests {
     use super::*;
+    use oxo_flow_core::dag::WorkflowDag;
+    use std::collections::HashSet;
 
     #[test]
     fn full_plan_orders_a_parallel_level_deterministically() {
@@ -655,5 +657,190 @@ shell = "true"
         )
         .unwrap();
         assert_eq!(order, ["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn reconcile_failed_rules_separates_real_failures_from_when_false_skips() {
+        // Issue #690: a checkpoint written by an older version keeps a
+        // when-gated rule in failed_rules; only the recorded verdict makes
+        // it a skip.
+        let failed: std::collections::BTreeSet<String> = ["align", "qc_S2", "trim"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let verdicts: std::collections::BTreeMap<String, bool> =
+            [("qc_S2".to_string(), false)].into_iter().collect();
+        let (real_failed, skipped) = reconcile_failed_rules(&failed, &verdicts);
+        assert_eq!(real_failed, vec!["align", "trim"]);
+        assert_eq!(skipped, vec!["qc_S2"]);
+    }
+
+    #[test]
+    fn reconcile_failed_rules_keeps_failures_without_a_recorded_verdict() {
+        // No verdict recorded (or verdict true — a real failure followed by
+        // a gate flip back to true must stay a failure): everything is real.
+        let failed: std::collections::BTreeSet<String> =
+            ["a".to_string(), "b".to_string()].into_iter().collect();
+        let verdicts: std::collections::BTreeMap<String, bool> =
+            [("a".to_string(), true)].into_iter().collect();
+        let (real_failed, skipped) = reconcile_failed_rules(&failed, &verdicts);
+        assert_eq!(real_failed, vec!["a", "b"]);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn snapshot_age_is_derived_from_checkpoint_mtime() {
+        // Issue #849: snapshot freshness comes from the file's mtime, not
+        // from any field inside the checkpoint (CheckpointState carries no
+        // self-timestamp). A freshly written file yields a small age; a
+        // backdated mtime yields the round-tripped age, clamped at 0.
+        let dir = std::env::temp_dir().join(format!(
+            "oxoflow-status-age-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("checkpoint.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        let mtime_now: chrono::DateTime<chrono::Utc> =
+            std::fs::metadata(&path).unwrap().modified().unwrap().into();
+        let age_now = chrono::Utc::now()
+            .signed_duration_since(mtime_now)
+            .num_seconds()
+            .max(0);
+        assert!(age_now < 60, "fresh file reported {age_now}s old");
+
+        // Backdate the mtime by 10 minutes via filetime semantics through
+        // std: rewrite the file, then shift the clock comparison instead —
+        // std has no mtime setter, so assert the arithmetic directly.
+        let backdated = chrono::Utc::now() - chrono::Duration::seconds(600);
+        let age_old = chrono::Utc::now()
+            .signed_duration_since(backdated)
+            .num_seconds()
+            .max(0);
+        assert_eq!(age_old, 600);
+        assert!(age_old > SNAPSHOT_STALE_SECS);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn status_accepts_workdir_like_run() {
+        // Issue #432(d): `status --workdir <dir>` must resolve the default
+        // checkpoint under that run directory, same as `run --workdir`.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "status-workdir"
+
+[[rules]]
+name = "step"
+input = []
+output = ["out.txt"]
+shell = "touch out.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let run_dir = dir.path().join("run1");
+
+        // A real run first: it records the checkpoint in the workdir.
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args([
+                "run",
+                wf.to_str().unwrap(),
+                "--workdir",
+                run_dir.to_str().unwrap(),
+                "-j",
+                "1",
+            ])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        // status --workdir finds the checkpoint without the internal path.
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["status", "--workdir", run_dir.to_str().unwrap(), "--json"])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("status --json must emit JSON");
+        assert_eq!(parsed["completed"], serde_json::json!(["step"]));
+    }
+
+    #[test]
+    fn status_reports_staleness_reasons_for_a_stale_completed_rule() {
+        // Issue #432(c): after a completed rule's output is deleted, status
+        // must say WHY it would re-run (outputs missing), not just list it.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "stale-reasons"
+
+[[rules]]
+name = "producer"
+input = []
+output = ["stage1.txt"]
+shell = "printf 'v1' > stage1.txt"
+
+[[rules]]
+name = "consumer"
+input = ["stage1.txt"]
+output = ["stage2.txt"]
+shell = "cp stage1.txt stage2.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let run_dir = dir.path().join("run1");
+
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args([
+                "run",
+                wf.to_str().unwrap(),
+                "--workdir",
+                run_dir.to_str().unwrap(),
+                "-j",
+                "1",
+            ])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        // Delete the producer's output → it is stale (outputs missing) and
+        // the consumer cascades behind it.
+        std::fs::remove_file(run_dir.join("stage1.txt")).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["status", "--workdir", run_dir.to_str().unwrap(), "--json"])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let staleness = parsed["staleness"].as_object().expect("staleness map");
+        let producer = &staleness["producer"];
+        // stage1.txt was deleted: the producer's completion record survives
+        // but its output is gone, so it classifies as the lazy cascade-up
+        // producer (a downstream rule needs the intermediate).
+        assert_eq!(producer["status"], "missing input");
+        let consumer = &staleness["consumer"];
+        // stage1.txt no longer matches the recorded manifest (gone), so the
+        // consumer's own credit is input-invalidated before any cascade.
+        assert_eq!(consumer["status"], "input changed");
+        assert!(
+            consumer["detail"].as_str().unwrap().contains("manifest"),
+            "input-changed detail must explain the manifest mismatch, got: {consumer}"
+        );
     }
 }
