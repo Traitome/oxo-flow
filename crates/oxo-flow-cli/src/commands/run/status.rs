@@ -1,6 +1,10 @@
 //! status/resume support printing: rule_timings, target-skipped/when-pruned notes, workdir check, staleness reasons, reconcile_failed_rules (#948 P2-5).
 
 use super::*;
+use crate::commands::print_banner;
+use anyhow::{Context, Result};
+use colored::Colorize;
+use std::path::PathBuf;
 
 /// Wall-time timings for `status --timing`, slowest first, plus their sum.
 /// Synthetic records (issue #324 F-1 `recorded_as: Some(...)`) carry a 0.0
@@ -318,6 +322,303 @@ pub(crate) fn reconcile_failed_rules<'a>(
     (real_failed, skipped_when_false)
 }
 
+pub async fn handle_status(
+    checkpoint: Option<PathBuf>,
+    workdir: Option<PathBuf>,
+    json: bool,
+    timing: bool,
+    limit: usize,
+) -> Result<()> {
+    print_banner();
+
+    // Detect common mistake: user passes a .oxoflow file instead of a
+    // checkpoint (issue #859). During a live run — the highest-frequency
+    // inspection moment — the sibling checkpoint
+    // `<workflow-dir>/.oxo-flow/checkpoint.json` usually already exists, so
+    // auto-resolve to it instead of telling the user to "run first". Only a
+    // genuinely missing checkpoint keeps the (reworded) error.
+    let checkpoint = match &checkpoint {
+        Some(path) if path.extension().is_some_and(|ext| ext == "oxoflow") => {
+            // The workflow's directory (or "." for a bare filename) is where
+            // `run` would have written the checkpoint.
+            let base = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let sibling = CheckpointState::default_path(&base);
+            if sibling.exists() {
+                eprintln!(
+                    "{} '{}' is a workflow file — using its sibling checkpoint '{}'.",
+                    "Note:".bold().cyan(),
+                    path.display(),
+                    sibling.display()
+                );
+                Some(sibling)
+            } else {
+                eprintln!(
+                    "{} '{}' appears to be a workflow file, not a checkpoint.",
+                    "Warning:".bold().yellow(),
+                    path.display()
+                );
+                eprintln!(
+                    "  No checkpoint found at '{}' — 'status' expects a checkpoint file (JSON).",
+                    sibling.display()
+                );
+                eprintln!(
+                    "  Run 'oxo-flow run {}' first to create one.",
+                    path.display()
+                );
+                anyhow::bail!("Cannot read workflow file as checkpoint");
+            }
+        }
+        other => other.clone(),
+    };
+
+    // Issue #432(d): mirror `run --workdir` so users do not need to know the
+    // checkpoint's internal path — the run directory is enough. An explicit
+    // CHECKPOINT argument wins.
+    let checkpoint_path = match (&checkpoint, &workdir) {
+        (Some(p), _) => p.clone(),
+        (None, Some(dir)) => CheckpointState::default_path(dir),
+        (None, None) => PathBuf::from(DEFAULT_CHECKPOINT),
+    };
+    let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
+        format!(
+            "failed to load checkpoint from '{}'.\n  \
+             Check that the file exists and is a valid checkpoint (JSON format).\n  \
+             Checkpoint files are generated automatically by 'oxo-flow run' in .oxo-flow/checkpoint.json.",
+            checkpoint_path.display()
+        )
+    })?;
+
+    // Issue #849: `status` reads a snapshot, not live state — surface how
+    // fresh the snapshot is (the flush lag observed on a live 561-rule run
+    // was ~1–2 min and completely invisible to operators). Sourced from the
+    // file's mtime, so it reflects the last write even when a monitoring
+    // wrapper reads the checkpoint out-of-band.
+    let checkpoint_mtime = std::fs::metadata(&checkpoint_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            let t: chrono::DateTime<chrono::Utc> = t.into();
+            t
+        });
+    let snapshot_age_secs = checkpoint_mtime.as_ref().map(|m| {
+        chrono::Utc::now()
+            .signed_duration_since(*m)
+            .num_seconds()
+            .max(0)
+    });
+    if snapshot_age_secs.is_some_and(|age| age > SNAPSHOT_STALE_SECS) {
+        tracing::warn!(
+            "checkpoint snapshot is {}s old (threshold {}s)",
+            snapshot_age_secs.unwrap(),
+            SNAPSHOT_STALE_SECS
+        );
+    }
+
+    // Deterministic order (HashSet iteration order is arbitrary)
+    let mut completed: Vec<&str> = state.completed_rules.iter().map(String::as_str).collect();
+    completed.sort_unstable();
+    // Issue #690: stale entries from older checkpoints — a rule whose
+    // recorded when-verdict is false — are not failures. Reconcile so
+    // `status` matches what the executor actually did. Both vectors are
+    // sorted (failed_rules is a BTreeSet, so iteration is deterministic).
+    let (failed, when_gated_off) =
+        reconcile_failed_rules(&state.failed_rules, &state.when_verdicts);
+
+    // ── Per-rule staleness reasons (issue #432(c)) ────────────────────────
+    // Reuse the dry-run preview's exact classification so "why will this
+    // rule re-run?" has the same answer in `status` and `dry-run -v`.
+    // Best-effort: needs the workflow file recorded in the checkpoint plus
+    // a current config; when either is missing the section degrades to the
+    // plain completed/failed listing below.
+    let staleness = compute_staleness_reasons(&state, &checkpoint_path);
+    let staleness_json: Option<serde_json::Map<String, serde_json::Value>> = if staleness.is_empty()
+    {
+        None
+    } else {
+        Some(
+            staleness
+                .iter()
+                .map(|(rule, (reason, detail))| {
+                    (
+                        rule.clone(),
+                        serde_json::json!({
+                            "status": reason,
+                            "detail": detail,
+                        }),
+                    )
+                })
+                .collect(),
+        )
+    };
+
+    if json {
+        let mut output = serde_json::json!({
+            "command": "status",
+            "checkpoint": checkpoint_path.display().to_string(),
+            "workflow": state.workflow_path,
+            "completed": completed,
+            "failed": failed,
+        });
+        // Issue #849: snapshot freshness — scripts/monitoring wrappers no
+        // longer need to stat the file out-of-band to judge it.
+        if let Some(mtime) = checkpoint_mtime {
+            output["checkpoint_mtime"] =
+                serde_json::json!(mtime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        }
+        if let Some(age) = snapshot_age_secs {
+            output["snapshot_age_secs"] = serde_json::json!(age);
+        }
+        // Issue #690: stale failed_rules entries whose when-gate evaluated
+        // false are reported here, not under "failed".
+        if !when_gated_off.is_empty() {
+            output["skipped_by_when"] = serde_json::json!(when_gated_off);
+        }
+        if let Some(map) = staleness_json {
+            output["staleness"] = serde_json::Value::Object(map);
+        }
+        if timing {
+            let (timings, total) = rule_timings(&state);
+            // serde_json::Map is a BTreeMap: keys stay deterministically sorted
+            let timings_map: serde_json::Map<String, serde_json::Value> = timings
+                .into_iter()
+                .map(|(rule, secs)| (rule.to_string(), serde_json::json!(secs)))
+                .collect();
+            output["timings"] = serde_json::Value::Object(timings_map);
+            output["total_time_secs"] = serde_json::json!(total);
+            // Sampled peak-RSS measurements where recorded (issue #67 §4).
+            let memory_map: serde_json::Map<String, serde_json::Value> = state
+                .benchmarks
+                .iter()
+                .filter(|(_, b)| b.max_memory_mb.is_some())
+                .map(|(rule, b)| {
+                    (
+                        rule.to_string(),
+                        serde_json::json!({
+                            "max_memory_mb": b.max_memory_mb,
+                            "memory_limit_mb": b.memory_limit_mb,
+                        }),
+                    )
+                })
+                .collect();
+            if !memory_map.is_empty() {
+                output["memory"] = serde_json::Value::Object(memory_map);
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    eprintln!("{} {}", "Status:".bold().cyan(), checkpoint_path.display());
+    // Issue #849: the checkpoint is a flushed snapshot, not live state —
+    // the observed flush lag on a live 561-rule run was ~1–2 min. Surface
+    // the age so "Completed: 0" is never mistaken for "nothing ran".
+    if let (Some(mtime), Some(age)) = (checkpoint_mtime, snapshot_age_secs) {
+        let written = mtime.with_timezone(&chrono::Local).format("%H:%M:%S");
+        if age > SNAPSHOT_STALE_SECS {
+            eprintln!(
+                "  {} Snapshot is {}s old (checkpoint written {} local) — flush lag, not necessarily stalled progress",
+                "Warning:".bold().yellow(),
+                age,
+                written
+            );
+        } else {
+            eprintln!(
+                "  State as of {}s ago (checkpoint written {} local)",
+                age, written
+            );
+        }
+    }
+    eprintln!("  Completed: {}", completed.len());
+    eprintln!("  Failed:    {}", failed.len());
+    if !when_gated_off.is_empty() {
+        eprintln!("  Skipped (when-gated off): {}", when_gated_off.len());
+    }
+
+    if timing {
+        let (timings, total) = rule_timings(&state);
+        if !timings.is_empty() {
+            eprintln!(
+                "\n{} (top {}, total {:.1}s)",
+                "Rule timings:".bold().green(),
+                limit.min(timings.len()),
+                total
+            );
+            for (rule, secs) in timings.iter().take(limit) {
+                let mem = state.benchmarks.get(*rule).and_then(|b| {
+                    b.max_memory_mb.map(|m| match b.memory_limit_mb {
+                        Some(l) if l > 0 => {
+                            if m * 100 >= l * 80 {
+                                format!("  peak {m}/{l} MiB ⚠")
+                            } else {
+                                format!("  peak {m}/{l} MiB")
+                            }
+                        }
+                        _ => format!("  peak {m} MiB"),
+                    })
+                });
+                match mem {
+                    Some(mem) => eprintln!("  {} {} ({:.1}s){}", "✓".green(), rule, secs, mem),
+                    None => eprintln!("  {} {} ({:.1}s)", "✓".green(), rule, secs),
+                }
+            }
+        }
+    } else {
+        if !staleness.is_empty() {
+            eprintln!("\n{}", "Staleness reasons (as of now):".bold().yellow());
+            eprintln!(
+                "  {}",
+                "why each completed rule would re-run under the current workflow+config".dimmed()
+            );
+            for rule in &completed {
+                match staleness.get(*rule) {
+                    Some((reason, detail)) => {
+                        eprintln!(
+                            "  {} {} — {} ({})",
+                            "✓".green(),
+                            rule,
+                            reason,
+                            detail.dimmed()
+                        );
+                    }
+                    None => eprintln!("  {} {} — up to date", "✓".green(), rule),
+                }
+            }
+        }
+        if !completed.is_empty() {
+            eprintln!("\n{}", "Completed rules:".bold().green());
+            for rule in &completed {
+                eprintln!("  {} {}", "✓".green(), rule);
+            }
+        }
+
+        if !failed.is_empty() {
+            eprintln!("\n{}", "Failed rules:".bold().red());
+            for rule in &failed {
+                eprintln!("  {} {}", "✗".red(), rule);
+            }
+        }
+
+        if !when_gated_off.is_empty() {
+            eprintln!("\n{}", "Skipped (when condition false):".bold().yellow());
+            for rule in &when_gated_off {
+                eprintln!(
+                    "  {} {} — {}",
+                    "⊘".yellow(),
+                    rule,
+                    "condition evaluated to false".dimmed()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod parallel_display_order_tests {
     use super::*;
