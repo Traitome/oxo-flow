@@ -341,20 +341,8 @@ pub async fn run_command(
         WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
             .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── Parse and merge CLI config overrides (shared with dry-run) ─────
-    // The workflow's own [config] keys gate the `--KEY VALUE` space form:
-    // unknown `--` tokens are rejected as typos instead of silently
-    // swallowed. config.config covers BOTH plain values (`key = "v"`) and
-    // declarative entries (`key = { default = ... }`) — config_meta alone
-    // only sees the latter.
-    let declared_config_keys: std::collections::HashSet<String> =
-        config.config.keys().cloned().collect();
-    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, "run")?;
-
-    apply_cli_overrides(&mut config, &cli_arg_values)?;
-    // A typo'd override key must not pass silently (audit finding): warn
-    // when it is neither declared nor referenced anywhere in the workflow.
-    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
+    // ── Parse and merge CLI config overrides (the shared phase, overrides.rs) ─────
+    apply_cli_override_phase(&mut config, &workflow, cli_args, "run")?;
 
     // ── Filter to a sample subset (--samples @path / first:N / names / ready) ────
     // Runs after CLI overrides so `ready` resolution sees the final config
@@ -4827,17 +4815,11 @@ pub async fn dry_run_command(
         WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
             .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── CLI config overrides (shared with run, issue #77) ─────
+    // ── CLI config overrides (the shared phase, overrides.rs) ─────
     // Applied in run's exact order: overrides first, then
     // the --samples subset filter — so the preview config is structurally
-    // identical to what `run` would execute. The workflow's own [config]
-    // keys gate the `--KEY VALUE` space form (same rule as run, issue #71).
-    let declared_config_keys: std::collections::HashSet<String> =
-        config.config.keys().cloned().collect();
-    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, "dry-run")?;
-    apply_cli_overrides(&mut config, &cli_arg_values)?;
-    // Same typo guard as `run` (shared override machinery).
-    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
+    // identical to what `run` would execute.
+    apply_cli_override_phase(&mut config, &workflow, cli_args, "dry-run")?;
 
     // ── Filter to a sample subset (--samples first:N / names / ready) ──
     // `ready` resolves against a scratch expanded clone; the report covers
@@ -6365,11 +6347,12 @@ pub async fn resume_command(
 mod tests {
     use super::{EndOfRunPruneDecision as Prune, endofrun_prune_decision};
     use super::{
-        age_ready_list, ai_attempts, apply_cli_overrides, closest_declared_key,
-        config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
-        missing_source_lines, parse_cli_overrides, parse_disk_hold_abort_rounds,
-        parse_disk_tick_secs, parse_spawn_watchdog_threshold, parse_watchdog_requeue_fires,
-        reconcile_failed_rules, substitute_source_placeholder, suggest_jobs,
+        age_ready_list, ai_attempts, apply_cli_override_phase, apply_cli_overrides,
+        closest_declared_key, config_placeholder_values, failure_exit_code, known_modules_hint,
+        missing_source_findings, missing_source_lines, parse_cli_overrides,
+        parse_disk_hold_abort_rounds, parse_disk_tick_secs, parse_spawn_watchdog_threshold,
+        parse_watchdog_requeue_fires, reconcile_failed_rules, substitute_source_placeholder,
+        suggest_jobs,
     };
     use oxo_flow_core::dag::WorkflowDag;
     use std::collections::{HashMap, HashSet};
@@ -7202,6 +7185,46 @@ shell = "true"
         .unwrap();
         apply_cli_overrides(&mut config, &overrides).unwrap();
         assert_eq!(config.config["api_token"].as_str(), Some("sk-OVERRIDE-123"));
+    }
+
+    #[test]
+    fn override_phase_wires_parse_apply_and_command_label() {
+        // Composition pin for apply_cli_override_phase: one call performs
+        // the parse → apply → warn sequence both run and dry-run rely on,
+        // and the command label reaches the parse errors (issue #77
+        // parity — the preview must reject what execution rejects).
+        let mut config = config_with_rules(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threads = { default = "4", help = "thread count" }
+
+[[rules]]
+name = "r"
+shell = "true"
+"#,
+        );
+        apply_cli_override_phase(
+            &mut config,
+            std::path::Path::new("t.oxoflow"),
+            vec!["--threads=8".to_string()],
+            "run",
+        )
+        .unwrap();
+        assert_eq!(config.config["threads"].as_str(), Some("8"));
+
+        let err = apply_cli_override_phase(
+            &mut config,
+            std::path::Path::new("t.oxoflow"),
+            vec!["--config".to_string(), "config/x.toml".to_string()],
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("dry-run"), "{msg}");
     }
 
     #[test]

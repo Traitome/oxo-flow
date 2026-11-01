@@ -539,6 +539,28 @@ pub(crate) fn warn_unknown_override_keys(
     }
 }
 
+/// The CLI-override phase both `run` and `dry-run` apply in the same
+/// order (issue #77): parse `--KEY VALUE` tokens against the workflow's
+/// own `[config]` keys — unknown `--` tokens are rejected as typos
+/// instead of silently swallowed (issue #71) — merge them into the
+/// config, then warn when a key is neither declared nor referenced
+/// anywhere in the workflow. `config.config` covers both plain values
+/// (`key = "v"`) and declarative entries (`key = { default = ... }`);
+/// `config_meta` alone only sees the latter. `command` labels the parse
+/// errors ("run" / "dry-run").
+pub(crate) fn apply_cli_override_phase(
+    config: &mut WorkflowConfig,
+    workflow: &Path,
+    cli_args: Vec<String>,
+    command: &str,
+) -> anyhow::Result<()> {
+    let declared_config_keys: HashSet<String> = config.config.keys().cloned().collect();
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, command)?;
+    apply_cli_overrides(config, &cli_arg_values)?;
+    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, workflow);
+    Ok(())
+}
+
 /// Nearest declared config key within a two-edit typo of `key` (the same
 /// heuristic `oxo-flow-core`'s unknown-key check applies).
 pub(crate) fn closest_declared_key<'a>(
