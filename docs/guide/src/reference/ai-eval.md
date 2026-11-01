@@ -33,9 +33,42 @@ python3 eval/scripts/runner.py tool --captures outputs/tool_answers.csv
 python3 eval/scripts/runner.py workflow --captures outputs/workflows --oxo-flow target/debug/oxo-flow
 ```
 
-Results land in `eval/results.csv`; each row is one judged trial with per-metric scores and an `overall` mean. The runner also writes `eval/results.items.csv` (per-item aggregates with `pass@k`) and `eval/results.summary.json` (dataset-level summary, breakdowns, and capture manifest).
+Results land in `eval/results.csv`; each row is one judged trial with
+per-metric scores and an `overall` mean. The runner also writes
+`eval/results.items.csv` (per-item aggregates with `pass@1` and `pass@k`) and
+`eval/results.summary.json` (dataset summary, 95% bootstrap confidence
+intervals, breakdowns, capture availability, and capture manifest).
 
-Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol.
+Capture manifests record git SHA, gold/knowledge hashes, provider/model
+identity, sampling settings, timestamps, and per-trial metadata so later
+analysis can be audited and reproduced. Failed or missing captures are excluded
+from model metrics and reported as infrastructure availability, not silently
+scored as zero.
+
+### Optional independent AI review
+
+Add `--ai-judge` to request an advisory expert-model review after deterministic
+judging:
+
+```bash
+AI_JUDGE_PROVIDER=openai \
+AI_JUDGE_BASE_URL=https://example.endpoint/v1 \
+AI_JUDGE_MODEL=chosen-judge-model \
+AI_JUDGE_API_KEY=... \
+python3 eval/scripts/runner.py workflow --captures outputs/workflows \
+  --oxo-flow target/debug/oxo-flow --out eval/results-workflow.csv --ai-judge
+```
+
+Never pass the API key as a CLI argument or commit it to the repository. The
+advisory reviewer returns four 0--10 dimensions—scientific correctness,
+completeness, engine conformance, and usability—with rationales, confidence,
+and major risks. Results are written separately as
+`eval/results-workflow.ai_judge.csv` and
+`eval/results-workflow.ai_judge.summary.json`; they never change the
+deterministic score of record. Review/API failures are retained as errors so a
+failed judge cannot fabricate a score.
+
+Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol. The advisory judge has a separate `AI_JUDGE_*` configuration so it can be an independent model and can be replaced without changing the benchmark.
 
 ## Gold set and human review
 

@@ -188,3 +188,85 @@ The sample size distribution ($N = 149, 70, 38$) was engineered according to sta
   $$N_{\text{total}} = (149_{\text{tool}} + 70_{\text{rule}} + 38_{\text{workflow}}) \times 5 = 1,285 \text{ trials}$$
 
   This volume provides rigorous statistical power to compute unbiased $\text{pass}@k$ estimators ($k \in \{1, 5\}$) and robust 95% bootstrap confidence intervals, resolving statistically significant performance differentials across foundation models ($p < 0.05$).
+
+## Appendix: Advisory AI Judge & Robust Reporting
+
+### B.1 Separation of Scores
+
+The deterministic judge remains the score of record. A second, explicitly
+advisory AI review can be requested with `runner.py --ai-judge`; its output is
+written to separate `*.ai_judge.csv` and `*.ai_judge.summary.json` files and is
+never merged into the deterministic `overall`.
+
+The advisory rubric has four 0--10 dimensions, averaged by the harness rather
+than trusted from the model:
+
+- `scientific_correctness`: biology, command semantics, dependencies, data flow.
+- `completeness`: every explicitly requested step, output, or question part.
+- `engine_conformance`: `.oxoflow` structure, explicit I/O, environment and
+  resources. For the tool layer this means exact, clearly scoped factual
+  answering rather than TOML.
+- `usability`: a competent user can run or apply the result without guessing.
+
+Each response must return valid JSON with one rationale per dimension, an
+overall confidence of `low/medium/high`, and a list of major risks. Responses
+are requested at temperature 0 with seed 172. Parse/schema failures are recorded
+as judge errors and do not become fabricated scores or deterministic penalties.
+Temperature and seed reduce but do not eliminate provider-level variation; a
+model version/endpoint snapshot is therefore part of the evaluation provenance.
+
+### B.2 Model Substitution and Secret Handling
+
+The judge is intentionally not a fixed benchmark component. Calls resolve these
+environment variables:
+
+```bash
+AI_JUDGE_PROVIDER=openai
+AI_JUDGE_BASE_URL=http://example.endpoint/v1
+AI_JUDGE_MODEL=chosen-judge-model
+AI_JUDGE_API_KEY=...   # never passed on the CLI and never written to artifacts
+```
+
+This permits paired think/no-think reviews through the same OpenAI-compatible
+gateway or replacement by any future model without changing the benchmark. The
+published benchmark must disclose the judge model, endpoint kind, prompt schema,
+temperature, seed, review success rate, and think/no-think consistency; it must
+not present the advisory mean as a deterministic result.
+Endpoint metadata is persisted for reproducibility, so the resolver rejects
+userinfo, query strings, and fragments; credentials belong only in
+`AI_JUDGE_API_KEY`.
+
+### B.3 Structural Matching Guards
+
+Workflow scoring no longer reuses one generated rule for several expected
+steps. `map_expected_steps` performs greedy one-to-one assignment with exact
+names first, then environment-package identity, then conservative morphology.
+For example, `fastp_trim` can match a bare `fastp` rule, `greet` can match
+`write_greeting`, and `index_bam` can match a SAMtools BAM-index rule; `star`
+cannot match `starfish_alignment`, and a STAR genome index cannot satisfy a
+BAM-index step.
+
+Output scoring distinguishes directory layout from scientific artifact role.
+Role matching checks compound extensions (`.g.vcf.gz`, `.vcf.gz`, `.fastq.gz`,
+`.bam.bai`, `.tar.gz`) so a plain VCF cannot satisfy a GVCF requirement.
+Stem matching requires every expected content token (so `counts` matches
+`sample_gene_counts`, but `counts` cannot match `discounts`), plus wildcard
+placeholder parity so per-sample patterns cannot be satisfied by static files.
+Single-rule scoring additionally accepts top-level engine
+resource keys and boundary-matches CLI parameters so `--out` cannot satisfy
+`--output`.
+
+### B.4 Reporting Requirements
+
+Dataset summaries now report:
+
+- deterministic submetric means, standard deviations, and perfect rates;
+- pass@1 (trial 1 perfect) separately from pass@k (any observed trial perfect);
+- deterministic 95% percentile bootstrap confidence intervals (10,000 resamples,
+  fixed seed 172);
+- capture availability as a first-class infrastructure metric, with failed or
+  missing captures excluded from model scores but never hidden from reporting;
+- explicit warnings when trial 1 is unavailable or capture coverage is partial.
+
+A result without these availability and provenance fields is not publication
+grade.

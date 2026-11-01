@@ -1,4 +1,5 @@
 import csv
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runner
+import ai_judge
 
 
 class ToolJudgingTests(unittest.TestCase):
@@ -47,6 +49,62 @@ class SummaryTests(unittest.TestCase):
         items = runner.per_item_summary(rows)
         self.assertEqual(items[0]["pass_at_k"], 1.0)
         self.assertEqual(items[1]["pass_at_k"], 0.0)
+
+    def test_per_item_summary_computes_pass_at_one_from_first_trial(self):
+        rows = [
+            {"id": "wf-001", "trial": 1, "overall": 0.0},
+            {"id": "wf-001", "trial": 2, "overall": 1.0},
+            {"id": "wf-002", "trial": 1, "overall": 1.0},
+        ]
+        items = runner.per_item_summary(rows)
+        self.assertEqual(items[0]["first_trial_perfect"], 0.0)
+        self.assertEqual(items[1]["first_trial_perfect"], 1.0)
+
+    def test_missing_first_trial_is_excluded_from_pass_at_one_mean(self):
+        # B2 fix: items without trial 1 must not drag pass@1 down as failures.
+        rows = [
+            {"id": "wf-001", "trial": 2, "overall": 1.0},
+            {"id": "wf-002", "trial": 1, "overall": 1.0},
+        ]
+        items = runner.per_item_summary(rows)
+        pass_at_1 = runner.mean([
+            row["first_trial_perfect"]
+            for row in items
+            if row["first_trial_available"] == 1.0
+        ])
+        self.assertEqual(pass_at_1, 1.0)
+
+    def test_capture_availability_clamps_at_one(self):
+        availability = runner.capture_availability(
+            [{"id": "a"}],
+            [{"id": "a", "trial": 1}, {"id": "a", "trial": 2}],
+            {"trials": 1},
+        )
+        self.assertEqual(availability["capture_success_rate"], 1.0)
+
+    def test_bootstrap_ci_is_deterministic_and_brackets_mean(self):
+        ci = runner.bootstrap_ci([0.0, 1.0], iterations=500)
+        self.assertEqual(ci, runner.bootstrap_ci([0.0, 1.0], iterations=500))
+        self.assertLessEqual(ci["lower"], 0.5)
+        self.assertGreaterEqual(ci["upper"], 0.5)
+
+    def test_capture_availability_uses_manifest_trials(self):
+        availability = runner.capture_availability(
+            [{"id": "a"}, {"id": "b"}],
+            [{"id": "a", "trial": 1}],
+            {"trials": 2, "failures": 3},
+        )
+        self.assertEqual(availability["expected_trials"], 4)
+        self.assertEqual(availability["capture_success_rate"], 0.25)
+
+    def test_capture_availability_respects_limited_manifest(self):
+        availability = runner.capture_availability(
+            [{"id": "a"}, {"id": "b"}],
+            [{"id": "a", "trial": 1}],
+            {"trials": 1, "item_ids": ["a"], "failures": 0},
+        )
+        self.assertEqual(availability["selected_items"], 1)
+        self.assertEqual(availability["capture_success_rate"], 1.0)
 
     def test_pick_capture_file_prefers_one_file_per_trial(self):
         with tempfile.TemporaryDirectory() as td:
@@ -178,6 +236,39 @@ class RuleJudgingTests(unittest.TestCase):
         )
         self.assertEqual(result["io_declared"], 1.0)
 
+    def test_top_level_engine_resources_are_declared(self):
+        result = self._judge(
+            self._row(),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\n'
+            'threads = 4\nmemory = "8G"\nshell = "tool"\n',
+        )
+        self.assertEqual(result["resources_declared"], 1.0)
+        self.assertEqual(result["resources_in_range"], 1.0)
+
+    def test_key_params_are_boundary_checked(self):
+        self.assertTrue(runner.param_present("--out", "tool --out result.txt"))
+        self.assertFalse(runner.param_present("--out", "tool --output result.txt"))
+        self.assertTrue(runner.param_present("-R", "gatk -R ref.fa"))
+        self.assertFalse(runner.param_present("-R", "gatk -RNA ref.fa"))
+        self.assertFalse(runner.param_present("index", "tool indexing"))
+
+
+class FailedRuleCaptureTests(unittest.TestCase):
+    def test_meta_error_is_skipped_not_scored_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rule-900.oxoflow"
+            path.write_text("not TOML", encoding="utf-8")
+            meta = Path(td) / "rule-900.oxoflow.meta.json"
+            meta.write_text('{"error":"HTTP 429"}', encoding="utf-8")
+            gold = [{
+                "id": "rule-900", "expected_tool": "fastp", "expected_version": "",
+                "expected_key_params": "[]", "expected_inputs": "[]",
+                "expected_outputs": "[]", "resource_range": "{}",
+            }]
+            with mock.patch("common.oxo_flow_cmd", return_value=(0, "", "")):
+                results = runner.judge_rule(gold, td, "/bin/true")
+        self.assertEqual(results, [])
+
 
 class ParserTests(unittest.TestCase):
     def test_load_generated_merges_defaults_into_rules(self):
@@ -252,6 +343,14 @@ class NegativeSampleJudgingTests(unittest.TestCase):
             "I could not find any tool named seq_shampooer. "
             "It does not exist in bioconda or nf-core.",
             {"bio", "bioc", "fc", "shampoo", "shampoos"},
+        )
+        self.assertEqual(score, 1.0)
+
+    def test_recognition_failure_is_a_rejection(self):
+        score = self._judge(
+            "what is seq_polisher_pro",
+            "I do not recognize seq_polisher_pro in Bioconda.",
+            set(),
         )
         self.assertEqual(score, 1.0)
 
@@ -335,6 +434,86 @@ class ValidityWarningTests(unittest.TestCase):
         warnings = runner.build_validity_warnings(summary, gold_rows, manifest)
         self.assertTrue(any("same-family" in w or "gold drafter" in w for w in warnings))
         self.assertTrue(any("preview-only" in w for w in warnings))
+
+    def test_partial_availability_and_missing_first_trial_are_flagged(self):
+        summary = {
+            "n_items": 2,
+            "capture_availability": {"capture_success_rate": 0.5},
+            "by_difficulty": {},
+            "by_query_type": {},
+            "per_item": [
+                {"id": "wf-001", "first_trial_available": 0.0},
+                {"id": "wf-002", "first_trial_available": 1.0},
+            ],
+        }
+        warnings = runner.build_validity_warnings(summary, [], {})
+        self.assertTrue(any("Capture availability is 0.500" in w for w in warnings))
+        self.assertTrue(any("wf-001" in w and "pass@1" in w for w in warnings))
+
+
+class AIJudgeTests(unittest.TestCase):
+    def test_provider_resolution_uses_environment_not_cli_secrets(self):
+        env = {
+            "AI_JUDGE_PROVIDER": "openai",
+            "AI_JUDGE_BASE_URL": "http://example.test/v1",
+            "AI_JUDGE_API_KEY": "secret",
+            "AI_JUDGE_MODEL": "judge-model",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            provider = ai_judge.resolve_provider()
+        self.assertEqual(
+            provider,
+            {
+                "kind": "openai",
+                "api_url": "http://example.test/v1",
+                "api_key": "secret",
+                "model": "judge-model",
+            },
+        )
+        self.assertNotIn("api_key", ai_judge.public_provider(provider))
+
+    def test_provider_rejects_credentialed_or_parameterized_endpoints(self):
+        env = {
+            "AI_JUDGE_PROVIDER": "openai",
+            "AI_JUDGE_MODEL": "judge-model",
+        }
+        for endpoint in (
+            "http://user@example.test/v1",
+            "http://example.test/v1?token=secret",
+            "http://example.test/v1#fragment",
+        ):
+            with mock.patch.dict(os.environ, {**env, "AI_JUDGE_BASE_URL": endpoint}, clear=True):
+                with self.assertRaises(ValueError):
+                    ai_judge.resolve_provider()
+
+    def test_normalize_review_recomputes_overall_and_requires_rationales(self):
+        review = ai_judge.normalize_review(
+            {
+                "scientific_correctness": {"score": 8, "rationale": "sound"},
+                "completeness": {"score": 6, "rationale": "one output missing"},
+                "engine_conformance": {"score": 9, "rationale": "valid TOML"},
+                "usability": {"score": 7, "rationale": "runnable"},
+                "confidence": "high",
+                "major_risks": ["missing output"],
+            }
+        )
+        self.assertEqual(review["ai_judge_overall"], 7.5)
+        self.assertIn("missing output", review["major_risks_json"])
+
+    def test_advisory_failure_is_recorded_without_fabricated_scores(self):
+        with tempfile.TemporaryDirectory() as td:
+            captures = Path(td) / "answers.csv"
+            with open(captures, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["id", "trial", "answer", "error"])
+                writer.writeheader()
+                writer.writerow({"id": "tool-900", "trial": 1, "answer": "fastp", "error": ""})
+            results = [{"id": "tool-900", "trial": 1}]
+            gold = [{"id": "tool-900", "query": "what is fastp"}]
+            provider = {"kind": "openai", "api_url": "http://test", "api_key": "x", "model": "m"}
+            with mock.patch("common.chat", side_effect=RuntimeError("HTTP 429")):
+                rows = ai_judge.evaluate_results(results, "tool", gold, str(captures), provider)
+        self.assertEqual(rows[0]["judge_error"], "HTTP 429")
+        self.assertEqual(rows[0]["ai_judge_overall"], "")
 
 
 if __name__ == "__main__":

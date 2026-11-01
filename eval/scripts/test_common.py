@@ -199,6 +199,71 @@ class StepMappingTests(unittest.TestCase):
     def test_map_expected_steps_leaves_unmatched_steps_out(self):
         self.assertEqual(common.map_expected_steps(["missing"], ["a", "b"]), {})
 
+    def test_step_mapping_is_one_to_one(self):
+        mapping = common.map_expected_steps(
+            ["vqsr_snps", "apply_vqsr_snps"],
+            ["vqsr_snps", "apply_vqsr_snps"],
+        )
+        self.assertEqual(
+            mapping,
+            {
+                "vqsr_snps": "vqsr_snps",
+                "apply_vqsr_snps": "apply_vqsr_snps",
+            },
+        )
+
+    def test_bare_tool_rule_cannot_satisfy_an_unrelated_expected_step(self):
+        # B1 fix: a `samtools` rule with environment `samtools` must not bind
+        # an unmapped `fastqc` step just because both tools appear in expected_tools.
+        rules = [{
+            "name": "samtools",
+            "environment": {"conda": "bioconda::samtools=1.24"},
+        }]
+        mapping = common.map_expected_steps(
+            ["fastqc"],
+            ["samtools"],
+            ["fastqc", "samtools"],
+            rules,
+        )
+        self.assertEqual(mapping, {})
+
+    def test_semantic_rule_names_match_without_reusing_a_generic_helper(self):
+        rules = [
+            {"name": "write_greeting", "output": ["out/hello.txt"]},
+            {"name": "fastp", "environment": {"conda": "bioconda::fastp=1.4.0"}},
+        ]
+        mapping = common.map_expected_steps(
+            ["greet", "fastp_trim"],
+            [rule["name"] for rule in rules],
+            ["echo", "fastp"],
+            rules,
+        )
+        self.assertEqual(mapping["greet"], "write_greeting")
+        self.assertEqual(mapping["fastp_trim"], "fastp")
+
+    def test_environment_identity_cannot_bind_the_wrong_indexer(self):
+        rules = [
+            {
+                "name": "star_index",
+                "environment": {"conda": "bioconda::star=2.7.11b"},
+                "output": ["reference/star_index"],
+            },
+            {
+                "name": "samtools_index",
+                "environment": {"conda": "bioconda::samtools=1.24"},
+                "output": ["aligned/{sample}.bam.bai"],
+            },
+        ]
+        mapping = common.map_expected_steps(
+            ["star_align", "index_bam"],
+            [rule["name"] for rule in rules],
+            ["STAR", "samtools"],
+            rules,
+        )
+        # The fixture has no alignment rule, so star_index must remain free.
+        self.assertNotIn("star_align", mapping)
+        self.assertEqual(mapping["index_bam"], "samtools_index")
+
 
 class MatchingTests(unittest.TestCase):
     def test_path_matches_allows_config_prefix_but_not_wrong_directory(self):
@@ -219,6 +284,42 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(common.loose_step_match("qc::fastqc", "qc::fastqc"))
         self.assertTrue(common.loose_step_match("fastqc", "qc::fastqc"))
         self.assertFalse(common.loose_step_match("star", "starfish_alignment"))
+
+    def test_agent_nouns_are_not_treated_as_morphology(self):
+        # `counter`, `caller`, and `aligner` can be distinct tools; only
+        # grammatical inflections are allowed to bridge rule-name variants.
+        self.assertFalse(common._tokens_equivalent("count", "counter"))
+        self.assertFalse(common._tokens_equivalent("call", "caller"))
+        self.assertFalse(common._tokens_equivalent("align", "aligner"))
+        self.assertTrue(common._tokens_equivalent("greet", "greeting"))
+
+    def test_path_roles_match_across_layout_but_not_scientific_type(self):
+        self.assertTrue(
+            common.path_role_matches(
+                "results/multiqc_report.html", "qc/multiqc_report.html"
+            )
+        )
+        self.assertTrue(
+            common.path_role_matches(
+                "counts/{sample}.counts.txt", "counts/{sample}_gene_counts.txt"
+            )
+        )
+        self.assertFalse(
+            common.path_role_matches(
+                "variants/{sample}.g.vcf.gz", "variants/{sample}.vcf.gz"
+            )
+        )
+        self.assertFalse(
+            common.path_role_matches(
+                "results/multiqc_report.html", "results/summary.txt"
+            )
+        )
+        # Contiguous stem check: a GVCF cannot satisfy a plain-VCF request.
+        self.assertFalse(
+            common.path_role_matches(
+                "variants/{sample}.vcf.gz", "variants/{sample}.g.vcf.gz"
+            )
+        )
 
 
 class JsonRequestRetryTests(unittest.TestCase):

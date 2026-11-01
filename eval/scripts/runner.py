@@ -15,7 +15,9 @@ Stdlib only.
 import argparse
 import csv
 import json
+import math
 import os
+import random
 import re
 import statistics
 import sys
@@ -23,11 +25,13 @@ import tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
+import ai_judge  # noqa: E402
 
 NOT_FOUND_RE = re.compile(
     r"not found|no such|does not exist|doesn't exist|no tool|unable to find|"
     r"cannot find|could not find|couldn't find|could not locate|does not appear to exist|"
-    r"unknown tool|i don'?t know of|no known",
+    r"unknown tool|i don'?t know of|no known|no record|no entry|not listed|"
+    r"not included|not known|don'?t recognize|do not recognize|unaware of",
     re.IGNORECASE,
 )
 TRIAL_RE = re.compile(r"trial-(\d+)")
@@ -57,6 +61,31 @@ def stdev(values):
     return round(statistics.stdev(values), 3) if len(values) >= 2 else 0.0
 
 
+def bootstrap_ci(values, confidence=0.95, iterations=10000, seed=172):
+    """Deterministic percentile bootstrap CI for a mean (stdlib only)."""
+    values = [float(value) for value in values]
+    if not values:
+        return {"lower": 0.0, "upper": 0.0, "confidence": confidence, "iterations": 0}
+    rng = random.Random(seed)
+    n = len(values)
+    means = []
+    for _ in range(iterations):
+        means.append(sum(values[rng.randrange(n)] for _ in range(n)) / n)
+    means.sort()
+    alpha = (1.0 - confidence) / 2.0
+    percentile_n = len(means)
+    # Nearest-rank empirical percentile. With 10,000 bootstrap means, the
+    # 2.5th percentile is order statistic 250 (zero-based index 249).
+    lower_index = min(percentile_n - 1, max(0, int(math.ceil(alpha * percentile_n)) - 1))
+    upper_index = min(percentile_n - 1, max(0, int(math.ceil((1.0 - alpha) * percentile_n)) - 1))
+    return {
+        "lower": round(means[lower_index], 3),
+        "upper": round(means[upper_index], 3),
+        "confidence": confidence,
+        "iterations": iterations,
+    }
+
+
 def metric_fields(results):
     """Numeric metric keys across ALL rows (union, first-seen order).
 
@@ -73,7 +102,11 @@ def metric_fields(results):
         "answer_len",
         "rule_count",
         "capture_error",
+        "capture_source",
         "perfect",
+        "ai_judge_json",
+        "ai_judge_rationale",
+        "ai_judge_error",
     }
     fields = []
     for row in results:
@@ -100,6 +133,7 @@ def summarize_rows(rows, metrics):
     ) if rows else 0.0
     out["overall_mean"] = mean(overall_values)
     out["overall_stdev"] = stdev(overall_values)
+    out["overall_ci95"] = bootstrap_ci(overall_values)
     return out
 
 
@@ -110,10 +144,14 @@ def per_item_summary(results):
     summaries = []
     for item_id, rows in sorted(by_id.items()):
         overalls = [float(r.get("overall", 0.0)) for r in rows]
+        first_trials = [r for r in rows if int(r.get("trial", 0)) == 1]
         summaries.append(
             {
                 "id": item_id,
                 "trials": len(rows),
+                "first_trial_available": 1.0 if first_trials else 0.0,
+                "first_trial_overall": mean([float(r.get("overall", 0.0)) for r in first_trials]),
+                "first_trial_perfect": 1.0 if any(float(r.get("overall", 0.0)) == 1.0 for r in first_trials) else 0.0,
                 "overall_mean": mean(overalls),
                 "overall_stdev": stdev(overalls),
                 "perfect_trial_rate": round(sum(1 for v in overalls if v == 1.0) / len(overalls), 3),
@@ -123,12 +161,54 @@ def per_item_summary(results):
     return summaries
 
 
+def capture_availability(gold_rows, results, capture_manifest):
+    """Report successful captures as a first-class infrastructure metric."""
+    trials = int((capture_manifest or {}).get("trials") or 1)
+    # A smoke run may limit `--limit 20` while the judge loads the full gold
+    # file.  The manifest's selected item ids, not the full CSV, define the
+    # intended denominator.
+    manifest_ids = set((capture_manifest or {}).get("item_ids") or [])
+    selected_rows = [row for row in gold_rows if not manifest_ids or row.get("id") in manifest_ids]
+    expected_trials = len(selected_rows) * trials
+    successful = len(results)
+    if not expected_trials:
+        return {
+            "expected_trials": 0,
+            "successful_trials": successful,
+            "reported_failures": int((capture_manifest or {}).get("failures") or 0),
+            "selected_items": len(selected_rows),
+            "capture_success_rate": 1.0 if results else 0.0,
+            "basis": "successful_results_no_manifest" if results else "no_successful_results",
+        }
+    rate = min(1.0, successful / expected_trials)
+    return {
+        "expected_trials": expected_trials,
+        "successful_trials": successful,
+        "reported_failures": int((capture_manifest or {}).get("failures") or 0),
+        "selected_items": len(selected_rows),
+        "capture_success_rate": round(rate, 3),
+        "basis": "manifest_expected_trials" if rate == successful / expected_trials else "capped_invalid_manifest_denominator",
+    }
+
+
 def load_manifest(captures_path):
     path = common.manifest_path(captures_path)
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             return path, json.load(fh)
     return "", None
+
+
+def ai_judge_detail_path(out_path):
+    out_path = os.path.abspath(out_path)
+    stem, ext = os.path.splitext(out_path)
+    return stem + ".ai_judge.csv" if ext else os.path.join(out_path, "ai_judge.csv")
+
+
+def ai_judge_summary_path(out_path):
+    out_path = os.path.abspath(out_path)
+    stem, ext = os.path.splitext(out_path)
+    return stem + ".ai_judge.summary.json" if ext else os.path.join(out_path, "ai_judge.summary.json")
 
 
 def write_csv(path, rows):
@@ -180,6 +260,19 @@ def load_generated(path):
     return text, rules, None
 
 
+def rule_shell(rule, fallback_text):
+    """Collect shell text from a rule, including transform map/combine."""
+    shell = rule.get("shell", "") if rule else fallback_text
+    if rule and isinstance(rule.get("transform"), dict):
+        transform = rule["transform"]
+        parts = [transform.get("map", "")]
+        if isinstance(transform.get("combine"), dict):
+            parts.append(transform["combine"].get("shell", ""))
+        transform_shell = " ".join(part for part in parts if part)
+        shell = (shell + " " + transform_shell).strip() if shell else transform_shell
+    return shell
+
+
 def find_pinned_version(text, tool):
     """Extract a version pin from conda or image-style references."""
     patterns = [
@@ -222,8 +315,17 @@ def memory_to_mb(value):
 
 
 def parse_resources(rule):
-    res = rule.get("resources", {})
-    return parse_threads(res.get("threads")), res.get("memory")
+    """Read resources from either [rules.resources] or top-level keys."""
+    resources = rule.get("resources", {})
+    if not isinstance(resources, dict):
+        resources = {}
+    threads = parse_threads(resources.get("threads"))
+    if threads is None:
+        threads = parse_threads(rule.get("threads"))
+    memory = resources.get("memory")
+    if memory is None:
+        memory = rule.get("memory")
+    return threads, memory
 
 
 def inferred_edges(rules):
@@ -320,9 +422,18 @@ def path_hits(expected_paths, declared_paths):
         return 0.0
     hits = 0
     for expected in expected_paths:
-        if any(common.path_matches(expected, declared) for declared in declared_paths):
+        if any(
+            common.path_matches(expected, declared) or common.path_role_matches(expected, declared)
+            for declared in declared_paths
+        ):
             hits += 1
     return round(hits / len(expected_paths), 3)
+
+
+def param_present(param, shell):
+    """Boundary-match a CLI option so --out cannot satisfy --output."""
+    escaped = re.escape(param)
+    return bool(re.search(rf"(?<![A-Za-z0-9_-]){escaped}(?![A-Za-z0-9_-])", shell, re.IGNORECASE))
 
 
 # ── Tool layer ──────────────────────────────────────────────────────────────
@@ -476,6 +587,7 @@ def judge_tool(gold_rows, captures_path):
                     **scores,
                     "perfect": 1.0 if scores and all(v == 1.0 for v in scores.values()) else 0.0,
                     "answer_len": len(answer),
+                    "capture_source": captures_path,
                     "capture_error": capture.get("error", ""),
                 }
             )
@@ -494,20 +606,20 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
             print(f"WARN: no capture for {row['id']} — skipped")
             continue
         for capture in captures:
+            meta = load_meta(capture["meta"])
+            if (meta.get("error") or "").strip():
+                print(
+                    f"WARN: {row['id']} trial {capture['trial']} capture failed "
+                    f"({str(meta.get('error', ''))[:80]}) — skipped"
+                )
+                continue
             text, rules, parse_err = load_generated(capture["path"])
             rule = rules[0] if rules else {}
-            shell = rule.get("shell", "") if rule else text
-            if rule and isinstance(rule.get("transform"), dict):
-                t = rule["transform"]
-                t_parts = [t.get("map", "")]
-                if isinstance(t.get("combine"), dict):
-                    t_parts.append(t["combine"].get("shell", ""))
-                transform_shell = " ".join(filter(None, t_parts))
-                if transform_shell:
-                    shell = (shell + " " + transform_shell).strip() if shell else transform_shell
+            shell = rule_shell(rule, text)
             scores = {}
 
-            scores["tool_present"] = 1.0 if common.name_present(row["expected_tool"], shell + " " + text) else 0.0
+            tool_names = (row["expected_tool"],) + PACKAGE_ALIASES.get(row["expected_tool"], ())
+            scores["tool_present"] = 1.0 if any(common.name_present(name, shell + " " + text) for name in tool_names) else 0.0
 
             if row["expected_version"]:
                 # References pin the *package* name, which often differs from
@@ -527,7 +639,7 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                 params = []
             if params:
                 scores["key_params"] = round(
-                    sum(1 for p in params if re.search(re.escape(p), shell, re.IGNORECASE)) / len(params),
+                    sum(1 for p in params if param_present(p, shell)) / len(params),
                     3,
                 )
 
@@ -576,7 +688,6 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                     ok = ok and (mem_mb is not None) and mem_mb <= resource_range.get("memory_max_mb", 262144)
                 scores["resources_in_range"] = 1.0 if ok else 0.0
 
-            meta = load_meta(capture["meta"])
             scores["overall"] = mean(list(scores.values())) if scores else 0.0
             results.append(
                 {
@@ -586,6 +697,7 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                     **scores,
                     "perfect": 1.0 if scores and all(v == 1.0 for v in scores.values()) else 0.0,
                     "capture_path": capture["path"],
+                    "capture_source": capture["path"],
                     "parse_err": parse_err or "",
                     "capture_error": meta.get("error", ""),
                 }
@@ -603,6 +715,13 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
             print(f"WARN: no capture for {row['id']} — skipped")
             continue
         for capture in captures:
+            meta = load_meta(capture["meta"])
+            if (meta.get("error") or "").strip():
+                print(
+                    f"WARN: {row['id']} trial {capture['trial']} capture failed "
+                    f"({str(meta.get('error', ''))[:80]}) — skipped"
+                )
+                continue
             text, rules, parse_err = load_generated(capture["path"])
             names = [r.get("name", "") for r in rules]
             scores = {}
@@ -625,13 +744,22 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 expected_steps = expected_tools = expected_edges = expected_outputs = []
 
             if expected_steps:
-                hits = sum(1 for step in expected_steps if any(common.loose_step_match(step, name) for name in names))
-                scores["step_coverage"] = round(hits / len(expected_steps), 3)
+                # One scientific step gets at most one generated rule. The
+                # previous first-match search could reuse a helper rule for
+                # several expected stages and overstate step coverage.
+                name_map = common.map_expected_steps(expected_steps, names, expected_tools, rules)
+                scores["step_coverage"] = round(len(name_map) / len(expected_steps), 3)
             if expected_tools:
-                hits = sum(1 for tool in expected_tools if common.name_present(tool, text))
+                hits = sum(
+                    1
+                    for tool in expected_tools
+                    if any(
+                        common.name_present(candidate, text)
+                        for candidate in (tool,) + PACKAGE_ALIASES.get(tool, ())
+                    )
+                )
                 scores["tool_coverage"] = round(hits / len(expected_tools), 3)
 
-            name_map = common.map_expected_steps(expected_steps, names)
             edges = engine_edges(oxo_flow_bin, capture["path"])
             if expected_edges:
                 hits = sum(1 for src, dst in expected_edges if (name_map.get(src), name_map.get(dst)) in edges)
@@ -652,6 +780,7 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                     "perfect": 1.0 if scores and all(v == 1.0 for v in scores.values()) else 0.0,
                     "rule_count": len(rules),
                     "capture_path": capture["path"],
+                    "capture_source": capture["path"],
                     "parse_err": parse_err or "",
                     "capture_error": meta.get("error", ""),
                 }
@@ -661,6 +790,10 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
 
 def build_validity_warnings(summary, gold_rows, capture_manifest):
     warnings = []
+    if not capture_manifest:
+        warnings.append(
+            "No capture manifest is available; trial denominator and provider/knowledge provenance cannot be audited."
+        )
     gold_drafters = sorted({row.get("gold_draft_by", "") for row in gold_rows if row.get("gold_draft_by")})
     provider_kind = ((capture_manifest or {}).get("provider") or {}).get("kind", "")
     if provider_kind and provider_kind in gold_drafters:
@@ -670,6 +803,12 @@ def build_validity_warnings(summary, gold_rows, capture_manifest):
     if (capture_manifest or {}).get("include_unreviewed"):
         warnings.append(
             "Capture included unreviewed gold rows (`--include-unreviewed`); treat results as preview-only, not publication-grade benchmark output."
+        )
+    capture_rate = float(summary.get("capture_availability", {}).get("capture_success_rate", 1.0))
+    if capture_rate < 1.0:
+        warnings.append(
+            f"Capture availability is {capture_rate:.3f}; failed/missing trials are excluded from model scores, "
+            "so availability must be reported alongside every performance estimate."
         )
     if summary["n_items"] < 10:
         warnings.append("Fewer than 10 items were judged; dataset-level estimates are low-confidence.")
@@ -682,14 +821,46 @@ def build_validity_warnings(summary, gold_rows, capture_manifest):
             low_n.append(f"query_type:{name}={stats['n']}")
     if low_n:
         warnings.append("Low-n breakdowns (<10 judged trials) should be treated cautiously: " + ", ".join(low_n))
+    missing_first = [
+        row["id"]
+        for row in summary.get("per_item", [])
+        if float(row.get("first_trial_available", 1.0)) == 0.0
+    ]
+    if missing_first:
+        warnings.append(
+            "Items without trial 1 are excluded from pass@1 (not silently failed): " + ", ".join(missing_first)
+        )
     return warnings
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────
 
-def report(results, gold_rows, out_path, summary_out=None, item_summary_out=None, capture_manifest=None, capture_manifest_path=""):
+def report(
+    results,
+    gold_rows,
+    out_path,
+    summary_out=None,
+    item_summary_out=None,
+    capture_manifest=None,
+    capture_manifest_path="",
+    ai_judge_summary="",
+):
     if not results:
-        print("no rows judged — nothing to report")
+        # A fully failed capture run is itself an important result. Write the
+        # availability record instead of silently emitting no artifact.
+        summary = {
+            "benchmark": "oxo-flow-ai-eval",
+            "layer": "",
+            "generated_at": common.utc_now(),
+            "n_results": 0,
+            "n_items": 0,
+            "capture_manifest_path": capture_manifest_path,
+            "capture_manifest": capture_manifest,
+            "capture_availability": capture_availability(gold_rows, [], capture_manifest),
+            "validity_warnings": ["No successful captures were available to judge."],
+        }
+        common.write_json(summary_out or common.summary_json_path(out_path), summary)
+        print("no rows judged — wrote capture-availability-only summary")
         return
 
     write_csv(out_path, results)
@@ -711,9 +882,18 @@ def report(results, gold_rows, out_path, summary_out=None, item_summary_out=None
         "n_trials_max": max(r["trial"] for r in results),
         "overall": summarize_rows(results, metrics),
         "item_pass_at_k": mean([row["pass_at_k"] for row in item_rows]),
+        "item_first_trial_coverage": mean([row["first_trial_available"] for row in item_rows]),
+        "item_pass_at_1": mean([
+            row["first_trial_perfect"]
+            for row in item_rows
+            if row["first_trial_available"] == 1.0
+        ]),
         "by_difficulty": {},
         "by_query_type": {},
         "per_item": item_rows,
+        "overall_item_ci95": bootstrap_ci([row["overall_mean"] for row in item_rows]),
+        "capture_availability": capture_availability(gold_rows, results, capture_manifest),
+        "ai_judge_summary": os.path.abspath(ai_judge_summary) if ai_judge_summary else "",
         "comparability_note": (
             "Overall scores average only the sub-metrics applicable to that row; mixed query types "
             "may therefore have different metric counts."
@@ -737,8 +917,13 @@ def report(results, gold_rows, out_path, summary_out=None, item_summary_out=None
 
     print(
         f"\n=== {results[0]['layer']} layer: {summary['n_items']} items, {summary['n_results']} judged trial(s), "
-        f"mean overall {summary['overall']['overall_mean']:.3f}, "
-        f"item pass@k {summary['item_pass_at_k']:.3f} ==="
+        f"mean overall {summary['overall']['overall_mean']:.3f} "
+        f"(95% CI {summary['overall']['overall_ci95']['lower']:.3f}-"
+        f"{summary['overall']['overall_ci95']['upper']:.3f}), "
+        f"item pass@1 {summary['item_pass_at_1']:.3f}, "
+        f"trial-1 coverage {summary['item_first_trial_coverage']:.3f}, "
+        f"item pass@k {summary['item_pass_at_k']:.3f}, capture success "
+        f"{summary['capture_availability']['capture_success_rate']:.3f} ==="
     )
     for difficulty, stats in summary["by_difficulty"].items():
         print(f"  difficulty={difficulty:6s} n={stats['n']:3d} mean={stats['overall_mean']:.3f} stdev={stats['overall_stdev']:.3f}")
@@ -759,6 +944,15 @@ def main():
     ap.add_argument("--item-summary-out", help="per-item summary CSV path (default: derived from --out)")
     ap.add_argument("--gold", help="override gold CSV path (default: eval/gold/<layer>.csv)")
     ap.add_argument("--include-unreviewed", action="store_true")
+    ap.add_argument("--ai-judge", action="store_true", help="run advisory expert-model review")
+    ap.add_argument("--ai-judge-provider", help="openai, claude, or ollama (default: AI_JUDGE_PROVIDER)")
+    ap.add_argument("--ai-judge-base-url", help="judge endpoint (default: AI_JUDGE_BASE_URL)")
+    ap.add_argument("--ai-judge-model", help="judge model (default: AI_JUDGE_MODEL)")
+    ap.add_argument("--ai-judge-max-tokens", type=int, default=16384)
+    # Thinking judges can legitimately reason for several minutes on a large
+    # workflow; the default is deliberately longer than the capture timeout.
+    ap.add_argument("--ai-judge-timeout", type=int, default=600)
+    ap.add_argument("--ai-judge-out", help="advisory detail CSV path (default: derived from --out)")
     args = ap.parse_args()
 
     gold_rows = common.load_gold(args.layer, args.include_unreviewed, args.gold)
@@ -779,6 +973,45 @@ def main():
             results = judge_rule(gold_rows, args.captures, oxo_flow_bin)
         else:
             results = judge_workflow(gold_rows, args.captures, oxo_flow_bin)
+
+    ai_judge_rows = []
+    judge_provider = None
+    if args.ai_judge:
+        try:
+            judge_provider = ai_judge.resolve_provider(
+                args.ai_judge_provider,
+                args.ai_judge_base_url,
+                args.ai_judge_model,
+            )
+        except ValueError as exc:
+            sys.exit(f"invalid AI judge configuration: {exc}")
+        if judge_provider is None:
+            sys.exit(
+                "AI judge is not configured: set AI_JUDGE_PROVIDER, AI_JUDGE_BASE_URL, "
+                "AI_JUDGE_MODEL and AI_JUDGE_API_KEY (Ollama needs no key)"
+            )
+        print(
+            f"Running advisory AI judge with {judge_provider['kind']}:{judge_provider['model']} "
+            "(not part of the deterministic score of record)"
+        )
+        ai_judge_rows = ai_judge.evaluate_results(
+            results,
+            args.layer,
+            gold_rows,
+            args.captures,
+            judge_provider,
+            max_tokens=args.ai_judge_max_tokens,
+            timeout=args.ai_judge_timeout,
+        )
+        judge_detail = args.ai_judge_out or ai_judge_detail_path(args.out)
+        write_csv(judge_detail, ai_judge_rows)
+        judge_summary = ai_judge.summarize(ai_judge_rows, judge_provider)
+        common.write_json(
+            ai_judge_summary_path(args.out),
+            judge_summary,
+        )
+        print(f"Wrote advisory AI judge detail to {judge_detail}")
+
     report(
         results,
         gold_rows,
@@ -787,8 +1020,12 @@ def main():
         item_summary_out=args.item_summary_out or common.item_summary_csv_path(args.out),
         capture_manifest=capture_manifest,
         capture_manifest_path=capture_manifest_path,
+        ai_judge_summary=ai_judge_summary_path(args.out) if args.ai_judge else "",
     )
-
-
+    # Advisory-judge failure is nonzero because the requested report is
+    # incomplete, but it must never prevent deterministic artifacts above from
+    # being written first.
+    if args.ai_judge and not judge_summary["n_reviewed"]:
+        sys.exit("advisory AI judge produced no valid reviews; deterministic results were still written")
 if __name__ == "__main__":
     main()

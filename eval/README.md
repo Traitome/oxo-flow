@@ -49,7 +49,12 @@ runner.py ───────────────────────�
    Each capture command writes trial-aware artifacts plus a JSON manifest recording git SHA, gold/knowledge hashes, provider/model identity, decoding settings, timestamps, and per-trial metadata.
 2. **Judge** — `python3 eval/scripts/runner.py <layer> --captures <dir-or-csv> [--oxo-flow target/debug/oxo-flow]`
    writes three outputs by default: detailed per-trial `eval/results.csv`, per-item aggregate `eval/results.items.csv`, and dataset summary `eval/results.summary.json`.
-3. **Review disagreements** — every judge is deterministic and documented
+   Add `--ai-judge` for a separate expert-model review. Configure it with
+   `AI_JUDGE_PROVIDER`, `AI_JUDGE_BASE_URL`, `AI_JUDGE_MODEL`, and
+   `AI_JUDGE_API_KEY` (never a CLI argument or repository file). Advisory
+   output is written to separate `*.ai_judge.*` files and does not alter the
+   deterministic score.
+3. **Review disagreements** — every deterministic judge is documented
    in `runner.py`; a human should spot-check rows with low scores (both
    "AI wrong" and "gold wrong" are possible findings).
 
@@ -100,6 +105,17 @@ changed.
 ## Reporting semantics
 
 - Detailed CSVs are **per trial**, not per item.
-- `results.items.csv` reports per-item means, standard deviations, and `pass@k` (whether any captured trial reached `overall = 1.0`).
-- `results.summary.json` records dataset-level means/stdevs, difficulty/query-type breakdowns, the capture manifest, and a comparability note that mixed query types may average different metric counts.
+- `results.items.csv` reports per-item means, standard deviations, `pass@1`
+  (trial 1 reached `overall = 1.0`), and `pass@k` (any captured trial reached
+  `overall = 1.0`).
+- `results.summary.json` records dataset-level means/stdevs and 95% bootstrap
+  confidence intervals, difficulty/query-type breakdowns, first-class capture
+  availability, the capture manifest, and a comparability note that mixed query
+  types may average different metric counts.
+- Failed or missing captures are excluded from model metrics and produce an
+  explicit availability rate/warning; they are never silently scored as zero.
+- Advisory AI-judge rows carry four 0--10 dimensions plus rationales, risks,
+  confidence, response IDs, and judge errors. The model's raw overall is
+  recomputed by the harness; review failures remain explicit rather than
+  becoming fabricated scores.
 - Negative tool items now require both an explicit rejection (for example `not found`) and the absence of any suggested known tool, reducing false credit for hallucinated fallback guesses.
