@@ -30,21 +30,19 @@ impl Tool for RunStatusTool {
         }
     }
     async fn execute(&self, _arguments: &str) -> Result<String, AiError> {
-        let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        let Some(backend) = crate::infra::db::global_backend() else {
             return Err(AiError::ToolError {
                 tool: "get_run_status".into(),
                 message: "database unavailable".into(),
             });
         };
-        let run: Option<crate::infra::db::models::RunRow> =
-            sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-                .bind(&self.run_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| AiError::ToolError {
-                    tool: "get_run_status".into(),
-                    message: e.to_string(),
-                })?;
+        let run = backend
+            .get_run(&self.run_id)
+            .await
+            .map_err(|e| AiError::ToolError {
+                tool: "get_run_status".into(),
+                message: e,
+            })?;
         let Some(run) = run else {
             return Err(AiError::ToolError {
                 tool: "get_run_status".into(),
@@ -105,21 +103,19 @@ impl Tool for RunLogsTool {
         }
     }
     async fn execute(&self, _arguments: &str) -> Result<String, AiError> {
-        let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        let Some(backend) = crate::infra::db::global_backend() else {
             return Err(AiError::ToolError {
                 tool: "get_run_logs".into(),
                 message: "database unavailable".into(),
             });
         };
-        let run: Option<crate::infra::db::models::RunRow> =
-            sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-                .bind(&self.run_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| AiError::ToolError {
-                    tool: "get_run_logs".into(),
-                    message: e.to_string(),
-                })?;
+        let run = backend
+            .get_run(&self.run_id)
+            .await
+            .map_err(|e| AiError::ToolError {
+                tool: "get_run_logs".into(),
+                message: e,
+            })?;
         let Some(run) = run else {
             return Err(AiError::ToolError {
                 tool: "get_run_logs".into(),

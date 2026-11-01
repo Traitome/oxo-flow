@@ -24,7 +24,9 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 )]
 /// GET /api/health
 pub async fn health() -> ApiResult<HealthResponse> {
-    let db_healthy = if let Ok(pool) = get_pool() {
+    let db_healthy = if let Some(backend) = crate::infra::db::global_backend() {
+        backend.health().await.unwrap_or(false)
+    } else if let Ok(pool) = get_pool() {
         sqlx::query("SELECT 1").execute(pool).await.is_ok()
     } else {
         false
@@ -346,27 +348,21 @@ pub async fn get_webhook_config(
         "admin",
         "Admin role required to read the webhook configuration",
     )?;
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+    crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "DB_ERROR",
             "Database not available".into(),
         )
     })?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
-        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-
-    match row {
-        Some((url, secret, enabled, events, scheme)) => Ok(Json(serde_json::json!({
-            "enabled": enabled != 0,
-            "url": url,
-            "secret_set": secret.is_some(),
-            "events": serde_json::from_str::<serde_json::Value>(&events).unwrap_or(serde_json::json!([])),
-            "signature_scheme": scheme,
+    let settings = crate::domains::observability::webhook::load_settings().await;
+    match settings {
+        Some(s) => Ok(Json(serde_json::json!({
+            "enabled": s.enabled,
+            "url": s.url,
+            "secret_set": s.secret.is_some(),
+            "events": s.events,
+            "signature_scheme": s.signature_scheme,
         }))),
         None => Ok(Json(serde_json::json!({
             "enabled": false, "url": "", "secret_set": false, "events": [],
