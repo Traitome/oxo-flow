@@ -430,6 +430,15 @@ def judge_tool(gold_rows, captures_path):
             print(f"WARN: no capture for {row['id']} — skipped")
             continue
         for capture in captures:
+            if (capture.get("error") or "").strip():
+                # An API/transport failure is infrastructure, not a model
+                # answer: scoring the empty string would book the rate limiter
+                # as a hallucination. Skip it; the manifest carries the cause.
+                print(
+                    f"WARN: {row['id']} trial {capture['trial']} capture failed "
+                    f"({capture['error'][:80]}) — skipped"
+                )
+                continue
             answer = capture.get("answer", "")
             scores = {}
             if row["expected_tool"]:

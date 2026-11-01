@@ -88,6 +88,12 @@ class VersionGateTests(unittest.TestCase):
         self.assertNotIn("version_match", row)
         self.assertEqual(row["overall"], 1.0)
 
+
+class CaptureFailureTests(unittest.TestCase):
+    """A failed capture (rate limit, transport) is infrastructure, not a
+    model answer — scoring the empty string would book the rate limiter as a
+    hallucination (#172 live smoke against the school gateway)."""
+
     def test_version_scored_when_query_asks(self):
         row = self._judge("what is the latest version of fastp in bioconda", "1.3.7", "fastp 1.3.7")
         self.assertEqual(row["version_match"], 1.0)
@@ -101,6 +107,31 @@ class VersionGateTests(unittest.TestCase):
         self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x 2.0.40")["version_match"], 0.0)
         self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x 12.0.4")["version_match"], 0.0)
         self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x v2.0.4")["version_match"], 1.0)
+
+
+class CaptureFailureTests(unittest.TestCase):
+    """A failed capture (rate limit, transport) is infrastructure, not a
+    model answer — scoring the empty string would book the rate limiter as a
+    hallucination (#172 live smoke against the school gateway)."""
+
+    def test_errored_capture_is_skipped_not_scored_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            captures = Path(td) / "answers.csv"
+            with open(captures, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["id", "trial", "answer", "error"])
+                writer.writeheader()
+                writer.writerow({"id": "tool-900", "trial": 1, "answer": "", "error": "HTTP 429"})
+            gold_rows = [
+                {
+                    "id": "tool-900",
+                    "query": "adapter trimming",
+                    "expected_tool": "fastp",
+                    "expected_version": "",
+                    "negative_sample": "0",
+                }
+            ]
+            results = runner.judge_tool(gold_rows, str(captures))
+        self.assertEqual(results, [])
 
 
 class RuleJudgingTests(unittest.TestCase):

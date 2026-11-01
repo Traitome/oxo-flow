@@ -268,6 +268,24 @@ class JsonRequestRetryTests(unittest.TestCase):
                 common._json_request("http://test", {}, {})
         self.assertEqual(len(calls), 1)
 
+    def test_rate_limit_with_html_body_is_replayed(self):
+        responses = [
+            self._http_error(429, "<html>429 Too Many Requests</html>"),
+            {"content": [{"type": "text", "text": "ok"}]},
+        ]
+
+        def fake_urlopen(req, timeout):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return contextlib.nullcontext(io.BytesIO(json.dumps(item).encode()))
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+            "common.time.sleep"
+        ):
+            data = common._json_request("http://test", {}, {})
+        self.assertEqual(data["content"][0]["text"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

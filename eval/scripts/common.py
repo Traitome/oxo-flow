@@ -285,7 +285,7 @@ DEFAULT_TIMEOUT_SECS = 300
 TRANSIENT_EMPTY_STATUS = frozenset({408, 502, 503, 504, 522, 524})
 
 
-def _json_request(url, body, headers, timeout=DEFAULT_TIMEOUT_SECS, retries=3):
+def _json_request(url, body, headers, timeout=DEFAULT_TIMEOUT_SECS, retries=4):
     last_error = ""
     for attempt in range(retries):
         req = urllib.request.Request(
@@ -302,6 +302,17 @@ def _json_request(url, body, headers, timeout=DEFAULT_TIMEOUT_SECS, retries=3):
             except Exception:
                 payload = ""
             last_error = f"HTTP {exc.code}: {payload[:200] or 'empty body'}"
+            if exc.code == 429 and attempt < retries - 1:
+                # Rate limiter (the school gateway answers with an HTML page,
+                # not a parseable API error): back off and replay regardless
+                # of body. Honor Retry-After seconds when the endpoint sends it.
+                delay = None
+                try:
+                    delay = float(exc.headers.get("Retry-After", "")) if exc.headers else None
+                except (TypeError, ValueError):
+                    delay = None
+                time.sleep(delay if delay and delay > 0 else 10.0 * (attempt + 1))
+                continue
             if exc.code in TRANSIENT_EMPTY_STATUS and not payload and attempt < retries - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
