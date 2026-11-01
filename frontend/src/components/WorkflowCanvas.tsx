@@ -394,7 +394,7 @@ export default function WorkflowCanvas({
         >
           <button
             type="button"
-            className="rf-layout-btn"
+            className="rf-metro-btn"
             style={{ background: 'var(--color-primary, #4F7DF9)', color: '#ffffff' }}
             onClick={() => setViewMode('standard')}
             title="Switch to Standard DAG View"
@@ -445,7 +445,7 @@ export default function WorkflowCanvas({
       >
         <button
           type="button"
-          className="rf-layout-btn"
+          className="rf-metro-btn"
           onClick={() => setViewMode('metro')}
           title="Switch to Metro Transit Map View"
         >

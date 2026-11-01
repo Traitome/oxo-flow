@@ -433,7 +433,8 @@ select.search-input{padding-right:1.75rem}
 }
 .rf-handle { width: 8px !important; height: 8px !important; background: var(--color-primary) !important; border: 2px solid var(--color-bg) !important; }
 
-.rf-layout-btn {
+.rf-layout-btn,
+.rf-metro-btn {
   position: absolute;
   top: 10px; right: 10px;
   z-index: 5;
@@ -447,7 +448,8 @@ select.search-input{padding-right:1.75rem}
   cursor: pointer;
   box-shadow: var(--shadow-card);
 }
-.rf-layout-btn:hover { color: var(--color-text); border-color: var(--color-primary); background: var(--color-bg-secondary); }
+.rf-layout-btn:hover,
+.rf-metro-btn:hover { color: var(--color-text); border-color: var(--color-primary); background: var(--color-bg-secondary); }
 
 .rf-minimap { background: var(--color-bg-tertiary) !important; border-radius: var(--radius-sm); }
 
