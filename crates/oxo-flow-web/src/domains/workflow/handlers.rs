@@ -111,6 +111,17 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+pub fn get_backend()
+-> Result<std::sync::Arc<dyn crate::infra::db::StorageBackend>, (StatusCode, Json<ApiError>)> {
+    crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })
+}
+
 pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -325,20 +336,15 @@ pub async fn diff_pipelines(
             return Ok(toml.clone());
         }
         if let Some(pid) = id {
-            let pool = get_pool()?;
-            let row: Option<models::PipelineRow> =
-                sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-                    .bind(pid)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("DB error loading pipeline {pid}: {e}");
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "DB_ERROR",
-                            "Internal database error".to_string(),
-                        )
-                    })?;
+            let backend = get_backend()?;
+            let row = backend.get_pipeline(pid).await.map_err(|e| {
+                tracing::error!("DB error loading pipeline {pid}: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".to_string(),
+                )
+            })?;
             // A diff of another user's private pipeline leaks its TOML —
             // apply the same read scope as every other pipeline endpoint.
             let Some(row) = row.filter(|r| can_read_pipeline(&user, r)) else {
@@ -384,20 +390,15 @@ pub async fn export_pipeline(
     let toml_content = if !req.toml_content.trim().is_empty() {
         req.toml_content
     } else if let Some(id) = req.pipeline_id.as_deref() {
-        let pool = get_pool()?;
-        let row: Option<models::PipelineRow> =
-            sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-                .bind(id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error loading pipeline {id}: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".to_string(),
-                    )
-                })?;
+        let backend = get_backend()?;
+        let row = backend.get_pipeline(id).await.map_err(|e| {
+            tracing::error!("DB error loading pipeline {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            )
+        })?;
         match row.filter(|r| can_read_pipeline(&user, r)) {
             Some(row) => row.toml_content,
             None => {
@@ -545,7 +546,6 @@ pub async fn save_pipeline(
     authenticated: Option<axum::Extension<CurrentUser>>,
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
-    let pool = get_pool()?;
     let toml_content = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -594,13 +594,20 @@ pub async fn save_pipeline(
     let now = now_iso();
     let id = uuid::Uuid::new_v4().to_string();
 
-    sqlx::query(
-        "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id).bind(&user_id).bind(name).bind(&version).bind(toml_content)
-    .bind(rules_count).bind(None::<String>).bind(visibility).bind(&now).bind(&now)
-    .execute(pool).await
-    .map_err(|e| {
+    let pipeline_row = models::PipelineRow {
+        id: id.clone(),
+        user_id: user_id.clone(),
+        name: name.to_string(),
+        version: version.clone(),
+        toml_content: toml_content.to_string(),
+        rules_count,
+        forked_from: None,
+        visibility: visibility.to_string(),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    let backend = get_backend()?;
+    backend.save_pipeline(&pipeline_row).await.map_err(|e| {
         tracing::error!("DB error creating pipeline: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -610,7 +617,9 @@ pub async fn save_pipeline(
     })?;
 
     // The initial save is revision 1 of the pipeline's history.
-    record_revision(pool, &id, &user_id, &version, toml_content).await;
+    if let Ok(pool) = get_pool() {
+        record_revision(pool, &id, &user_id, &version, toml_content).await;
+    }
 
     Ok(Json(Pipeline {
         id,
@@ -701,20 +710,16 @@ pub async fn get_pipeline(
     Path(id): Path<String>,
 ) -> ApiResult<Pipeline> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let row: Option<models::PipelineRow> = sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching pipeline {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    let row = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     // Enforce read permission; foreign private pipelines 404 (existence
     // must not leak — issue #82 P0-4).
@@ -765,21 +770,16 @@ pub async fn update_pipeline(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let existing: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id} for update: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let existing = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id} for update: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -850,34 +850,40 @@ pub async fn update_pipeline(
 
     let now = now_iso();
     // Snapshot the pre-update content so rollback can restore it.
-    record_revision(
-        pool,
-        &id,
-        &user.id,
-        &existing.version,
-        &existing.toml_content,
-    )
-    .await;
-    sqlx::query(
-        "UPDATE pipelines SET name = ?, version = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(&name)
-    .bind(&version)
-    .bind(&toml_content)
-    .bind(&visibility)
-    .bind(rules_count)
-    .bind(&now)
-    .bind(&id)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error updating pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
+    if let Ok(pool) = get_pool() {
+        record_revision(
+            pool,
+            &id,
+            &user.id,
+            &existing.version,
+            &existing.toml_content,
         )
-    })?;
+        .await;
+    }
+
+    let updated_pipeline = models::PipelineRow {
+        id: id.clone(),
+        user_id: existing.user_id.clone(),
+        name: name.clone(),
+        version: version.clone(),
+        toml_content: toml_content.clone(),
+        rules_count,
+        forked_from: existing.forked_from.clone(),
+        visibility: visibility.clone(),
+        created_at: existing.created_at.clone(),
+        updated_at: now.clone(),
+    };
+    backend
+        .save_pipeline(&updated_pipeline)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error updating pipeline {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     Ok(Json(Pipeline {
         id,
@@ -908,21 +914,16 @@ pub async fn delete_pipeline(
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let existing: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id} for deletion: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let existing = backend.get_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching pipeline {id} for deletion: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -941,18 +942,14 @@ pub async fn delete_pipeline(
         ));
     }
 
-    sqlx::query("DELETE FROM pipelines WHERE id = ?")
-        .bind(&id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error deleting pipeline {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    backend.delete_pipeline(&id).await.map_err(|e| {
+        tracing::error!("DB error deleting pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }
@@ -972,20 +969,16 @@ pub async fn delete_pipeline(
 )]
 /// GET /api/templates
 pub async fn list_templates() -> ApiResult<Vec<Template>> {
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let rows: Vec<models::TemplateRow> =
-        sqlx::query_as("SELECT * FROM templates ORDER BY category, name ASC")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error listing templates: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let rows = backend.list_templates().await.map_err(|e| {
+        tracing::error!("DB error listing templates: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let list: Vec<Template> = rows
         .into_iter()
@@ -1021,22 +1014,16 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
 /// Accepts the template UUID OR its name (`?template=` supports both —
 /// issue #81: the editor only understood UUIDs before).
 pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let row: Option<models::TemplateRow> =
-        sqlx::query_as("SELECT * FROM templates WHERE id = ? OR name = ? LIMIT 1")
-            .bind(&id)
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching template {id}: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let row = backend.get_template(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching template {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     match row {
         Some(r) => Ok(Json(Template {
@@ -1075,7 +1062,6 @@ pub async fn save_template(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Template> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
 
     let name = req
         .get("name")
@@ -1134,28 +1120,24 @@ pub async fn save_template(
     // upsert used to let any user rewrite anyone's template (suggested to
     // every user via LIMIT 20, so planted content was widely visible).
     // Updating a system template is an admin operation (issue #81).
+    let backend = get_backend()?;
     if !template_id.is_empty() {
-        let existing: Option<(String, i64)> =
-            sqlx::query_as("SELECT created_by, is_system FROM templates WHERE id = ?")
-                .bind(&id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-        let Some((created_by, is_system)) = existing else {
+        let existing = backend.get_template(&id).await.unwrap_or(None);
+        let Some(existing) = existing else {
             return Err(err(
                 StatusCode::NOT_FOUND,
                 "NOT_FOUND",
                 format!("Template {id} not found"),
             ));
         };
-        if is_system == 1 && !user.is_admin() {
+        if existing.is_system == 1 && !user.is_admin() {
             return Err(err(
                 StatusCode::FORBIDDEN,
                 "ACCESS_DENIED",
                 "Only admins may modify system templates".into(),
             ));
         }
-        if created_by != user.id && !user.is_admin() {
+        if existing.created_by.as_deref() != Some(&user.id) && !user.is_admin() {
             return Err(err(
                 StatusCode::FORBIDDEN,
                 "ACCESS_DENIED",
@@ -1166,22 +1148,20 @@ pub async fn save_template(
 
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
 
-    sqlx::query(
-        "INSERT INTO templates (id, name, category, description, tags, toml_content, is_system, created_by, usage_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, category = excluded.category, description = excluded.description, tags = excluded.tags, toml_content = excluded.toml_content, is_system = excluded.is_system, updated_at = excluded.updated_at",
-    )
-    .bind(&id)
-    .bind(name)
-    .bind(category)
-    .bind(description)
-    .bind(&tags_json)
-    .bind(toml_content)
-    .bind(if is_system { 1_i64 } else { 0_i64 })
-    .bind(Some(&user.id))
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
+    let template_row = models::TemplateRow {
+        id: id.clone(),
+        name: name.to_string(),
+        category: category.to_string(),
+        description: description.to_string(),
+        tags: tags_json,
+        toml_content: toml_content.to_string(),
+        is_system: if is_system { 1 } else { 0 },
+        created_by: Some(user.id.clone()),
+        usage_count: 0,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    backend.save_template(&template_row).await.map_err(|e| {
         tracing::error!("DB error saving template: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1220,21 +1200,16 @@ pub async fn delete_template(
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let existing: Option<models::TemplateRow> =
-        sqlx::query_as("SELECT * FROM templates WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching template {id} for deletion: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let existing = backend.get_template(&id).await.map_err(|e| {
+        tracing::error!("DB error fetching template {id} for deletion: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -1259,18 +1234,14 @@ pub async fn delete_template(
         ));
     }
 
-    sqlx::query("DELETE FROM templates WHERE id = ?")
-        .bind(&id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error deleting template {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    backend.delete_template(&id).await.map_err(|e| {
+        tracing::error!("DB error deleting template {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }

@@ -1140,11 +1140,14 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn get_template(&self, id: &str) -> Result<Option<models::TemplateRow>, String> {
-        sqlx::query_as::<_, models::TemplateRow>("SELECT * FROM templates WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| e.to_string())
+        sqlx::query_as::<_, models::TemplateRow>(
+            "SELECT * FROM templates WHERE id = ? OR name = ? LIMIT 1",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
     }
 
     async fn save_template(&self, t: &models::TemplateRow) -> Result<models::TemplateRow, String> {
