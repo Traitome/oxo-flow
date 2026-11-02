@@ -412,7 +412,7 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
       folder,
       {
         type: "oxo-flow",
-        workflow: vscode.workspace.asRelativePath(pick.file),
+        workflow: relativeWorkflow(folder, pick.file),
         kind: "resume",
       },
       "resume"
@@ -492,7 +492,7 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
       folder,
       {
         type: "oxo-flow",
-        workflow: vscode.workspace.asRelativePath(target),
+        workflow: relativeWorkflow(folder, target),
         kind: "generate",
       },
       "generate",
@@ -715,7 +715,7 @@ async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar)
   const folder = folderFor(pick.file);
   if (!folder) return;
   const executable = statusBar.executable();
-  const args = statusArgs(vscode.workspace.asRelativePath(pick.file), { timing: true });
+  const args = statusArgs(relativeWorkflow(folder, pick.file), { timing: true });
   const res = await withOxoProgress("oxo-flow: reading run status…", () =>
     runCli(executable, args, { cwd: folder.uri.fsPath })
   );
