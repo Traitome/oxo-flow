@@ -21,9 +21,12 @@ import json
 import os
 import sys
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-KNOWLEDGE_DIR = os.path.join(REPO_ROOT, "crates", "oxo-flow-ai", "src", "knowledge")
-OUT_PATH = os.path.join(REPO_ROOT, "eval", "gold", "tool.csv")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import common  # noqa: E402
+
+REPO_ROOT = common.REPO_ROOT
+KNOWLEDGE_DIR = common.KNOWLEDGE_DIR
+OUT_PATH = common.GOLD_DIR + "/tool.csv"
 
 BIOCONDA_RECIPE_URL = (
     "https://github.com/bioconda/bioconda-recipes/tree/master/recipes/{name}"
@@ -70,19 +73,6 @@ def bioconda_url(name):
 
 def nfcore_url(name):
     return NFCORE_MODULE_URL.format(name=NFCORE_MODULE_PATHS.get(name, name))
-
-
-def load_jsonl(name):
-    """Load a knowledge JSONL, returning list[dict] in file order."""
-    rows = []
-    path = os.path.join(KNOWLEDGE_DIR, name)
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            rows.append(json.loads(line))
-    return rows
 
 
 def load_meta_dates():
@@ -191,12 +181,12 @@ def sample_rows(rows, name_key, stride, offset=0):
 
 def emit():
     dates = load_meta_dates()
-    bioconda = load_jsonl("bioconda_tools.jsonl")
+    bioconda = common.load_jsonl("bioconda_tools.jsonl")
     bioconda_index = build_bioconda_index(bioconda)
-    nfcore = load_jsonl("nfcore_modules.jsonl")
-    commercial = load_jsonl("commercial_tools.jsonl")
+    nfcore = common.load_jsonl("nfcore_modules.jsonl")
+    commercial = common.load_jsonl("commercial_tools.jsonl")
     commercial_index = {r["n"]: r for r in commercial}
-    biotools = load_jsonl("biotools_overlay.jsonl")
+    biotools = common.load_jsonl("biotools_overlay.jsonl")
 
     header = [
         "id", "layer", "query", "query_type", "expected_tool", "expected_version",
