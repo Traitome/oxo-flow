@@ -837,6 +837,15 @@ mark `key_set` instead. Rows are encrypted at rest only when
 `OXO_FLOW_MASTER_KEY` is configured; without it, the local database uses the
 documented plaintext compatibility mode (#205).
 
+There is deliberately no DELETE endpoint: resetting a tier means saving
+`provider: "disabled"` through the same PUT endpoints. A disabled user-tier
+row makes that user fall back to the shared runtime; a disabled server-tier
+row disables the shared runtime (immediately via the same reconfiguration
+path, and again on the next startup when the row is restored). Omitting
+`provider` in a PUT body defaults to `"disabled"`, so a save that only flips
+a toggle must carry the current provider over (the bundled Settings page
+does exactly that).
+
 Provider names are validated before either configuration endpoint writes
 to storage. An unsupported name returns `400 INVALID_AI_PROVIDER` and
 leaves the existing configuration untouched. If storage succeeds but the
