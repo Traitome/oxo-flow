@@ -25,7 +25,7 @@ export class OxoflowHoverProvider implements vscode.HoverProvider {
       case "value":
       case "inline-table-value": {
         const lookup = ctx.kind === "value" ? ctx.context : `rules.${ctx.tableKey}`;
-        const key = ctx.kind === "value" ? ctx.key : ctx.key;
+        const key = ctx.key;
         const enums = enumFor(lookup, key);
         if (enums?.includes(wordText)) {
           info = { key, type: "enum value", enums };

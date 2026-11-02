@@ -27,9 +27,9 @@ export class OxoflowCompletionProvider implements vscode.CompletionItemProvider 
       case "inline-table-key":
         return inlineTableKeyItems(ctx.context, ctx.tableKey, ctx.typed, ctx.usedKeys, position);
       case "value":
-        return valueItems(ctx.context, ctx.key, ctx.typed, index, position);
+        return valueItems(ctx.context, ctx.key, index, position);
       case "inline-table-value":
-        return valueItems(`rules.${ctx.tableKey}`, ctx.key, ctx.typed, index, position);
+        return valueItems(`rules.${ctx.tableKey}`, ctx.key, index, position);
     }
   }
 }
@@ -106,11 +106,9 @@ function inlineTableKeyItems(
 function valueItems(
   context: string,
   key: string,
-  typed: string,
   index: ReturnType<typeof resolveEditContext>["index"],
   position: vscode.Position
 ): vscode.CompletionItem[] {
-  void typed;
   const range = wordRangeAt(position);
 
   // Cross-references first: rules referenced by name.
@@ -174,7 +172,6 @@ function propDetail(info: PropInfo): string {
 }
 
 function wordRangeAt(position: vscode.Position): vscode.Range {
-  void position;
   // An empty replacement range is the safe default: VS Code's built-in
   // `editor.suggest.filterGraceful` handles prefix filtering, and a wrong
   // word range would clobber neighboring TOML punctuation.
