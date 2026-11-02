@@ -207,72 +207,39 @@ pub async fn import_from_config(definitions: &[crate::config::ClusterDefinition]
             continue;
         }
         let now = now_iso();
-        if let Some(backend) = crate::infra::db::global_backend() {
-            match backend.get_cluster(&req.id).await {
-                Ok(None) => {
-                    let row = models::ClusterRow {
-                        id: req.id.clone(),
-                        name: req.name.clone(),
-                        ssh_host: req.ssh_host.clone(),
-                        ssh_port: req.ssh_port as i64,
-                        ssh_user: req.ssh_user.clone(),
-                        ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
-                        scheduler: req.scheduler.clone(),
-                        remote_dir: req.remote_dir.clone(),
-                        enabled: req.enabled,
-                        created_at: now.clone(),
-                    };
-                    if let Err(error) = backend.save_cluster(&row).await {
-                        tracing::warn!(
-                            cluster_id = %req.id,
-                            error = %error,
-                            "failed to import cluster from platform config"
-                        );
-                    }
-                }
-                Ok(Some(_)) => {}
-                Err(error) => {
+        let Some(backend) = crate::infra::db::global_backend() else {
+            continue;
+        };
+        match backend.get_cluster(&req.id).await {
+            Ok(None) => {
+                let row = models::ClusterRow {
+                    id: req.id.clone(),
+                    name: req.name.clone(),
+                    ssh_host: req.ssh_host.clone(),
+                    ssh_port: req.ssh_port as i64,
+                    ssh_user: req.ssh_user.clone(),
+                    ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
+                    scheduler: req.scheduler.clone(),
+                    remote_dir: req.remote_dir.clone(),
+                    enabled: req.enabled,
+                    created_at: now,
+                };
+                if let Err(error) = backend.save_cluster(&row).await {
                     tracing::warn!(
                         cluster_id = %req.id,
                         error = %error,
-                        "could not check for an existing cluster; config import skipped"
+                        "failed to import cluster from platform config"
                     );
                 }
             }
-            continue;
-        }
-        let pool = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
-        // INSERT OR IGNORE: existing rows win over the config file.
-        let result = sqlx::query(
-            "INSERT OR IGNORE INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&req.id)
-        .bind(&req.name)
-        .bind(&req.ssh_host)
-        .bind(req.ssh_port as i64)
-        .bind(req.ssh_user.as_deref())
-        .bind(
-            req.ssh_key
-                .as_deref()
-                .map(crate::infra::crypto::seal)
-                .as_deref(),
-        )
-        .bind(req.scheduler.as_deref())
-        .bind(req.remote_dir.as_deref())
-        .bind(req.enabled)
-        .bind(&now)
-        .execute(pool)
-        .await;
-        match result {
-            Ok(r) if r.rows_affected() > 0 => {
-                tracing::info!("Imported cluster '{}' from platform config", req.id);
+            Ok(Some(_)) => {}
+            Err(error) => {
+                tracing::warn!(
+                    cluster_id = %req.id,
+                    error = %error,
+                    "could not check for an existing cluster; config import skipped"
+                );
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Failed to import cluster '{}': {e}", req.id),
         }
     }
 }
