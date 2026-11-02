@@ -707,7 +707,7 @@ memory = "32G"
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
-| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
+| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder) |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
@@ -949,6 +949,8 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).
 | `time_limit` | String | `"48h"` | Wall-time limit |
 | `partition` | String | `"gpu"` | HPC partition/queue to submit to |
 | `groups` | Table | `{db_conn = 1}` | Resource group consumption tracking |
+| `numa_node` | Integer | `0` | Pin the command to a specific NUMA node via `numactl` (topology is discovered at run start when any rule sets this or `numa_pin`; see [NUMA pinning](#numa-pinning)) |
+| `numa_pin` | Bool | `true` | Auto-select the optimal NUMA node for the rule's memory request and wrap the command with `numactl` |
 
 ---
 
@@ -1066,6 +1068,30 @@ io_bound = true           # reserved: parsed, not yet consumed by the scheduler
 Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`. The
 `runtime` and `io_bound` hints are reserved scheduler knobs: only
 `input_size` and `memory_scale` are consumed today.
+
+### NUMA pinning
+
+On multi-socket hosts, rules can be pinned to a NUMA node so memory
+bandwidth stays local to the cores running the job:
+
+```toml
+[[rules]]
+name = "bwa_align"
+# ...
+[rules.resources]
+numa_pin = true          # auto-select the node with the most free memory
+# or: numa_node = 0      # pin to an explicit node id
+```
+
+- Setting `numa_pin` or `numa_node` on any rule — or `numa_aware = true` in
+  the `[engine]` section — triggers hardware topology discovery when the run
+  starts (Linux sysfs / macOS sysctl).
+- At execution the command is wrapped with `numactl --cpunodebind=<node>
+  --membind=<node>`. The node is the explicit `numa_node`, or auto-selected:
+  the first node whose memory fits the rule's request, falling back to the
+  node with the most memory (node `0` as a last resort).
+- Topology discovery is Linux/macOS only; on other platforms the wrapper is
+  skipped.
 
 ---
 
@@ -3120,8 +3146,9 @@ run status or its exit code.
 
 ## `[engine]` — Runtime Disk-Pressure Guard (issue #843)
 
-Optional run-time disk monitoring. Without this section the engine never
-measures free space mid-run and behavior is unchanged.
+Optional run-time disk monitoring and hardware placement knobs. Without this
+section the engine never measures free space mid-run and behavior is
+unchanged.
 
 ```toml
 [engine]
@@ -3129,6 +3156,11 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 # reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk
 # tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule
 # protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data (issue #935)
+# numa_aware = true          # optional: discover NUMA topology at run start (also implied by rule-level numa_pin/numa_node)
+# staging_mode = "stream"    # optional: global remote-input staging mode (rule-level / [defaults] override this)
+# tier0_ram_scratch = "/dev/shm"        # optional: RAM/tmpfs scratch tier
+# tier1_nvme_scratch = "/mnt/nvme/scratch"  # optional: local NVMe/SSD scratch tier
+# tier2_shared_scratch = "/lustre/scratch"  # optional: shared cluster FS scratch tier
 ```
 
 | Field | Type | Default | Description |
@@ -3137,6 +3169,11 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 | `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
 | `tmp_dir` | String | — | Global scratch directory (issue #907). Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
 | `protected_data_trees` | Array of String | — | Workdir-relative data trees whose content must not change behind the engine's back (issue #935 P1) — e.g. `["raw/", "reference/"]`. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud `PROTECTED TREE DRIFT:` section when a file changed, was removed, or appeared. `run` **refuses to execute** on drift unless `--allow-protected-drift` is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented |
+| `numa_aware` | Bool | `false` | Discover hardware NUMA topology at run start and enable per-rule `numactl` wrapping. Implied automatically when any rule sets `numa_pin` or `numa_node` — see [NUMA pinning](#numa-pinning) |
+| `staging_mode` | String | `"eager"` | Global default for how remote storage inputs (S3/GCS) reach a rule's shell. `eager` downloads the full object to local scratch before the rule runs; `stream` (aliases `stream_fifo`/`fifo`) streams on demand through a FIFO without buffering to disk; `passthrough` (alias `pass_through`) leaves the raw URI untouched for tools with native cloud I/O. Also accepted per-rule and in `[defaults]`; resolution is rule ← `[defaults]` ← `[engine]`. See [Remote staging and upload](cloud-storage.md#remote-staging-and-upload) |
+| `tier0_ram_scratch` | String | — | Tier 0 scratch root: RAM disk or tmpfs (e.g. `/dev/shm`) — lowest latency, capacity-constrained. Only used for small scratch requests (see [Scratch tier ladder](#scratch-tier-ladder)) |
+| `tier1_nvme_scratch` | String | — | Tier 1 scratch root: local NVMe/SSD (e.g. `/mnt/nvme/scratch`) — high IOPS, moderate capacity |
+| `tier2_shared_scratch` | String | — | Tier 2 scratch root: shared cluster filesystem (Lustre / GPFS / BeeGFS / NFS) — largest capacity, shared with other nodes |
 
 ### Response ladder
 
@@ -3230,6 +3267,28 @@ Notes:
   ends below the floor (or on any run without an `[engine]` section,
   matching the historical unconditional behavior). If free space cannot
   be measured (non-Unix), outputs are kept as a precaution.
+
+### Scratch tier ladder
+
+Rules with `scratch = true` run inside a scratch directory that the engine
+selects from the configured tier ladder — the highest-performance tier with
+enough free space wins:
+
+1. **Tier 0** (`tier0_ram_scratch`) — RAM disk/tmpfs. Considered only when
+   the rule's `resources.disk` request is small (≤ 2 GiB), so big jobs
+   never fill tmpfs.
+2. **Tier 1** (`tier1_nvme_scratch`) — local NVMe/SSD.
+3. **Tier 2** (`tier2_shared_scratch`) — shared cluster filesystem.
+
+Each tier root is probed for free capacity before selection; a tier that
+cannot be probed (directory missing, statfs error) is **skipped with a
+warning** — a large job is never routed onto an unverified, nearly-full
+disk. The required size comes from the rule's `resources.disk` value
+(1 GiB when unset). If no tier qualifies, the scratch directory falls back
+to `<workdir>/.oxo-flow/scratch/` as before; without any tier configured
+the ladder is inert. Outputs are moved back to their declared paths after
+the rule completes. On cluster backends scratch tiers are not yet consulted
+(jobs run directly in the shared workdir).
 
 ## See Also
 
