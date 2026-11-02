@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { versionArgs } from "../core/cliArgs";
-import { runCli } from "../core/exec";
+import { parseCliVersion, runCli } from "../core/exec";
 
 /**
  * Status bar: shows CLI availability + version, click opens a command quick
@@ -46,7 +46,7 @@ export class StatusBar implements vscode.Disposable {
       this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
       return;
     }
-    const version = res.stdout.trim().split(/\s+/).pop() ?? "unknown";
+    const version = parseCliVersion(res.stdout) ?? "unknown";
     this.item.text = "$(circle-filled) oxo-flow";
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**oxo-flow** \`${version}\`\n\n\`${executable}\`\n\nClick for pipeline commands.`);

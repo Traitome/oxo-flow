@@ -52,3 +52,8 @@ export async function runCli(
     opts.onSpawn?.(() => child.kill());
   });
 }
+
+/** Last whitespace-separated token of CLI output — how `--version` reports. */
+export function parseCliVersion(stdout: string): string | undefined {
+  return stdout.trim().split(/\s+/).pop() || undefined;
+}

@@ -9,7 +9,7 @@ import {
   lintArgs,
   versionArgs,
 } from "./core/cliArgs";
-import { runCli } from "./core/exec";
+import { parseCliVersion, runCli } from "./core/exec";
 import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
 import {
@@ -769,7 +769,7 @@ async function reportIssue(statusBar: StatusBar, context: ReportContext): Promis
   let cliVersion: string | undefined;
   await withOxoProgress("oxo-flow: preparing the issue report…", async () => {
     const probe = await runCli(executable, versionArgs(), { timeoutMs: 3000 });
-    if (!probe.spawnError) cliVersion = probe.stdout.trim().split(/\s+/).pop();
+    if (!probe.spawnError) cliVersion = parseCliVersion(probe.stdout);
   });
   const env: ReportEnvironment = {
     extensionVersion,
