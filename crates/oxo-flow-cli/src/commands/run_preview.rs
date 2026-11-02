@@ -60,6 +60,80 @@ impl RuleStatus {
             RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh
         )
     }
+
+    /// Whether this status flags degraded validity — changed inputs or
+    /// missing outputs. The stderr listing styles these loud-yellow (with
+    /// the cascades) so the eye lands on *why* a rule re-runs.
+    pub fn is_warning(&self) -> bool {
+        matches!(
+            self,
+            RuleStatus::InputInvalidated | RuleStatus::OutputsMissing
+        )
+    }
+
+    /// The three renderings every status display derives from:
+    /// `(bracket_word, machine_tag, reason, cascaded_from)`.
+    ///
+    /// - `bracket_word` — the `[run:`/`[skip:`/`[rerun:` word the human
+    ///   stderr listing prints and the JSON plan mirrors 1:1.
+    /// - `machine_tag` — the checkpoint-block tag persisted for issue #66.
+    ///   Carried explicitly because it does NOT decompose from the word:
+    ///   cascades print as `rerun` but persist as `run-cascaded`, and
+    ///   `Skipped` persists as bare `skip` while its siblings carry
+    ///   suffixes.
+    /// - `reason` — the human text after the colon.
+    /// - `cascaded_from` — the rule this cascade originates from.
+    pub fn render_parts(&self) -> (&'static str, &'static str, String, Option<String>) {
+        match self {
+            RuleStatus::NeverCompleted => (
+                "run",
+                "run-never-completed",
+                "never completed".to_string(),
+                None,
+            ),
+            RuleStatus::ConfigInvalidated => (
+                "run",
+                "run-config-changed",
+                "config changed".to_string(),
+                None,
+            ),
+            RuleStatus::InputInvalidated => (
+                "run",
+                "run-input-changed",
+                "input changed".to_string(),
+                None,
+            ),
+            RuleStatus::OutputsMissing => (
+                "run",
+                "run-outputs-missing",
+                "outputs missing".to_string(),
+                None,
+            ),
+            RuleStatus::Cascaded { from } => (
+                "rerun",
+                "run-cascaded",
+                format!("downstream of {from}"),
+                Some(from.clone()),
+            ),
+            RuleStatus::Skipped => ("skip", "skip", "up to date".to_string(), None),
+            RuleStatus::SkippedByWhen => (
+                "skip",
+                "skip-when-condition",
+                "when condition false".to_string(),
+                None,
+            ),
+            RuleStatus::CascadedUpstream { from } => (
+                "rerun",
+                "run-cascaded-upstream",
+                format!("upstream of {from}"),
+                Some(from.clone()),
+            ),
+            RuleStatus::Forced => ("run", "run-forced", "forced (--rerun)".to_string(), None),
+            RuleStatus::SkippedFresh => {
+                ("skip", "skip-fresh", "outputs up-to-date".to_string(), None)
+            }
+        }
+    }
 }
 
 /// One rule in the predicted plan.

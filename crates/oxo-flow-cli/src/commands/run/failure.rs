@@ -112,12 +112,16 @@ pub(crate) async fn handle_run_failure_abort(
         } else {
             "failed"
         };
-        let killed: Vec<String> = ctx
+        // Sorted: this vec persists into checkpoint.json JobRecords via
+        // record_run below — HashMap iteration order must not leak into
+        // the persisted artifact.
+        let mut killed: Vec<String> = ctx
             .task_rule
             .values()
             .filter(|name| *name != completed_rule)
             .cloned()
             .collect();
+        killed.sort();
         if !killed.is_empty() {
             // A rule that already finished its closure (result still
             // unreaped in the JoinSet) has written its own record —

@@ -13,6 +13,7 @@ use oxo_flow_core::executor::checkpoint::CheckpointState;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::Mutex;
 
 /// Parameters needed to execute the event-driven scheduler loop.
@@ -41,6 +42,76 @@ pub(crate) struct SchedulerLoopContext<'a> {
     pub samples_filter: &'a [String],
     pub workflow: &'a Path,
     pub json_summary: &'a mut RunJsonSummary,
+}
+
+/// Record a post-completion processing failure (checkpoint re-entry,
+/// output_pattern discovery): fail the rule, persist the checkpoint, and
+/// attribute the failure so the run summary shows the same diagnostics the
+/// log does (issue #83 WS2). Both callers previously duplicated this ~35-line
+/// block and had drifted on the `required` lookup — one read the cloned
+/// checkpoint rule, the other re-read config with `unwrap_or(true)`;
+/// consolidating forces a single attribution semantics (config lookup,
+/// defaulting to required only when the rule is unknown).
+#[allow(clippy::too_many_arguments)]
+async fn record_processing_failure(
+    config: &WorkflowConfig,
+    workdir_actual: &Path,
+    checkpoint: &Arc<Mutex<CheckpointState>>,
+    checkpoint_path: &Path,
+    failed_rules_set: &Arc<Mutex<HashSet<String>>>,
+    failures: &Arc<Mutex<Vec<(String, String)>>>,
+    fail_count: &AtomicUsize,
+    non_required_fail_count: &AtomicUsize,
+    rule: &str,
+    log_message: &'static str,
+    reason_prefix: &str,
+    error: &anyhow::Error,
+) -> oxo_flow_core::executor::JobRecord {
+    tracing::error!(rule = %rule, error = %error, log_message);
+    let required = config.get_rule(rule).map(|r| r.required).unwrap_or(true);
+    let record = oxo_flow_core::executor::JobRecord {
+        signal: None,
+        rule: rule.to_string(),
+        status: oxo_flow_core::executor::JobStatus::Failed,
+        enqueued_at: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(1),
+        stdout: None,
+        stderr: None,
+        command: None,
+        retries: 0,
+        skip_reason: Some(format!("{reason_prefix}: {error}")),
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: config
+            .get_rule(rule)
+            .and_then(|r| oxo_flow_core::executor::process::rule_report_caption(r, workdir_actual)),
+    };
+    failed_rules_set.lock().await.insert(rule.to_string());
+    {
+        let mut ck = checkpoint.lock().await;
+        ck.record_run(&record, output_tail_bytes_from_env());
+        ck.mark_failed(rule);
+        if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
+            tracing::warn!("Failed to save checkpoint: {save_err}");
+        }
+    }
+    {
+        let mut f = failures.lock().await;
+        let reason = if required {
+            format!("{reason_prefix}: {error}")
+        } else {
+            format!("{reason_prefix}: {error} (non-required)")
+        };
+        f.push((rule.to_string(), reason));
+    }
+    if required {
+        fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    record
 }
 
 pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow::Result<()> {
@@ -111,11 +182,11 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             if ck.is_running(rule_name) {
                 continue;
             }
-            if ck.is_completed(rule_name)
-                && !rerun
-                && order_set.contains(rule_name.as_str())
-                && !submitted.contains(rule_name.as_str())
-            {
+            // `order` is a DAG topological walk (unique entries) and
+            // `order_set` is derived from it, so membership is tautological
+            // here; `submitted` starts empty and only ever receives the
+            // rule being processed, so neither needs re-checking.
+            if ck.is_completed(rule_name) && !rerun {
                 // Shared with dry-run's read-only preview (issue #66).
                 // Tombstoned rules count as up to date while no dependent
                 // needs their outputs.
@@ -205,7 +276,6 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         skipped_count: skipped_count.clone(),
         provenance_recorded: provenance_recorded.clone(),
         provenance,
-        keep_going,
         is_tty,
         semaphore: semaphore.clone(),
     });
@@ -922,58 +992,24 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             )
             .await
         {
-            tracing::error!(rule = %completed_rule, error = %e, "checkpoint re-entry failed");
             // Fail the checkpoint rule and propagate like any failure.
             // Build the record first so the checkpoint captures the same
             // diagnostics the report will show (issue #83 WS2).
-            let record = oxo_flow_core::executor::JobRecord {
-                signal: None,
-                rule: completed_rule.clone(),
-                status: oxo_flow_core::executor::JobStatus::Failed,
-                enqueued_at: None,
-                started_at: None,
-                finished_at: None,
-                exit_code: Some(1),
-                stdout: None,
-                stderr: None,
-                command: None,
-                retries: 0,
-                skip_reason: Some(format!("re-entry manifest: {e}")),
-                max_rss_mb: None,
-                cpu_seconds: None,
-                caption: config.get_rule(&completed_rule).and_then(|r| {
-                    oxo_flow_core::executor::process::rule_report_caption(
-                        r,
-                        workdir_actual.as_ref(),
-                    )
-                }),
-            };
-            {
-                let mut frs = failed_rules_set.lock().await;
-                frs.insert(completed_rule.clone());
-            }
-            {
-                let mut ck = checkpoint.lock().await;
-                ck.record_run(&record, output_tail_bytes_from_env());
-                ck.mark_failed(&completed_rule);
-                if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
-                    tracing::warn!("Failed to save checkpoint: {save_err}");
-                }
-            }
-            {
-                let mut f = failures.lock().await;
-                let reason = if cp_rule.required {
-                    format!("re-entry manifest: {e}")
-                } else {
-                    format!("re-entry manifest: {e} (non-required)")
-                };
-                f.push((completed_rule.clone(), reason));
-            }
-            if cp_rule.required {
-                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            } else {
-                non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
+            let record = record_processing_failure(
+                &*config,
+                workdir_actual.as_ref(),
+                checkpoint,
+                checkpoint_path,
+                &failed_rules_set,
+                &failures,
+                &fail_count,
+                &non_required_fail_count,
+                &completed_rule,
+                "checkpoint re-entry failed",
+                "re-entry manifest",
+                &e,
+            )
+            .await;
             sched.mark_completed(record);
         }
 
@@ -1001,61 +1037,21 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             )
             .await
         {
-            tracing::error!(rule = %completed_rule, error = %e, "output_pattern discovery failed");
-            let record = oxo_flow_core::executor::JobRecord {
-                signal: None,
-                rule: completed_rule.clone(),
-                status: oxo_flow_core::executor::JobStatus::Failed,
-                enqueued_at: None,
-                started_at: None,
-                finished_at: None,
-                exit_code: Some(1),
-                stdout: None,
-                stderr: None,
-                command: None,
-                retries: 0,
-                skip_reason: Some(format!("output_pattern discovery: {e}")),
-                max_rss_mb: None,
-                cpu_seconds: None,
-                caption: config.get_rule(&completed_rule).and_then(|r| {
-                    oxo_flow_core::executor::process::rule_report_caption(
-                        r,
-                        workdir_actual.as_ref(),
-                    )
-                }),
-            };
-            {
-                let mut frs = failed_rules_set.lock().await;
-                frs.insert(completed_rule.clone());
-            }
-            {
-                let mut ck = checkpoint.lock().await;
-                ck.record_run(&record, output_tail_bytes_from_env());
-                ck.mark_failed(&completed_rule);
-                if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
-                    tracing::warn!("Failed to save checkpoint: {save_err}");
-                }
-            }
-            {
-                let mut f = failures.lock().await;
-                let reason = match config.get_rule(&completed_rule).map(|r| r.required) {
-                    Some(false) => format!("output_pattern discovery: {e} (non-required)"),
-                    _ => format!("output_pattern discovery: {e}"),
-                };
-                f.push((completed_rule.clone(), reason));
-            }
-            // Mirror the re-entry failure attribution above: honor the
-            // rule's `required` flag so a non-required producer's discovery
-            // hiccup doesn't fail the whole run.
-            if config
-                .get_rule(&completed_rule)
-                .map(|r| r.required)
-                .unwrap_or(true)
-            {
-                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            } else {
-                non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
+            let record = record_processing_failure(
+                &*config,
+                workdir_actual.as_ref(),
+                checkpoint,
+                checkpoint_path,
+                &failed_rules_set,
+                &failures,
+                &fail_count,
+                &non_required_fail_count,
+                &completed_rule,
+                "output_pattern discovery failed",
+                "output_pattern discovery",
+                &e,
+            )
+            .await;
             sched.mark_completed(record);
         }
 

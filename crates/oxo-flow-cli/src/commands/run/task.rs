@@ -44,7 +44,6 @@ pub(crate) struct TaskContext {
     pub skipped_count: Arc<AtomicUsize>,
     pub provenance_recorded: Arc<AtomicUsize>,
     pub provenance: bool,
-    pub keep_going: bool,
     pub is_tty: bool,
     pub semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -596,12 +595,14 @@ pub(crate) async fn execute_rule_task(
             if let Err(e) = ck.save_to_file_async(&ctx.checkpoint_path).await {
                 tracing::warn!("Failed to save checkpoint: {e}");
             }
-            if !ctx.keep_going {
-                progress_narrate(
-                    format_args!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e),
-                    &ctx.task_run_log,
-                );
-            }
+            // Narrate unconditionally, matching the executed-failure branch
+            // above: the failure is real in either mode, and the abort path
+            // (without --keep-going) narrates it again — duplicated there is
+            // preferable to a silent spawn/staging death under --keep-going.
+            progress_narrate(
+                format_args!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e),
+                &ctx.task_run_log,
+            );
             // Always record: keep_going needs the final
             // listing, non-required failures are listed in
             // either mode, and the AI recovery path must be able

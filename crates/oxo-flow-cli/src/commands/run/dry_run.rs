@@ -362,39 +362,18 @@ pub async fn dry_run_command(
             .plan
             .iter()
             .find(|r| r.name == *rule_name)
-            .map(|r| match &r.status {
-                crate::commands::run_preview::RuleStatus::NeverCompleted => {
-                    format!("{}", "[run: never completed]".bold())
-                }
-                crate::commands::run_preview::RuleStatus::ConfigInvalidated => {
-                    format!("{}", "[run: config changed]".bold())
-                }
-                crate::commands::run_preview::RuleStatus::InputInvalidated => {
-                    format!("{}", "[run: input changed]".bold().yellow())
-                }
-                crate::commands::run_preview::RuleStatus::OutputsMissing => {
-                    format!("{}", "[run: outputs missing]".bold().yellow())
-                }
-                crate::commands::run_preview::RuleStatus::Cascaded { from } => {
-                    format!(
-                        "{}",
-                        format!("[rerun: downstream of {from}]").bold().yellow()
-                    )
-                }
-                crate::commands::run_preview::RuleStatus::Skipped => {
-                    format!("{}", "[skip: up to date]".dimmed())
-                }
-                crate::commands::run_preview::RuleStatus::SkippedByWhen => {
-                    format!("{}", "[skip: when condition false]".dimmed())
-                }
-                crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
-                    format!("{}", format!("[rerun: upstream of {from}]").bold().yellow())
-                }
-                crate::commands::run_preview::RuleStatus::Forced => {
-                    format!("{}", "[run: forced (--rerun)]".bold())
-                }
-                crate::commands::run_preview::RuleStatus::SkippedFresh => {
-                    format!("{}", "[skip: outputs up-to-date]".dimmed())
+            .map(|r| {
+                let (word, _, reason, _) = r.status.render_parts();
+                let text = format!("[{word}: {reason}]");
+                // Skips stay quiet; changed inputs / missing outputs and the
+                // cascades they trigger are the attention-worthy cases
+                // (loud yellow); everything else runs bold.
+                if word == "skip" {
+                    format!("{}", text.dimmed())
+                } else if word == "rerun" || r.status.is_warning() {
+                    format!("{}", text.bold().yellow())
+                } else {
+                    format!("{}", text.bold())
                 }
             })
             .unwrap_or_default();
@@ -524,17 +503,17 @@ pub async fn dry_run_command(
         );
     }
 
-    // Resource summary
-    let total_threads: u32 = config.rules.iter().map(|r| r.effective_threads()).sum();
-    let max_threads: u32 = config
-        .rules
-        .iter()
+    // Resource summary — computed over the execution order (the same set
+    // the listing prints), not the whole config, so the totals match the
+    // rules actually listed (e.g. `--rule` filtered runs).
+    let rules_in_order = order.iter().filter_map(|name| config.get_rule(name));
+    let total_threads: u32 = rules_in_order.clone().map(|r| r.effective_threads()).sum();
+    let max_threads: u32 = rules_in_order
+        .clone()
         .map(|r| r.effective_threads())
         .max()
         .unwrap_or(1);
-    let memory_values: Vec<&str> = config
-        .rules
-        .iter()
+    let memory_values: Vec<&str> = rules_in_order
         .filter_map(|r| r.effective_memory())
         .collect();
     eprintln!();
@@ -623,37 +602,10 @@ pub async fn dry_run_command(
                 .plan
                 .iter()
                 .map(|r| {
-                    let (status, cascaded_from) = match &r.status {
-                        crate::commands::run_preview::RuleStatus::NeverCompleted => {
-                            ("run-never-completed", None)
-                        }
-                        crate::commands::run_preview::RuleStatus::ConfigInvalidated => {
-                            ("run-config-changed", None)
-                        }
-                        crate::commands::run_preview::RuleStatus::InputInvalidated => {
-                            ("run-input-changed", None)
-                        }
-                        crate::commands::run_preview::RuleStatus::OutputsMissing => {
-                            ("run-outputs-missing", None)
-                        }
-                        crate::commands::run_preview::RuleStatus::Cascaded { from } => {
-                            ("run-cascaded", Some(from.clone()))
-                        }
-                        crate::commands::run_preview::RuleStatus::Skipped => ("skip", None),
-                        crate::commands::run_preview::RuleStatus::SkippedByWhen => {
-                            ("skip-when-condition", None)
-                        }
-                        crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
-                            ("run-cascaded-upstream", Some(from.clone()))
-                        }
-                        crate::commands::run_preview::RuleStatus::Forced => ("run-forced", None),
-                        crate::commands::run_preview::RuleStatus::SkippedFresh => {
-                            ("skip-fresh", None)
-                        }
-                    };
+                    let (_, machine_tag, _, cascaded_from) = r.status.render_parts();
                     serde_json::json!({
                         "name": r.name,
-                        "status": status,
+                        "status": machine_tag,
                         "cascaded_from": cascaded_from,
                     })
                 })
@@ -691,39 +643,9 @@ pub async fn dry_run_command(
                     .find(|r| r.name == *name)
                     .map(|r| &r.status)
                 {
-                    Some(crate::commands::run_preview::RuleStatus::NeverCompleted) => {
-                        ("run", "never completed".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::ConfigInvalidated) => {
-                        ("run", "config changed".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::InputInvalidated) => {
-                        ("run", "input changed".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::OutputsMissing) => {
-                        ("run", "outputs missing".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::Cascaded { from }) => (
-                        "rerun",
-                        format!("downstream of {from}"),
-                        Some(from.clone()),
-                    ),
-                    Some(crate::commands::run_preview::RuleStatus::Skipped) => {
-                        ("skip", "up to date".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::SkippedByWhen) => {
-                        ("skip", "when condition false".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::CascadedUpstream { from }) => (
-                        "rerun",
-                        format!("upstream of {from}"),
-                        Some(from.clone()),
-                    ),
-                    Some(crate::commands::run_preview::RuleStatus::Forced) => {
-                        ("run", "forced (--rerun)".to_string(), None)
-                    }
-                    Some(crate::commands::run_preview::RuleStatus::SkippedFresh) => {
-                        ("skip", "outputs up-to-date".to_string(), None)
+                    Some(status) => {
+                        let (word, _, reason, cascaded_from) = status.render_parts();
+                        (word, reason, cascaded_from)
                     }
                     // The preview classifies every rule in the execution
                     // set, so this branch is unreachable; keep it loud.

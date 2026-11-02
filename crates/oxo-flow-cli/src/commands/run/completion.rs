@@ -40,6 +40,60 @@ pub(crate) struct CompletionContext<'a> {
     pub json_summary: &'a mut RunJsonSummary,
 }
 
+/// Print the failed/blocked rules listing, grouped under module headers when
+/// the workflow declares modules (issue #887). `symbol` and `detail`
+/// differentiate the two shapes — `✗ <name> — <reason>` vs
+/// `⊘ <name> — depends on '<dep>'` — while the module-group scaffolding and
+/// the flat fallback stay identical.
+fn list_rules_by_module(
+    entries: &[(String, String)],
+    module_rules: &HashMap<String, Vec<String>>,
+    run_log: &SharedRunLog,
+    (symbol, detail): (&str, &dyn Fn(&str) -> String),
+) {
+    let names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
+    // Color by symbol identity — ✗ failures print red, ⊘ blocked rules
+    // print yellow — identically in the grouped and flat branches.
+    let colored_symbol = if symbol == "✗" {
+        symbol.red().to_string()
+    } else {
+        symbol.yellow().to_string()
+    };
+    let Some(groups) = module_groups_for_rules(&names, module_rules) else {
+        for (name, detail_text) in entries {
+            progress_narrate(
+                format_args!(
+                    "  {} {} — {}",
+                    colored_symbol,
+                    name.bold(),
+                    detail(detail_text)
+                ),
+                run_log,
+            );
+        }
+        return;
+    };
+    for (group, members) in &groups {
+        progress_narrate(
+            format_args!("  {} ({}):", run_group_title(*group).bold(), members.len()),
+            run_log,
+        );
+        for name in members {
+            if let Some((_, detail_text)) = entries.iter().find(|(n, _)| n == name) {
+                progress_narrate(
+                    format_args!(
+                        "    {} {} — {}",
+                        colored_symbol,
+                        name.bold(),
+                        detail(detail_text)
+                    ),
+                    run_log,
+                );
+            }
+        }
+    }
+}
+
 /// Executes all post-loop completion tasks and returns the final workflow execution Result.
 pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow::Result<()> {
     emit_execution_event(oxo_flow_core::executor::ExecutionEvent::WorkflowCompleted {
@@ -140,33 +194,12 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
             format_args!("\n{}", "Failed rules:".bold().red()),
             ctx.run_log,
         );
-        let names: Vec<&str> = ctx.failures.iter().map(|(name, _)| name.as_str()).collect();
-        match module_groups_for_rules(&names, &ctx.config.module_rules) {
-            Some(groups) => {
-                for (group, members) in &groups {
-                    progress_narrate(
-                        format_args!("  {} ({}):", run_group_title(*group).bold(), members.len()),
-                        ctx.run_log,
-                    );
-                    for name in members {
-                        if let Some((_, reason)) = ctx.failures.iter().find(|(n, _)| n == name) {
-                            progress_narrate(
-                                format_args!("    {} {} — {}", "✗".red(), name.bold(), reason),
-                                ctx.run_log,
-                            );
-                        }
-                    }
-                }
-            }
-            None => {
-                for (name, reason) in ctx.failures {
-                    progress_narrate(
-                        format_args!("  {} {} — {}", "✗".red(), name.bold(), reason),
-                        ctx.run_log,
-                    );
-                }
-            }
-        }
+        list_rules_by_module(
+            ctx.failures,
+            &ctx.config.module_rules,
+            ctx.run_log,
+            ("✗", &|reason: &str| reason.to_string()),
+        );
     }
 
     // Blocked rules did not run and produced no outputs. Listing them keeps the
@@ -176,38 +209,12 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
             format_args!("\n{}", "Blocked rules (did not run):".bold().yellow()),
             ctx.run_log,
         );
-        let names: Vec<&str> = ctx.blocked.iter().map(|(name, _)| name.as_str()).collect();
-        match module_groups_for_rules(&names, &ctx.config.module_rules) {
-            Some(groups) => {
-                for (group, members) in &groups {
-                    progress_narrate(
-                        format_args!("  {} ({}):", run_group_title(*group).bold(), members.len()),
-                        ctx.run_log,
-                    );
-                    for name in members {
-                        if let Some((_, dep)) = ctx.blocked.iter().find(|(n, _)| n == name) {
-                            progress_narrate(
-                                format_args!(
-                                    "    {} {} — depends on '{}'",
-                                    "⊘".yellow(),
-                                    name.bold(),
-                                    dep
-                                ),
-                                ctx.run_log,
-                            );
-                        }
-                    }
-                }
-            }
-            None => {
-                for (name, dep) in ctx.blocked {
-                    progress_narrate(
-                        format_args!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep),
-                        ctx.run_log,
-                    );
-                }
-            }
-        }
+        list_rules_by_module(
+            ctx.blocked,
+            &ctx.config.module_rules,
+            ctx.run_log,
+            ("⊘", &|dep: &str| format!("depends on '{dep}'")),
+        );
     }
 
     // Verify output files exist for completed rules
