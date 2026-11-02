@@ -400,7 +400,7 @@ cargo build --workspace
 # Run all tests (unit + integration)
 cargo test --workspace
 
-# Run the full CI suite (fmt + clippy + build + test + schema-drift + version-check + audit + frontend lint)
+# Run the full CI suite (fmt + clippy + build + test + schema-drift + version-check + audit + deny + secrets + docs + frontend lint + eval gates + extension tests)
 make ci
 
 # Individual CI steps

@@ -64,7 +64,7 @@ Every code change, diagnostic rule, hardware interface, visual component, and be
   - All existing `.oxoflow` workflows (`examples/gallery/*.oxoflow` and test fixtures) must parse, validate, and execute with identical semantics when `[types]` and `[rules.types]` are omitted.
   - Variable and configuration expansion (`expand_to_fixed_point`, `expand_rule_patterns`) must always complete before deriving canonical rule fingerprints, DAG edges, or type bindings.
 - **Collector Completeness**:
-  - Validation, linting, deep-check (`D001`–`D004`), scientific preflight (`SCI-*`), and type-checking (`TYPE-*`) passes must accumulate all findings across a workflow without short-circuiting on the first error.
+  - Validation, linting, deep-check (`D001`–`D005`), scientific preflight (`SCI-*`), and type-checking (`TYPE-*`) passes must accumulate all findings across a workflow without short-circuiting on the first error.
 - **Documentation & Schema Lockstep**:
   - Every new TOML key or diagnostic code must ship in the same commit/PR with updates to `crates/oxo-flow-core/src/config/known_keys.rs`, `docs/schema/oxoflow-v1.schema.json`, regenerated VS Code completion data (`npm run generate` in `editors/vscode`), and user guide entries under `docs/guide/src/`.
 - **Clinical & Regulatory Qualification (IQ/OQ/PQ)**:
@@ -225,7 +225,7 @@ pub trait StorageBackend: Send + Sync {
 - [ ] **Step 2**: Implement the extended trait methods in `sqlite.rs` and `postgres.rs` (using `INSERT ... ON CONFLICT DO UPDATE` for idempotent node state transitions and Postgres advisory locks for concurrent run-status updates).
 - [ ] **Step 3**: Replace all direct `crate::infra::db::sqlite::try_pool()` queries in `domains/execution/handlers.rs` and `executor.rs` with calls through the global `StorageBackend` instance.
 - [ ] **Step 4**: Rename `require_sqlite_for_runs`, `runs_gate_verdict`, and `RUNS_REQUIRE_SQLITE` only after tests prove the backend-agnostic contract; update AGENTS.md and user-guide references in lockstep.
-- [ ] **Step 5**: Verify with `cargo test --test web_integration --test web_oauth_and_pg_contract --test postgres_storage_contract`.
+- [ ] **Step 5**: Verify with `cargo test --test web_integration --test web_oauth_and_pg_contract`.
 - [ ] **Step 6**: Add live PostgreSQL concurrency, crash-recovery, and multi-instance tests.
 
 ---
@@ -538,7 +538,7 @@ Current CLI simulation baseline: 8/10 detections, 7/10 attributed diagnoses, 7/1
 **Files**:
 
 - Modify: `crates/oxo-flow-cli/src/commands/run/mod.rs`
-- Modify: `frontend/src/components/RunMonitor.tsx`
+- Modify: `frontend/src/pages/MonitorReport.tsx`
 - Modify: `editors/vscode/src/extension.ts`
 - Modify: `crates/oxo-flow-web/src/domains/chat/handlers.rs`
 

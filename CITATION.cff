@@ -9,7 +9,7 @@ authors:
     affiliation: "Traitome"
 version: 0.28.0
 date-released: "2026-11-02"
-license: Apache-2.0
+license: Apache-2.0 AND LicenseRef-Proprietary
 url: "https://github.com/Traitome/oxo-flow"
 repository-code: "https://github.com/Traitome/oxo-flow"
 keywords:
@@ -27,3 +27,6 @@ abstract: >-
   support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
   reporting designed for clinical review, and a REST API web interface.
   Clinical qualification is a separate evidence and governance process.
+  The core engine, CLI, and AI crates are Apache-2.0; the web crate is
+  dual-licensed (Academic/Commercial) — see LICENSE-ACADEMIC and
+  LICENSE-COMMERCIAL in the repository.
