@@ -37,7 +37,8 @@ async fn seed_webhook_row(secret: Option<&str>) {
     sqlx::query(
         "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) \
          VALUES (1, 'https://hooks.example/alive', ?, 0, '[]', 'sha256-keyed', '2026-10-25T00:00:00Z') \
-         ON CONFLICT(id) DO UPDATE SET url = excluded.url, secret = excluded.secret, enabled = 0",
+         ON CONFLICT(id) DO UPDATE SET url = excluded.url, secret = excluded.secret, \
+             enabled = 0, signature_scheme = 'sha256-keyed'",
     )
     .bind(secret)
     .execute(pool)
