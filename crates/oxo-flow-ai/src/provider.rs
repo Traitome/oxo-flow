@@ -634,7 +634,6 @@ impl ClaudeBackend {
             "model": self.model,
             "system": system,
             "messages": anthropic_msgs,
-            "max_tokens": max_tokens_from_env(),
         });
 
         if let Some(temperature) = self.temperature {
@@ -655,6 +654,17 @@ impl ClaudeBackend {
                 .collect();
             body["tools"] = serde_json::json!(anthropic_tools);
         }
+
+        // Adaptive output budget, LAST so the estimate covers everything
+        // actually sent (system, transcript, tool schemas): a fixed
+        // `max_tokens` pushed input + output past a third-party model's
+        // window (99073 input + 32000 requested > 131072) and the request
+        // died with HTTP 400 before the overflow-recovery path could help.
+        body["max_tokens"] = serde_json::json!(clamp_max_tokens(
+            max_tokens_from_env(),
+            estimate_request_tokens(&body),
+            context_tokens_from_env(),
+        ));
 
         body
     }
@@ -813,6 +823,87 @@ fn parse_max_tokens(value: Option<&str>) -> u32 {
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(16384)
+}
+
+/// Full-window token budget for Anthropic-compatible third-party models,
+/// overridable via `OXO_FLOW_AI_CONTEXT_TOKENS`. Unset → `None` = clamping
+/// disabled (real Anthropic models size their window server-side; the knob
+/// exists for proxies that front a smaller model and reject the overflow
+/// with HTTP 400 instead).
+fn context_tokens_from_env() -> Option<u32> {
+    parse_context_tokens(std::env::var("OXO_FLOW_AI_CONTEXT_TOKENS").ok().as_deref())
+}
+
+fn parse_context_tokens(value: Option<&str>) -> Option<u32> {
+    value
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|n| *n > 0)
+}
+
+/// Upper bound on how badly the chars→tokens estimate can undershoot a
+/// CJK-heavy prompt (GLM's tokenizer emits ~1 token per 1.5 chars for CJK,
+/// versus ~4 chars/token for English) — reserved before the clamp fires.
+const TOKEN_ESTIMATE_SAFETY: f64 = 1.5;
+
+/// Headroom subtracted from `context_limit` before clamping: reasoning
+/// models consume window on both sides, and the chars→tokens estimate is a
+/// heuristic, not a measurement.
+const CONTEXT_CLAMP_MARGIN_TOKENS: u32 = 4096;
+
+/// Clamp the configured output budget so `estimated input + max_tokens`
+/// stays inside the declared context window. Keeps the full configured
+/// budget when there is room; floors at 1024 so a request is still
+/// well-formed (the server-side overflow error then drives the existing
+/// compress-and-retry recovery) when even 1024 does not fit.
+fn clamp_max_tokens(
+    configured: u32,
+    estimated_input_tokens: u64,
+    context_limit: Option<u32>,
+) -> u32 {
+    let Some(limit) = context_limit else {
+        return configured;
+    };
+    let used = estimated_input_tokens as f64 * TOKEN_ESTIMATE_SAFETY;
+    let available = limit as f64 - CONTEXT_CLAMP_MARGIN_TOKENS as f64 - used;
+    if available >= configured as f64 {
+        return configured;
+    }
+    (available.max(1024.0)) as u32
+}
+
+/// Rough pre-send token estimate for an already-serialized body: ~4 chars
+/// per token on English text, and every number counts as at least one
+/// token. Deliberately a heuristic — the safety factor and margin above
+/// absorb its error, and the env knob's docs promise no precision.
+fn estimate_request_tokens(body: &serde_json::Value) -> u64 {
+    estimate_json_value_tokens(body)
+}
+
+fn estimate_json_value_tokens(value: &serde_json::Value) -> u64 {
+    match value {
+        serde_json::Value::Null => 1,
+        serde_json::Value::Bool(_) => 1,
+        serde_json::Value::Number(n) => n.to_string().len() as u64,
+        serde_json::Value::String(s) => estimate_text_tokens(s),
+        serde_json::Value::Array(items) => {
+            1 + items.iter().map(estimate_json_value_tokens).sum::<u64>()
+        }
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| estimate_text_tokens(k) + estimate_json_value_tokens(v))
+            .sum(),
+    }
+}
+
+fn estimate_text_tokens(s: &str) -> u64 {
+    // Count UTF-16 code units like real tokenizers report lengths: CJK
+    // chars cost one unit each and tokenize densely, so weighting them by
+    // UTF-16 length keeps the estimate honest for GLM/Qwen/DeepSeek input.
+    let units = s
+        .chars()
+        .map(char::len_utf16 as fn(char) -> usize)
+        .sum::<usize>();
+    (units as u64).div_ceil(4).max(1)
 }
 
 fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
@@ -2162,6 +2253,90 @@ mod tests {
         assert_eq!(parse_max_tokens(Some("abc")), 16384);
         assert_eq!(parse_max_tokens(Some("")), 16384);
         assert_eq!(parse_max_tokens(None), 16384);
+    }
+
+    #[test]
+    fn context_tokens_env_parses_strictly() {
+        // Same shape as parse_max_tokens but None-on-invalid (clamping
+        // disabled), because a mistyped window must never silently shrink
+        // the output budget on a model that needs the full ceiling.
+        assert_eq!(parse_context_tokens(Some("131072")), Some(131072));
+        assert_eq!(parse_context_tokens(Some(" 229376 ")), Some(229376));
+        assert_eq!(parse_context_tokens(Some("0")), None);
+        assert_eq!(parse_context_tokens(Some("-1")), None);
+        assert_eq!(parse_context_tokens(Some("abc")), None);
+        assert_eq!(parse_context_tokens(Some("")), None);
+        assert_eq!(parse_context_tokens(None), None);
+    }
+
+    #[test]
+    fn clamp_keeps_configured_budget_when_room_allows() {
+        // ~99000 estimated input inside a 229376 window leaves ample room
+        // for the full 32000 configured budget.
+        assert_eq!(clamp_max_tokens(32000, 99_073, Some(229376)), 32000);
+    }
+
+    #[test]
+    fn clamp_reproduces_the_field_incident() {
+        // The reported failure: 99073 input tokens estimated, 32000
+        // requested, window actually 131072. With the ~1.5× safety factor
+        // the estimate reads ~148610 — over the window — so the budget
+        // floors at 1024 and the request is at least well-formed; the
+        // server-side 400 then drives compress-and-retry. Without a
+        // context window declared the configured budget is untouched.
+        assert_eq!(clamp_max_tokens(32000, 99_073, Some(131072)), 1024);
+        assert_eq!(clamp_max_tokens(32000, 99_073, None), 32000);
+    }
+
+    #[test]
+    fn clamp_scales_between_floor_and_configured() {
+        // available = limit − 4096 margin − 1.5×estimate. Room for 2000
+        // after margin+safety → clamped to 2000, not to the floor;
+        // room ≥ configured stays at the configured value.
+        assert_eq!(clamp_max_tokens(32000, 60_000, Some(96_096)), 2000);
+        assert_eq!(clamp_max_tokens(32000, 60_000, Some(126_096)), 32000);
+    }
+
+    #[test]
+    fn estimate_text_tokens_is_monotone_and_nonzero() {
+        assert!(estimate_text_tokens("") >= 1);
+        assert!(estimate_text_tokens("hello world") > estimate_text_tokens("hello"));
+        // CJK: 5 chars = 5 UTF-16 units → ceil(5/4) = 2 tokens — never 0.
+        assert_eq!(estimate_text_tokens("生成工作流"), 2);
+        assert!(estimate_text_tokens("生成工作流生成工作流生成工作流生成工作流") > 1);
+    }
+
+    #[test]
+    fn build_body_clamps_max_tokens_under_declared_window() {
+        // End-to-end through build_body: a large transcript inside a small
+        // declared window yields a shrunken max_tokens instead of the
+        // configured 32000 that would trip the server's 400.
+        let backend = ClaudeBackend::new(
+            "test-key".to_string(),
+            Some("glm-4.7".to_string()),
+            Some("http://localhost:1234".to_string()),
+        );
+        let filler = "x".repeat(400_000); // ~100k tokens at 4 chars/token
+        let messages = vec![
+            Message::system("You are a pipeline generator."),
+            Message::user(&filler),
+        ];
+        let tools = vec![ToolDef {
+            name: "emit_toml".to_string(),
+            description: "emit the pipeline".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let body = backend.build_body(&messages, &tools);
+        let max_tokens = body["max_tokens"].as_u64().unwrap();
+        assert!(
+            max_tokens < 32_000,
+            "expected clamped budget, got {max_tokens}"
+        );
+        assert!(
+            max_tokens >= 1024,
+            "budget must stay well-formed, got {max_tokens}"
+        );
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
     }
 
     #[test]
