@@ -104,12 +104,15 @@ export class OxoflowDiagnostics implements vscode.Disposable {
 
     if (lintRes.status === "fulfilled" && lintRes.value) {
       const res = lintRes.value;
-      if (!res.spawnError) {
+      if (res.spawnError) {
+        log(`[diagnostics] cannot run ${executable} (lint): ${res.spawnError}`);
+      } else {
         try {
           const report = parseReport(res.stdout);
           if (report.command === "lint") findings.push(...findingsFromLint(report));
         } catch (e) {
           log(`[diagnostics] lint parse failure: ${e instanceof Error ? e.message : String(e)}`);
+          findings.push(unparseable("lint", res));
         }
       }
     }
@@ -174,7 +177,7 @@ function unparseable(command: string, res: { stderr: string; exitCode: number | 
     code: "CLI_OUTPUT",
     message: `could not parse oxo-flow ${command} output (exit ${res?.exitCode ?? "?"}): ${detail}`,
     rule: null,
-    suggestion: "Run `oxo-flow validate --json` in a terminal to see the raw output; also check oxo-flow.executablePath.",
+    suggestion: `Run \`oxo-flow ${command} --json\` in a terminal to see the raw output; also check oxo-flow.executablePath.`,
     source: "validate",
   };
 }
