@@ -1,6 +1,6 @@
 //! Nextflow DSL2 transpiler for converting Nextflow process blocks into oxo-flow rules.
 
-use super::normalize_memory;
+use super::{infer_bio_types, normalize_memory};
 use crate::error::{OxoFlowError, Result};
 
 /// Extracted intermediate representation of a Nextflow process.
@@ -111,8 +111,7 @@ pub fn transpile_nextflow(source: &str) -> Result<String> {
         }
 
         // Inferred biological types
-        let (in_type, out_type) =
-            infer_process_types(&rule_name, &rendered_inputs, &rendered_outputs);
+        let (in_type, out_type) = infer_bio_types(&rule_name, &rendered_inputs, &rendered_outputs);
         if let Some(it) = in_type
             && let Some(ot) = out_type
         {
@@ -125,46 +124,6 @@ pub fn transpile_nextflow(source: &str) -> Result<String> {
     }
 
     Ok(toml)
-}
-
-/// Infer BioType annotations based on tool name and file extensions.
-fn infer_process_types(
-    name: &str,
-    inputs: &[String],
-    outputs: &[String],
-) -> (Option<&'static str>, Option<&'static str>) {
-    let lower = name.to_lowercase();
-    let has_fastq_in = inputs
-        .iter()
-        .any(|i| i.contains(".fastq") || i.contains(".fq"));
-    let has_bam_out = outputs.iter().any(|o| o.contains(".bam"));
-    let has_vcf_out = outputs.iter().any(|o| o.contains(".vcf"));
-
-    if lower.contains("bwa")
-        || lower.contains("bowtie")
-        || lower.contains("hisat")
-        || lower.contains("star")
-        || lower.contains("minimap")
-    {
-        (Some("fastq"), Some("bam_coord"))
-    } else if lower.contains("fastqc") {
-        (Some("fastq"), None)
-    } else if lower.contains("sort") {
-        (Some("bam_coord"), Some("bam_coord"))
-    } else if lower.contains("call")
-        || lower.contains("mutect")
-        || lower.contains("haplotype")
-        || lower.contains("deepvariant")
-        || lower.contains("strelka")
-    {
-        (Some("bam_coord"), Some("vcf_indexed"))
-    } else if has_fastq_in && has_bam_out {
-        (Some("fastq"), Some("bam_coord"))
-    } else if has_bam_out && has_vcf_out {
-        (Some("bam_coord"), Some("vcf_indexed"))
-    } else {
-        (None, None)
-    }
 }
 
 /// Parse all `process Name { ... }` blocks from Nextflow source.
