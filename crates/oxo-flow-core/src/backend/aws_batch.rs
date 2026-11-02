@@ -16,24 +16,15 @@ pub fn sanitize_aws_batch_name(name: &str) -> String {
     sanitize_cloud_name(name, 128, false, "_")
 }
 
-/// Generate an AWS Batch SubmitJob input JSON specification.
-pub fn generate_aws_batch_job_spec(
-    rule: &Rule,
-    shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-) -> String {
-    let job_name = format!("oxoflow-{}", sanitize_aws_batch_name(&rule.name));
+/// Build the AWS Batch `resourceRequirements` entries shared by single and
+/// array jobs: VCPU + MEMORY plus the optional GPU entry (`gpu` or
+/// `gpu_spec`). Array specs previously dropped the GPU requirement,
+/// silently scheduling GPU rules onto CPU-only compute environments.
+fn resource_requirements(rule: &Rule) -> Vec<serde_json::Value> {
     let threads = rule.resources.threads.max(1);
     let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
 
-    let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
-
-    let job_definition = cluster_config
-        .account
-        .as_deref()
-        .unwrap_or("oxoflow-job-def");
-
-    let mut resource_requirements = vec![
+    let mut requirements = vec![
         json!({
             "type": "VCPU",
             "value": format!("{threads}")
@@ -46,7 +37,7 @@ pub fn generate_aws_batch_job_spec(
 
     if let Some(gpu_count) = rule.resources.gpu {
         if gpu_count > 0 {
-            resource_requirements.push(json!({
+            requirements.push(json!({
                 "type": "GPU",
                 "value": format!("{gpu_count}")
             }));
@@ -54,11 +45,29 @@ pub fn generate_aws_batch_job_spec(
     } else if let Some(spec) = &rule.resources.gpu_spec
         && spec.count > 0
     {
-        resource_requirements.push(json!({
+        requirements.push(json!({
             "type": "GPU",
             "value": format!("{}", spec.count)
         }));
     }
+
+    requirements
+}
+
+/// Generate an AWS Batch SubmitJob input JSON specification.
+pub fn generate_aws_batch_job_spec(
+    rule: &Rule,
+    shell_cmd: &str,
+    cluster_config: &ClusterJobConfig,
+) -> String {
+    let job_name = format!("oxoflow-{}", sanitize_aws_batch_name(&rule.name));
+
+    let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
+
+    let job_definition = cluster_config
+        .account
+        .as_deref()
+        .unwrap_or("oxoflow-job-def");
 
     let payload = json!({
         "jobName": job_name,
@@ -66,7 +75,7 @@ pub fn generate_aws_batch_job_spec(
         "jobDefinition": job_definition,
         "containerOverrides": {
             "command": ["/bin/bash", "-c", shell_cmd],
-            "resourceRequirements": resource_requirements
+            "resourceRequirements": resource_requirements(rule)
         }
     });
 
@@ -81,8 +90,6 @@ pub fn generate_aws_batch_array_spec(
     cluster_config: &ClusterJobConfig,
 ) -> String {
     let job_name = format!("oxoflow-array-{}", sanitize_aws_batch_name(&rule.name));
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
 
     let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
 
@@ -103,16 +110,7 @@ pub fn generate_aws_batch_array_spec(
         },
         "containerOverrides": {
             "command": ["/bin/bash", "-c", dispatch_cmd],
-            "resourceRequirements": [
-                {
-                    "type": "VCPU",
-                    "value": format!("{threads}")
-                },
-                {
-                    "type": "MEMORY",
-                    "value": format!("{mem_mb}")
-                }
-            ]
+            "resourceRequirements": resource_requirements(rule)
         }
     });
 
@@ -172,6 +170,7 @@ mod tests {
         let resources = crate::rule::Resources {
             threads: 8,
             memory: Some("32G".into()),
+            gpu: Some(1),
             ..Default::default()
         };
         let rule = Rule {
@@ -186,5 +185,13 @@ mod tests {
         assert_eq!(val["arrayProperties"]["size"], 10);
         let cmd = val["containerOverrides"]["command"][2].as_str().unwrap();
         assert!(cmd.contains("AWS_BATCH_JOB_ARRAY_INDEX"));
+        // Array specs must carry the same GPU requirement as single jobs.
+        let gpu = val["containerOverrides"]["resourceRequirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["type"] == "GPU")
+            .expect("array spec must include GPU requirement");
+        assert_eq!(gpu["value"], "1");
     }
 }

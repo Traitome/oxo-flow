@@ -4,6 +4,11 @@
 //! JSON configurations with cpuMilli/memoryMib, taskGroups, and allocation
 //! policies. Submission/polling goes through the shared `ClusterExecutor`
 //! (`backend/cluster.rs`).
+//!
+//! GPU resources (`gpu` / `gpu_spec`) are deliberately not mapped here:
+//! GCP Batch attaches GPUs through the job's allocation policy
+//! (InstanceTemplate or `installGpus`), not the task payload's
+//! `computeResource` — GPU provisioning stays operator infrastructure.
 
 use super::sanitize_cloud_name;
 use crate::cluster::ClusterJobConfig;

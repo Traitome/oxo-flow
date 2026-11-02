@@ -15,21 +15,13 @@ pub fn sanitize_k8s_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
 }
 
-/// Generate a Kubernetes batch/v1 Job manifest for a single rule.
-pub fn generate_k8s_job_manifest(
-    rule: &Rule,
-    shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-) -> String {
-    let job_name = format!("oxoflow-{}", sanitize_k8s_name(&rule.name));
+/// Build the container resource block shared by single and array jobs:
+/// cpu/memory requests, and cpu/memory limits plus the optional NVIDIA GPU
+/// limit (`gpu` or `gpu_spec`). Array jobs previously dropped the GPU
+/// limit, silently scheduling GPU rules onto CPU-only nodes.
+fn container_resources(rule: &Rule) -> serde_json::Value {
     let threads = rule.resources.threads.max(1);
     let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
-
-    let container_image = rule
-        .environment
-        .docker
-        .as_deref()
-        .unwrap_or("ubuntu:latest");
 
     let mut limits = json!({
         "cpu": format!("{threads}"),
@@ -45,6 +37,29 @@ pub fn generate_k8s_job_manifest(
     {
         limits["nvidia.com/gpu"] = json!(format!("{}", spec.count));
     }
+
+    json!({
+        "requests": {
+            "cpu": format!("{threads}"),
+            "memory": format!("{mem_mb}Mi"),
+        },
+        "limits": limits,
+    })
+}
+
+/// Generate a Kubernetes batch/v1 Job manifest for a single rule.
+pub fn generate_k8s_job_manifest(
+    rule: &Rule,
+    shell_cmd: &str,
+    cluster_config: &ClusterJobConfig,
+) -> String {
+    let job_name = format!("oxoflow-{}", sanitize_k8s_name(&rule.name));
+
+    let container_image = rule
+        .environment
+        .docker
+        .as_deref()
+        .unwrap_or("ubuntu:latest");
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -73,13 +88,7 @@ pub fn generate_k8s_job_manifest(
                             "image": container_image,
                             "command": ["/bin/bash", "-c"],
                             "args": [shell_cmd],
-                            "resources": {
-                                "requests": {
-                                    "cpu": format!("{threads}"),
-                                    "memory": format!("{mem_mb}Mi"),
-                                },
-                                "limits": limits,
-                            }
+                            "resources": container_resources(rule),
                         }
                     ]
                 }
@@ -99,8 +108,6 @@ pub fn generate_k8s_array_job_manifest(
     cluster_config: &ClusterJobConfig,
 ) -> String {
     let job_name = format!("oxoflow-array-{}", sanitize_k8s_name(&rule.name));
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
 
     let container_image = rule
         .environment
@@ -141,16 +148,7 @@ pub fn generate_k8s_array_job_manifest(
                             "image": container_image,
                             "command": ["/bin/bash", "-c"],
                             "args": [dispatch_cmd],
-                            "resources": {
-                                "requests": {
-                                    "cpu": format!("{threads}"),
-                                    "memory": format!("{mem_mb}Mi"),
-                                },
-                                "limits": {
-                                    "cpu": format!("{threads}"),
-                                    "memory": format!("{mem_mb}Mi"),
-                                }
-                            }
+                            "resources": container_resources(rule),
                         }
                     ]
                 }
@@ -222,6 +220,7 @@ mod tests {
         let resources = crate::rule::Resources {
             threads: 4,
             memory: Some("8G".into()),
+            gpu: Some(2),
             ..Default::default()
         };
         let rule = Rule {
@@ -244,5 +243,7 @@ mod tests {
                 .unwrap()
                 .contains("JOB_COMPLETION_INDEX")
         );
+        // Array jobs must carry the same GPU limit as single jobs.
+        assert_eq!(container["resources"]["limits"]["nvidia.com/gpu"], "2");
     }
 }
