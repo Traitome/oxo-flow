@@ -157,6 +157,39 @@ pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiErro
     })
 }
 
+/// Top-20 template names feeding AI matching (translate, chat).
+///
+/// Single point of sync for the lookup: prefer the storage backend, fall
+/// back to a direct SQLite query when only the pool is live, and degrade to
+/// an empty list rather than failing the AI call. The backend path inherits
+/// `list_templates`' category/name ordering while the fallback orders by
+/// usage — preserved verbatim from the original call sites; converge the
+/// two deliberately, not as a side effect of a refactor.
+pub async fn top_template_names() -> Vec<String> {
+    if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .list_templates()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(20)
+            .map(|t| t.name)
+            .collect()
+    } else if let Ok(pool) = get_pool() {
+        sqlx::query_as::<_, crate::infra::db::models::TemplateRow>(
+            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| t.name)
+        .collect()
+    } else {
+        vec![]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline lifecycle
 // ---------------------------------------------------------------------------

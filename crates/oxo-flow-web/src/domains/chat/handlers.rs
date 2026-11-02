@@ -340,28 +340,7 @@ pub async fn chat_send_json(
         ));
     }
 
-    let templates: Vec<String> = if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .list_templates()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .take(20)
-            .map(|t| t.name)
-            .collect()
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, models::TemplateRow>(
-            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
-    } else {
-        vec![]
-    };
+    let templates = crate::domains::workflow::handlers::top_template_names().await;
 
     let session_id = req
         .session_id

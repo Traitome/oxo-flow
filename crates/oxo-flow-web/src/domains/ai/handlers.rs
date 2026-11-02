@@ -75,28 +75,7 @@ pub async fn translate(
     }
 
     let provider = crate::ai_provider::provider_for(&user.id).await;
-    let templates: Vec<String> = if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .list_templates()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .take(20)
-            .map(|t| t.name)
-            .collect()
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, models::TemplateRow>(
-            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
-    } else {
-        vec![]
-    };
+    let templates = super::super::workflow::handlers::top_template_names().await;
 
     super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates)
         .await
@@ -143,29 +122,10 @@ pub async fn translate_sse(
         Some(crate::ai_provider::provider_for(&user.id).await)
     };
 
-    let templates: Vec<String> = if invalid_intent {
+    let templates = if invalid_intent {
         vec![]
-    } else if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .list_templates()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .take(20)
-            .map(|t| t.name)
-            .collect()
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, models::TemplateRow>(
-            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
     } else {
-        vec![]
+        super::super::workflow::handlers::top_template_names().await
     };
 
     let intent = req.intent.clone();
