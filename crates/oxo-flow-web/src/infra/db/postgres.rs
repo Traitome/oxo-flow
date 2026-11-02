@@ -764,7 +764,12 @@ impl StorageBackend for PostgresBackend {
         for bind in &q.filter_binds {
             count_query = count_query.bind(bind);
         }
-        let total: i64 = count_query.fetch_one(&self.pool).await.unwrap_or(0);
+        // Propagate, never swallow: a failed COUNT must not degrade into a
+        // fabricated `total: 0` that the client reads as valid data.
+        let total: i64 = count_query
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("count runs: {e}"))?;
 
         Ok(models::CursorPage {
             items,
@@ -1415,15 +1420,18 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn get_run_metrics(&self) -> Result<(i64, u64), String> {
+        // Both COUNTs propagate: the trait already returns Result, and the
+        // caller owns the display-tier degrade — swallowing here would make
+        // that fallback dead code.
         let active: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'queued')")
                 .fetch_one(&self.pool)
                 .await
-                .unwrap_or(0);
+                .map_err(|e| format!("count active runs: {e}"))?;
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
             .fetch_one(&self.pool)
             .await
-            .unwrap_or(0);
+            .map_err(|e| format!("count runs: {e}"))?;
         Ok((active, total as u64))
     }
 
