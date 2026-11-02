@@ -276,37 +276,59 @@ fn get_slurm_jobs() -> Vec<JobInfo> {
     jobs
 }
 
+/// Parse `qstat -q` output (PBS/Torque) into queue status entries.
+///
+/// Columns (Torque `altdsp_statque`, PBS Pro identical):
+/// `Queue Memory CPU Time Walltime Node Run Que Lm State`. Row tokens:
+/// 0 = queue name, 5 = running, 6 = queued, 8/9 = enabled/started flags.
+/// `Que` folds Transit+Queued+Held+Waiting (Torque `get_ct`), so `held`
+/// stays 0 — `-q` cannot separate it. There is no Tot column; the footer
+/// only prints Run/Que sums, so `total_jobs` is running + pending.
+/// The `server:` preamble, header row, and totals footer all fail the
+/// token-count or numeric checks and are dropped.
+fn parse_pbs_queues(stdout: &str) -> Vec<QueueStatus> {
+    let mut queues = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("---") {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 8 {
+            continue;
+        }
+        // Real rows always print `%3d %3d` for Run/Que; the header's
+        // "Run"/"Que" fail this parse, which is what excludes it.
+        let (Ok(running), Ok(pending)) = (parts[5].parse::<usize>(), parts[6].parse::<usize>())
+        else {
+            continue;
+        };
+        let state = match (parts.get(8), parts.get(9)) {
+            (Some(enabled), Some(started)) => format!("{enabled} {started}"),
+            _ => "unknown".to_string(),
+        };
+
+        queues.push(QueueStatus {
+            queue_name: parts[0].to_string(),
+            total_jobs: running + pending,
+            running,
+            pending,
+            held: 0,
+            state,
+        });
+    }
+
+    queues
+}
+
 /// Get PBS/Torque queue status.
 fn get_pbs_queues() -> Vec<QueueStatus> {
     let output = match Command::new("qstat").arg("-q").output() {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut queues = Vec::new();
-
-    for line in stdout.lines().skip(2) {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("---") {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-
-        queues.push(QueueStatus {
-            queue_name: parts[0].to_string(),
-            total_jobs: parts.get(6).and_then(|v| v.parse().ok()).unwrap_or(0),
-            running: parts.get(5).and_then(|v| v.parse().ok()).unwrap_or(0),
-            pending: parts.get(6).and_then(|v| v.parse().ok()).unwrap_or(0),
-            held: 0,
-            state: parts.get(2).unwrap_or(&"up").to_string(),
-        });
-    }
-
-    queues
+    parse_pbs_queues(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Parse `pbsnodes -a` output: node names start at column 0, their
@@ -912,6 +934,38 @@ mod tests {
         assert_eq!(queues[0].total_jobs, 2);
         assert_eq!(queues[0].pending, 1);
         assert_eq!(queues[0].running, 1);
+    }
+
+    #[test]
+    fn parses_pbs_qstat_q_queue_rows_dropping_preamble_and_footer() {
+        // Arrange — real Torque `qstat -q` layout (altdsp_statque): "server:"
+        // preamble, header, `---` separator, data rows, then a totals footer
+        // whose Run/Que columns print without a queue name.
+        let out = "\nserver: hpc\n\
+                   \n\
+                   Queue            Memory CPU Time Walltime Node  Run Que Lm  State\n\
+                   ---------------- ------ -------- -------- ----  --- --- --  -----\n\
+                   workq               --  00:30:00 08:00:00   --     8  12  --   E R\n\
+                   batch               --     --       --     --     2   0  --   E R\n\
+                                                        ----- -----\n\
+                                                            10    12\n";
+
+        // Act
+        let queues = parse_pbs_queues(out);
+
+        // Assert — header and footer never become bogus queues; Que folds
+        // Held+Waiting so `pending` is the raw Que value and held stays 0.
+        assert_eq!(queues.len(), 2, "got: {queues:?}");
+        assert_eq!(queues[0].queue_name, "workq");
+        assert_eq!(queues[0].running, 8);
+        assert_eq!(queues[0].pending, 12);
+        assert_eq!(queues[0].total_jobs, 20);
+        assert_eq!(queues[0].state, "E R");
+        assert_eq!(queues[1].queue_name, "batch");
+        assert_eq!(queues[1].running, 2);
+        assert_eq!(queues[1].pending, 0);
+        assert_eq!(queues[1].total_jobs, 2);
+        assert_eq!(queues[1].held, 0);
     }
 
     #[test]
