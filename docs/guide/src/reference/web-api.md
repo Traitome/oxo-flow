@@ -813,6 +813,14 @@ variables. `GET /api/ai/config/effective` shows the resolved result and
 which level supplied each field. API keys are stored encrypted at rest
 (#205) and never echoed back — responses mark `key_set` instead.
 
+Provider names are validated before either configuration endpoint writes
+to storage. An unsupported name returns `400 INVALID_AI_PROVIDER` and
+leaves the existing configuration untouched. If storage succeeds but the
+runtime cannot activate the new provider, the endpoint returns
+`500 AI_RECONFIGURE_FAILED`; the durable row remains available for the
+next startup, but the caller must correct the provider settings rather
+than assuming the running process switched.
+
 See [AI Translation Layer](ai-translation.md) for details.
 
 ---

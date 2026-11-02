@@ -24,9 +24,17 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &str) {
     let title: String = message.chars().take(60).collect();
     if let Some(backend) = crate::infra::db::global_backend() {
-        let _ = backend
+        if let Err(error) = backend
             .save_chat_user_message(session_id, &user.id, &title, message)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                session_id,
+                user_id = %user.id,
+                error = %error,
+                "user chat message could not be persisted"
+            );
+        }
         return;
     }
     let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
@@ -86,9 +94,17 @@ async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &st
 /// Append the assistant's final answer to the session.
 async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content: &str) {
     if let Some(backend) = crate::infra::db::global_backend() {
-        let _ = backend
+        if let Err(error) = backend
             .save_chat_assistant_message(session_id, &user.id, content)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                session_id,
+                user_id = %user.id,
+                error = %error,
+                "assistant chat message could not be persisted"
+            );
+        }
         return;
     }
     let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {

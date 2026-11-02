@@ -28,14 +28,22 @@ fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
 /// the last 50 revisions per pipeline; older snapshots are pruned.
 async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_content: &str) {
     if let Some(backend) = crate::infra::db::global_backend() {
-        let _ = backend
+        if let Err(error) = backend
             .record_pipeline_revision(pipeline_id, user_id, version, toml_content)
-            .await;
+            .await
+        {
+            tracing::error!(
+                pipeline_id,
+                version,
+                error = %error,
+                "failed to persist pipeline revision"
+            );
+        }
         return;
     }
     let Ok(pool) = get_pool() else { return };
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at) \
          VALUES (?, ?, ?, ?, ?, ?)",
     )
@@ -46,9 +54,18 @@ async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_c
     .bind(toml_content)
     .bind(&now)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::error!(
+            pipeline_id,
+            version,
+            error = %error,
+            "failed to persist pipeline revision"
+        );
+        return;
+    }
     // Keep the history bounded: drop everything beyond the newest 50.
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         "DELETE FROM pipeline_revisions WHERE pipeline_id = ? AND id NOT IN \
          (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? \
           ORDER BY created_at DESC, rowid DESC LIMIT 50)",
@@ -56,7 +73,14 @@ async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_c
     .bind(pipeline_id)
     .bind(pipeline_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            pipeline_id,
+            error = %error,
+            "failed to prune old pipeline revisions"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

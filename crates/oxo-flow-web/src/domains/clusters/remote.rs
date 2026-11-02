@@ -446,14 +446,26 @@ async fn mark_failed(run_id: &str, message: &str) {
             updated = true;
         }
     } else if let Some(pool) = db::try_pool() {
-        let _ = sqlx::query(
+        match sqlx::query(
             "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
         )
         .bind(end)
         .bind(run_id)
         .execute(pool)
-        .await;
-        updated = true;
+        .await
+        {
+            Ok(result) if result.rows_affected() > 0 => updated = true,
+            Ok(_) => {
+                tracing::error!("Remote run {run_id} does not exist in SQLite");
+            }
+            Err(error) => {
+                tracing::error!(
+                    run_id,
+                    error = %error,
+                    "failed to persist remote-run failure"
+                );
+            }
+        }
     }
     if !updated {
         tracing::error!(

@@ -33,6 +33,20 @@ pub fn invalidate_provider_for(user_id: &str) {
     }
 }
 
+fn parse_provider_kind(kind: &str) -> Result<ProviderKind, String> {
+    kind.parse()
+        .map_err(|error: anyhow::Error| error.to_string())
+}
+
+/// Validate durable AI configuration before it is written. The settings API
+/// must not persist a provider name that the runtime can never instantiate.
+pub(crate) fn validate_provider_kind(kind: &str) -> Result<(), String> {
+    if kind.eq_ignore_ascii_case("disabled") {
+        return Ok(());
+    }
+    parse_provider_kind(kind).map(|_| ())
+}
+
 /// Resolve the provider a user's AI calls must use:
 /// 1. their own saved row (provider != "disabled")
 /// 2. the shared runtime (server row / env / default)
@@ -156,7 +170,10 @@ impl AiProviderRegistry {
         api_url: Option<String>,
         model: Option<String>,
     ) -> Result<(), String> {
-        let kind_parsed: ProviderKind = kind.parse().map_err(|e: anyhow::Error| e.to_string())?;
+        if kind.eq_ignore_ascii_case("disabled") {
+            return oxo_flow_ai::AI.disable().map_err(|error| error.to_string());
+        }
+        let kind_parsed = parse_provider_kind(kind)?;
 
         let cfg = oxo_flow_ai::config::AiConfig {
             enabled: true,
@@ -203,5 +220,18 @@ impl AiProviderRegistry {
         // gated on OLLAMA_HOST by the caller (`provider_candidates`).
         // OLLAMA_HOST / OLLAMA_MODEL ride the canonical env snapshot now.
         Ok(create_provider(ProviderKind::Ollama, None, None, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_provider_kind;
+
+    #[test]
+    fn provider_names_are_validated_before_durable_writes() {
+        assert!(validate_provider_kind("openai").is_ok());
+        assert!(validate_provider_kind("claude").is_ok());
+        assert!(validate_provider_kind("disabled").is_ok());
+        assert!(validate_provider_kind("definitely-not-a-provider").is_err());
     }
 }

@@ -100,9 +100,17 @@ pub async fn fork_pipeline(
     })?;
 
     // Log the fork action
-    let _ = backend
+    if let Err(error) = backend
         .log_action(&user.id, "fork_pipeline", &forked_id)
-        .await;
+        .await
+    {
+        tracing::error!(
+            user_id = %user.id,
+            forked_id,
+            error = %error,
+            "fork succeeded but its audit record could not be persisted"
+        );
+    }
 
     Ok(Json(ForkResponse { forked_id, name }))
 }

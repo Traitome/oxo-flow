@@ -219,20 +219,36 @@ pub async fn import_from_config(definitions: &[crate::config::ClusterDefinition]
         }
         let now = now_iso();
         if let Some(backend) = crate::infra::db::global_backend() {
-            if backend.get_cluster(&req.id).await.unwrap_or(None).is_none() {
-                let row = models::ClusterRow {
-                    id: req.id.clone(),
-                    name: req.name.clone(),
-                    ssh_host: req.ssh_host.clone(),
-                    ssh_port: req.ssh_port as i64,
-                    ssh_user: req.ssh_user.clone(),
-                    ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
-                    scheduler: req.scheduler.clone(),
-                    remote_dir: req.remote_dir.clone(),
-                    enabled: req.enabled,
-                    created_at: now.clone(),
-                };
-                let _ = backend.save_cluster(&row).await;
+            match backend.get_cluster(&req.id).await {
+                Ok(None) => {
+                    let row = models::ClusterRow {
+                        id: req.id.clone(),
+                        name: req.name.clone(),
+                        ssh_host: req.ssh_host.clone(),
+                        ssh_port: req.ssh_port as i64,
+                        ssh_user: req.ssh_user.clone(),
+                        ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
+                        scheduler: req.scheduler.clone(),
+                        remote_dir: req.remote_dir.clone(),
+                        enabled: req.enabled,
+                        created_at: now.clone(),
+                    };
+                    if let Err(error) = backend.save_cluster(&row).await {
+                        tracing::warn!(
+                            cluster_id = %req.id,
+                            error = %error,
+                            "failed to import cluster from platform config"
+                        );
+                    }
+                }
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        cluster_id = %req.id,
+                        error = %error,
+                        "could not check for an existing cluster; config import skipped"
+                    );
+                }
             }
             continue;
         }

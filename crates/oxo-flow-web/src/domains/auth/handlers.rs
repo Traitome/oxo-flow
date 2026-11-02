@@ -838,9 +838,16 @@ pub async fn upload_license(
             "{{\"bytes\":{},\"sha256\":\"{hex}\"}}",
             license_data.len(),
         );
-        let _ = backend
+        if let Err(error) = backend
             .log_action_with_metadata(&user.id, "upload_license", "license", Some(&metadata))
-            .await;
+            .await
+        {
+            tracing::error!(
+                user_id = %user.id,
+                error = %error,
+                "license event could not be written to the audit log"
+            );
+        }
     }
 
     Ok(Json(service::license_status()))

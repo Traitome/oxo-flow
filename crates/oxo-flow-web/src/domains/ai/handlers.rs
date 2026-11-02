@@ -40,6 +40,15 @@ fn ai_db_error(operation: &'static str, error: String) -> (StatusCode, Json<ApiE
     )
 }
 
+fn runtime_optional(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn runtime_api_key(stored: Option<&str>) -> Option<String> {
+    runtime_optional(&crate::infra::crypto::open(stored.unwrap_or_default()))
+}
+
 #[utoipa::path(
     post,
     path = "/api/ai/translate",
@@ -609,16 +618,23 @@ pub async fn restore_ai_config_from_db() {
         );
         return;
     }
-    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+    if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
         &row.provider,
         Some(crate::infra::crypto::open(&api_key)),
         Some(row.api_url.unwrap_or_default()),
         Some(row.model.unwrap_or_default()),
-    );
-    tracing::info!(
-        "AI registry restored from DB tier: provider={}",
-        row.provider
-    );
+    ) {
+        tracing::error!(
+            provider = %row.provider,
+            error = %error,
+            "stored AI configuration could not be restored into the runtime registry"
+        );
+    } else {
+        tracing::info!(
+            "AI registry restored from DB tier: provider={}",
+            row.provider
+        );
+    }
 }
 
 #[utoipa::path(
@@ -743,10 +759,19 @@ pub async fn update_server_ai_config(
     let provider = req
         .get("provider")
         .and_then(|v| v.as_str())
-        .unwrap_or("disabled");
+        .unwrap_or("disabled")
+        .trim()
+        .to_ascii_lowercase();
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    crate::ai_provider::validate_provider_kind(&provider).map_err(|error| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_AI_PROVIDER",
+            format!("AI provider '{provider}' is not supported: {error}"),
+        )
+    })?;
     // An absent/empty key means "keep the stored one" — the API never returns
     // the key, so a settings save that omits it must not wipe it.
     let stored_api_key = crate::infra::crypto::seal(api_key);
@@ -754,7 +779,7 @@ pub async fn update_server_ai_config(
     let row = models::AiProviderConfigRow {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: None,
-        provider: provider.to_string(),
+        provider: provider.clone(),
         api_key: Some(stored_api_key),
         api_url: Some(api_url.to_string()),
         model: Some(model.to_string()),
@@ -767,7 +792,7 @@ pub async fn update_server_ai_config(
             .map_or_else(|| now.clone(), |row| row.created_at.clone()),
         updated_at: now,
     };
-    backend
+    let saved = backend
         .save_ai_provider_config(&row, api_key.is_empty())
         .await
         .map_err(|e| ai_db_error("saving server AI provider config", e))?;
@@ -775,15 +800,26 @@ pub async fn update_server_ai_config(
     // Apply only after durable persistence so a failed save cannot leave the
     // runtime pointing at a configuration that disappears on restart.
     crate::ai_provider::invalidate_provider_cache();
-    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-        provider,
-        Some(api_key.into()),
-        Some(api_url.into()),
-        Some(model.into()),
-    );
+    if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+        &saved.provider,
+        runtime_api_key(saved.api_key.as_deref()),
+        runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
+        runtime_optional(saved.model.as_deref().unwrap_or_default()),
+    ) {
+        tracing::error!(
+            provider = %saved.provider,
+            error = %error,
+            "server AI configuration was persisted but could not be activated"
+        );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AI_RECONFIGURE_FAILED",
+            "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
+        ));
+    }
 
     Ok(Json(
-        serde_json::json!({"status": "updated", "provider": provider}),
+        serde_json::json!({"status": "updated", "provider": saved.provider}),
     ))
 }
 
@@ -873,10 +909,19 @@ pub async fn update_user_ai_config(
     let provider = req
         .get("provider")
         .and_then(|v| v.as_str())
-        .unwrap_or("disabled");
+        .unwrap_or("disabled")
+        .trim()
+        .to_ascii_lowercase();
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    crate::ai_provider::validate_provider_kind(&provider).map_err(|error| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_AI_PROVIDER",
+            format!("AI provider '{provider}' is not supported: {error}"),
+        )
+    })?;
     // An absent/empty key means "keep the stored one". Compared as a flag,
     // not by the sealed value: with a master key configured seal("") is a
     // non-empty ciphertext.
@@ -901,7 +946,7 @@ pub async fn update_user_ai_config(
     let row = models::AiProviderConfigRow {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: Some(user.id.clone()),
-        provider: provider.to_string(),
+        provider: provider.clone(),
         api_key: Some(stored_api_key),
         api_url: Some(api_url.to_string()),
         model: Some(model.to_string()),
@@ -912,7 +957,7 @@ pub async fn update_user_ai_config(
         created_at: now.clone(),
         updated_at: now,
     };
-    backend
+    let saved = backend
         .save_ai_provider_config(&row, api_key.is_empty())
         .await
         .map_err(|e| ai_db_error("saving user AI provider config", e))?;
@@ -922,18 +967,30 @@ pub async fn update_user_ai_config(
     // team users' rows are resolved per user by provider_for().
     let applied = crate::server::running_mode() == "personal" || user.is_admin();
     crate::ai_provider::invalidate_provider_for(&user.id);
-    if applied {
-        let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-            provider,
-            Some(api_key.into()),
-            Some(api_url.into()),
-            Some(model.into()),
+    if applied
+        && let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            &saved.provider,
+            runtime_api_key(saved.api_key.as_deref()),
+            runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
+            runtime_optional(saved.model.as_deref().unwrap_or_default()),
+        )
+    {
+        tracing::error!(
+            provider = %saved.provider,
+            user_id = %user.id,
+            error = %error,
+            "user AI configuration was persisted but could not be activated"
         );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AI_RECONFIGURE_FAILED",
+            "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
+        ));
     }
 
     Ok(Json(serde_json::json!({
         "status": "updated",
-        "provider": provider,
+        "provider": saved.provider,
         "applied_to_runtime": applied,
     })))
 }
@@ -1003,4 +1060,21 @@ pub async fn knowledge_skills(
             "primary_tool": s.primary_tool,
         })).collect::<Vec<_>>(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{runtime_api_key, runtime_optional};
+
+    #[test]
+    fn runtime_config_omits_blank_overrides() {
+        assert_eq!(runtime_optional("  "), None);
+        assert_eq!(runtime_optional(" gpt-5 "), Some("gpt-5".to_string()));
+        assert_eq!(runtime_api_key(None), None);
+        assert_eq!(runtime_api_key(Some("  ")), None);
+        assert_eq!(
+            runtime_api_key(Some(" sk-stored ")),
+            Some("sk-stored".to_string())
+        );
+    }
 }

@@ -336,6 +336,20 @@ async fn server_ai_config_reports_an_unreadable_credential_as_unconfigured() {
     );
 }
 
+#[tokio::test]
+async fn unsupported_ai_provider_is_rejected_before_persistence() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let (status, body) = put(
+        &app,
+        "/api/ai/config/server",
+        json!({"provider": "not-a-real-provider"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_AI_PROVIDER", "{body}");
+}
+
 // ---------------------------------------------------------------------------
 // F-4 — POST /api/runs speaks ONE typed contract (issue #324)
 // ---------------------------------------------------------------------------

@@ -216,6 +216,21 @@ impl AiRegistry {
         Ok(())
     }
 
+    /// Disable AI for this running process without rewriting the persisted
+    /// CLI config file. Durable settings remain the caller's responsibility;
+    /// the web settings API stores them in its database.
+    pub fn disable(&self) -> Result<(), AiError> {
+        let mut provider = self.provider.write().map_err(|_| AiError::Config {
+            message: "AI provider lock poisoned".into(),
+        })?;
+        let mut config = self.config.write().map_err(|_| AiError::Config {
+            message: "AI config lock poisoned".into(),
+        })?;
+        *provider = Some(AiProvider::Noop);
+        config.enabled = false;
+        Ok(())
+    }
+
     /// Create a new session for tracking an AI interaction.
     pub fn new_session(&self, command: &str, user_intent: &str) -> AiSession {
         let provider = self.provider().unwrap_or(AiProvider::Noop);
@@ -261,5 +276,16 @@ mod tests {
         let session = reg.new_session("template", "RNA-seq");
         assert_eq!(session.command, "template");
         assert_eq!(session.user_intent, "RNA-seq");
+    }
+
+    #[test]
+    fn disable_switches_the_runtime_to_noop() {
+        let reg = AiRegistry::new();
+        reg.disable().expect("disable registry");
+        assert!(!reg.is_enabled());
+        assert_eq!(
+            reg.provider().unwrap_or(AiProvider::Noop).name(),
+            "disabled"
+        );
     }
 }
