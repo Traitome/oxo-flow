@@ -1289,6 +1289,7 @@ mod tests {
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
             (CITATION_KEYS, "/properties/citation"),
+            (INCLUDE_KEYS, "/properties/include/items"),
             (ENGINE_KEYS, "/properties/engine"),
             (RESOURCE_BUDGET_KEYS, "/properties/resource_budget"),
             (PLUGINS_KEYS, "/properties/plugins"),

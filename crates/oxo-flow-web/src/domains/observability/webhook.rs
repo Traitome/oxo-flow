@@ -7,13 +7,38 @@ use oxo_flow_core::webhook::{
     HttpMethod, SignatureScheme, WebhookClient, WebhookConfig, WebhookEvent, WebhookPayload,
 };
 
+/// Secure default for newly configured web endpoints.
+pub const DEFAULT_SIGNATURE_SCHEME: &str = "hmac-sha256";
+
+/// Frozen compatibility scheme used by pre-existing webhook rows.
+pub const LEGACY_SIGNATURE_SCHEME: &str = "sha256-keyed";
+
+/// Parse a persisted/API signature scheme without silently coercing typos.
+#[must_use]
+pub fn signature_scheme(value: &str) -> Option<SignatureScheme> {
+    match value.trim() {
+        "hmac-sha256" => Some(SignatureScheme::HmacSha256),
+        "sha256-keyed" => Some(SignatureScheme::Sha256Keyed),
+        _ => None,
+    }
+}
+
+/// Return the canonical stored spelling accepted by this API.
+#[must_use]
+pub fn canonical_signature_scheme(value: &str) -> Option<&'static str> {
+    match signature_scheme(value)? {
+        SignatureScheme::HmacSha256 => Some(DEFAULT_SIGNATURE_SCHEME),
+        SignatureScheme::Sha256Keyed => Some(LEGACY_SIGNATURE_SCHEME),
+    }
+}
+
 /// One config row (id=1) persisted by PUT /api/webhook.
 pub struct WebhookSettings {
     pub enabled: bool,
     pub url: String,
     pub secret: Option<String>,
     pub events: Vec<String>,
-    /// "sha256-keyed" (legacy v0.10 default) or "hmac-sha256".
+    /// "hmac-sha256" or the frozen legacy "sha256-keyed".
     pub signature_scheme: String,
 }
 
@@ -24,7 +49,7 @@ impl Default for WebhookSettings {
             url: String::new(),
             secret: None,
             events: Vec::new(),
-            signature_scheme: "sha256-keyed".into(),
+            signature_scheme: DEFAULT_SIGNATURE_SCHEME.into(),
         }
     }
 }
@@ -151,20 +176,20 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
+    let Some(scheme) = signature_scheme(&settings.signature_scheme) else {
+        tracing::error!(
+            "webhook delivery disabled for run {run_id}: unsupported signature scheme '{}'",
+            settings.signature_scheme
+        );
+        return;
+    };
     let config = WebhookConfig {
         url: settings.url,
         method: HttpMethod::Post,
         headers: Default::default(),
         events: vec![event],
         secret: settings.secret,
-        // The configured scheme decides: legacy consumers keep verifying
-        // 'sha256-keyed' signatures after an upgrade; opting into the
-        // RFC-2104 scheme is an explicit setting change.
-        signature_scheme: if settings.signature_scheme == "hmac-sha256" {
-            SignatureScheme::HmacSha256
-        } else {
-            SignatureScheme::Sha256Keyed
-        },
+        signature_scheme: scheme,
         timeout_secs: 10,
         max_retries: 1,
     };

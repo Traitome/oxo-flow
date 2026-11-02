@@ -12,9 +12,9 @@ obtain a full license agreement and to purchase a license.
 
 APPLICABILITY
 ──────────────
-This license applies ONLY to the oxo-flow-web crate. All other
-oxo-flow crates (oxo-flow-core, oxo-flow-cli, venus) are licensed
-under the Apache License 2.0 — see the LICENSE file.
+This license applies ONLY to the oxo-flow-web crate. The core, AI, CLI, and
+desktop crates are licensed under the Apache License 2.0. See the LICENSE
+file and the README licensing table.
 
 SCOPE OF LICENSE
 ─────────────────

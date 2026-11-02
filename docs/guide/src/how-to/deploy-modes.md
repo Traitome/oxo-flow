@@ -46,7 +46,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | Supported on both SQLite and PostgreSQL via the unified `StorageBackend` trait |
+| Run execution | Backend-routed code exists for SQLite and PostgreSQL; live parity is unproven. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -77,10 +77,11 @@ automatic fallback chain between mechanisms.
 **User management**: beyond the env-var credentials, accounts created on
 the **Users** page (or `POST /api/users`) carry a bcrypt-hashed password in
 the database and sign in through the same `/api/auth/login` endpoint.
-Every state-changing request (create/update/delete/run actions) is recorded
-in the audit trail — **Audit** page or `GET /api/audit` — with the acting
-user and the real outcome. The trail spans all users, so it is admin-only
-outside personal mode.
+State-changing requests attempt an audit entry visible on the **Audit** page
+or through `GET /api/audit`, with the acting user and recorded outcome. Audit
+writes are not yet a durable, fail-closed compliance ledger, so do not treat a
+missing entry as proof that no action occurred. The trail spans all users and
+is admin-only outside personal mode.
 
 **Workspace isolation**:
 ```
@@ -150,7 +151,7 @@ selects the PostgreSQL backend; anything else (including unset, which
 defaults to `sqlite://oxo-flow.db` in the working directory) stays SQLite.
 
 ```bash
-# PostgreSQL (all storage-backed web metadata; run execution stays SQLite-only)
+# PostgreSQL (storage-backed web metadata and backend-routed run records)
 export DATABASE_URL=postgres://oxo:secret@db.lab.example.edu:5432/oxo_flow
 oxo-flow serve --mode team --host 0.0.0.0
 ```
@@ -162,11 +163,17 @@ Two constraints apply:
   `cargo build --features postgres` (or the equivalent in your own
   image). On a build without the feature, a `postgres://` `DATABASE_URL`
   aborts startup with a clear error instead of silently falling back.
-- **Run execution**: the `StorageBackend` trait has PostgreSQL parity for
-  run-record persistence, but the executable `/api/runs*` surface is still
-  gated with `503 RUNS_REQUIRE_SQLITE`. Use the CLI for execution or a
-  personal-mode server backed by SQLite. The startup capability matrix
-  reports this split explicitly.
+- **Run execution**: the `StorageBackend` trait has PostgreSQL code paths for
+  run-record persistence, but production parity is not established. Validate
+  concurrency, crash recovery, and multi-instance behavior before relying on
+  PostgreSQL for execution metadata. The historical
+  `503 RUNS_REQUIRE_SQLITE` name may remain until that evidence supports a
+  backend-agnostic rename.
+- **Tenant safety**: team/HPC authorization is not an OS or container
+  execution boundary. A normal workflow can run shell commands under the
+  server account and may access server environment secrets. Do not invite
+  untrusted tenants until the isolation gate in
+  `docs/superpowers/audits/industrial-scientific-audit-ledger.md` passes.
 
 ## Startup Verification
 
@@ -292,20 +299,22 @@ browser e2e suite (and any local automation) legitimately exceeds the
 100 req/min budget and must set it. Never set it on a team/hpc
 production server: the limiter is the brute-force protection.
 
-## Run Control Truth (all modes)
+## Run Control Status (all modes)
 
-Run control is backed by real process signaling, and crash recovery tells
-the truth:
+Run control uses process signaling, but lifecycle truth remains
+prototype-grade:
 
-- **Cancel** sends SIGTERM (then SIGKILL after a 5 s grace) to the run's
-  process group — rules run *inside* the run group, so no rule process
-  survives a cancel.
-- **Pause/resume** freezes and thaws the same group (SIGSTOP/SIGCONT).
-- **Crash restart**: on startup, runs left `running`/`paused` are probed —
-  a live CLI is re-attached (cancel/pause keep working) and monitored to
-  its end; a finished one is attributed from the exit record the wrapper
-  shell wrote (`.exit-code`), so a completed run is never rewritten to
-  `failed` by a restart.
+- **Cancel** attempts SIGTERM, then SIGKILL after a grace period, against the
+  run's process group. Cancellation errors and races with completion are not
+  yet reconciled through monotonic compare-and-set transitions.
+- **Pause/resume** sends SIGSTOP/SIGCONT, but persistence failures and missing
+  process groups can leave the database state inconsistent with the process.
+- **Crash restart** attempts to probe and re-attach unfinished runs. The
+  backend does not yet provide restart-safe multi-instance ownership or proof
+  that a terminal state cannot be overwritten in every race.
+
+Do not present these controls as crash-consistent or compliance-grade. The
+release blockers and required tests are tracked in the audit ledger.
 
 ## Production Deployment
 
@@ -348,9 +357,10 @@ DEEPSEEK_API_KEY=…
 ```
 
 A stop (`systemctl stop oxo-flow`) delivers SIGTERM; the server drains
-connections and exits. Runs in flight are not force-killed — cancel them
-from the UI before a planned stop, or let the crash-restart probe
-re-attach them on the next start (see [Run Control Truth](#run-control-truth-all-modes)).
+connections and exits. Runs in flight are not force-killed. Cancel them from
+the UI before a planned stop and verify the terminal state; restart recovery
+is not yet qualified for unattended production use (see
+[Run Control Status](#run-control-status-all-modes)).
 
 ### nginx reverse proxy
 

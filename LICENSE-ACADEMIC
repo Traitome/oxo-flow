@@ -16,9 +16,9 @@ to use, copy, modify, and distribute the oxo-flow-web component solely for:
   • Personal non-commercial projects
   • Evaluation of the software
 
-NOTE: This license applies ONLY to the oxo-flow-web crate. All other
-oxo-flow crates (oxo-flow-core, oxo-flow-cli, venus) are licensed under
-the Apache License 2.0 — see the LICENSE file in the repository root.
+NOTE: This license applies ONLY to the oxo-flow-web crate. The core, AI,
+CLI, and desktop crates are licensed under the Apache License 2.0. See the
+LICENSE file and the README licensing table in the repository root.
 
 PERMITTED USES
 ──────────────

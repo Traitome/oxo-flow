@@ -403,7 +403,7 @@ pub async fn get_webhook_config(
         }))),
         None => Ok(Json(serde_json::json!({
             "enabled": false, "url": "", "secret_set": false, "events": [],
-            "signature_scheme": "sha256-keyed",
+            "signature_scheme": crate::domains::observability::webhook::DEFAULT_SIGNATURE_SCHEME,
         }))),
     }
 }
@@ -474,6 +474,7 @@ pub async fn put_webhook_config(
     }
     // An empty secret field means "keep the existing one"; the caller
     // cannot read it back, only replace it.
+    let existing_settings = crate::domains::observability::webhook::load_settings().await;
     let secret: Option<String> = req
         .get("secret")
         .and_then(|v| v.as_str())
@@ -489,9 +490,9 @@ pub async fn put_webhook_config(
         // signals failure that way. Such a row is NOT a usable secret: the
         // gate must treat it as absent, or #909-NIT-1's downgrade to
         // unsigned (forgeable) deliveries silently re-arms itself.
-        let has_stored_secret = crate::domains::observability::webhook::load_settings()
-            .await
-            .and_then(|s| s.secret)
+        let has_stored_secret = existing_settings
+            .as_ref()
+            .and_then(|s| s.secret.as_ref())
             .is_some_and(|s| !s.is_empty());
         if !has_stored_secret {
             return Err(err(
@@ -512,15 +513,47 @@ pub async fn put_webhook_config(
         })
         .unwrap_or_else(|| vec!["workflow_completed".into(), "workflow_failed".into()]);
     let events_json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".into());
-    // Default 'sha256-keyed' keeps pre-v0.11 webhook consumers verifying
-    // after upgrade; 'hmac-sha256' (RFC 2104) is the explicit opt-in.
-    let signature_scheme = match req
-        .get("signature_scheme")
-        .and_then(|v| v.as_str())
-        .unwrap_or("sha256-keyed")
-    {
-        "hmac-sha256" => "hmac-sha256",
-        _ => "sha256-keyed",
+    // New configurations use the RFC-2104 scheme. Omission preserves the
+    // stored scheme for existing deployments, while an explicit unknown
+    // value is a client error rather than a silent downgrade.
+    let signature_scheme = match req.get("signature_scheme") {
+        Some(value) => {
+            let Some(value) = value.as_str() else {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_SIGNATURE_SCHEME",
+                    "signature_scheme must be a string: 'hmac-sha256' or 'sha256-keyed'".into(),
+                ));
+            };
+            crate::domains::observability::webhook::canonical_signature_scheme(value).ok_or_else(
+                || {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_SIGNATURE_SCHEME",
+                        "signature_scheme must be 'hmac-sha256' or 'sha256-keyed'".into(),
+                    )
+                },
+            )?
+        }
+        None => existing_settings
+            .as_ref()
+            .map(|settings| {
+                crate::domains::observability::webhook::canonical_signature_scheme(
+                    &settings.signature_scheme,
+                )
+                .ok_or_else(|| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "WEBHOOK_CONFIG_INVALID",
+                        "stored webhook signature_scheme is invalid; resend an explicit supported scheme"
+                            .into(),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(
+                crate::domains::observability::webhook::DEFAULT_SIGNATURE_SCHEME,
+            ),
     };
     let sealed_secret = secret.as_deref().map(crate::infra::crypto::seal);
     if let Some(backend) = crate::infra::db::global_backend() {
@@ -568,7 +601,10 @@ pub async fn put_webhook_config(
         })?;
     }
 
-    Ok(Json(
-        serde_json::json!({"status": "saved", "enabled": enabled, "events": events}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "saved",
+        "enabled": enabled,
+        "events": events,
+        "signature_scheme": signature_scheme,
+    })))
 }

@@ -96,4 +96,8 @@ This governance document may be amended through the RFC process described above.
 
 ---
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+Licensing is per crate: the core, AI, CLI, and desktop components use the
+[Apache License 2.0](LICENSE), while `oxo-flow-web` uses the
+[Academic License](LICENSE-ACADEMIC) or a
+[Commercial License](LICENSE-COMMERCIAL). The licensing table in the repository
+README is authoritative.

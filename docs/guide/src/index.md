@@ -44,7 +44,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | Capability | Description |
 |---|---|
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
-| **AI Companion & Scientist Team** | Natural language pipeline generation, intelligent refinement, 30+ domain diagnostic patterns, automated recovery, and multi-agent review profile |
+| **AI Companion & Scientist Team** | Natural language pipeline generation, intelligent refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile |
 | **Disk-pressure & scratch safety** | Multi-stage runtime disk-pressure guard (Normal → Reclaim → Hold → Abort) with cascade reclamation, plus global `tmp_dir` scratch isolation |
 | **Cryptographic provenance** | Checkpoint truth anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
@@ -64,19 +64,19 @@ oxo-flow rethinks bioinformatics workflow orchestration from the ground up:
 1. **DAG as pure declarative data, not imperative code** — `.oxoflow` TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.
 2. **Cryptographic determinism over file timestamps** — Exact reproducibility through SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old `mtime` heuristics as the source of truth.
 3. **Physical resource boundaries as first-class constraints** — Built-in multi-stage runtime disk-pressure protection and scratch volume isolation (`tmp_dir`) prevent catastrophic out-of-disk failures on long-running pipelines.
-4. **Hermetic environment isolation** — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) guarantee tool versions never collide.
-5. **Rust-native compiled performance & safety** — Compiled native binary with no external runtime dependencies, `#![forbid(unsafe_code)]`, and sub-second startup with zero JVM or Python overhead.
+4. **Environment isolation** — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) reduce tool-version conflicts; this is not a complete host or tenant boundary.
+5. **Rust-native compiled performance & safety** — Compiled native binary with no embedded Python or JVM runtime, `#![forbid(unsafe_code)]`, and fast startup; bioinformatics tools, containers, and environment managers remain explicit external dependencies.
 6. **AI as an architectural citizen** — Grounded on deterministic engine APIs with structured `{code, message, detail, suggestion}` error contracts, unified validation feedback loops, and 30+ domain diagnostic patterns.
 
 ---
 
 ## Who Is This For?
 
-**Bioinformaticians** who build and maintain analysis pipelines — oxo-flow gives you a faster, type-safe workflow engine with clear error messages, reproducibility guarantees, and no external runtime dependency.
+**Bioinformaticians** who build and maintain analysis pipelines — oxo-flow gives you a fast workflow engine with clear error messages, explicit reproducibility controls, and no external runtime dependency.
 
 **Research laboratories and core facilities** running genomics workflows — the reporting system produces structured, auditable reports (engine version, workflow checksum, checkpoint provenance), and container packaging ensures reproducibility across environments.
 
-**Researchers** who need reproducible science — every workflow execution is deterministic, and environments are locked per rule so results are the same on any machine.
+**Researchers** who need reproducible science — the engine records execution evidence and supports pinned environments, but identical biological results still require controlled inputs, references, software, commands, hardware, and external services.
 
 **Core facility staff** managing multi-sample, multi-assay workloads — the DAG engine and cluster backends handle parallelism and resource scheduling automatically.
 
@@ -240,7 +240,7 @@ If you use oxo-flow in academic research, please cite:
 
 ## Join the Community
 
-oxo-flow is a **community-driven, open-source project** licensed under Apache 2.0. Bug reports, feature requests, and contributions are welcome.
+The core, AI, CLI, and desktop components are Apache-2.0 licensed; the web crate uses a separate Academic/Commercial license. Bug reports, feature requests, and contributions are welcome. See the repository licensing table for the authoritative per-crate terms.
 
 | How to contribute | Link |
 |---|---|

@@ -22,6 +22,7 @@ const COUNT_MENTIONS: &[&str] = &[
     "CONTRIBUTING.md",
     "docs/guide/src/index.md",
     "docs/guide/src/reference/architecture.md",
+    "docs/superpowers/plans/linux-server-validation-protocol.md",
 ];
 
 fn repo_root() -> PathBuf {

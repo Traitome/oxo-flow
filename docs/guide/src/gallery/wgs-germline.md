@@ -8,7 +8,7 @@ A complete whole-genome sequencing (WGS) germline variant calling pipeline follo
     - Cohort joint genotyping with CombineGVCFs
     - Per-sample rule expansion and `expand_inputs` fan-in
     - Mixed environments (conda, singularity)
-    - Clinical-grade variant annotation with VEP
+    - Clinical-review-oriented variant annotation with VEP
     - Report configuration with provenance tracking
 
 ## Pipeline Overview
@@ -374,7 +374,7 @@ mechanics of per-sample expansion and `expand_inputs`.
 
 ### BQSR (Base Quality Score Recalibration)
 
-BQSR corrects systematic errors in base quality scores assigned by the sequencer. It uses known variant sites (dbSNP, Mills indels) to distinguish true variants from sequencing artifacts. This step is critical for clinical-grade variant calling accuracy.
+BQSR corrects systematic errors in base quality scores assigned by the sequencer. It uses known variant sites (dbSNP, Mills indels) to distinguish true variants from sequencing artifacts. BQSR can improve calibration for suitable cohorts, but this example is not a validated clinical assay and does not establish clinical accuracy.
 
 ### GVCF Mode
 
@@ -384,7 +384,7 @@ The `combine_gvcfs` rule merges the per-sample GVCFs into a single cohort GVCF (
 
 ### VQSR (Variant Quality Score Recalibration)
 
-Instead of fixed hard filters, the pipeline applies VQSR for clinical-grade variant calling:
+Instead of fixed hard filters, the pipeline demonstrates VQSR for research and clinical-review workflows:
 
 1. **vqsr_snps** — GATK VariantRecalibrator builds a recalibration model from annotation features (QD, MQ, MQRankSum, ReadPosRankSum, FS, SOR), using hapmap, omni, and 1000G as training/truth resources and dbSNP as a known-sites resource.
 2. **apply_vqsr_snps** — GATK ApplyVQSR applies the SNP model at `--truth-sensitivity-filter-level 99.7`, retaining high sensitivity while filtering false positives.

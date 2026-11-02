@@ -33,34 +33,15 @@ pub(crate) fn build_dag_and_targets(
     )
     .context("failed to build workflow DAG")?;
 
-    if !config.types.is_empty() || config.rules.iter().any(|rule| rule.types.is_some()) {
-        let type_errors = oxo_flow_core::types::check_workflow_types(config, &dag);
-        if !type_errors.is_empty() {
-            let findings = type_errors
-                .iter()
-                .map(|td| {
-                    let hint = td
-                        .violation
-                        .suggestion
-                        .as_deref()
-                        .map(|suggestion| format!("\n    hint: {suggestion}"))
-                        .unwrap_or_default();
-                    format!(
-                        "[{}] {} ({} -> {}): {}{}",
-                        td.violation.code,
-                        td.consumer_rule,
-                        td.producer_channel,
-                        td.consumer_channel,
-                        td.violation.message,
-                        hint
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n  ");
-            anyhow::bail!(
-                "declared biological type contracts are violated — fix before running:\n  {findings}"
-            );
-        }
+    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(config, &dag) {
+        let findings = type_errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n  ");
+        anyhow::bail!(
+            "declared biological type contracts are violated — fix before running:\n  {findings}"
+        );
     }
 
     // --module partial runs (issue #112 elasticity): each module name

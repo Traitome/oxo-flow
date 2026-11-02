@@ -1,23 +1,67 @@
-# Quantitative Statistical Benchmark & Hypothesis Testing Report
+# Statistical Benchmark Evidence Status
 
-## 1. Experimental Arms & Pass@1 Performance
+> **Status**: no confirmatory statistical result.
+>
+> **Evidence mode**: tooling validation only.
+>
+> **Important**: this document must not be cited as evidence of superiority over Nextflow, Snakemake, or another `oxo-flow` configuration.
 
-| Arm | Description | Total Samples | Pass@1 | 95% Bootstrap CI | Mean Tokens | Mean Cost ($) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **ARM_A** | Arm A (Naive Baseline) | 36 | **41.7%** | [0.278, 0.583] | 1220 | $0.0031 |
-| **ARM_B** | Arm B (CLI Agent) | 36 | **83.3%** | [0.694, 0.944] | 5553 | $0.0139 |
-| **ARM_C** | Arm C (Type-Directed Continuum) | 36 | **100.0%** | [1.000, 1.000] | 6870 | $0.0172 |
+## 1. Purpose
 
-## 2. Paired Hypothesis Testing (McNemar's Test with Continuity Correction)
+The statistical harness is designed to analyze matched Arms A, B, and C after a pre-registered benchmark campaign:
 
-| Contrast | Discordant Pairs (b/c) | $\chi^2$ (df=1) | Two-Tailed $p$-value | Odds Ratio | Significant ($\alpha=0.05$) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **ARM B VS ARM A** | 17 / 2 | 10.3158 | 0.0013 | 8.5 | **YES** (p < 0.05) |
-| **ARM C VS ARM B** | 6 / 0 | 4.1667 | 0.0412 | inf | **YES** (p < 0.05) |
-| **ARM C VS ARM A** | 21 / 0 | 19.0476 | 1.2760e-05 | inf | **YES** (p < 0.05) |
+- **Arm A**: unconstrained generation.
+- **Arm B**: syntax/schema feedback only.
+- **Arm C**: full declared-contract and scientific-preflight feedback.
 
-## 3. Scientific Synthesis
+The harness fails closed when matched three-arm measurements are absent.
 
-- **Arm C (Type-Directed Continuum)** demonstrates statistically superior pass rates over both Arm A and Arm B.
-- Static semantic validation coupled with causal fault self-healing resolves biological contract mismatches before execution without manual intervention.
-- The modest token expenditure increase in Arm C is offset by eliminating failed cluster job reruns and lost bioinformatician debugging hours.
+## 2. What Is Implemented
+
+- Paired cell matching by intent, model, and seed.
+- `pass@k` computation when the required repeated samples exist.
+- Bootstrap confidence intervals.
+- McNemar analysis for paired binary outcomes.
+- Cost and token summaries.
+- Explicit non-inferential mode for deterministic synthetic fixtures.
+
+These are analysis capabilities, not experimental findings.
+
+## 3. Direct Systems Comparison Required
+
+An AI-synthesis benchmark is not a replacement benchmark. Any claim that
+`oxo-flow` can substitute for Nextflow or Snakemake also requires a direct,
+pre-registered comparison using the same workflow intent, inputs, reference
+data, container digests, host, resource limits, scheduler, and cache state.
+The comparison must retain per-run engine versions, commands, wall time, peak
+memory, disk I/O, completion, declared-output equivalence, restart behavior,
+failures, and exclusions. Unsupported constructs are coverage limits and may
+not be silently dropped.
+
+## 4. Evidence Required Before Reporting Results
+
+The confirmatory campaign must attach:
+
+1. A pre-registration of primary outcomes, exclusions, stopping rules, and analysis.
+2. The exact held-out intent corpus and a leakage audit.
+3. Fixed model names, provider versions, prompts, tool policies, token budgets, and seeds.
+4. Matched per-item outputs for every arm.
+5. Raw success/failure judgments with human adjudication where automation is insufficient.
+6. Token and monetary cost inputs with provider pricing provenance.
+7. An independent reanalysis from the raw data.
+8. Negative results and unsupported cells, without post-hoc deletion.
+
+## 5. Prohibited Claims
+
+Do not report any of the following without measured matched data:
+
+- a pass-rate superiority claim;
+- a statistically significant improvement;
+- a self-healing success rate;
+- a cost advantage;
+- a claim that biological errors are eliminated;
+- a claim that a synthetic fixture predicts production or publication performance.
+
+## 6. Current Decision
+
+The confirmatory benchmark remains **Planned / blocked**. The next admissible output is a pre-registration and data manifest, not a results table.

@@ -84,6 +84,11 @@ path = "align.oxoflow"
 | `path` | String | **Yes** | Path to the included `.oxoflow` file |
 | `namespace` | String | No | Optional namespace prefix for included rule names |
 
+Use a local path or a `repo` + `ref` pinned include. Raw `http://` and `https://`
+URLs in `path` are rejected without making a network request; mutable remote
+content would bypass both module pinning and the engine's network safety
+boundary.
+
 ### Namespace Behavior
 
 When a `namespace` is specified:
@@ -597,7 +602,7 @@ Each section ID maps to a registered `ReportSectionGenerator`:
 | `commands` | Expanded shell commands for every rule | Always |
 | `file-manifest` | Input and output file listings | Always |
 | `environment` | Available backends and oxo-flow version | Always |
-| `clinical-compliance` | ACMG/AMP classification, audit trail, biomarkers | Always |
+| `clinical-compliance` | Static capability and audit-statement section; it does not generate variant classifications, ACMG/AMP interpretations, or clinical conclusions | Always |
 | `execution-status` | Per-rule execution status and benchmark metrics | Only with checkpoint |
 | `software-versions` | Declared software per rule, nf-core-style: docker `image:tag`, module `tool/version`, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded (see [Reporting](reporting-system.md#software-versions-section)) | When any rule declares an environment |
 | `rule-captions` | Per-rule `report` annotations rendered as markdown — see [Rule Captions](#rule-captions) | When any rule declares `report` |

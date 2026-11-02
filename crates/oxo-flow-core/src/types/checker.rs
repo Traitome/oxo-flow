@@ -1,6 +1,7 @@
 //! DAG biological subtyping checker and automated coercion rule synthesizer.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation, coercion_rule_for_index,
@@ -22,6 +23,25 @@ pub struct TypeDiagnostic {
     pub consumer_channel: String,
     /// Specific biological type violation.
     pub violation: TypeViolation,
+}
+
+impl fmt::Display for TypeDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{}] {} -> {} ({} -> {}): {}",
+            self.violation.code,
+            self.producer_rule,
+            self.consumer_rule,
+            self.producer_channel,
+            self.consumer_channel,
+            self.violation.message
+        )?;
+        if let Some(suggestion) = &self.violation.suggestion {
+            write!(f, "; hint: {suggestion}")?;
+        }
+        Ok(())
+    }
 }
 
 impl BioTypeSpec {
@@ -314,6 +334,22 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
     }
 
     diagnostics
+}
+
+/// Validate declared biological contracts across a workflow DAG.
+///
+/// Returns an empty success when the workflow declares no BioTypes. This is
+/// the shared admission gate for CLI preflight and web run creation.
+pub fn validate_workflow_types(
+    config: &WorkflowConfig,
+    dag: &WorkflowDag,
+) -> Result<(), Vec<TypeDiagnostic>> {
+    let diagnostics = check_workflow_types(config, dag);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
+    }
 }
 
 fn resolve_type_spec(

@@ -6,11 +6,147 @@
 
 use oxo_flow_core::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Component, Path};
 
 use crate::infra::db::models;
 
 use super::diagnostics::DiagnosticsEngine;
 use super::types::*;
+
+/// Detect a BioTypes declaration from parsed TOML structure.
+///
+/// Supports both table declarations (`[types.name]`, `[rules.types]`) and
+/// inline declarations (`types = { ... }`). Invalid TOML is handled by the
+/// canonical workflow parser before run admission; this predicate is only a
+/// conservative routing check for the resolved-admission gate.
+#[cfg(test)]
+fn source_rejects_unresolved_admission(source: &str) -> bool {
+    let Ok(root) = toml::from_str::<toml::Table>(source) else {
+        return false;
+    };
+    table_declares_type_contracts(&root)
+}
+
+fn table_declares_type_contracts(root: &toml::Table) -> bool {
+    let has_root_types = root
+        .get("types")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|types| !types.is_empty());
+    let has_rule_types = root
+        .get("rules")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|rules| {
+            rules.iter().filter_map(toml::Value::as_table).any(|rule| {
+                rule.get("types")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|types| !types.is_empty())
+            })
+        });
+    has_root_types || has_rule_types
+}
+
+fn include_tables(root: &toml::Table) -> Vec<&toml::Table> {
+    root.get("include")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+        .collect()
+}
+
+fn resolve_included_source(current: &str, include: &str) -> Option<String> {
+    if include.starts_with("http://")
+        || include.starts_with("https://")
+        || Path::new(include).is_absolute()
+    {
+        return None;
+    }
+    let mut resolved = Vec::new();
+    for component in Path::new(current)
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(include)
+        .components()
+    {
+        match component {
+            Component::Normal(part) => resolved.push(part.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!resolved.is_empty()).then(|| resolved.join("/"))
+}
+
+/// Evidence gathered from the host and its locally staged include graph.
+///
+/// Unrelated staged assets are deliberately ignored: `include_files` may
+/// contain environment manifests, data dictionaries, or other TOML that
+/// happens to mention `types` without participating in workflow admission.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct AdmissionSourceScan {
+    pub host_declares_type_contracts: bool,
+    pub host_has_include_graph: bool,
+    pub included_source_declares_type_contracts: bool,
+    pub unresolved_include: bool,
+}
+
+/// Scan the host and locally staged sources reachable through `[[include]]`.
+pub(crate) fn scan_admission_sources<'a>(
+    host_source: &str,
+    include_sources: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> AdmissionSourceScan {
+    let sources: HashMap<&str, &str> = include_sources.into_iter().collect();
+    let mut visited = HashSet::new();
+    let mut pending = VecDeque::from([("workflow.oxoflow".to_string(), host_source)]);
+    let mut scan = AdmissionSourceScan::default();
+
+    while let Some((path, source)) = pending.pop_front() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let Ok(root) = toml::from_str::<toml::Table>(source) else {
+            if path != "workflow.oxoflow" {
+                scan.unresolved_include = true;
+            }
+            continue;
+        };
+        if table_declares_type_contracts(&root) {
+            if path == "workflow.oxoflow" {
+                scan.host_declares_type_contracts = true;
+            } else {
+                scan.included_source_declares_type_contracts = true;
+            }
+        }
+        let includes = include_tables(&root);
+        if path == "workflow.oxoflow" && !includes.is_empty() {
+            scan.host_has_include_graph = true;
+        }
+        for include in includes {
+            if include.get("repo").is_some() {
+                scan.unresolved_include = true;
+                continue;
+            }
+            let Some(include_path) = include.get("path").and_then(toml::Value::as_str) else {
+                scan.unresolved_include = true;
+                continue;
+            };
+            let Some(resolved) = resolve_included_source(&path, include_path) else {
+                scan.unresolved_include = true;
+                continue;
+            };
+            let Some(content) = sources.get(resolved.as_str()) else {
+                scan.unresolved_include = true;
+                continue;
+            };
+            pending.push_back((resolved, content));
+        }
+    }
+    scan
+}
 
 /// Create a run from pipeline TOML. Returns execution plan with resource estimates.
 pub fn create_run(
@@ -23,6 +159,21 @@ pub fn create_run(
     // producer/consumer pairs only match after placeholder expansion.
     let dag = WorkflowDag::from_rules_with_config(&wf.rules, &wf.config_placeholder_values())
         .map_err(|e| format!("DAG: {e}"))?;
+
+    // Web admission uses the same canonical biological contract gate as the
+    // CLI preflight. Rejecting here prevents an invalid run from being
+    // persisted or queued while deferring the failure to the spawned CLI.
+    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(&wf, &dag) {
+        let findings = type_errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "declared biological type contracts are violated: {findings}"
+        ));
+    }
+
     let execution_order = dag.execution_order().map_err(|e| format!("Order: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
 
@@ -439,6 +590,162 @@ values = ["s1", "s2"]
             err.contains("collides with a built-in wildcard"),
             "error must name the collision: {err}"
         );
+    }
+
+    #[test]
+    fn create_run_rejects_declared_type_contract_violations() {
+        let toml = r#"
+[workflow]
+name = "type-gate"
+version = "0.1.0"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[types.bam_sorted_indexed]
+format = "bam"
+sort_order = "coordinate"
+index = "bai"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+
+[[rules]]
+name = "call"
+input = ["aligned.sam"]
+output = ["calls.vcf"]
+shell = "touch calls.vcf"
+
+[rules.types]
+inputs = { default = "bam_sorted_indexed" }
+"#;
+        let config = RunConfig {
+            max_jobs: Some(2),
+            dry_run: None,
+            keep_going: None,
+            resource_budget: None,
+        };
+        let err = create_run(toml, &config, None)
+            .expect_err("web admission must reject declared type violations");
+        assert!(err.contains("TYPE-001"), "{err}");
+        assert!(err.contains("TYPE-002"), "{err}");
+        assert!(err.contains("TYPE-003"), "{err}");
+        assert!(err.contains("hint:"), "{err}");
+    }
+
+    #[test]
+    fn typed_contract_source_scan_handles_tables_inline_tables_and_comments() {
+        assert!(source_rejects_unresolved_admission(
+            "[types.sam]\nformat = \"sam\""
+        ));
+        assert!(source_rejects_unresolved_admission(
+            "[workflow]\nname = \"typed\"\n[[rules]]\nname = \"r\"\n  [rules.types] # contract\noutputs = {}"
+        ));
+        assert!(!source_rejects_unresolved_admission(
+            "# [types.sam]\nformat = \"sam\""
+        ));
+        assert!(!source_rejects_unresolved_admission("[env]\nchannels = []"));
+        assert!(source_rejects_unresolved_admission(
+            "types = { sam = { format = \"sam\" } }\n[workflow]\nname = \"typed\""
+        ));
+        assert!(source_rejects_unresolved_admission(
+            "[workflow]\nname = \"typed\"\n[[rules]]\nname = \"r\"\ntypes = { outputs = { default = \"sam\" } }"
+        ));
+        assert!(source_rejects_unresolved_admission(
+            "[workflow]\nname = \"typed\"\n[[rules]]\nname = \"r\"\ntypes.outputs = { default = \"sam\" }"
+        ));
+    }
+
+    #[test]
+    fn typed_contract_scan_follows_only_reachable_local_includes() {
+        let host = r#"
+[workflow]
+name = "host"
+
+[[include]]
+path = "modules/plain.oxoflow"
+"#;
+        let plain = r#"
+[workflow]
+name = "plain"
+
+[[include]]
+path = "nested/typed.oxoflow"
+"#;
+        let typed = r#"
+[workflow]
+name = "typed"
+
+[[rules]]
+name = "r"
+types = { outputs = { default = "sam" } }
+"#;
+        let unrelated = r#"
+[types.sam]
+format = "sam"
+"#;
+        let sources = [
+            ("modules/plain.oxoflow", plain),
+            ("modules/nested/typed.oxoflow", typed),
+            ("assets/unrelated.toml", unrelated),
+        ];
+        let scan = scan_admission_sources(host, sources);
+        assert!(!scan.host_declares_type_contracts);
+        assert!(scan.host_has_include_graph);
+        assert!(scan.included_source_declares_type_contracts);
+        assert!(!scan.unresolved_include);
+
+        let host_without_nested_types = r#"
+[workflow]
+name = "host"
+
+[[include]]
+path = "modules/plain.oxoflow"
+"#;
+        let plain_without_includes = r#"
+[workflow]
+name = "plain"
+"#;
+        let unrelated_only = [
+            ("modules/plain.oxoflow", plain_without_includes),
+            ("assets/unrelated.toml", unrelated),
+        ];
+        let scan = scan_admission_sources(host_without_nested_types, unrelated_only);
+        assert!(!scan.host_declares_type_contracts);
+        assert!(scan.host_has_include_graph);
+        assert!(!scan.included_source_declares_type_contracts);
+        assert!(!scan.unresolved_include);
+
+        let host_with_unstaged_include = r#"
+[workflow]
+name = "host"
+
+[[include]]
+path = "modules/missing.oxoflow"
+"#;
+        let scan = scan_admission_sources(host_with_unstaged_include, unrelated_only);
+        assert!(scan.host_has_include_graph);
+        assert!(scan.unresolved_include);
+
+        let host_with_repo_include = r#"
+[workflow]
+name = "host"
+
+[[include]]
+path = "modules/plain.oxoflow"
+repo = "https://example.com/workflows.git"
+ref = "v1"
+"#;
+        let staged_shadow = [("modules/plain.oxoflow", "[workflow]\nname = \"shadow\"\n")];
+        let scan = scan_admission_sources(host_with_repo_include, staged_shadow);
+        assert!(scan.host_has_include_graph);
+        assert!(scan.unresolved_include);
     }
 
     #[test]

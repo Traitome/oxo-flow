@@ -17,7 +17,7 @@ mod inspect_tests;
 #[cfg(test)]
 mod tests;
 
-pub use checker::{TypeDiagnostic, check_workflow_types};
+pub use checker::{TypeDiagnostic, check_workflow_types, validate_workflow_types};
 pub use inspect::{
     IntrospectError, IntrospectedBioType, introspect_bytes, introspect_file,
     introspect_path_with_spec,

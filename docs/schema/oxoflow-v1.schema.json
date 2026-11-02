@@ -306,11 +306,41 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "Path to the included .oxoflow file"
+            "description": "Path to the included .oxoflow file, or a path inside a pinned git repository"
           },
           "namespace": {
             "type": "string",
             "description": "Optional namespace prefix for included rules"
+          },
+          "name": {
+            "type": "string",
+            "description": "Module identity for partial runs; defaults to the included file stem"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Input file patterns the host must provide to the module"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output file patterns the module exposes to the host"
+          },
+          "params": {
+            "type": "object",
+            "description": "Default config values for the module; explicit host values take precedence"
+          },
+          "repo": {
+            "type": "string",
+            "description": "Git repository containing the included path"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Git tag, branch, or commit pinning the repository include"
           }
         }
       }

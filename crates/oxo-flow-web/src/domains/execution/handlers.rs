@@ -256,23 +256,54 @@ fn check_spawn_budget(
     Ok(())
 }
 
+/// Override the run-creation limiter without mutating process environment.
+///
+/// Integration tests use this to isolate router contract coverage from the
+/// process-wide sliding window. The limiter's enforcement remains covered by
+/// its dedicated unit test. Debug builds expose this seam for integration
+/// tests; release builds omit both the function and its override state.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn set_run_rate_limit_for_tests(limit: u32) {
+    run_rate_limit::set_limit_for_tests(limit);
+}
+
 /// Per-identity sliding-window rate limit for run creation (issue #213).
 /// Expensive spawns must not share the global request limiter's budget with
 /// health checks and reads. Configurable via `OXO_FLOW_RUNS_RATE_LIMIT`
 /// (allowed runs per minute, default 5; 0 disables the limiter entirely).
 mod run_rate_limit {
     use std::collections::HashMap;
+    #[cfg(debug_assertions)]
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{LazyLock, Mutex};
     use std::time::{Duration, Instant};
 
     const WINDOW: Duration = Duration::from_secs(60);
+    #[cfg(debug_assertions)]
+    const NO_TEST_OVERRIDE: u64 = u64::MAX;
     pub const DEFAULT_LIMIT: u32 = 5;
 
+    #[cfg(debug_assertions)]
+    static TEST_LIMIT: AtomicU64 = AtomicU64::new(NO_TEST_OVERRIDE);
+
     fn limit() -> u32 {
+        #[cfg(debug_assertions)]
+        {
+            let test_limit = TEST_LIMIT.load(Ordering::Relaxed);
+            if test_limit != NO_TEST_OVERRIDE {
+                return test_limit as u32;
+            }
+        }
         std::env::var("OXO_FLOW_RUNS_RATE_LIMIT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_LIMIT)
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn set_limit_for_tests(limit: u32) {
+        TEST_LIMIT.store(u64::from(limit), Ordering::Relaxed);
     }
 
     static HITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
@@ -435,27 +466,58 @@ pub async fn create_run(
     // never leave a ghost `queued` runs row behind (PR #930 NIT-3). IO
     // staging (mkdir/write) still happens after the row exists.
     let validated_overrides = validate_config_overrides(&req)?;
-    let include_paths: Vec<(String, String)> = req
-        .include_files
-        .iter()
-        .flat_map(|m| m.iter())
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    for (rel, _) in &include_paths {
-        if rel == "workflow.oxoflow" {
+    let mut include_paths = Vec::new();
+    let mut canonical_keys = std::collections::BTreeSet::new();
+    for (raw, content) in req.include_files.iter().flat_map(|files| files.iter()) {
+        let rel = crate::workspace::canonicalize_relative_path(raw).map_err(|reason| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_INCLUDE_PATH",
+                format!("include_files key '{raw}' is not a valid relative path: {reason}"),
+            )
+        })?;
+        if rel.eq_ignore_ascii_case("workflow.oxoflow") {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "INVALID_INCLUDE_PATH",
-                "include_files key 'workflow.oxoflow' would overwrite the main workflow".into(),
+                format!(
+                    "include_files key '{raw}' resolves to 'workflow.oxoflow' and would overwrite the main workflow"
+                ),
             ));
         }
-        if let Err(reason) = crate::workspace::check_relative_path(rel) {
+        if !canonical_keys.insert(rel.to_ascii_lowercase()) {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "INVALID_INCLUDE_PATH",
-                format!("include_files key '{rel}' is not a valid relative path: {reason}"),
+                format!(
+                    "include_files contains multiple keys that resolve to the same path or case-insensitive path alias '{rel}'"
+                ),
             ));
         }
+        include_paths.push((rel, content.clone()));
+    }
+
+    // BioTypes can be declared in the host workflow or an included module,
+    // and config overrides can change the graph that the checker evaluates.
+    // Full include/override resolution is not yet available in the web
+    // admission layer, so typed inputs must fail closed instead of claiming
+    // parity with the CLI's resolved-workflow preflight.
+    let admission_sources = service::scan_admission_sources(
+        toml,
+        include_paths
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str())),
+    );
+    let needs_resolved_admission = admission_sources.unresolved_include
+        || admission_sources.included_source_declares_type_contracts
+        || (admission_sources.host_declares_type_contracts
+            && (admission_sources.host_has_include_graph || !validated_overrides.is_empty()));
+    if needs_resolved_admission {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "TYPED_ADMISSION_UNSUPPORTED",
+            "Typed or uninspectable workflow includes, or direct typed workflows with includes or config_overrides, require the CLI's resolved-workflow admission path".into(),
+        ));
     }
 
     let resp = service::create_run(toml, &config, None)

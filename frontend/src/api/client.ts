@@ -324,9 +324,9 @@ export const api = {
   rollbackPipeline: (id: string, revision_id: string) => post<Pipeline>(`/api/pipelines/${id}/rollback`, { revision_id }),
 
   // ── Webhooks (issue #82 P1-12) ──
-  webhookConfig: () => get<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>('/api/webhook'),
-  webhookUpdate: (config: { enabled: boolean; url: string; secret?: string; events?: string[] }) =>
-    put<{ status: string }>('/api/webhook', config),
+  webhookConfig: () => get<{ enabled: boolean; url: string; secret_set: boolean; events: string[]; signature_scheme: string }>('/api/webhook'),
+  webhookUpdate: (config: { enabled: boolean; url: string; secret?: string; events?: string[]; signature_scheme?: string }) =>
+    put<{ status: string; enabled: boolean; events: string[]; signature_scheme: string }>('/api/webhook', config),
 
   // ── API keys (issue #82 P1-13) ──
   listApiKeys: () => get<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>('/api/auth/keys'),

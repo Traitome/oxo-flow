@@ -595,21 +595,12 @@ impl WorkflowConfig {
                 let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
                 (text, next_base)
             } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {
-                // Fetch remote include on a dedicated thread to avoid tokio runtime conflicts
-                tracing::info!(url = %inc.path, "fetching remote include");
-                let url = inc.path.clone();
-                let text =
-                    std::thread::spawn(move || reqwest::blocking::get(&url).and_then(|r| r.text()))
-                        .join()
-                        .map_err(|_| OxoFlowError::Parse {
-                            path: PathBuf::from(&inc.path),
-                            message: "remote include fetch panicked".to_string(),
-                        })?
-                        .map_err(|e| OxoFlowError::Parse {
-                            path: PathBuf::from(&inc.path),
-                            message: format!("failed to fetch remote include: {}", e),
-                        })?;
-                (text, base_dir.to_path_buf()) // Remote includes don't change base_dir for now
+                return Err(OxoFlowError::Parse {
+                    path: PathBuf::from(&inc.path),
+                    message: "remote URL includes are not supported — use `repo` with a pinned \
+                              `ref` and a repository-relative `path`"
+                        .to_string(),
+                });
             } else {
                 let inc_path = base_dir.join(&inc.path);
                 // Stat-first regular-file gate (issue #714, pattern from

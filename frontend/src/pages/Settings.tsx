@@ -82,7 +82,7 @@ export default function Settings() {
   const [refs, setRefs] = useState<ReferenceStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [adv, setAdv] = useState({ search_enabled: true, monitor_enabled: true, auto_retry_enabled: false, max_correction_rounds: 3 });
-  const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>({ enabled: false, url: '', secret_set: false, events: [] });
+  const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[]; signature_scheme: string }>({ enabled: false, url: '', secret_set: false, events: [], signature_scheme: 'hmac-sha256' });
   const [webhookSecret, setWebhookSecret] = useState('');
   const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>([]);
   const [newKeyName, setNewKeyName] = useState('');
@@ -417,6 +417,15 @@ export default function Settings() {
           <SettingInput placeholder="https://example.com/oxo-webhook" value={webhook.url}
             onChange={(e) => setWebhook({ ...webhook, url: e.target.value })} />
           <div style={{ marginTop: '0.5rem' }}>
+            <SettingLabel text={t('settings.webhook.scheme')} />
+            <select value={webhook.signature_scheme}
+              onChange={(e) => setWebhook({ ...webhook, signature_scheme: e.target.value })}
+              className="search-input" style={{ width: '100%' }}>
+              <option value="hmac-sha256">{t('settings.webhook.schemeHmac')}</option>
+              <option value="sha256-keyed">{t('settings.webhook.schemeLegacy')}</option>
+            </select>
+          </div>
+          <div style={{ marginTop: '0.5rem' }}>
             <SettingLabel text={webhook.secret_set ? t('settings.webhook.secretSet') : t('settings.webhook.secret')} />
             <SettingInput type="password" placeholder={webhook.secret_set ? '••••••••' : 'secret'} value={webhookSecret}
               onChange={(e) => setWebhookSecret(e.target.value)} />
@@ -427,7 +436,12 @@ export default function Settings() {
           </label>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px' }}>
             <button className="btn-sm" onClick={() => {
-              api.webhookUpdate({ enabled: webhook.enabled, url: webhook.url, secret: webhookSecret || undefined })
+              api.webhookUpdate({
+                enabled: webhook.enabled,
+                url: webhook.url,
+                secret: webhookSecret || undefined,
+                signature_scheme: webhook.signature_scheme,
+              })
                 .then(() => { setWebhookSecret(''); api.webhookConfig().then(setWebhook); setNotice(t('settings.webhook.saved')); })
                 .catch(() => setNotice(t('settings.webhook.saveFailed')));
             }}>{t('settings.webhook.save')}</button>

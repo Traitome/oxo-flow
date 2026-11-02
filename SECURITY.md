@@ -19,15 +19,34 @@ Response within 48 hours. Fixes published within 7 days.
 - **`#![forbid(unsafe_code)]`** — No unsafe Rust in core and web crates
 - **Shell injection prevention** — Commands parsed and sanitized before execution
 - **Path traversal protection** — I/O paths validated against workspace boundaries
-- **API key encryption** — Provider keys encrypted at rest
+- **API key encryption** — Provider keys are encrypted at rest when `OXO_FLOW_MASTER_KEY` is configured; otherwise the local database uses the documented plaintext compatibility mode
 - **Rate limiting** — Per-IP on auth and chat endpoints
-- **No secrets in source** — Credentials via env vars or encrypted config
+- **No secrets in source** — Credentials come from environment variables, a
+  configured master-key-sealed store, or the documented plaintext compatibility
+  mode; plaintext mode is not suitable for shared production hosts
 - **Input validation** — Structured error responses `{code, message, detail}`
 
 ## Trust Boundary
 
-AI service layer: zero DB write, zero process management, zero filesystem write.
-AI never executes autonomously — every action requires human approval.
+The deterministic engine, web authorization layer, AI tools, MCP servers, workflow
+shells, and execution backends are separate trust domains. AI output is untrusted
+input and must pass deterministic parsing, validation, and the relevant approval
+path before it can affect a run.
+
+This separation is not yet a complete security boundary:
+
+- workflow shells can inherit ambient process credentials;
+- team/HPC execution has no OS-level tenant isolation boundary;
+- expanded sensitive values can reach scheduler and container artifacts;
+- malformed tool arguments can fail open, and a generic MCP token can be sent to
+  any activated MCP endpoint;
+- malformed or partial AI repairs can overwrite a complete workflow until the
+  repair path is hardened.
+
+Treat AI-assisted workflows as authoring aids, validate every generated artifact,
+and do not expose team/HPC execution to untrusted workflow authors. The
+release-blocking evidence and exit criteria are maintained in
+[`docs/superpowers/audits/industrial-scientific-audit-ledger.md`](docs/superpowers/audits/industrial-scientific-audit-ledger.md).
 
 ## Dependency Auditing
 

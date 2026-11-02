@@ -1683,7 +1683,7 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
     let bob_config = client
         .post(format!("{base}/api/ai/config"))
         .bearer_auth(&bob)
-        .json(&serde_json::json!({"provider": "noop"}))
+        .json(&serde_json::json!({"provider": "deepseek"}))
         .send()
         .await
         .unwrap();
@@ -1728,7 +1728,7 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
     let bob_user_config = client
         .put(format!("{base}/api/ai/config/user"))
         .bearer_auth(&bob)
-        .json(&serde_json::json!({"provider": "noop", "api_key": "bobs-key"}))
+        .json(&serde_json::json!({"provider": "deepseek", "api_key": "bobs-key"}))
         .send()
         .await
         .unwrap();
@@ -1762,7 +1762,7 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
         .json()
         .await
         .unwrap();
-    assert_eq!(bob_effective["tiers"]["user_provider"], "noop");
+    assert_eq!(bob_effective["tiers"]["user_provider"], "deepseek");
 
     // Cluster management is admin-only too (SSH credentials).
     let bob_cluster = client

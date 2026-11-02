@@ -529,6 +529,30 @@ fn resolve_includes_missing_file() {
 }
 
 #[test]
+fn resolve_includes_rejects_remote_urls_without_fetching() {
+    let toml = r#"
+        [workflow]
+        name = "remote_include"
+        version = "1.0.0"
+
+        [[include]]
+        path = "http://127.0.0.1:9/module.oxoflow"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).expect("include directive parses");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("remote URL includes must fail closed");
+    let message = err.to_string();
+    assert!(
+        message.contains("remote URL includes are not supported"),
+        "{message}"
+    );
+    assert!(message.contains("`repo`"), "{message}");
+    assert!(message.contains("`ref`"), "{message}");
+}
+
+#[test]
 fn validate_rejects_bad_execution_groups() {
     let toml_str = r#"
         [workflow]

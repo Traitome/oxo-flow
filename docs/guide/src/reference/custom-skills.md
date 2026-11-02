@@ -177,9 +177,12 @@ closing the DNS-rebinding window between screening and connecting
 hops are re-screened the same way — a hop that lands in internal space is
 refused, and an approved hop connects to its own vetted address.
 
-This preserves the trust boundary: the AI never executes autonomously,
-and attacker-influenced skill manifests cannot aim it at internal
-services.
+These controls narrow the attack surface but are not a complete trust
+boundary. A generic `OXO_FLOW_MCP_TOKEN` is sent to every activated MCP
+endpoint unless a per-server token overrides it, and automatically approved
+project reads combined with outbound fetches can create a data-exfiltration
+path. Activate only reviewed skills and MCP servers, prefer per-server tokens,
+and treat this subsystem as prototype-grade until the audit gates close.
 
 ### Protocol Version and Authentication
 
@@ -195,12 +198,15 @@ MCP servers requiring bearer authentication read the token from the
 environment — never from a skill manifest, which is attacker-influenced
 text (#518):
 
-- `OXO_FLOW_MCP_TOKEN` — generic token sent to every MCP server
+- `OXO_FLOW_MCP_TOKEN` — generic token sent to every MCP server unless a
+  per-server override is present
 - `OXO_FLOW_MCP_TOKEN_<SERVER>` — per-server token (server name
   uppercased, non-alphanumeric characters folded to `_`; e.g. server
   `fs-gdrive` → `OXO_FLOW_MCP_TOKEN_FS_GDRIVE`)
 
-The per-server variable wins when both are set. The `<SERVER>` name is
+The per-server variable wins when both are set. Do not use the generic token
+with a skill catalog that can select an operator-unreviewed endpoint. The
+`<SERVER>` name is
 folded from the endpoint URL's host, port and path (everything after the
 scheme — `mcp://fs-gdrive:9000/v1` → `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`),
 so two servers sharing a host on different paths get distinct variables.

@@ -301,6 +301,17 @@ fn test_dag_type_checking_pipeline() {
         "must detect sort order mismatch"
     );
     assert!(codes.contains(&"TYPE-003"), "must detect missing BAI index");
+
+    let rendered = diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("[TYPE-001] align -> call_variants (default -> default):"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("; hint: "), "{rendered}");
 }
 
 #[test]

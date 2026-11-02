@@ -1,18 +1,27 @@
 # oxo-flow Roadmap
 
 > **Mission**: Build a Rust-native bioinformatics pipeline engine with first-principles design,
-> first-class clinical-grade reporting, environment management, and a full-featured web interface.
+> reporting designed for clinical rigor, environment management, and a full-featured web interface.
 >
-> Licensed under Apache 2.0 — fully open source and free.
+> Licensing is per crate: the core, AI, CLI, and desktop components are
+> Apache-2.0; the web crate uses separate Academic/Commercial terms. See the
+> licensing table in README.md.
+>
+> **Roadmap status**: Phases 1–11 preserve historical implementation milestones. A checked item
+> records that work landed; it is not evidence that the current security, release, scientific, or
+> user-experience gate has passed. The audit ledger linked from Phase 12 is authoritative for
+> maturity and release blockers.
 
 ---
 
-## Multi-Expert System Evaluation
+## Role-Based Evaluation Synthesis
 
-The following evaluation synthesizes perspectives from 30 domain experts to guide the
-project's design decisions, priorities, and architecture.
+The following evaluation is a role-based design review: the 30 roles are analytical
+lenses, not evidence that 30 independent domain experts reviewed or validated the
+implementation. The table records recommendations and hypotheses that must be tested
+against code, users, and domain truth sets.
 
-### Expert Panel Summary
+### Role-Based Review Summary
 
 | # | Role | Key Recommendation |
 |---|------|--------------------|
@@ -54,7 +63,7 @@ project's design decisions, priorities, and architecture.
 3. **Template-based reporting** — Tera engine for HTML reports with CSS styling; JSON for programmatic access
 4. **REST API design** — CRUD for workflows, runs, reports; SSE for real-time execution monitoring
 5. **Container-first packaging** — Generate Dockerfile/Singularity definitions from workflow specs automatically
-6. **Reference pipeline** — Clinical tumor variant calling pipeline validated the entire engine stack
+6. **Reference pipeline** — A clinical tumor variant calling workflow is used as a worked example; it did not validate the entire engine stack
 
 ---
 
@@ -72,7 +81,7 @@ project's design decisions, priorities, and architecture.
 
 5. **Performance through Rust** — Zero-cost abstractions, fearless concurrency, and efficient memory management make Rust ideal for orchestrating thousands of concurrent bioinformatics tasks.
 
-6. **Clinical-grade quality** — Reports must be accurate, traceable, and auditable. Every step logs its provenance, inputs, outputs, software versions, and execution environment.
+6. **Clinical rigor by design** — Reports must be accurate, traceable, and auditable. Every step should log its provenance, inputs, outputs, software versions, and execution environment. Clinical qualification requires separate evidence and is not implied by these design goals.
 
 ### System Architecture
 
@@ -249,7 +258,8 @@ memory = "32G"
 
 ## Phase 4: Reporting System
 
-**Goal**: Modular, clinical-grade report generation.
+**Goal**: Modular reporting designed for clinical review. Clinical
+qualification requires a separate evidence and governance program.
 
 ### Milestone 4.1: Report Engine
 - [x] Structured report generation from the run checkpoint (Tera templates were archived in the issue #83 redesign)
@@ -263,7 +273,7 @@ memory = "32G"
 - [x] Execution provenance section
 - [x] Key-value metadata sections
 
-### Milestone 4.3: Clinical Report Standards
+### Milestone 4.3: Clinical Review Report Foundations
 - [x] Structured clinical report sections
 - [x] Audit trail and traceability
 - [x] Report metadata with timestamps and provenance
@@ -319,9 +329,9 @@ memory = "32G"
 
 ---
 
-## Phase 8: Production Hardening
+## Phase 8: Production Hardening Foundations
 
-**Goal**: Production-ready release with complete documentation and testing.
+**Goal**: establish baseline packaging, documentation, and tests. Production readiness is governed by the evidence gates in Phase 12, not by this historical phase heading.
 
 ### Milestone 8.1: Testing
 - [x] Unit test coverage across all modules
@@ -398,14 +408,18 @@ framework extensibility, code quality, and documentation.
 - [ ] Property-based testing with proptest (Expert 6.9)
 - [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)
 - [ ] FHIR/HL7 report output format (Expert 30.6)
-- [x] Multi-tenancy (Phase 10; per-user resource quotas remain open)
+- [ ] Multi-tenancy (Phase 10 provides directory separation, but no OS-level tenant boundary; per-user resource quotas remain open)
 - [ ] Job arrays for cluster backends (Expert 13.6)
 - [ ] Node feature matching for HPC scheduling (Expert 13.4)
 - [ ] Spot/preemptible instance support (Expert 14.10)
 
-## Phase 10: Industrial-Grade Web UI System (Completed)
+## Phase 10: Web UI Implementation Baseline
 
 **Goal**: Transform oxo-flow-web into a multi-tenant, resource-aware scheduling portal.
+
+**Status**: substantial implementation exists, but the industrial and multi-tenant claims remain
+blocked by the findings in the Phase 12 audit ledger: no OS-level tenant execution boundary,
+non-atomic run admission, mutable run snapshots, and incomplete lifecycle recovery.
 
 ### Milestone 10.1: Persistence Layer
 - [x] SQLite integration with `sqlx`
@@ -414,10 +428,14 @@ framework extensibility, code quality, and documentation.
 - [x] Audit log implementation for host-level actions
 
 ### Milestone 10.2: Identity & Multi-Tenancy
-- [x] OS account binding mechanism (Sudo/SSH)
-- [x] Physical directory isolation (`workspace/users/<name>/runs/<id>/`)
-- [x] Credential management (encrypted SSH keys)
+- [x] Sudo/SSH execution plumbing exists
+- [x] User-scoped directory namespaces exist (`workspace/users/<name>/runs/<id>/`)
+- [x] Credential storage exists (SSH keys are sealed only when `OXO_FLOW_MASTER_KEY` is configured)
 - [x] Permission-aware file browser API
+
+These are implementation primitives, not a tenant security boundary. They do not
+establish OS-level account binding for every execution path, resource isolation,
+credential scrubbing, or protection from untrusted workflow authors.
 
 ### Milestone 10.3: Resource Awareness
 - [x] Real-time host metrics via `sysinfo`
@@ -434,7 +452,7 @@ framework extensibility, code quality, and documentation.
 
 ---
 
-## Phase 11: v0.8 — Domain-Driven Architecture & AI Integration (Completed, 2026-06-13)
+## Phase 11: v0.8 — Domain-Driven Architecture & AI Integration
 
 **Goal**: Refactor to a deterministic core with AI translation layer, collaboration primitives, and three-mode deployment.
 
@@ -458,7 +476,7 @@ framework extensibility, code quality, and documentation.
 - [x] `/api/ai/explain` — failure diagnosis with human-readable explanations
 - [x] `/api/ai/interpret` — result interpretation with caveats
 - [x] `/api/ai/optimize` — parameter optimization
-- [x] AI provider architecture with fallback chain (Claude → OpenAI → DeepSeek → Ollama → template)
+- [x] AI provider architecture with explicit provider selection and credential-based auto-detection; provider behavior is not treated as a silent quality fallback
 - [x] AI service zero-write-permission enforcement
 
 ### Phase 11.3: Collaboration & Multi-Mode
@@ -467,47 +485,70 @@ framework extensibility, code quality, and documentation.
 - [x] HPC submission backend (SLURM, PBS)
 - [x] Three-mode deployment (personal/team/hpc)
 - [x] Full API coverage: 50+ endpoints across 8 domains
-- [x] 1,280+ tests passing, zero failures
+- [x] Test suite expanded substantially; exact pass status must be recorded for the evaluated commit because this historical checklist is not current CI evidence
 
 ---
 
-## Phase 12: v1.0 — Industrial Scale & Nature-Tier Scientific Verification
+## Phase 12: Research Program Toward Industrial and Publication-Grade Workflow Science
 
-**Goal**: Transform `oxo-flow` into an enterprise-grade cloud-native engine and establish a new scientific computing paradigm (*Nature Biotechnology* / *Nature Methods* target): **Quad-Pillar Co-Designed (Hardware, Software, Design, and User Experience) Formally-Verified Scientific Workflows**.
+**Status**: staged research program. No Stage 12 exit gate has passed.
 
-Full research proposal & architectural specification: [`docs/superpowers/specs/industrial-scientific-roadmap.md`](docs/superpowers/specs/industrial-scientific-roadmap.md).
+**Goal**: establish a defensible, evidence-driven path toward a secure industrial workflow engine and a publication-tier scientific contribution. The target includes *Nature Biotechnology* / *Nature Methods*, but acceptance is not assumed and no manuscript claim is currently supported.
 
-Rigorous task-by-task implementation plan & scientific execution protocol: [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](docs/superpowers/plans/industrial-scientific-implementation-plan.md).
+The program must co-design hardware, software, visual design, and user experience. Existing code, prototypes, projections, and simulations are starting points, not completion evidence.
 
-### Stage 12.1: Hardware-Aware Cloud Core, Decoupled Persistence & Streaming I/O
+Supporting documents:
 
-- [x] Unified `StorageBackend` for PostgreSQL-native multi-tenant run execution (resolving issue #207)
-- [x] Native Kubernetes `ExecutorBackend` and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
-- [x] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
-- [x] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
-- [x] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
+- Audit evidence and release blockers: [`docs/superpowers/audits/industrial-scientific-audit-ledger.md`](docs/superpowers/audits/industrial-scientific-audit-ledger.md)
+- Research proposal and architectural specification: [`docs/superpowers/specs/industrial-scientific-roadmap.md`](docs/superpowers/specs/industrial-scientific-roadmap.md)
+- Implementation and scientific execution protocol: [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](docs/superpowers/plans/industrial-scientific-implementation-plan.md)
 
-### Stage 12.2: BioTypes Biological Semantic Typing & Metro-DAG Visual Design System
+Maturity labels used below:
 
-- [x] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
-- [x] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
-- [x] Sub-millisecond binary header introspection (BAM/CRAM/VCF/FASTQ) prior to job dispatch
-- [x] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
-- [x] Metropolis cross-platform design system tokens and Metro-DAG high-performance interactive transit map
+- **Implemented and verified**: exercised by deterministic tests or measured evidence.
+- **Implemented but unproven**: code exists, but production-scale or scientific evidence is absent.
+- **Prototype**: usable path with material semantic or operational gaps.
+- **Simulation only**: model, fixture, mock, or synthetic result.
+- **Planned / blocked**: not implemented or dependent on a release blocker.
 
-### Stage 12.3: Universal Ecosystem Transpiler & Autonomous Self-Healing Continuum
+### Stage 12.1: Truthful Execution, Persistence & Safe Operations
 
-- [x] Deterministic Nextflow DSL2 (`nf-core`) and Snakemake AST transpiler (`oxo-flow import`) with automated `BioTypes` lifting
-- [x] Four-layer causal fault-isolation graph unifying exit codes, resource telemetry (`BenchmarkRecord`), and header metadata
-- [x] Bounded, provenance-preserving autonomous self-healing loop with 1-click UI and 1-key CLI remediation actions
-- [x] Seamless cross-platform workflow continuum synchronizing state across VS Code, CLI, Desktop, and Web
+| Capability | Maturity | Remaining exit evidence |
+| :--- | :--- | :--- |
+| Unified run-ledger storage abstraction | Implemented but unproven | Live PostgreSQL parity, concurrency, crash recovery, and horizontal-instance tests |
+| Kubernetes and cloud batch executors | Prototype | They currently shell out through `kubectl`, `aws`, and `gcloud`; live submit/run/cancel/retrieve campaigns are required |
+| Range I/O and object-storage staging | Implemented but unproven | End-to-end streaming, interruption, backpressure, and scratch-footprint measurements |
+| Hardware topology and storage-tier discovery | Prototype | Multi-socket affinity, NUMA locality, NVMe pressure, and fallback performance evidence |
+| Team/HPC isolation and RBAC | Prototype / blocked | No OS-level tenant execution boundary; secrets and host files are not isolated |
+| Immutable run history and atomic admission | Planned / blocked | Unique artifact snapshots, atomic create/stage/spawn, and truthful lifecycle transitions |
 
-### Stage 12.4: Large-Scale Empirical Benchmark, Human-Factors Study & Manuscript Package
+### Stage 12.2: Biological Contracts & Human-Centered Visual Design
 
-- [x] Multi-hundred-intent synthesis and fault-detection benchmark (`eval/frontier/`) vs. Nextflow & Snakemake
-- [x] Population-scale multi-omics cohort and hardware scalability (NUMA/NVMe/GPU) study across HPC and cloud backends
-- [x] Quantitative human-factors user experience study evaluating cognitive debugging efficiency and SUS scores
-- [x] Open reproducible artifact package and manuscript submissions (*Nature Methods* / *Nature Biotechnology*)
+| Capability | Maturity | Remaining exit evidence |
+| :--- | :--- | :--- |
+| Backwards-compatible BioTypes declarations and `TYPE-*` diagnostics | Implemented but unproven | Broad biological truth-set validation and false-positive analysis |
+| Header inspection and scientific preflight | Implemented but unproven | Literature-backed rule review, adversarial fixtures, and measured latency |
+| Hybrid re-entry and `[[values]]` expansion | Implemented but unproven | Deterministic replay at cohort scale and crash/interruption tests |
+| Metropolis design tokens and Metro-DAG renderer | Prototype | Accessibility, semantic safety, mobile, 5,000-10,000-node performance, and visual regression tests |
+| Guided editor and cross-surface state | Prototype / blocked | Round-trip semantic preservation, explicit diff acceptance, tenant-scoped drafts, and stale-validation blocking |
+
+### Stage 12.3: Ecosystem Interoperability & Bounded Remediation
+
+| Capability | Maturity | Remaining exit evidence |
+| :--- | :--- | :--- |
+| Nextflow/Snakemake import | Prototype | Representative corpus coverage, semantic equivalence tests, unsupported-construct reporting, and round-trip review |
+| Causal fault diagnosis | Prototype | Current CLI simulation: 8/10 detected, 7/10 attributed, 7/10 proposed |
+| Repair application and successful rerun | Planned / blocked | Current CLI simulation: 0/10 applied, 0/10 verified, 0/10 rerun successfully |
+| CLI/Web/VS Code remediation continuity | Prototype | The exact approved patch must be applied, verified, and audited; currently UI actions and validation state can diverge |
+
+### Stage 12.4: Empirical Science, Human Factors & Publication
+
+| Study | Maturity | Remaining exit evidence |
+| :--- | :--- | :--- |
+| AI synthesis and fault-injection benchmark | Simulation only | Matched Arms A/B/C, held-out intents, multiple seeds, run-level data, and pre-registered analysis |
+| Cohort and hardware scalability | Simulation or smoke test only | Measured campaigns on named hardware; current cohort evidence is a 10-sample, 30-node CLI pilot |
+| Human-factors study | Simulation only | Ethics approval, real participants, randomized task order, and complete SUS/TLX analysis |
+| Manuscript and artifact package | Planned / blocked | No submission, acceptance, independent replication, or journal-ready package exists |
 
 ---
 
@@ -526,4 +567,4 @@ Rigorous task-by-task implementation plan & scientific execution protocol: [`doc
 | Testing | cargo test + integration tests |
 | CI/CD | GitHub Actions |
 | Documentation | MkDocs + rustdoc |
-| License | Apache 2.0 |
+| License | Per crate: Apache-2.0 except `oxo-flow-web` (Academic/Commercial) |

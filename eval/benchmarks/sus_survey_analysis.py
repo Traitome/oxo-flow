@@ -1,303 +1,209 @@
 #!/usr/bin/env python3
-"""Quantitative Human-Factors & System Usability Scale (SUS) analysis harness.
+"""Synthetic System Usability Scale (SUS) harness-validation tool.
 
-Analyzes empirical user study data evaluating bioinformatic workflow engines:
-1. Computes standardized 10-item System Usability Scale (SUS) scores (Brooke 1996).
-2. Calculates Sauro & Lewis (2016) curved letter grades (A+ to F) and adjective ratings.
-3. Computes NASA-TLX cognitive load multidimensional indices.
-4. Executes paired two-tailed Student's t-tests and Wilcoxon signed-rank tests
-   with Holm-Bonferroni multiple testing correction.
+This tool exercises deterministic questionnaire-scoring code on generic synthetic
+data. It computes SUS values, Sauro-Lewis grade bands, and NASA-TLX aggregates,
+but it does not estimate empirical human-factors outcomes or compare workflow
+engines.
 
 Usage:
-  python3 eval/benchmarks/sus_survey_analysis.py [--participants 30] [--out-md report.md] [--out-json report.json]
+  python3 eval/benchmarks/sus_survey_analysis.py [--cases 30] [--out-md report.md] [--out-json report.json]
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import random
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 
 def calculate_sus_score(responses: List[int]) -> float:
-    """Calculates standardized SUS score from 10 Likert responses (scale 1-5).
-
-    Odd items (positive): score = R_i - 1
-    Even items (negative): score = 5 - R_i
-    Total = sum(scores) * 2.5
-    """
+    """Calculate the standardized SUS score from ten Likert responses (1-5)."""
     assert len(responses) == 10, "SUS requires exactly 10 responses"
     total_contribution = 0
-    for idx, r in enumerate(responses):
-        if idx % 2 == 0:  # 0-indexed items 0, 2, 4, 6, 8 (1, 3, 5, 7, 9)
-            total_contribution += (r - 1)
-        else:  # 0-indexed items 1, 3, 5, 7, 9 (2, 4, 6, 8, 10)
-            total_contribution += (5 - r)
+    for idx, response in enumerate(responses):
+        if idx % 2 == 0:
+            total_contribution += response - 1
+        else:
+            total_contribution += 5 - response
     return total_contribution * 2.5
 
 
 def sus_to_grade_and_adjective(score: float) -> Tuple[str, str]:
-    """Maps SUS score to Sauro & Lewis curved grade and Bangor adjective rating."""
+    """Map a SUS score to the Sauro-Lewis grade bands."""
     if score >= 84.1:
-        grade = "A+"
-        adj = "Best Imaginable"
-    elif score >= 80.8:
-        grade = "A"
-        adj = "Excellent"
-    elif score >= 78.9:
-        grade = "A-"
-        adj = "Good"
-    elif score >= 74.1:
-        grade = "B"
-        adj = "Good"
-    elif score >= 68.0:
-        grade = "C"
-        adj = "OK"
-    elif score >= 51.7:
-        grade = "D"
-        adj = "Poor"
-    else:
-        grade = "F"
-        adj = "Worst Imaginable"
-    return grade, adj
+        return "A+", "Best Imaginable"
+    if score >= 80.8:
+        return "A", "Excellent"
+    if score >= 78.9:
+        return "A-", "Good"
+    if score >= 74.1:
+        return "B", "Good"
+    if score >= 68.0:
+        return "C", "OK"
+    if score >= 51.7:
+        return "D", "Poor"
+    return "F", "Worst Imaginable"
 
 
 def mean_and_std(data: List[float]) -> Tuple[float, float]:
-    """Computes sample mean and sample standard deviation."""
+    """Compute the sample mean and sample standard deviation."""
     n = len(data)
     if n == 0:
         return 0.0, 0.0
-    mean_val = sum(data) / n
+    mean_value = sum(data) / n
     if n == 1:
-        return mean_val, 0.0
-    variance = sum((x - mean_val) ** 2 for x in data) / (n - 1)
-    return mean_val, math.sqrt(variance)
+        return mean_value, 0.0
+    variance = sum((value - mean_value) ** 2 for value in data) / (n - 1)
+    return mean_value, math.sqrt(variance)
 
 
-def paired_t_test(x: List[float], y: List[float]) -> Tuple[float, float]:
-    """Computes paired two-tailed Student's t-statistic and approximate p-value."""
-    assert len(x) == len(y) and len(x) > 1, "Paired t-test requires identical length vectors > 1"
-    diffs = [a - b for a, b in zip(x, y)]
-    n = len(diffs)
-    d_mean, d_sd = mean_and_std(diffs)
-    if d_sd == 0:
-        return 0.0, 1.0
+def generate_synthetic_fixture(n_cases: int = 30) -> Dict[str, Any]:
+    """Generate one generic fixture stream; these are not study observations."""
+    if n_cases < 2:
+        raise ValueError("synthetic fixture requires at least two cases")
 
-    t_stat = d_mean / (d_sd / math.sqrt(n))
-    # Approximation of p-value for Student t with n-1 df
-    df = n - 1
-    # Use normal approximation for moderate df (n=30)
-    z = abs(t_stat)
-    p_val = 2.0 * 0.5 * math.erfc(z / math.sqrt(2.0))
-    return round(t_stat, 3), p_val
-
-
-def generate_survey_dataset(n_participants: int = 30) -> Dict[str, Any]:
-    """Generates synthetic empirical SUS and NASA-TLX survey responses for N participants."""
     rng = random.Random(999)
-
-    platforms = ["nextflow", "snakemake", "oxoflow"]
-    dataset = {p: {"sus_scores": [], "sus_responses": [], "nasa_tlx": [], "ttfp_secs": []} for p in platforms}
-
-    for i in range(n_participants):
-        # Nextflow: moderate complexity, CLI only (SUS ~58.5)
-        nf_resp = [
-            rng.choice([3, 4]), rng.choice([3, 4]), rng.choice([2, 3]), rng.choice([3, 4]),
-            rng.choice([3, 4]), rng.choice([3, 4]), rng.choice([2, 3]), rng.choice([3, 4]),
-            rng.choice([2, 3]), rng.choice([3, 4]),
+    responses = []
+    tlx_values = []
+    ttfp_values = []
+    for _ in range(n_cases):
+        response_vector = [
+            rng.choice([3, 4, 5]),
+            rng.choice([1, 2, 3]),
+            rng.choice([3, 4, 5]),
+            rng.choice([1, 2, 3]),
+            rng.choice([3, 4, 5]),
+            rng.choice([1, 2, 3]),
+            rng.choice([3, 4, 5]),
+            rng.choice([1, 2, 3]),
+            rng.choice([3, 4, 5]),
+            rng.choice([1, 2, 3]),
         ]
-        nf_sus = calculate_sus_score(nf_resp)
-        nf_tlx = rng.gauss(64.0, 8.0)
-        nf_ttfp = rng.gauss(920.0, 110.0)
-
-        # Snakemake: Python DSL (SUS ~62.0)
-        sm_resp = [
-            rng.choice([3, 4]), rng.choice([2, 3]), rng.choice([3, 4]), rng.choice([3, 4]),
-            rng.choice([3, 4]), rng.choice([3, 4]), rng.choice([3, 4]), rng.choice([3, 4]),
-            rng.choice([3, 4]), rng.choice([3, 4]),
-        ]
-        sm_sus = calculate_sus_score(sm_resp)
-        sm_tlx = rng.gauss(58.0, 7.5)
-        sm_ttfp = rng.gauss(840.0, 95.0)
-
-        # oxo-flow: Metro-DAG, 1-Click remediation, BioTypes type safety (SUS ~88.5)
-        oxo_resp = [
-            rng.choice([4, 5]), rng.choice([1, 2]), rng.choice([4, 5]), rng.choice([1, 2]),
-            rng.choice([4, 5]), rng.choice([1, 2]), rng.choice([4, 5]), rng.choice([1, 2]),
-            rng.choice([4, 5]), rng.choice([1, 2]),
-        ]
-        oxo_sus = calculate_sus_score(oxo_resp)
-        oxo_tlx = rng.gauss(26.0, 5.0)
-        oxo_ttfp = rng.gauss(240.0, 45.0)
-
-        dataset["nextflow"]["sus_scores"].append(nf_sus)
-        dataset["nextflow"]["sus_responses"].append(nf_resp)
-        dataset["nextflow"]["nasa_tlx"].append(round(nf_tlx, 1))
-        dataset["nextflow"]["ttfp_secs"].append(round(nf_ttfp, 1))
-
-        dataset["snakemake"]["sus_scores"].append(sm_sus)
-        dataset["snakemake"]["sus_responses"].append(sm_resp)
-        dataset["snakemake"]["nasa_tlx"].append(round(sm_tlx, 1))
-        dataset["snakemake"]["ttfp_secs"].append(round(sm_ttfp, 1))
-
-        dataset["oxoflow"]["sus_scores"].append(oxo_sus)
-        dataset["oxoflow"]["sus_responses"].append(oxo_resp)
-        dataset["oxoflow"]["nasa_tlx"].append(round(oxo_tlx, 1))
-        dataset["oxoflow"]["ttfp_secs"].append(round(oxo_ttfp, 1))
-
-    return dataset
-
-
-def analyze_survey_results(dataset: Dict[str, Any]) -> Dict[str, Any]:
-    """Computes aggregate usability scores, grades, and inferential comparisons."""
-    platform_names = {
-        "nextflow": "Nextflow DSL2",
-        "snakemake": "Snakemake",
-        "oxoflow": "oxo-flow (Metropolis UX)",
-    }
-
-    metrics = {}
-    for p in ["nextflow", "snakemake", "oxoflow"]:
-        data = dataset[p]
-        sus_m, sus_sd = mean_and_std(data["sus_scores"])
-        tlx_m, tlx_sd = mean_and_std(data["nasa_tlx"])
-        ttfp_m, ttfp_sd = mean_and_std(data["ttfp_secs"])
-        grade, adj = sus_to_grade_and_adjective(sus_m)
-
-        metrics[p] = {
-            "name": platform_names[p],
-            "sus_mean": round(sus_m, 1),
-            "sus_std": round(sus_sd, 1),
-            "grade": grade,
-            "adjective": adj,
-            "nasa_tlx_mean": round(tlx_m, 1),
-            "nasa_tlx_std": round(tlx_sd, 1),
-            "ttfp_mean_secs": round(ttfp_m, 1),
-            "ttfp_std_secs": round(ttfp_sd, 1),
-        }
-
-    # Inferential statistical comparisons (oxo-flow vs competitors)
-    t_sus_nf, p_sus_nf = paired_t_test(dataset["oxoflow"]["sus_scores"], dataset["nextflow"]["sus_scores"])
-    t_sus_sm, p_sus_sm = paired_t_test(dataset["oxoflow"]["sus_scores"], dataset["snakemake"]["sus_scores"])
-    t_ttfp_nf, p_ttfp_nf = paired_t_test(dataset["oxoflow"]["ttfp_secs"], dataset["nextflow"]["ttfp_secs"])
-    t_ttfp_sm, p_ttfp_sm = paired_t_test(dataset["oxoflow"]["ttfp_secs"], dataset["snakemake"]["ttfp_secs"])
+        responses.append(response_vector)
+        tlx_values.append(round(rng.gauss(50.0, 10.0), 1))
+        ttfp_values.append(round(rng.gauss(600.0, 90.0), 1))
 
     return {
-        "metrics": metrics,
-        "comparisons": {
-            "sus_oxoflow_vs_nextflow": {"t_stat": t_sus_nf, "p_value": p_sus_nf},
-            "sus_oxoflow_vs_snakemake": {"t_stat": t_sus_sm, "p_value": p_sus_sm},
-            "ttfp_oxoflow_vs_nextflow": {"t_stat": t_ttfp_nf, "p_value": p_ttfp_nf},
-            "ttfp_oxoflow_vs_snakemake": {"t_stat": t_ttfp_sm, "p_value": p_ttfp_sm},
+        "sus_scores": [calculate_sus_score(vector) for vector in responses],
+        "sus_responses": responses,
+        "nasa_tlx": tlx_values,
+        "ttfp_secs": ttfp_values,
+    }
+
+
+def analyze_synthetic_fixture(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize one fixture stream without estimating effects or testing hypotheses."""
+    sus_mean, sus_sd = mean_and_std(dataset["sus_scores"])
+    tlx_mean, tlx_sd = mean_and_std(dataset["nasa_tlx"])
+    ttfp_mean, ttfp_sd = mean_and_std(dataset["ttfp_secs"])
+    grade, adjective = sus_to_grade_and_adjective(sus_mean)
+
+    return {
+        "evidence_status": "simulation_only",
+        "inferential_analysis_performed": False,
+        "fixture_cases": len(dataset["sus_scores"]),
+        "metrics": {
+            "sus_mean": round(sus_mean, 1),
+            "sus_std": round(sus_sd, 1),
+            "grade": grade,
+            "adjective": adjective,
+            "nasa_tlx_mean": round(tlx_mean, 1),
+            "nasa_tlx_std": round(tlx_sd, 1),
+            "ttfp_mean_secs": round(ttfp_mean, 1),
+            "ttfp_std_secs": round(ttfp_sd, 1),
         },
     }
 
 
 def render_markdown_report(report: Dict[str, Any]) -> str:
-    """Renders comprehensive Markdown report for manuscript submission."""
-    m = report["metrics"]
-    c = report["comparisons"]
+    """Render a fixture-validation report that cannot be mistaken for a study."""
+    if (
+        report.get("evidence_status") != "simulation_only"
+        or report.get("inferential_analysis_performed") is not False
+    ):
+        raise ValueError("only non-inferential synthetic reports may be rendered")
 
-    def fmt_p(p_val: float) -> str:
-        # Float underflow renders ultra-small p-values as exactly 0.0; report a
-        # scientific bound instead of an impossible exact zero.
-        if p_val <= 0.0 or p_val < 1e-300:
-            return "p < 1.0e-300"
-        return f"p = {p_val:.4e}"
-
-    oxo, nf, sm = m["oxoflow"], m["nextflow"], m["snakemake"]
-
-    lines = [
-        "# Quantitative Human-Factors & System Usability Study Report",
-        "",
-        "> **Data provenance**: the numbers below are produced by a seeded,",
-        "> reproducible *synthetic response simulator* (fixed RNG seed) that exercises",
-        "> the scoring and statistical pipeline. They are projections of the protocol",
-        "> defined in `ux_eval_protocol.md`, **not** measurements from a conducted",
-        "> human-subjects study; substitute real participant responses before any",
-        "> manuscript submission.",
-        "",
-        "## 1. Usability Scale & Cognitive Load Summary ($N=30$ Bioinformaticians)",
-        "",
-        "| Platform | SUS Score (Mean ± SD) | Curved Letter Grade | Adjective Rating | NASA-TLX Load (0–100) | Time-to-First-Pass (Minutes) |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: |",
-    ]
-
-    for p in ["nextflow", "snakemake", "oxoflow"]:
-        info = m[p]
-        ttfp_min = f"{info['ttfp_mean_secs']/60.0:.1f} ± {info['ttfp_std_secs']/60.0:.1f} min"
-        lines.append(
-            f"| **{info['name']}** | **{info['sus_mean']:.1f} ± {info['sus_std']:.1f}** | "
-            f"**{info['grade']}** | {info['adjective']} | {info['nasa_tlx_mean']:.1f} ± {info['nasa_tlx_std']:.1f} | {ttfp_min} |"
-        )
-
-    lines.extend([
-        "",
-        "## 2. Paired Hypothesis Tests & Inferential Statistics",
-        "",
-        "| Comparison Pair | Dependent Measure | $t$-statistic (df=29) | Two-Tailed $p$-value | Significance Threshold |",
-        "| :--- | :---: | :---: | :---: | :---: |",
-        f"| **oxo-flow vs Nextflow** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_nextflow']['t_stat']}$ | ${fmt_p(c['sus_oxoflow_vs_nextflow']['p_value'])}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Snakemake** | System Usability Scale (SUS) | $t = {c['sus_oxoflow_vs_snakemake']['t_stat']}$ | ${fmt_p(c['sus_oxoflow_vs_snakemake']['p_value'])}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Nextflow** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_nextflow']['t_stat']}$ | ${fmt_p(c['ttfp_oxoflow_vs_nextflow']['p_value'])}$ | **Significant ($p < 0.001$)** |",
-        f"| **oxo-flow vs Snakemake** | Time-to-First-Pass (TTFP) | $t = {c['ttfp_oxoflow_vs_snakemake']['t_stat']}$ | ${fmt_p(c['ttfp_oxoflow_vs_snakemake']['p_value'])}$ | **Significant ($p < 0.001$)** |",
-        "",
-        "## 3. Human Factors Conclusions",
-        "",
-        f"- **Grade A+ Usability (simulated projection)**: `oxo-flow` achieved a mean SUS score of **{oxo['sus_mean']:.1f} (Grade {oxo['grade']}, '{oxo['adjective']}')**, compared to {nf['sus_mean']:.1f} (Grade {nf['grade']}) for Nextflow and {sm['sus_mean']:.1f} (Grade {sm['grade']}) for Snakemake.",
-        f"- **Cognitive Load Reduction (simulated projection)**: the NASA-TLX burden dropped by **{(1 - oxo['nasa_tlx_mean'] / nf['nasa_tlx_mean']) * 100:.0f}%** vs Nextflow ({oxo['nasa_tlx_mean']:.1f} vs {nf['nasa_tlx_mean']:.1f}) through visual Metro-DAG layout, sub-millisecond biological header inspection, and 1-Click Remediation.",
-        f"- **Time-to-First-Pass Acceleration (simulated projection)**: participants reached verified working pipelines in **{oxo['ttfp_mean_secs']/60.0:.1f} minutes** on `oxo-flow`, vs {nf['ttfp_mean_secs']/60.0:.1f} minutes on Nextflow and {sm['ttfp_mean_secs']/60.0:.1f} minutes on Snakemake.",
-    ])
-
-    return "\n".join(lines)
+    metrics = report["metrics"]
+    ttfp_minutes = (
+        f"{metrics['ttfp_mean_secs'] / 60.0:.1f} +/- "
+        f"{metrics['ttfp_std_secs'] / 60.0:.1f} min"
+    )
+    return "\n".join(
+        [
+            "# Synthetic Human-Factors Harness Check",
+            "",
+            "> **SIMULATION ONLY**: all values below are fixed synthetic test vectors.",
+            "> They verify questionnaire arithmetic and aggregation code. They are not",
+            "> measurements, projections, effect estimates, or evidence about any workflow",
+            "> engine. This report performs no hypothesis test and supports no comparative",
+            "> claim.",
+            "",
+            "## 1. Generic Fixture Output",
+            "",
+            "This one-row report only demonstrates that parsing, reverse scoring, means,",
+            "and standard deviations execute. It does not describe a system or population.",
+            "",
+            "| Fixture | Synthetic SUS Value | Scoring-Code Grade | Fixture TLX Value | Fixture TTFP Value |",
+            "| :--- | :---: | :---: | :---: | :---: |",
+            f"| {report['fixture_cases']} generic cases | "
+            f"{metrics['sus_mean']:.1f} +/- {metrics['sus_std']:.1f} | "
+            f"{metrics['grade']} | {metrics['nasa_tlx_mean']:.1f} +/- "
+            f"{metrics['nasa_tlx_std']:.1f} | {ttfp_minutes} |",
+            "",
+            "## 2. Interpretation Boundary",
+            "",
+            "- This file cannot be cited as a usability result.",
+            "- No confidence interval, effect size, hypothesis test, or causal statement is produced.",
+            "- A real evaluation requires a pre-registered protocol, ethics approval, complete task",
+            "  outcomes, missing-data rules, and an independent analysis.",
+        ]
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Human factors & SUS survey analysis harness")
-    parser.add_argument("--participants", type=int, default=30, help="Number of study participants")
-    parser.add_argument("--out-json", default=None, help="Export path for JSON analysis report")
-    parser.add_argument("--out-md", default=None, help="Export path for Markdown manuscript report")
+    parser = argparse.ArgumentParser(description="Synthetic SUS scoring-fixture harness")
+    parser.add_argument("--cases", type=int, default=30, help="Number of synthetic fixture cases")
+    parser.add_argument("--out-json", default=None, help="Export path for the fixture JSON")
+    parser.add_argument(
+        "--out-md",
+        default=None,
+        help="Export path for the non-inferential Markdown report",
+    )
     args = parser.parse_args()
 
-    dataset = generate_survey_dataset(n_participants=args.participants)
-    report = analyze_survey_results(dataset)
+    dataset = generate_synthetic_fixture(n_cases=args.cases)
+    report = analyze_synthetic_fixture(dataset)
+    metrics = report["metrics"]
 
     print("=" * 80)
-    print("oxo-flow Human Factors & SUS Analysis (SIMULATED pilot data — see ux_eval_protocol.md)")
-    print(f"Cohort Size: N={args.participants} Bioinformaticians")
+    print("SYNTHETIC SUS HARNESS CHECK - NOT A STUDY OR EMPIRICAL ESTIMATE")
+    print(f"Synthetic fixture cases: {report['fixture_cases']}")
     print("=" * 80)
-
-    for p, info in report["metrics"].items():
-        print(
-            f"{info['name']:<28} | SUS: {info['sus_mean']:4.1f} ± {info['sus_std']:3.1f} "
-            f"({info['grade']:<2}, {info['adjective']:<15}) | NASA-TLX: {info['nasa_tlx_mean']:4.1f} | "
-            f"TTFP: {info['ttfp_mean_secs']/60.0:4.1f} min"
-        )
-
+    print(
+        f"Generic fixture | SUS: {metrics['sus_mean']:4.1f} +/- "
+        f"{metrics['sus_std']:3.1f} ({metrics['grade']}) | "
+        f"TLX: {metrics['nasa_tlx_mean']:4.1f} | "
+        f"TTFP: {metrics['ttfp_mean_secs'] / 60.0:4.1f} min"
+    )
     print("-" * 80)
-    print("Inferential Paired t-tests (df=29):")
-    for pair, test in report["comparisons"].items():
-        p_val = test["p_value"]
-        p_str = "< 1.0e-300" if p_val <= 0.0 or p_val < 1e-300 else (f"{p_val:.4e}" if p_val < 0.001 else f"{p_val:.4f}")
-        print(f"  {pair:<28}: t = {test['t_stat']:6.2f}, p = {p_str} (p < 0.001)")
+    print("No hypothesis test or comparative result was produced.")
     print("=" * 80)
 
     if args.out_json:
-        out_j = Path(args.out_json)
-        out_j.parent.mkdir(parents=True, exist_ok=True)
-        out_j.write_text(json.dumps(report, indent=2))
-        print(f"Survey analysis JSON exported to: {out_j}")
+        out_json = Path(args.out_json)
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(json.dumps(report, indent=2) + "\n")
+        print(f"Fixture JSON exported to: {out_json}")
 
     if args.out_md:
-        out_m = Path(args.out_md)
-        out_m.parent.mkdir(parents=True, exist_ok=True)
-        out_m.write_text(render_markdown_report(report))
-        print(f"Survey analysis Markdown exported to: {out_m}")
+        out_markdown = Path(args.out_md)
+        out_markdown.parent.mkdir(parents=True, exist_ok=True)
+        out_markdown.write_text(render_markdown_report(report))
+        print(f"Non-inferential Markdown exported to: {out_markdown}")
 
 
 if __name__ == "__main__":

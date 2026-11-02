@@ -25,9 +25,10 @@ Six commitments shape every subsystem:
 2. **Plan fully, then execute.** Wildcard expansion, DAG construction,
    cycle detection, and target selection all happen before the first job
    starts. What can be decided statically is decided statically.
-3. **Hermetic per-rule environments.** Every rule names its software
+3. **Isolated per-rule environments.** Every rule names its software
    environment (conda, docker, …); the engine resolves, builds, caches,
-   and wraps it — tool versions never leak between steps.
+   and wraps it to reduce tool-version leaks between steps. This is not a
+   complete host, credential, or tenant security boundary.
 4. **Resources as first-class constraints.** Threads, memory, GPU, and
    custom pools are declared per rule and enforced by a scheduler that
    waits instead of over-subscribing.
