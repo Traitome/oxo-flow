@@ -125,13 +125,18 @@ fn test_sql_injection_prevention() {
         if !path.exists() {
             continue;
         }
-        let source = std::fs::read_to_string(&path).unwrap_or_default();
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let source = strip_comments(&raw);
 
-        // Check that SQL queries use .bind() (parameterized)
-        let has_sql = source.contains("SELECT")
-            || source.contains("INSERT")
-            || source.contains("UPDATE")
-            || source.contains("DELETE");
+        // Statement-shaped patterns only: utoipa method verbs (`delete,`) and
+        // prose like "/// DELETE /api/..." must not read as SQL. Handlers are
+        // expected to route storage through StorageBackend; any raw SQL that
+        // does appear must be parameterized with .bind().
+        let has_sql = ["INSERT INTO", "DELETE FROM"]
+            .iter()
+            .any(|p| source.contains(p))
+            || (source.contains("UPDATE ") && source.contains(" SET "))
+            || (source.contains("SELECT ") && source.contains(" FROM "));
         let has_bind = source.contains(".bind(");
 
         if has_sql {
@@ -140,12 +145,6 @@ fn test_sql_injection_prevention() {
                 "Handler file {file} has SQL queries but no .bind() calls — possible SQL injection risk"
             );
         }
-
-        // The key safety check: all SQL queries must use .bind() for parameters.
-        // format! is safe when used only for error messages (not building SQL).
-        // The definitive check: has SQL + has .bind() → parameterized → safe.
-        // This was verified above.
-        let _ = file; // used in assertion messages above
     }
 }
 
