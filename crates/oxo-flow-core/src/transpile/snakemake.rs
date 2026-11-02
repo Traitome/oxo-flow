@@ -528,7 +528,6 @@ fn extract_output_paths(
     }
 }
 
-
 fn translate_snakemake_shell(shell: &str) -> String {
     let mut s = shell.trim().to_string();
     let is_triple_dq = s.starts_with("\"\"\"") && s.ends_with("\"\"\"");

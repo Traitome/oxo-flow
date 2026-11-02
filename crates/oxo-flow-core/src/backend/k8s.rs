@@ -1,17 +1,13 @@
-//! Native Kubernetes batch Jobs executor and manifest generator.
+//! Kubernetes batch/v1 Job manifest generator.
 //!
 //! Maps ScheduledRule resources and container specifications onto Kubernetes
-//! batch/v1 Job manifests with deterministic labels and fail-fast semantics.
+//! batch/v1 Job manifests with deterministic labels. Submission/polling goes
+//! through the shared `ClusterExecutor` (`backend/cluster.rs`).
 
-use super::{
-    BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name,
-};
+use super::sanitize_cloud_name;
 use crate::cluster::ClusterJobConfig;
-use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
-use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use serde_json::json;
 
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
@@ -166,181 +162,12 @@ pub fn generate_k8s_array_job_manifest(
     serde_json::to_string_pretty(&manifest).unwrap_or_default()
 }
 
-/// Kubernetes batch Jobs executor driver.
-pub struct KubernetesExecutor {
-    cluster: ClusterJobConfig,
-    namespace: Option<String>,
-    cli: CloudCli,
-}
-
-impl KubernetesExecutor {
-    pub fn new(cluster: ClusterJobConfig) -> Self {
-        Self {
-            cluster,
-            namespace: None,
-            cli: CloudCli::new(),
-        }
-    }
-
-    pub fn with_namespace(mut self, ns: &str) -> Self {
-        self.namespace = Some(ns.to_string());
-        self
-    }
-
-    pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
-        self.cli = self.cli.with_scheduler_dir(dir);
-        self
-    }
-
-    pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.cli = self.cli.with_env(key, value);
-        self
-    }
-
-    pub fn with_workdir(mut self, dir: PathBuf) -> Self {
-        self.cli = self.cli.with_workdir(dir);
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutorBackend for KubernetesExecutor {
-    fn name(&self) -> &'static str {
-        "kubernetes"
-    }
-
-    fn render_script(&self, rule: &ScheduledRule) -> Result<String> {
-        Ok(generate_k8s_job_manifest(
-            &rule.rule,
-            &rule.shell_cmd,
-            &self.cluster,
-        ))
-    }
-
-    fn render_array_script(
-        &self,
-        rule: &crate::rule::Rule,
-        cmd_dir: &str,
-        count: usize,
-    ) -> Result<String> {
-        Ok(generate_k8s_array_job_manifest(
-            rule,
-            cmd_dir,
-            count,
-            &self.cluster,
-        ))
-    }
-
-    async fn submit(&self, script_path: &Path) -> Result<String> {
-        let path_str = script_path.to_string_lossy().to_string();
-        let mut args = vec!["create", "-f", &path_str, "-o", "jsonpath={.metadata.name}"];
-        let ns_flag;
-        if let Some(ns) = &self.namespace {
-            ns_flag = format!("--namespace={ns}");
-            args.push(&ns_flag);
-        }
-        let out = self.cli.run_cmd("kubectl", &args).await?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(OxoFlowError::Config {
-                message: format!("kubectl create failed: {stderr}"),
-            });
-        }
-        let job_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if job_id.is_empty() {
-            return Err(OxoFlowError::Config {
-                message: "kubectl create returned empty job name".into(),
-            });
-        }
-        Ok(job_id)
-    }
-
-    async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>> {
-        let mut statuses = HashMap::new();
-        if job_ids.is_empty() {
-            return Ok(statuses);
-        }
-
-        for id in job_ids {
-            let mut args = vec!["get", "job", id, "-o", "json"];
-            let ns_flag;
-            if let Some(ns) = &self.namespace {
-                ns_flag = format!("--namespace={ns}");
-                args.push(&ns_flag);
-            }
-            let out = self.cli.run_cmd("kubectl", &args).await?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(OxoFlowError::Config {
-                    message: format!("kubectl get job '{id}' failed: {stderr}"),
-                });
-            }
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Ok(v) = serde_json::from_str::<Value>(&stdout) {
-                let status_obj = &v["status"];
-                let active = status_obj["active"].as_u64().unwrap_or(0);
-                let succeeded = status_obj["succeeded"].as_u64().unwrap_or(0);
-                let failed = status_obj["failed"].as_u64().unwrap_or(0);
-
-                let status = if succeeded > 0 {
-                    BackendJobStatus::Completed
-                } else if failed > 0 {
-                    BackendJobStatus::Failed
-                } else if active > 0 {
-                    BackendJobStatus::Running
-                } else if status_obj["startTime"].is_null() {
-                    BackendJobStatus::Pending
-                } else {
-                    BackendJobStatus::Running
-                };
-                statuses.insert(id.clone(), status);
-            }
-        }
-
-        Ok(statuses)
-    }
-
-    async fn cancel(&self, job_id: &str) -> Result<()> {
-        let mut args = vec!["delete", "job", job_id, "--cascade=foreground"];
-        let ns_flag;
-        if let Some(ns) = &self.namespace {
-            ns_flag = format!("--namespace={ns}");
-            args.push(&ns_flag);
-        }
-        let out = self.cli.run_cmd("kubectl", &args).await?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(OxoFlowError::Config {
-                message: format!("kubectl delete failed: {stderr}"),
-            });
-        }
-        Ok(())
-    }
-
-    async fn logs(&self, job_id: &str) -> Result<String> {
-        let job_ref = format!("job/{job_id}");
-        let mut args = vec!["logs", &job_ref];
-        let ns_flag;
-        if let Some(ns) = &self.namespace {
-            ns_flag = format!("--namespace={ns}");
-            args.push(&ns_flag);
-        }
-        let out = self.cli.run_cmd("kubectl", &args).await?;
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    }
-
-    async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
-        let poll_map = self.poll(&[job_id.to_string()]).await.ok()?;
-        let status = poll_map.get(job_id).copied()?;
-        Some(TerminalRecord::status_only(status))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cluster::ClusterBackend;
     use crate::rule::Rule;
+    use serde_json::Value;
 
     fn test_config() -> ClusterJobConfig {
         ClusterJobConfig {

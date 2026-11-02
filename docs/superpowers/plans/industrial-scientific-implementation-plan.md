@@ -248,9 +248,9 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Extend `ClusterBackend` enum in `crates/oxo-flow-core/src/cluster.rs` with `Kubernetes`, `AwsBatch`, and `GcpBatch` variants while keeping existing `Slurm`, `Pbs`, `Sge`, and `Lsf` behavior byte-identical.
-- [ ] **Step 2**: Implement `ExecutorBackend` for `KubernetesExecutor` (`k8s.rs`), mapping `ScheduledRule` resources (`threads`, `memory_mb`, `gpu_spec`, `time_limit`, `tmp_dir`) into Kubernetes `Job` manifests with deterministic label selectors (`oxoflow.io/run-id`, `oxoflow.io/rule`).
-- [ ] **Step 3**: Implement `ExecutorBackend` for `AwsBatchExecutor` (`aws_batch.rs`) and `GcpBatchExecutor` (`gcp_batch.rs`), mapping `BackendJobStatus` and `TerminalRecord` (exit code, wall-clock runtime, peak memory from container metrics) into `BackendDriver`.
+- [x] **Step 1**: Extend `ClusterBackend` enum in `crates/oxo-flow-core/src/cluster.rs` with `Kubernetes`, `AwsBatch`, and `GcpBatch` variants while keeping existing `Slurm`, `Pbs`, `Sge`, and `Lsf` behavior byte-identical.
+- [x] **Step 2** (superseded): dedicated `KubernetesExecutor` removed — `ClusterExecutor` (`backend/cluster.rs`) covers Kubernetes render + submit/poll/cancel/logs; the free `generate_k8s_*` generators in `backend/k8s.rs` remain the single manifest source (`src/cluster.rs:137`).
+- [x] **Step 3** (superseded): dedicated `AwsBatchExecutor`/`GcpBatchExecutor` and `CloudCli` removed for the same reason — one production executor, free generator functions stay (`src/cluster.rs:140/143`).
 - [ ] **Step 4**: Add mock transport tests for submission, array batching, cancellation errors, missing accounting, and per-element outcomes.
 - [ ] **Step 5**: Execute live submit/queue/run/cancel/fail/retry/retrieve campaigns for every advertised backend.
 

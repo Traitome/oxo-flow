@@ -434,4 +434,3 @@ fn translate_nextflow_script(script: &str, _process_name: &str) -> String {
 
     out.join("\n").trim().to_string()
 }
-

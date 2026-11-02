@@ -167,7 +167,6 @@ mod tests {
             tier0_ram_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/ram")),
             tier1_nvme_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/nvme")),
             tier2_shared_scratch: Some(PathBuf::from("/nonexistent-dir-xyz/shared")),
-            ..Default::default()
         };
         // All probes fail → None, not a silent fallback.
         assert!(ladder.select_tier_for_scratch(1024, true).is_none());

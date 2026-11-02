@@ -1,17 +1,14 @@
-//! Google Cloud Batch executor and job specification generator.
+//! Google Cloud Batch job specification generator.
 //!
-//! Maps ScheduledRule specifications onto Google Cloud Batch jobs submit
-//! JSON configurations with cpuMilli/memoryMib, taskGroups, and allocation policies.
+//! Maps ScheduledRule specifications onto Google Cloud Batch jobs.submit
+//! JSON configurations with cpuMilli/memoryMib, taskGroups, and allocation
+//! policies. Submission/polling goes through the shared `ClusterExecutor`
+//! (`backend/cluster.rs`).
 
-use super::{
-    BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name,
-};
+use super::sanitize_cloud_name;
 use crate::cluster::ClusterJobConfig;
-use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
-use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use serde_json::json;
 
 /// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric
 /// and hyphens, max 63 chars).
@@ -117,207 +114,12 @@ pub fn generate_gcp_batch_array_spec(
     serde_json::to_string_pretty(&payload).unwrap_or_default()
 }
 
-/// Google Cloud Batch executor driver.
-pub struct GcpBatchExecutor {
-    cluster: ClusterJobConfig,
-    project: Option<String>,
-    location: String,
-    cli: CloudCli,
-}
-
-impl GcpBatchExecutor {
-    pub fn new(cluster: ClusterJobConfig) -> Self {
-        Self {
-            cluster,
-            project: None,
-            location: "us-central1".to_string(),
-            cli: CloudCli::new(),
-        }
-    }
-
-    pub fn with_project(mut self, project: &str) -> Self {
-        self.project = Some(project.to_string());
-        self
-    }
-
-    pub fn with_location(mut self, loc: &str) -> Self {
-        self.location = loc.to_string();
-        self
-    }
-
-    pub fn with_scheduler_dir(mut self, dir: PathBuf) -> Self {
-        self.cli = self.cli.with_scheduler_dir(dir);
-        self
-    }
-
-    pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.cli = self.cli.with_env(key, value);
-        self
-    }
-
-    pub fn with_workdir(mut self, dir: PathBuf) -> Self {
-        self.cli = self.cli.with_workdir(dir);
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutorBackend for GcpBatchExecutor {
-    fn name(&self) -> &'static str {
-        "gcp-batch"
-    }
-
-    fn render_script(&self, rule: &ScheduledRule) -> Result<String> {
-        Ok(generate_gcp_batch_job_spec(
-            &rule.rule,
-            &rule.shell_cmd,
-            &self.cluster,
-        ))
-    }
-
-    fn render_array_script(
-        &self,
-        rule: &crate::rule::Rule,
-        cmd_dir: &str,
-        count: usize,
-    ) -> Result<String> {
-        Ok(generate_gcp_batch_array_spec(
-            rule,
-            cmd_dir,
-            count,
-            &self.cluster,
-        ))
-    }
-
-    async fn submit(&self, script_path: &Path) -> Result<String> {
-        let path_str = script_path.to_string_lossy().to_string();
-        let stem = script_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("job");
-        let job_name = format!("oxoflow-{}", sanitize_gcp_batch_name(stem));
-
-        let config_arg = format!("--config={path_str}");
-        let loc_arg = format!("--location={}", self.location);
-        let mut args = vec![
-            "batch",
-            "jobs",
-            "submit",
-            &job_name,
-            &config_arg,
-            &loc_arg,
-            "--format=value(name)",
-        ];
-
-        let proj_arg;
-        if let Some(proj) = &self.project {
-            proj_arg = format!("--project={proj}");
-            args.push(&proj_arg);
-        }
-
-        let out = self.cli.run_cmd("gcloud", &args).await?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(OxoFlowError::Config {
-                message: format!("gcloud batch jobs submit failed: {stderr}"),
-            });
-        }
-        let job_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let final_id = if job_id.is_empty() { job_name } else { job_id };
-        Ok(final_id)
-    }
-
-    async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>> {
-        let mut statuses = HashMap::new();
-        if job_ids.is_empty() {
-            return Ok(statuses);
-        }
-
-        for id in job_ids {
-            let loc_arg = format!("--location={}", self.location);
-            let mut args = vec![
-                "batch",
-                "jobs",
-                "describe",
-                id.as_str(),
-                &loc_arg,
-                "--format=json",
-            ];
-            let proj_arg;
-            if let Some(proj) = &self.project {
-                proj_arg = format!("--project={proj}");
-                args.push(&proj_arg);
-            }
-
-            let out = self.cli.run_cmd("gcloud", &args).await?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(OxoFlowError::Config {
-                    message: format!("gcloud batch jobs describe failed for '{id}': {stderr}"),
-                });
-            }
-
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Ok(val) = serde_json::from_str::<Value>(&stdout) {
-                let st = val["status"]["state"].as_str().unwrap_or_default();
-                let status = match st {
-                    "QUEUED" | "SCHEDULED" => BackendJobStatus::Pending,
-                    "RUNNING" => BackendJobStatus::Running,
-                    "SUCCEEDED" => BackendJobStatus::Completed,
-                    "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
-                    _ => BackendJobStatus::Unknown,
-                };
-                statuses.insert(id.clone(), status);
-            }
-        }
-
-        Ok(statuses)
-    }
-
-    async fn cancel(&self, job_id: &str) -> Result<()> {
-        let loc_arg = format!("--location={}", self.location);
-        let mut args = vec!["batch", "jobs", "delete", job_id, &loc_arg, "--quiet"];
-        let proj_arg;
-        if let Some(proj) = &self.project {
-            proj_arg = format!("--project={proj}");
-            args.push(&proj_arg);
-        }
-        let out = self.cli.run_cmd("gcloud", &args).await?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(OxoFlowError::Config {
-                message: format!("gcloud batch jobs delete failed: {stderr}"),
-            });
-        }
-        Ok(())
-    }
-
-    async fn logs(&self, job_id: &str) -> Result<String> {
-        let filter =
-            format!("resource.type=batch.googleapis.com/Job AND resource.labels.job_id={job_id}");
-        let args = vec![
-            "logging",
-            "read",
-            &filter,
-            "--limit=50",
-            "--format=value(textPayload)",
-        ];
-        let out = self.cli.run_cmd("gcloud", &args).await?;
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    }
-
-    async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
-        let poll_map = self.poll(&[job_id.to_string()]).await.ok()?;
-        let status = poll_map.get(job_id).copied()?;
-        Some(TerminalRecord::status_only(status))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cluster::ClusterBackend;
     use crate::rule::Rule;
+    use serde_json::Value;
 
     fn test_config() -> ClusterJobConfig {
         ClusterJobConfig {

@@ -1446,8 +1446,7 @@ impl LocalExecutor {
                     .memory
                     .as_deref()
                     .and_then(crate::scheduler::parse_memory_mb);
-                topo.select_node_for_job(mem_mb)
-                    .unwrap_or(0)
+                topo.select_node_for_job(mem_mb).unwrap_or(0)
             });
             Ok(topo.wrap_command_with_numa(&wrapped, node))
         } else {

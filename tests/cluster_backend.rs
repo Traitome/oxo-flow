@@ -9,6 +9,7 @@
 mod common;
 use common::workspace_bin;
 
+use oxo_flow_core::backend::ExecutorBackend;
 use oxo_flow_core::backend::ScheduledPlan;
 use oxo_flow_core::backend::cluster::ClusterExecutor;
 use oxo_flow_core::backend::driver::{BackendDriver, DriverConfig, DriverOptions};
@@ -700,7 +701,7 @@ fn run_directory_records_what_each_job_cost() {
 
 #[tokio::test]
 async fn kubernetes_executor_renders_manifest_and_parses_status() {
-    use oxo_flow_core::backend::ExecutorBackend;
+    use oxo_flow_core::backend::cluster::ClusterExecutor;
     let dir = tempfile::tempdir().unwrap();
     let cluster_config = ClusterJobConfig {
         backend: ClusterBackend::Kubernetes,
@@ -709,8 +710,7 @@ async fn kubernetes_executor_renders_manifest_and_parses_status() {
         walltime: None,
         extra_args: Vec::new(),
     };
-    let exec = oxo_flow_core::backend::k8s::KubernetesExecutor::new(cluster_config.clone())
-        .with_namespace("oxoflow-prod")
+    let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
 
     assert_eq!(exec.name(), "kubernetes");
@@ -751,7 +751,7 @@ async fn kubernetes_executor_renders_manifest_and_parses_status() {
 
 #[tokio::test]
 async fn aws_batch_executor_renders_spec_and_parses_status() {
-    use oxo_flow_core::backend::ExecutorBackend;
+    use oxo_flow_core::backend::cluster::ClusterExecutor;
     let dir = tempfile::tempdir().unwrap();
     let cluster_config = ClusterJobConfig {
         backend: ClusterBackend::AwsBatch,
@@ -760,7 +760,7 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
         walltime: None,
         extra_args: Vec::new(),
     };
-    let exec = oxo_flow_core::backend::aws_batch::AwsBatchExecutor::new(cluster_config.clone())
+    let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
 
     assert_eq!(exec.name(), "aws-batch");
@@ -800,7 +800,7 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
 
 #[tokio::test]
 async fn gcp_batch_executor_renders_spec_and_parses_status() {
-    use oxo_flow_core::backend::ExecutorBackend;
+    use oxo_flow_core::backend::cluster::ClusterExecutor;
     let dir = tempfile::tempdir().unwrap();
     let cluster_config = ClusterJobConfig {
         backend: ClusterBackend::GcpBatch,
@@ -809,9 +809,7 @@ async fn gcp_batch_executor_renders_spec_and_parses_status() {
         walltime: None,
         extra_args: Vec::new(),
     };
-    let exec = oxo_flow_core::backend::gcp_batch::GcpBatchExecutor::new(cluster_config.clone())
-        .with_project("biotech-gcp")
-        .with_location("us-east1")
+    let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
 
     assert_eq!(exec.name(), "gcp-batch");
