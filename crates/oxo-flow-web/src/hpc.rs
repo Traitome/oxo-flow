@@ -374,10 +374,10 @@ fn parse_pbs_nodes(stdout: &str) -> Vec<NodeStatus> {
                         node.cpus_free = node.cpus_total;
                     }
                     "status" => {
-                        // Parse allocation info
-                        if let Some(_pos) = value.find("np=") {
-                            // Rough parse of allocated CPUs
-                        }
+                        // `pbsnodes` packs a `;`-separated key=value blob
+                        // (rectime, cput, …) into this attribute. Allocated
+                        // CPUs are not recoverable from it — leave the
+                        // allocation fields at 0 rather than guessing.
                     }
                     _ => {}
                 }

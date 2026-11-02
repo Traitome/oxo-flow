@@ -26,9 +26,9 @@ list).
   (issue #708).
 - A pattern **without exit codes** fires on any non-zero or unknown exit
   code — never on exit 0. A rule that exited 0 has nothing to diagnose.
-- The same pattern table backs `monitor_agent::is_known_error_pattern`, so
-  the AI monitor and the diagnostics service never disagree on a
-  classification.
+- The AI monitor's failure classifier (`monitor_agent::classify_failure`)
+  runs the same pattern table, so the AI monitor and the diagnostics
+  service never disagree on a classification.
 
 ## Error Pattern Library
 

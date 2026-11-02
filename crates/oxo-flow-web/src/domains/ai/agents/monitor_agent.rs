@@ -328,60 +328,6 @@ fn classify_failure(
     }
 }
 
-/// Generate a fix suggestion for a failed rule.
-pub fn suggest_fix(rule: &str, exit_code: Option<i32>, _log_excerpt: &str) -> Vec<String> {
-    match exit_code {
-        Some(137) | Some(9) => vec![
-            format!("Increase memory allocation for '{rule}'"),
-            "Add checkpoint/retry mechanism".into(),
-            "Reduce input file size or split into chunks".into(),
-        ],
-        Some(139) => vec![
-            format!("Reduce threads for '{rule}'"),
-            "Verify input data integrity".into(),
-            "Update tool to latest version".into(),
-        ],
-        Some(1) => vec![
-            format!("Check '{rule}' for missing input files or incorrect paths"),
-            "Verify environment/tool availability".into(),
-        ],
-        _ => vec![
-            format!("Review logs for '{rule}' and adjust parameters"),
-            "Try running manually to isolate the issue".into(),
-        ],
-    }
-}
-
-/// Check if a failed rule matches a known error pattern.
-///
-/// Delegates to the shared [`DiagnosticsEngine`] pattern table so the AI
-/// monitor and the web diagnostics service agree on what counts as a known
-/// error (issue #708) — the previous hand-rolled substring checks matched
-/// near-miss words (`contains("oom")` matched "zoom"). Returns
-/// `(auto_fixable, pattern_id)`.
-///
-/// Exit-code-only signatures still fire when no stderr text survived:
-/// 137/9 is the OOM killer's SIGKILL, 139 is SIGSEGV.
-pub fn is_known_error_pattern(exit_code: Option<i32>, log_excerpt: &str) -> (bool, String) {
-    match exit_code {
-        Some(137) | Some(9) => return (true, "oom_killed".into()),
-        Some(139) => return (true, "segfault".into()),
-        _ => {}
-    }
-
-    match DiagnosticsEngine::global()
-        .analyze("monitor", log_excerpt, exit_code)
-        .into_iter()
-        .find(|r| r.error_pattern.as_deref() != Some("unknown_error"))
-    {
-        Some(result) => (
-            result.auto_fixable,
-            result.error_pattern.unwrap_or_else(|| "unknown".into()),
-        ),
-        None => (false, "unknown".into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,13 +383,6 @@ mod tests {
                 .any(|a| a.level == AlertLevel::Critical)
         );
         assert!(status.alerts.iter().any(|a| a.auto_fixable));
-    }
-
-    #[test]
-    fn test_is_known_oom_pattern() {
-        let (known, pattern) = is_known_error_pattern(Some(137), "");
-        assert!(known);
-        assert_eq!(pattern, "oom_killed");
     }
 
     #[test]
@@ -598,37 +537,6 @@ mod tests {
         let ids_b: Vec<&str> = b.alerts.iter().map(|x| x.alert_id.as_str()).collect();
         assert_eq!(ids_a, ids_b);
         assert!(ids_a.iter().any(|id| id.starts_with("failed:star_align:")));
-    }
-
-    #[test]
-    fn test_is_known_log_pattern() {
-        let (known, pattern) = is_known_error_pattern(None, "Out of memory: killed process");
-        assert!(known);
-        assert_eq!(pattern, "oom_killed");
-    }
-
-    #[test]
-    fn test_zoom_does_not_match_oom() {
-        // Regression for issue #709: contains("oom") matched "zoom".
-        let (known, pattern) = is_known_error_pattern(None, "Zooming the canvas to level 5");
-        assert!(!known);
-        assert_eq!(pattern, "unknown");
-    }
-
-    #[test]
-    fn test_shared_engine_reports_diagnostics_pattern_id() {
-        // The monitor and the diagnostics engine now share one table, so
-        // pattern ids and auto-fixability cannot drift apart (#708).
-        let (known, pattern) =
-            is_known_error_pattern(Some(127), "sh: 1: fastqc: command not found");
-        assert!(known);
-        assert_eq!(pattern, "command_not_found");
-    }
-
-    #[test]
-    fn test_suggest_fix_oom() {
-        let fixes = suggest_fix("star_align", Some(137), "");
-        assert!(fixes[0].contains("memory"));
     }
 
     #[test]
