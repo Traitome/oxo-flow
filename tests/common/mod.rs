@@ -129,6 +129,26 @@ pub async fn api_put(
     api_req(base, "PUT", path, Some(token), Some(body)).await
 }
 
+/// Poll `/api/health` until the server answers, then return. The panic
+/// carries the log tail so a timeout is diagnosable (bind failure vs.
+/// slow start vs. wrong port). Tests that need blocking semantics
+/// (web_sse_shutdown) keep their own sync copy — this one is async.
+pub async fn wait_ready(base: &str, log_path: &std::path::Path) {
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "server did not become ready at {base}\n{}",
+            std::fs::read_to_string(log_path).unwrap_or_else(|_| "(no server log)".into())
+        );
+        if client.get(format!("{base}/api/health")).send().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 pub struct WebServer {
     pub child: Child,
     pub base: String,

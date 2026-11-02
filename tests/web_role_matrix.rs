@@ -8,30 +8,11 @@
 
 mod common;
 use common::free_port;
-use common::{api_get, api_post, log_tail, spawn_web_server, spawn_web_server_with_args};
+use common::{api_get, api_post, log_tail, spawn_web_server, spawn_web_server_with_args, wait_ready};
 
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
-async fn wait_ready(base: &str) {
-    let client = Client::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "server did not become ready at {base}"
-        );
-        if client
-            .get(format!("{base}/api/health"))
-            .send()
-            .await
-            .is_ok()
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
 
 /// The full matrix, one sequential flow.
 #[tokio::test]
@@ -46,7 +27,7 @@ async fn web_role_matrix_full_flow() {
             ("OXO_FLOW_ADMIN_PASSWORD", "secret-admin"),
         ],
     );
-    wait_ready(&server.base).await;
+    wait_ready(&server.base, &server.log_path).await;
     let base = server.base.clone();
 
     // ── 1. Unauthenticated walkthrough ──────────────────────────────────
@@ -272,7 +253,7 @@ async fn web_role_matrix_full_flow() {
             ("OXO_FLOW_ADMIN_PASSWORD", "secret-admin"),
         ],
     );
-    wait_ready(&server2.base).await;
+    wait_ready(&server2.base, &server2.log_path).await;
     let base2 = server2.base.clone();
     // Admin still logs in (bcrypt users persisted).
     let (status, login) = api_post(
@@ -312,7 +293,7 @@ async fn web_base_path_prefixes_endpoints() {
         &["--base-path", "/oxo-flow"],
     );
     let base = format!("http://127.0.0.1:{port}");
-    wait_ready(&base).await;
+    wait_ready(&base, &server.log_path).await;
     let client = Client::new();
     let (status, _) = client
         .get(format!("{base}/oxo-flow/api/health"))

@@ -13,31 +13,12 @@
 
 mod common;
 use common::free_port;
-use common::{log_tail, spawn_web_server};
+use common::{log_tail, spawn_web_server, wait_ready};
 
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-async fn wait_ready(base: &str) {
-    let client = Client::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "server did not become ready at {base}"
-        );
-        if client
-            .get(format!("{base}/api/health"))
-            .send()
-            .await
-            .is_ok()
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
 
 async fn post_run(base: &str, toml: &str) -> String {
     let client = Client::new();
@@ -118,7 +99,7 @@ async fn sse_terminal_events_under_load() {
             ("OXO_FLOW_RUNS_RATE_LIMIT", "0"),
         ],
     );
-    wait_ready(&server.base).await;
+    wait_ready(&server.base, &server.log_path).await;
 
     let (tx, mut rx) = mpsc::channel::<(String, String)>(64);
     let reader = spawn_sse_reader(server.base.clone(), tx);
@@ -173,7 +154,7 @@ async fn sse_terminal_event_survives_server_restart() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
     let mut server = spawn_web_server(dir.path(), port, &[("OXO_FLOW_MODE", "personal")]);
-    wait_ready(&server.base).await;
+    wait_ready(&server.base, &server.log_path).await;
 
     let slow_toml = "[workflow]\nname = \"slow\"\n\n[[rules]]\nname = \"wait\"\noutput = [\"later.txt\"]\nshell = \"sleep 25; echo ok > {output}\"\n";
     let run_id = post_run(&server.base, slow_toml).await;
@@ -188,7 +169,7 @@ async fn sse_terminal_event_survives_server_restart() {
     // resume monitoring the executing run.
     let port2 = free_port();
     let mut server2 = spawn_web_server(dir.path(), port2, &[("OXO_FLOW_MODE", "personal")]);
-    wait_ready(&server2.base).await;
+    wait_ready(&server2.base, &server2.log_path).await;
 
     let (tx, mut rx) = mpsc::channel::<(String, String)>(16);
     let reader = spawn_sse_reader(server2.base.clone(), tx);
