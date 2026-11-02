@@ -118,6 +118,31 @@ pub(crate) fn infer_bio_types(
     }
 }
 
+/// Emit a rule-level `types = { inputs = {...}, outputs = {...} }` contract,
+/// rendering each side independently. Single-sided contracts (e.g. a QC rule
+/// that only types its fastq input) are valid `.oxoflow`
+/// ([`crate::types::RuleTypesSpec`] skips empty maps) and round-trip through
+/// the parser, so a side is dropped only when the type is unknown or the
+/// channel list is empty — never defaulted to an empty channel name. Shared
+/// single point of sync for both transpilers (DRY).
+pub(crate) fn push_types_contract(
+    toml: &mut String,
+    inputs: Option<(&str, &str)>,
+    outputs: Option<(&str, &str)>,
+) {
+    let mut parts = Vec::new();
+    if let Some((channel, ty)) = inputs {
+        parts.push(format!("inputs = {{ \"{channel}\" = \"{ty}\" }}"));
+    }
+    if let Some((channel, ty)) = outputs {
+        parts.push(format!("outputs = {{ \"{channel}\" = \"{ty}\" }}"));
+    }
+    if parts.is_empty() {
+        return;
+    }
+    toml.push_str(&format!("types = {{ {} }}\n", parts.join(", ")));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +241,30 @@ mod tests {
         assert!(toml_str.contains("threads = 4"));
         assert!(toml_str.contains("resources = { memory = \"8G\" }"));
         assert!(toml_str.contains("types = {"));
+    }
+
+    #[test]
+    fn test_push_types_contract_single_sided() {
+        // Both sides present.
+        let mut toml = String::new();
+        push_types_contract(
+            &mut toml,
+            Some(("reads", "fastq")),
+            Some(("bam", "bam_coord")),
+        );
+        assert_eq!(
+            toml,
+            "types = { inputs = { \"reads\" = \"fastq\" }, outputs = { \"bam\" = \"bam_coord\" } }\n"
+        );
+
+        // Input-only contract (fastqc arm): outputs side omitted, no empty keys.
+        let mut toml = String::new();
+        push_types_contract(&mut toml, Some(("reads", "fastq")), None);
+        assert_eq!(toml, "types = { inputs = { \"reads\" = \"fastq\" } }\n");
+
+        // No inferable side: no line at all.
+        let mut toml = String::new();
+        push_types_contract(&mut toml, None, None);
+        assert!(toml.is_empty());
     }
 }

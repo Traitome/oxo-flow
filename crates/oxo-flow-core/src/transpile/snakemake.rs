@@ -1,6 +1,6 @@
 //! Snakemake transpiler for converting Snakemake rules into oxo-flow workflows.
 
-use super::{infer_bio_types, normalize_memory};
+use super::{infer_bio_types, normalize_memory, push_types_contract};
 use crate::error::{OxoFlowError, Result};
 
 /// Extracted intermediate representation of a Snakemake rule.
@@ -136,17 +136,11 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
 
         // Inferred biological types
         let (in_type, out_type) = infer_bio_types(&r.name, &r.inputs, &r.outputs);
-        if let Some(it) = in_type
-            && let Some(ot) = out_type
-        {
-            toml.push_str(&format!(
-                "types = {{ inputs = {{ \"{}\" = \"{}\" }}, outputs = {{ \"{}\" = \"{}\" }} }}\n",
-                r.inputs.first().unwrap_or(&String::new()),
-                it,
-                r.outputs.first().unwrap_or(&String::new()),
-                ot
-            ));
-        }
+        push_types_contract(
+            &mut toml,
+            in_type.zip(r.inputs.first().map(String::as_str)),
+            out_type.zip(r.outputs.first().map(String::as_str)),
+        );
         toml.push('\n');
     }
     Ok(toml)

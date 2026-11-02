@@ -1,6 +1,6 @@
 //! Nextflow DSL2 transpiler for converting Nextflow process blocks into oxo-flow rules.
 
-use super::{infer_bio_types, normalize_memory};
+use super::{infer_bio_types, normalize_memory, push_types_contract};
 use crate::error::{OxoFlowError, Result};
 
 /// Extracted intermediate representation of a Nextflow process.
@@ -112,14 +112,11 @@ pub fn transpile_nextflow(source: &str) -> Result<String> {
 
         // Inferred biological types
         let (in_type, out_type) = infer_bio_types(&rule_name, &rendered_inputs, &rendered_outputs);
-        if let Some(it) = in_type
-            && let Some(ot) = out_type
-        {
-            toml.push_str(&format!(
-                "types = {{ inputs = {{ \"{}\" = \"{}\" }}, outputs = {{ \"{}\" = \"{}\" }} }}\n",
-                rendered_inputs[0], it, rendered_outputs[0], ot
-            ));
-        }
+        push_types_contract(
+            &mut toml,
+            in_type.map(|t| (rendered_inputs[0].as_str(), t)),
+            out_type.map(|t| (rendered_outputs[0].as_str(), t)),
+        );
         toml.push('\n');
     }
 
