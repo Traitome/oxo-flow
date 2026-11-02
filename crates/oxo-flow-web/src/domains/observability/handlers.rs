@@ -121,61 +121,6 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
     }))
 }
 
-/// GET /api/events (SSE — Server-Sent Events)
-pub async fn sse_events() -> impl axum::response::IntoResponse {
-    use axum::http::StatusCode;
-    let events: Vec<serde_json::Value> = if let Some(backend) = crate::infra::db::global_backend() {
-        let rows = backend.list_recent_audit_logs(50).await.unwrap_or_default();
-        rows.into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "id": r.id,
-                    "user_id": r.user_id,
-                    "action": r.action,
-                    "target": r.target,
-                    "timestamp": r.timestamp,
-                })
-            })
-            .collect()
-    } else if let Ok(pool) = get_pool() {
-        let rows: Vec<models::AuditLogRow> =
-            sqlx::query_as("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 50")
-                .fetch_all(pool)
-                .await
-                .unwrap_or_default();
-
-        rows.into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "id": r.id,
-                    "user_id": r.user_id,
-                    "action": r.action,
-                    "target": r.target,
-                    "timestamp": r.timestamp,
-                })
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // Return as SSE formatted text
-    let sse_body = events
-        .iter()
-        .map(|e| format!("data: {}\n", serde_json::to_string(e).unwrap_or_default()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (
-        StatusCode::OK,
-        [
-            ("content-type", "text/event-stream"),
-            ("cache-control", "no-cache"),
-            ("connection", "keep-alive"),
-        ],
-        sse_body,
-    )
-}
-
 #[utoipa::path(
     get,
     path = "/api/quota",

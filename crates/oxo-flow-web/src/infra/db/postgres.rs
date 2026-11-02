@@ -728,66 +728,18 @@ impl StorageBackend for PostgresBackend {
         &self,
         filters: &models::RunFilters,
     ) -> Result<models::CursorPage<models::RunRow>, String> {
-        let mut where_clauses: Vec<String> = Vec::new();
-        let mut binds: Vec<String> = Vec::new();
-        let mut param_idx = 1;
-
-        if let Some(user_id) = &filters.user_id {
-            where_clauses.push(format!("user_id = ${param_idx}"));
-            binds.push(user_id.clone());
-            param_idx += 1;
-        }
-        if let Some(status) = &filters.status
-            && matches!(
-                status.as_str(),
-                "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
-            )
-        {
-            where_clauses.push(format!("status = ${param_idx}"));
-            binds.push(status.clone());
-            param_idx += 1;
-        }
-        if let Some(q) = &filters.q {
-            let trimmed = q.trim();
-            if !trimmed.is_empty() {
-                where_clauses.push(format!(
-                    "(workflow_name LIKE ${} OR id LIKE ${})",
-                    param_idx,
-                    param_idx + 1
-                ));
-                let pattern = format!("%{trimmed}%");
-                binds.push(pattern.clone());
-                binds.push(pattern);
-                param_idx += 2;
-            }
-        }
-
-        let filter_where_sql = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", where_clauses.join(" AND "))
-        };
-        let filter_binds = binds.clone();
-
-        if let Some(cursor) = &filters.cursor {
-            where_clauses.push(format!("created_at < ${param_idx}"));
-            binds.push(cursor.clone());
-        }
-
-        let page_where_sql = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", where_clauses.join(" AND "))
-        };
+        // Same shared assembler as SQLite, rendered with PostgreSQL's
+        // numbered `$N` binds — filter semantics live in one place.
+        let q = models::assemble_run_list_query_pg(filters);
 
         let limit = filters.limit.clamp(1, 500);
         let sql = format!(
             "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
-            page_where_sql,
+            q.page_where_sql,
             limit + 1
         );
         let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
-        for bind in &binds {
+        for bind in &q.page_binds {
             query = query.bind(bind);
         }
         let rows: Vec<models::RunRow> = query
@@ -807,9 +759,9 @@ impl StorageBackend for PostgresBackend {
             None
         };
 
-        let count_sql = format!("SELECT COUNT(*) FROM runs{}", filter_where_sql);
+        let count_sql = format!("SELECT COUNT(*) FROM runs{}", q.filter_where_sql);
         let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
-        for bind in &filter_binds {
+        for bind in &q.filter_binds {
             count_query = count_query.bind(bind);
         }
         let total: i64 = count_query.fetch_one(&self.pool).await.unwrap_or(0);

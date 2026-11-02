@@ -216,32 +216,9 @@ pub fn check_license() -> LicenseStatus {
 }
 
 use std::sync::OnceLock;
-use tokio::sync::broadcast;
 
-/// Broadcast channel for Server-Sent Events (SSE).
-static EVENT_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
-
-fn event_tx() -> broadcast::Sender<String> {
-    EVENT_TX
-        .get_or_init(|| {
-            let (tx, _rx) = broadcast::channel(100);
-            tx
-        })
-        .clone()
-}
-
-/// Send an SSE event.
-/// Broadcasts to both the legacy channel and the infra SSE channel
-/// so all connected clients receive real-time updates.
+/// Broadcast a system-wide SSE event (user = null) on the active SSE channel.
 pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
-    let msg = format!(
-        r#"{{"type":"{}","time":"{}","data":{}}}"#,
-        event_type,
-        chrono::Utc::now().to_rfc3339(),
-        serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
-    );
-    let _ = event_tx().send(msg.clone());
-    // Also forward to the infra SSE channel used by the active SSE endpoint
     crate::sse::broadcast_event(event_type, data);
 }
 

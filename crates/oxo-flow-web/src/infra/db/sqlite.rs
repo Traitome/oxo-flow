@@ -982,58 +982,19 @@ impl StorageBackend for SqliteBackend {
         &self,
         filters: &models::RunFilters,
     ) -> Result<models::CursorPage<models::RunRow>, String> {
-        let mut where_clauses: Vec<String> = Vec::new();
-        let mut binds: Vec<String> = Vec::new();
-
-        if let Some(user_id) = &filters.user_id {
-            where_clauses.push("user_id = ?".to_string());
-            binds.push(user_id.clone());
-        }
-        if let Some(status) = &filters.status
-            && matches!(
-                status.as_str(),
-                "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
-            )
-        {
-            where_clauses.push("status = ?".to_string());
-            binds.push(status.clone());
-        }
-        if let Some(q) = &filters.q {
-            let trimmed = q.trim();
-            if !trimmed.is_empty() {
-                where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
-                let pattern = format!("%{trimmed}%");
-                binds.push(pattern.clone());
-                binds.push(pattern);
-            }
-        }
-
-        let filter_where_sql = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", where_clauses.join(" AND "))
-        };
-        let filter_binds = binds.clone();
-
-        if let Some(cursor) = &filters.cursor {
-            where_clauses.push("created_at < ?".to_string());
-            binds.push(cursor.clone());
-        }
-
-        let page_where_sql = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", where_clauses.join(" AND "))
-        };
+        // Filter/cursor semantics come from the shared assembler in models —
+        // the same tested implementation the handler-level tests pin and the
+        // PostgreSQL backend renders with `$N` binds.
+        let q = models::assemble_run_list_query(filters);
 
         let limit = filters.limit.clamp(1, 500);
         let sql = format!(
             "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
-            page_where_sql,
+            q.page_where_sql,
             limit + 1
         );
         let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
-        for bind in &binds {
+        for bind in &q.page_binds {
             query = query.bind(bind);
         }
         let rows: Vec<models::RunRow> = query
@@ -1053,9 +1014,9 @@ impl StorageBackend for SqliteBackend {
             None
         };
 
-        let count_sql = format!("SELECT COUNT(*) FROM runs{}", filter_where_sql);
+        let count_sql = format!("SELECT COUNT(*) FROM runs{}", q.filter_where_sql);
         let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
-        for bind in &filter_binds {
+        for bind in &q.filter_binds {
             count_query = count_query.bind(bind);
         }
         let total: i64 = count_query.fetch_one(&self.pool).await.unwrap_or(0);
