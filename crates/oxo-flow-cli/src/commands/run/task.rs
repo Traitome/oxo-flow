@@ -579,9 +579,15 @@ pub(crate) async fn execute_rule_task(
                 cpu_seconds: None,
                 caption: rule_caption,
             };
-            emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleCompleted {
+            // Same #856 greppability contract as the executed-failure
+            // branch above: a rule that dies at spawn/staging is a
+            // FAILED rule, not a completion — emitting RuleCompleted
+            // here made `grep -c rule_failed` undercount by one.
+            emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleFailed {
                 rule: rule_name.clone(),
-                status: oxo_flow_core::executor::JobStatus::Failed,
+                exit_code: record.exit_code,
+                signal: record.signal,
+                retries: record.retries,
                 duration_ms: 0,
             });
             let mut ck = ctx.checkpoint.lock().await;
