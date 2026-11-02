@@ -50,10 +50,6 @@
         "0": { "name": "meta.key.oxoflow string.unquoted.key.oxoflow" }
       }
     },
-    "assignment": {
-      "name": "keyword.operator.assignment.oxoflow",
-      "match": "="
-    },
     "key-value": {
       "comment": "a key = value line; the value part reuses the shared value context. The context ends at end of line — multi-line values (arrays, block strings) keep it alive through their own begin/end sub-patterns.",
       "begin": "^\\s*((?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*)\\s*(=)\\s*",

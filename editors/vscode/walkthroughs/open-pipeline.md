@@ -3,7 +3,7 @@
 Open any `.oxoflow` file in the workspace — syntax highlighting,
 completion, and folding come alive immediately. No pipeline yet?
 
-Two quick starts:
+Three quick starts:
 
 - **From the terminal**: `oxo-flow init my-pipeline` scaffolds a
   project with a starter `.oxoflow` file, directory layout, and

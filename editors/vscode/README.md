@@ -32,7 +32,7 @@ engine:
 
 - top-level tables and their properties (`[workflow]`, `[ai]`,
   `[wildcard_constraints]`, …)
-- all 51 `[[rules]]` properties with documentation on hover
+- every `[[rules]]` property with documentation on hover
 - enum values where the schema constrains them (`checksum`, cluster
   `backend`, …)
 - `depends_on` / `extends` complete **rule names defined in the current file**
