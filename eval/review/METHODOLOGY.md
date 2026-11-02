@@ -2,7 +2,7 @@
 
 **Author:** Shixiang Wang (王诗翔) · *Traitome & oxo-flow Team*  
 **Date:** October 31, 2026  
-**Status:** AI-Assisted Verification, Human-Supervised · Cryptographically Hash-Bound · Issue #172 Disposition Pending Owner Attestation  
+**Status:** AI-Assisted Verification, Human-Supervised · Cryptographically Hash-Bound · Issue #172 Disposition: Owner Supervision Attestation Posted (2026-11-02)  
 
 ---
 
