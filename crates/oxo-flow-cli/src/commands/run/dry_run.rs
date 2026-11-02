@@ -15,7 +15,7 @@ pub async fn dry_run_command(
     workflow: Option<PathBuf>,
     target: Vec<String>,
     module: Vec<String>,
-    verbose: bool,
+    _verbose: bool,
     json: bool,
     ai: bool,
     ai_max_retries: Option<u32>,
@@ -471,10 +471,6 @@ pub async fn dry_run_command(
                 let icon = if exists { "✓" } else { "✗" };
                 eprintln!("     input {}: {}", icon, s);
             }
-        }
-
-        if verbose {
-            // Additional verbose info
         }
     }
 

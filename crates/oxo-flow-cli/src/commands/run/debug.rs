@@ -18,10 +18,13 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
+    // One placeholder map shared by every consumer below (AI analysis, DAG
+    // build, rule dump) — all expand from the same config, so they must see
+    // the same values.
+    let wildcard_values = config_placeholder_values(&config.config);
+
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        // Build wildcard values from config so template variables expand
-        let debug_wildcards = crate::commands::run::config_placeholder_values(&config.config);
         let expanded: Vec<String> = config
             .rules
             .iter()
@@ -30,7 +33,7 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
                 let shell = oxo_flow_core::executor::process::render_shell_command(
                     shell_cmd,
                     r,
-                    &debug_wildcards,
+                    &wildcard_values,
                     oxo_flow_core::scheduler::detect_system_limits(),
                 );
                 format!(
@@ -69,11 +72,13 @@ logical errors. Output format per rule:
         }
     }
 
-    let dag = WorkflowDag::from_rules_with_config(
-        &config.rules,
-        &config_placeholder_values(&config.config),
-    )
-    .context("failed to build workflow DAG")?;
+    // One placeholder map shared by every consumer below (AI analysis, DAG
+    // build, rule dump) — all expand from the same config, so they must see
+    // the same values.
+    let wildcard_values = config_placeholder_values(&config.config);
+
+    let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values)
+        .context("failed to build workflow DAG")?;
 
     let rules_to_show: Vec<&oxo_flow_core::rule::Rule> = if let Some(ref name) = rule_name {
         match config.rules.iter().find(|r| r.name == *name) {
@@ -129,8 +134,6 @@ logical errors. Output format per rule:
         "Debug:".bold().cyan(),
         rules_to_show.len()
     );
-
-    let wildcard_values = config_placeholder_values(&config.config);
 
     for rule in &rules_to_show {
         eprintln!("{}", format!("── Rule: {} ──", rule.name).bold().cyan());
