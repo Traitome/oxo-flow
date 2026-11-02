@@ -352,7 +352,8 @@ pub async fn login(
     backend
         .create_session(&session_user_id, &result.token, &expires.to_rfc3339())
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!("DB error creating session for user {session_user_id}: {e}");
             err(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "DB_ERROR",

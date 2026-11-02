@@ -385,7 +385,8 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
     let pipeline = backend
         .get_pipeline(&share.pipeline_id)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!("DB error fetching source pipeline for share landing: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DB_ERROR",
