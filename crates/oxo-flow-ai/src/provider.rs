@@ -589,6 +589,62 @@ pub fn classify_http_error_with_retry_after(
     }
 }
 
+// ── Shared wire-format helpers (openai-compatible + ollama) ────────────────
+
+/// Wire string for a message role — identical across the openai-compatible
+/// and ollama backends.
+fn role_str(role: &MessageRole) -> &'static str {
+    match role {
+        MessageRole::System => "system",
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::Tool => "tool",
+    }
+}
+
+/// One tool definition in the openai-compatible wire shape, shared verbatim
+/// by the openai-compatible and ollama backends.
+fn tool_def_json(t: &ToolDef) -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.parameters,
+        }
+    })
+}
+
+/// DeepSeek reports cache traffic natively: `prompt_tokens` is already the
+/// full bill (hit + miss), and the split arrives as
+/// `prompt_cache_hit_tokens` (native DeepSeek) or
+/// `prompt_tokens_details.cached_tokens` (openai-compatible shape). Returns
+/// the hit count when either field is present, so below-rate billing stays
+/// honest on DeepSeek (PR #960 wired only the Anthropic counters, leaving
+/// this dead on real DeepSeek traffic). Endpoints without the fields read
+/// as absent.
+fn cache_read_tokens_from_usage(usage: &serde_json::Value) -> Option<u64> {
+    usage["prompt_cache_hit_tokens"]
+        .as_u64()
+        .or(usage["prompt_tokens_details"]["cached_tokens"].as_u64())
+}
+
+/// Validate a tool call's raw `arguments` string, repairing broken JSON to
+/// `{}`: models like DeepSeek have been observed to truncate long argument
+/// strings. The repair is warned about — silently rewriting a model's
+/// arguments would hide the failure from the caller.
+fn repair_tool_arguments(raw: &str, tool: &str) -> String {
+    if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+        raw.to_string()
+    } else {
+        tracing::warn!(
+            tool,
+            "tool call arguments are not valid JSON — repairing to {{}}"
+        );
+        "{}".to_string()
+    }
+}
+
 // ── Claude backend ─────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -1034,12 +1090,7 @@ impl OpenAiBackend {
             .iter()
             .map(|m| {
                 let mut obj = serde_json::json!({
-                    "role": match m.role {
-                        MessageRole::System => "system",
-                        MessageRole::User => "user",
-                        MessageRole::Assistant => "assistant",
-                        MessageRole::Tool => "tool",
-                    },
+                    "role": role_str(&m.role),
                     "content": m.content,
                 });
                 // DeepSeek reasoning models require the assistant's reasoning
@@ -1076,19 +1127,7 @@ impl OpenAiBackend {
         }
 
         if !tools.is_empty() {
-            let openai_tools: Vec<serde_json::Value> = tools
-                .iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
-                    })
-                })
-                .collect();
+            let openai_tools: Vec<serde_json::Value> = tools.iter().map(tool_def_json).collect();
             body["tools"] = serde_json::json!(openai_tools);
             body["tool_choice"] = serde_json::json!("auto");
         }
@@ -1157,17 +1196,10 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
         None
     };
 
-    // DeepSeek reports cache traffic natively: `prompt_tokens` is already
-    // the full bill (hit + miss), and the split arrives as
-    // `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`. Mapping the
-    // hit count into `cache_read_tokens` keeps below-rate billing honest
-    // on DeepSeek (PR #960 wired only the Anthropic counters, leaving this
-    // branch dead on real DeepSeek traffic). Endpoints without the fields
-    // default to zero, so OpenAI/Groq/Azure parsing is unchanged.
-    let cache_read_tokens = json["usage"]["prompt_cache_hit_tokens"]
-        .as_u64()
-        .or(json["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64())
-        .unwrap_or(0);
+    // Mapping the hit count into `cache_read_tokens` keeps below-rate
+    // billing honest on DeepSeek; endpoints without the fields default to
+    // zero, so OpenAI/Groq/Azure parsing is unchanged.
+    let cache_read_tokens = cache_read_tokens_from_usage(&json["usage"]).unwrap_or(0);
 
     let usage = Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
@@ -1216,15 +1248,7 @@ fn parse_tool_calls_strict(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, A
                 .get("arguments")
                 .and_then(|v| v.as_str())
                 .unwrap_or("{}");
-            let arguments = if serde_json::from_str::<serde_json::Value>(raw_arguments).is_ok() {
-                raw_arguments.to_string()
-            } else {
-                tracing::warn!(
-                    tool = name,
-                    "tool call arguments are not valid JSON — repairing to {{}}"
-                );
-                "{}".to_string()
-            };
+            let arguments = repair_tool_arguments(raw_arguments, name);
             Ok(ToolCall {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -1276,7 +1300,7 @@ impl OllamaBackend {
     ) -> Result<AiResponse, AiError> {
         let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
-        let (status, _headers, json) = send_with_retry(
+        let (status, headers, json) = send_with_retry(
             self.client
                 .post(&self.api_url)
                 .header("content-type", "application/json")
@@ -1289,10 +1313,18 @@ impl OllamaBackend {
         .await?;
 
         if !status.is_success() {
-            return Err(AiError::Provider {
-                provider: "ollama".into(),
-                message: format!("HTTP {status}: {json}"),
-            });
+            // Ollama error bodies are a top-level `{"error": "..."}` object,
+            // not the openai `{"error": {"message": ...}}` shape.
+            let err_msg = json["error"]
+                .as_str()
+                .or_else(|| json["error"]["message"].as_str())
+                .unwrap_or("unknown error");
+            return Err(classify_http_error_with_retry_after(
+                "ollama",
+                status.as_u16(),
+                err_msg,
+                retry_after_header(&headers),
+            ));
         }
 
         let response = parse_ollama_response(&json)?;
@@ -1361,17 +1393,7 @@ fn parse_ollama_tool_calls(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, A
                 })?;
             let arguments = match &tc["function"]["arguments"] {
                 // Newer Ollama emits a JSON object; older versions a string.
-                serde_json::Value::String(s) => {
-                    if serde_json::from_str::<serde_json::Value>(s).is_ok() {
-                        s.clone()
-                    } else {
-                        tracing::warn!(
-                            tool = name,
-                            "ollama tool call arguments are not valid JSON — repairing to {{}}"
-                        );
-                        "{}".to_string()
-                    }
-                }
+                serde_json::Value::String(s) => repair_tool_arguments(s, name),
                 serde_json::Value::Null => "{}".to_string(),
                 other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
             };
@@ -1394,12 +1416,7 @@ fn build_ollama_body(
         .iter()
         .map(|m| {
             let mut msg = serde_json::json!({
-                "role": match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                },
+                "role": role_str(&m.role),
                 "content": m.content,
             });
             // Echo the assistant's tool-call request back so Ollama can
@@ -1437,19 +1454,7 @@ fn build_ollama_body(
 
     // Ollama supports tools in newer versions; include if provided
     if !tools.is_empty() {
-        let ollama_tools: Vec<serde_json::Value> = tools
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                })
-            })
-            .collect();
+        let ollama_tools: Vec<serde_json::Value> = tools.iter().map(tool_def_json).collect();
         body["tools"] = serde_json::json!(ollama_tools);
     }
 
@@ -1539,13 +1544,10 @@ fn usage_from_frame(frame: &str) -> Option<Usage> {
     let line = frame.lines().find(|l| l.contains("\"usage\""))?;
     let json: serde_json::Value =
         serde_json::from_str(line.trim().strip_prefix("data:").unwrap_or("").trim()).ok()?;
-    let cache_read_tokens = json["usage"]["prompt_cache_hit_tokens"]
-        .as_u64()
-        .or(json["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64());
     Some(Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64()?,
         completion_tokens: json["usage"]["completion_tokens"].as_u64()?,
-        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_read_tokens: cache_read_tokens_from_usage(&json["usage"]).unwrap_or(0),
         ..Usage::default()
     })
 }
@@ -1916,11 +1918,9 @@ fn resolve_provider(
     // A non-empty value that did not parse is almost certainly a typo
     // (`cluade`, `open-ai2`): say so instead of silently running the
     // detection/auto tiers as if the variable were unset (live-observed
-    // confusion: an invalid name produced no signal at all).
-    if !provider_env.is_empty()
-        && !provider_env.eq_ignore_ascii_case("disabled")
-        && provider_env.parse::<ProviderKind>().is_err()
-    {
+    // confusion: an invalid name produced no signal at all). "disabled"
+    // and parseable names never reach this point (early-returned above).
+    if !provider_env.is_empty() {
         tracing::warn!(
             "OXO_FLOW_AI_PROVIDER='{}' is not a known provider (expected claude, openai, deepseek, or ollama) — ignoring it and falling back to detection/config",
             provider_env
