@@ -111,13 +111,15 @@ export function findingsFromLint(r: LintReport): Finding[] {
 /**
  * Validate and lint intentionally overlap (lint re-runs the format checks), so
  * running both produces duplicates. Two findings are the same when code,
- * message and rule agree — the marketplace cannot merge them, so we do.
+ * message and rule agree — the marketplace cannot merge them, so we do. The
+ * first occurrence wins: the provider pushes validate findings before lint,
+ * so the authoritative validate copy survives an overlap.
  */
 export function dedupeFindings(findings: Finding[]): Finding[] {
   const seen = new Set<string>();
   const out: Finding[] = [];
   for (const f of findings) {
-    const key = `${f.source}\u0000${f.code}\u0000${f.message}\u0000${f.rule ?? ""}`;
+    const key = `${f.code}\u0000${f.message}\u0000${f.rule ?? ""}`;
     if (!seen.has(key)) {
       seen.add(key);
       out.push(f);
