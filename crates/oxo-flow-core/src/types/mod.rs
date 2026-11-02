@@ -234,7 +234,9 @@ impl FromStr for IndexKind {
 #[must_use]
 pub fn coercion_rule_for_index(kind: IndexKind) -> Option<&'static str> {
     match kind {
-        IndexKind::Bai | IndexKind::Csi | IndexKind::Crai => Some("samtools index {input}"),
+        IndexKind::Bai => Some("samtools index {input}"),
+        IndexKind::Csi => Some("samtools index -c {input}"),
+        IndexKind::Crai => Some("samtools index {input}"),
         IndexKind::Tbi => Some("tabix -p vcf {input}"),
         IndexKind::Fai => Some("samtools faidx {input}"),
     }

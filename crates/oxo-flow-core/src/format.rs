@@ -1104,7 +1104,25 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     // empty-config build silently missed cycles routed through
     // `{config.*}` outputs, issue #466).
     match WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values()) {
-        Ok(_) => {}
+        Ok(dag) => {
+            if !config.types.is_empty() || config.rules.iter().any(|rule| rule.types.is_some()) {
+                for td in crate::types::check_workflow_types(config, &dag) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "upstream rule '{}' ({} -> {}): {}",
+                            td.producer_rule,
+                            td.producer_channel,
+                            td.consumer_channel,
+                            td.violation.message
+                        ),
+                        rule: Some(td.consumer_rule),
+                        code: td.violation.code,
+                        suggestion: td.violation.suggestion,
+                    });
+                }
+            }
+        }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -2292,27 +2310,6 @@ pub fn lint_format(
                 suggestion: Some(format!(
                     "declare it as {key} = {{ default = \"...\", sensitive = true }} so the value is env-routed and masked on disk"
                 )),
-            });
-        }
-    }
-
-    // BioTypes biological semantic subtyping contract check (TYPE-001 .. TYPE-006)
-    if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
-        && let Some(dag) = dag.as_ref()
-    {
-        for td in crate::types::check_workflow_types(config, dag) {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                message: format!(
-                    "upstream rule '{}' ({} -> {}): {}",
-                    td.producer_rule,
-                    td.producer_channel,
-                    td.consumer_channel,
-                    td.violation.message
-                ),
-                rule: Some(td.consumer_rule),
-                code: td.violation.code,
-                suggestion: td.violation.suggestion,
             });
         }
     }
@@ -4581,7 +4578,10 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             extends = "nonexistent"
             shell = "echo hello"
         "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
+        // Bypass WorkflowConfig::parse: load-path resolution rejects this
+        // before validate_format runs. The validator still owns E008 for
+        // callers that construct or deserialize a config directly.
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E008"));

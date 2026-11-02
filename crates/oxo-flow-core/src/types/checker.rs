@@ -142,12 +142,31 @@ impl BioTypeSpec {
         if let Some(expected_rg) = &expected.read_groups
             && expected_rg.required
         {
-            let missing = self.read_groups.as_ref().is_none_or(|rg| !rg.required);
-            if missing {
+            let missing_fields: Vec<&str> = self
+                .read_groups
+                .as_ref()
+                .filter(|rg| rg.required)
+                .map(|rg| {
+                    expected_rg
+                        .fields
+                        .iter()
+                        .filter(|field| !rg.fields.contains(field))
+                        .map(String::as_str)
+                        .collect()
+                })
+                .unwrap_or_else(|| expected_rg.fields.iter().map(String::as_str).collect());
+            if self.read_groups.as_ref().is_none_or(|rg| !rg.required) || !missing_fields.is_empty()
+            {
+                let missing_detail = if missing_fields.is_empty() {
+                    "no read-group contract".to_string()
+                } else {
+                    format!("missing fields: {}", missing_fields.join(", "))
+                };
                 violations.push(TypeViolation {
                     code: "TYPE-005".to_string(),
-                    message: "missing read group contract: consumer requires valid @RG header tags, but producer does not declare them"
-                        .to_string(),
+                    message: format!(
+                        "read group contract mismatch: consumer requires valid @RG header tags ({missing_detail})"
+                    ),
                     suggestion: Some(
                         "add read groups during alignment (e.g. bwa mem -R) or inject with gatk AddOrReplaceReadGroups"
                             .to_string(),
@@ -180,7 +199,12 @@ impl BioTypeSpec {
                         expected_comp, current_comp
                     ),
                     suggestion: Some(suggestion),
-                    coercion_rule: Some("bgzip -c {input} > {output}".to_string()),
+                    coercion_rule: Some(match expected_comp {
+                        CompressionKind::Bgzip => "bgzip -c {input} > {output}".to_string(),
+                        CompressionKind::Zstd => "zstd -c {input} > {output}".to_string(),
+                        CompressionKind::Gzip => "gzip -c {input} > {output}".to_string(),
+                        CompressionKind::None => "gzip -dc {input} > {output}".to_string(),
+                    }),
                 });
             }
         }
@@ -204,14 +228,17 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
     let rule_map: std::collections::HashMap<&str, &crate::rule::Rule> =
         config.rules.iter().map(|r| (r.name.as_str(), r)).collect();
 
-    // Walk all topological dependency edges
-    for (consumer_name, rule) in &rule_map {
+    // Walk all topological dependency edges in declaration order so
+    // diagnostics are deterministic across runs.
+    for rule in &config.rules {
+        let consumer_name = &rule.name;
         let Some(consumer_types) = &rule.types else {
             continue;
         };
 
         // Get direct dependencies from DAG
-        let deps = dag.dependencies(consumer_name).unwrap_or_default();
+        let mut deps = dag.dependencies(consumer_name).unwrap_or_default();
+        deps.sort();
         for producer_name in deps {
             let Some(producer_rule) = rule_map.get(producer_name.as_str()) else {
                 continue;
@@ -242,13 +269,38 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                         let producer_spec = resolve_type_spec(out_type_name, config);
                         let consumer_spec = resolve_type_spec(in_type_name, config);
 
-                        if let (Some(p_spec), Some(c_spec)) = (producer_spec, consumer_spec)
+                        for (role, channel, resolved) in [
+                            ("producer", out_ch.as_str(), &producer_spec),
+                            ("consumer", in_ch.as_str(), &consumer_spec),
+                        ] {
+                            if let Err(message) = resolved {
+                                diagnostics.push(TypeDiagnostic {
+                                    producer_rule: producer_name.clone(),
+                                    consumer_rule: consumer_name.clone(),
+                                    producer_channel: out_ch.clone(),
+                                    consumer_channel: in_ch.clone(),
+                                    violation: TypeViolation {
+                                        code: "TYPE-UNKNOWN".to_string(),
+                                        message: format!(
+                                            "{role} type for channel '{channel}' cannot be resolved: {message}"
+                                        ),
+                                        suggestion: Some(
+                                            "declare the type under [types.<name>] or use a supported format/attribute syntax"
+                                                .to_string(),
+                                        ),
+                                        coercion_rule: None,
+                                    },
+                                });
+                            }
+                        }
+
+                        if let (Ok(p_spec), Ok(c_spec)) = (producer_spec, consumer_spec)
                             && let Err(violations) = p_spec.is_subtype_of(&c_spec)
                         {
                             for violation in violations {
                                 diagnostics.push(TypeDiagnostic {
                                     producer_rule: producer_name.clone(),
-                                    consumer_rule: (*consumer_name).to_string(),
+                                    consumer_rule: consumer_name.clone(),
                                     producer_channel: out_ch.clone(),
                                     consumer_channel: in_ch.clone(),
                                     violation,
@@ -264,18 +316,83 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
     diagnostics
 }
 
-fn resolve_type_spec<'a>(
-    name_or_inline: &'a str,
-    config: &'a WorkflowConfig,
-) -> Option<BioTypeSpec> {
-    if let Some(declared) = config.types.get(name_or_inline) {
-        return Some(declared.clone());
+fn resolve_type_spec(
+    name_or_inline: &str,
+    config: &WorkflowConfig,
+) -> std::result::Result<BioTypeSpec, String> {
+    let lookup = name_or_inline
+        .strip_prefix("types.")
+        .unwrap_or(name_or_inline);
+    if let Some(declared) = config.types.get(lookup) {
+        return Ok(declared.clone());
     }
 
-    // Try parsing format name as a basic BioTypeSpec
-    if let Ok(format) = name_or_inline.parse::<BioFormat>() {
-        return Some(BioTypeSpec::new(format));
+    parse_inline_type_spec(name_or_inline)
+}
+
+fn parse_inline_type_spec(input: &str) -> std::result::Result<BioTypeSpec, String> {
+    let input = input.trim();
+    let (format_name, attrs) = match input.split_once('[') {
+        Some((format, rest)) => {
+            let attrs = rest
+                .strip_suffix(']')
+                .ok_or_else(|| format!("unterminated inline type attributes in '{input}'"))?;
+            (format.trim(), Some(attrs))
+        }
+        None => (input, None),
+    };
+
+    let format = if format_name.eq_ignore_ascii_case("gvcf") {
+        BioFormat::Vcf
+    } else {
+        format_name
+            .parse::<BioFormat>()
+            .map_err(|e| format!("unknown biological type '{format_name}': {e}"))?
+    };
+    let mut spec = BioTypeSpec::new(format);
+    if format_name.eq_ignore_ascii_case("gvcf") {
+        spec.attributes
+            .insert("variant_type".to_string(), "germline".to_string());
     }
 
-    None
+    let Some(attrs) = attrs else {
+        return Ok(spec);
+    };
+
+    for attr in attrs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (key, value) = attr
+            .split_once('=')
+            .ok_or_else(|| format!("inline type attribute '{attr}' must be key=value"))?;
+        let key = key.trim();
+        let value = value.trim().trim_matches(['"', '\'']);
+        match key {
+            "sort_order" => {
+                spec.sort_order = Some(
+                    value
+                        .parse::<SortOrder>()
+                        .map_err(|e| format!("invalid inline type attribute '{key}': {e}"))?,
+                );
+            }
+            "index" => {
+                spec.index = Some(
+                    value
+                        .parse::<super::IndexKind>()
+                        .map_err(|e| format!("invalid inline type attribute '{key}': {e}"))?,
+                );
+            }
+            "compression" => {
+                spec.compression = Some(
+                    value
+                        .parse::<CompressionKind>()
+                        .map_err(|e| format!("invalid inline type attribute '{key}': {e}"))?,
+                );
+            }
+            "reference_build" => spec.reference_build = Some(value.to_string()),
+            other => {
+                spec.attributes.insert(other.to_string(), value.to_string());
+            }
+        };
+    }
+
+    Ok(spec)
 }

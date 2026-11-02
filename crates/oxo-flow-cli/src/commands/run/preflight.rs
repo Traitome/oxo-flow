@@ -33,6 +33,36 @@ pub(crate) fn build_dag_and_targets(
     )
     .context("failed to build workflow DAG")?;
 
+    if !config.types.is_empty() || config.rules.iter().any(|rule| rule.types.is_some()) {
+        let type_errors = oxo_flow_core::types::check_workflow_types(config, &dag);
+        if !type_errors.is_empty() {
+            let findings = type_errors
+                .iter()
+                .map(|td| {
+                    let hint = td
+                        .violation
+                        .suggestion
+                        .as_deref()
+                        .map(|suggestion| format!("\n    hint: {suggestion}"))
+                        .unwrap_or_default();
+                    format!(
+                        "[{}] {} ({} -> {}): {}{}",
+                        td.violation.code,
+                        td.consumer_rule,
+                        td.producer_channel,
+                        td.consumer_channel,
+                        td.violation.message,
+                        hint
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n  ");
+            anyhow::bail!(
+                "declared biological type contracts are violated — fix before running:\n  {findings}"
+            );
+        }
+    }
+
     // --module partial runs (issue #112 elasticity): each module name
     // resolves to its rules plus the host producers of its declared
     // concrete inputs; upstream DAG dependents come via the target
@@ -302,6 +332,45 @@ pub(crate) fn warn_low_free_space(workdir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dag_preflight_rejects_declared_type_contract_violations() {
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "type_gate"
+
+            [types.raw_sam]
+            format = "sam"
+
+            [types.indexed_bam]
+            format = "bam"
+            index = "bai"
+
+            [[rules]]
+            name = "align"
+            output = ["out.sam"]
+            shell = "touch out.sam"
+            [rules.types]
+            outputs = { default = "raw_sam" }
+
+            [[rules]]
+            name = "call"
+            input = ["out.sam"]
+            output = ["calls.vcf"]
+            shell = "touch calls.vcf"
+            [rules.types]
+            inputs = { default = "indexed_bam" }
+            "#,
+        )
+        .unwrap();
+
+        let err = build_dag_and_targets(&config, Vec::new(), &[]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("biological type contracts"), "{message}");
+        assert!(message.contains("TYPE-001"), "{message}");
+        assert!(message.contains("TYPE-003"), "{message}");
+    }
 
     #[test]
     fn validate_resource_budget_accepts_feasible_rules() {

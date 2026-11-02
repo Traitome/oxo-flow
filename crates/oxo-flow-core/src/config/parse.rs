@@ -36,6 +36,7 @@ impl WorkflowConfig {
         // covered by the dedup pass, which runs before its discovery push.
         Self::reject_reserved_sample_group_names(&config.sample_groups)?;
         config = config.with_reference_builder_templates()?;
+        resolve_rule_templates(&mut config.rules)?;
         config.validate()?;
         Ok(config)
     }
@@ -501,6 +502,7 @@ impl WorkflowConfig {
         // and inject keyed config values (config.<name> = output) for each reference.
         config = config.with_reference_builder_templates()?;
 
+        resolve_rule_templates(&mut config.rules)?;
         config.validate()?;
         Ok(config)
     }
@@ -1131,91 +1133,119 @@ impl WorkflowConfig {
     }
 }
 pub fn resolve_rule_templates(rules: &mut [crate::rule::Rule]) -> crate::Result<()> {
-    // Build a name→index map
+    // Build a name→index map. A duplicate name would make inheritance
+    // depend on HashMap insertion order, so reject it before resolution.
     let name_to_idx: std::collections::HashMap<String, usize> = rules
         .iter()
         .enumerate()
         .map(|(i, r)| (r.name.clone(), i))
-        .collect();
-
-    // Detect circular inheritance
-    for rule in rules.iter() {
-        if let Some(ref base_name) = rule.extends {
-            let mut visited = std::collections::HashSet::new();
-            visited.insert(rule.name.clone());
-            let mut current = base_name.clone();
-            while let Some(&idx) = name_to_idx.get(&current) {
-                if !visited.insert(current.clone()) {
+        .try_fold(
+            std::collections::HashMap::with_capacity(rules.len()),
+            |mut map, (name, idx)| {
+                if map.insert(name.clone(), idx).is_some() {
                     return Err(crate::OxoFlowError::Config {
-                        message: format!(
-                            "circular extends chain detected: rule '{}' extends '{}' which forms a cycle",
-                            rule.name, base_name
-                        ),
+                        message: format!("duplicate rule name '{name}' cannot be resolved"),
                     });
                 }
-                match &rules[idx].extends {
-                    Some(next) => current = next.clone(),
-                    None => break,
-                }
+                Ok(map)
+            },
+        )?;
+
+    fn resolve_one(
+        idx: usize,
+        rules: &[crate::rule::Rule],
+        name_to_idx: &std::collections::HashMap<String, usize>,
+        states: &mut [u8],
+        resolved: &mut [Option<crate::rule::Rule>],
+    ) -> crate::Result<crate::rule::Rule> {
+        match states[idx] {
+            2 => {
+                return resolved[idx]
+                    .clone()
+                    .ok_or_else(|| crate::OxoFlowError::Config {
+                        message: format!(
+                            "rule '{}' was not retained after resolution",
+                            rules[idx].name
+                        ),
+                    });
             }
+            1 => {
+                return Err(crate::OxoFlowError::Config {
+                    message: format!(
+                        "circular extends chain detected at rule '{}'",
+                        rules[idx].name
+                    ),
+                });
+            }
+            _ => {}
         }
-    }
 
-    // Resolve templates (iterate by index to avoid borrow issues)
-    let snapshot: Vec<crate::rule::Rule> = rules.to_vec();
+        states[idx] = 1;
+        let mut rule = rules[idx].clone();
 
-    for rule in rules.iter_mut() {
-        if let Some(ref base_name) = rule.extends.clone() {
+        if let Some(base_name) = rule.extends.clone() {
             let base_idx =
-                name_to_idx
-                    .get(base_name)
+                *name_to_idx
+                    .get(&base_name)
                     .ok_or_else(|| crate::OxoFlowError::Config {
                         message: format!(
                             "rule '{}' extends '{}' which does not exist",
                             rule.name, base_name
                         ),
                     })?;
-            let base = &snapshot[*base_idx];
+            let base = resolve_one(base_idx, rules, name_to_idx, states, resolved)?;
 
-            // Inherit fields that are at their default values
-            if rule.threads.is_none() && base.threads.is_some() {
+            // Inherit only fields the child leaves at their default values.
+            // The base is already fully resolved, so multi-level chains use
+            // the grandparent values rather than the original unresolved
+            // snapshot.
+            if rule.threads.is_none() {
                 rule.threads = base.threads;
             }
-            if rule.memory.is_none() && base.memory.is_some() {
+            if rule.memory.is_none() {
                 rule.memory = base.memory.clone();
             }
-            if rule.resources == crate::rule::Resources::default()
-                && base.resources != crate::rule::Resources::default()
-            {
+            if rule.resources == crate::rule::Resources::default() {
                 rule.resources = base.resources.clone();
             }
-            if rule.environment.is_empty() && !base.environment.is_empty() {
+            if rule.environment.is_empty() {
                 rule.environment = base.environment.clone();
             }
-            if rule.tags.is_empty() && !base.tags.is_empty() {
+            if rule.tags.is_empty() {
                 rule.tags = base.tags.clone();
             }
-            if rule.retries == 0 && base.retries > 0 {
+            if rule.retries == 0 {
                 rule.retries = base.retries;
             }
-            if rule.retry_delay.is_none() && base.retry_delay.is_some() {
+            if rule.retry_delay.is_none() {
                 rule.retry_delay = base.retry_delay.clone();
             }
-            if rule.group.is_none() && base.group.is_some() {
+            if rule.group.is_none() {
                 rule.group = base.group.clone();
             }
-            if rule.log.is_none() && base.log.is_some() {
+            if rule.log.is_none() {
                 rule.log = base.log.clone();
             }
-            // Inherit params that are not already set
             for (key, value) in &base.params {
-                let k: String = key.clone();
-                let v: toml::Value = value.clone();
-                rule.params.entry(k).or_insert(v);
+                rule.params
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
             }
         }
+
+        states[idx] = 2;
+        resolved[idx] = Some(rule.clone());
+        Ok(rule)
     }
 
+    let mut states = vec![0_u8; rules.len()];
+    let mut resolved: Vec<Option<crate::rule::Rule>> = vec![None; rules.len()];
+    for idx in 0..rules.len() {
+        resolve_one(idx, rules, &name_to_idx, &mut states, &mut resolved)?;
+    }
+    for (rule, resolved_rule) in rules.iter_mut().zip(resolved) {
+        *rule = resolved_rule.expect("every rule is resolved before assignment");
+    }
     Ok(())
 }
 

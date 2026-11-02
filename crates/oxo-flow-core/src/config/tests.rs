@@ -1136,6 +1136,65 @@ fn resolve_rule_templates_basic() {
 }
 
 #[test]
+fn parse_applies_rule_templates_before_validation() {
+    let toml = r#"
+        [workflow]
+        name = "extends_load_path"
+
+        [[rules]]
+        name = "base"
+        threads = 16
+        tags = ["alignment"]
+        retries = 2
+
+        [[rules]]
+        name = "child"
+        extends = "base"
+        input = ["reads.fq"]
+        output = ["aligned.bam"]
+        shell = "bwa mem ref.fa {input} > {output}"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).expect("workflow with extends must parse");
+    let child = config
+        .rules
+        .iter()
+        .find(|rule| rule.name == "child")
+        .expect("child rule");
+
+    assert_eq!(child.threads, Some(16));
+    assert_eq!(child.tags, vec!["alignment"]);
+    assert_eq!(child.retries, 2);
+}
+
+#[test]
+fn resolve_rule_templates_uses_multilevel_resolved_values() {
+    let mut rules = vec![
+        crate::rule::Rule {
+            name: "grandparent".to_string(),
+            threads: Some(32),
+            tags: vec!["inherited".to_string()],
+            ..Default::default()
+        },
+        crate::rule::Rule {
+            name: "parent".to_string(),
+            extends: Some("grandparent".to_string()),
+            ..Default::default()
+        },
+        crate::rule::Rule {
+            name: "child".to_string(),
+            extends: Some("parent".to_string()),
+            ..Default::default()
+        },
+    ];
+
+    resolve_rule_templates(&mut rules).unwrap();
+
+    assert_eq!(rules[2].threads, Some(32));
+    assert_eq!(rules[2].tags, vec!["inherited"]);
+}
+
+#[test]
 fn resolve_rule_templates_override() {
     let mut rules = vec![
         crate::rule::Rule {
@@ -1354,6 +1413,59 @@ fn resolve_split_values_direct() {
 }
 
 #[test]
+fn resolve_split_values_rejects_invalid_n_instead_of_single_chunk_fallback() {
+    let config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "test"
+
+        [[rules]]
+        name = "test_rule"
+        shell = "echo test"
+        "#,
+    )
+    .unwrap();
+
+    let split = crate::rule::SplitConfig {
+        by: "chr".to_string(),
+        values: Vec::new(),
+        values_from: None,
+        n: Some("chr1".to_string()),
+        glob: None,
+    };
+
+    let err = config.resolve_split_values(&split).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("split.n"), "{message}");
+    assert!(message.contains("chr1"), "{message}");
+}
+
+#[test]
+fn expand_scatter_rejects_empty_value_domain() {
+    let toml = r#"
+        [workflow]
+        name = "empty_scatter"
+
+        [[rules]]
+        name = "per_chunk"
+        input = ["sample.bam"]
+        output = ["chunks/{chunk}.bam"]
+        shell = "process {input} > {output}"
+
+        [rules.scatter]
+        variable = "chunk"
+        values = []
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+    let err = config.expand_wildcards().unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("empty value domain"), "{message}");
+    assert!(message.contains("per_chunk"), "{message}");
+    assert!(message.contains("chunk"), "{message}");
+}
+
+#[test]
 fn expand_transform_split_map_combine() {
     let toml = r#"
         [workflow]
@@ -1399,6 +1511,56 @@ fn expand_transform_split_map_combine() {
     let combine = &config.rules[2];
     assert!(combine.name.contains("combine"));
     assert!(combine.shell.as_ref().unwrap().contains("GatherVcfs"));
+}
+
+#[test]
+fn expand_transform_preserves_execution_semantics() {
+    let toml = r#"
+        [workflow]
+        name = "transform_semantics"
+
+        [[rules]]
+        name = "variant_calling"
+        input = ["sample.bam"]
+        output = ["sample.vcf.gz"]
+        tags = ["variant", "production"]
+        retries = 3
+        localrule = true
+        staging_mode = "stream"
+        benchmark = "bench/{chr}.tsv"
+
+        [rules.environment]
+        docker = "biocontainers/gatk:4.5"
+
+        [rules.transform.split]
+        by = "chr"
+        values = ["chr1", "chr2"]
+
+        [rules.transform]
+        map = "gatk HaplotypeCaller -I {input} -L {chr} -O {output}"
+
+        [rules.transform.combine]
+        shell = "gatk GatherVcfs {chunks} -O {output}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    assert_eq!(config.rules.len(), 3);
+    for rule in &config.rules {
+        assert_eq!(rule.tags, vec!["variant", "production"]);
+        assert_eq!(rule.retries, 3);
+        assert!(rule.localrule);
+        assert_eq!(
+            rule.environment.docker.as_deref(),
+            Some("biocontainers/gatk:4.5")
+        );
+        assert_eq!(
+            rule.staging_mode,
+            Some(crate::storage::StagingMode::StreamFifo)
+        );
+        assert_eq!(rule.benchmark.as_deref(), Some("bench/{chr}.tsv"));
+    }
 }
 
 #[test]

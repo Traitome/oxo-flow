@@ -1131,6 +1131,21 @@ impl WorkflowConfig {
                 {
                     values = resolved;
                 }
+                if values.is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "scatter rule '{}' has an empty value domain for '{}'",
+                            rule.name, scatter.variable
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "define at least one value in scatter.values or ensure \
+                             scatter.values_from resolves to a non-empty list; an empty domain \
+                             would silently remove this analysis branch"
+                                .to_string(),
+                        ),
+                    });
+                }
 
                 let mut scatter_outputs = Vec::new();
 
@@ -1311,31 +1326,20 @@ impl WorkflowConfig {
                         },
                     };
 
-                    let mut map_rule = Rule {
-                        name: map_rule_name,
-                        input: map_input,
-                        output: vec![chunk_output].into(),
-                        shell: Some(map_shell),
-                        // Inherit the parent's required semantics (issue
-                        // #142 H5): Rule's plain Default makes bools false
-                        // while serde defaults `required` to true — an
-                        // engine-generated chunk must not silently become
-                        // best-effort.
-                        required: rule.required,
-
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        retries: rule.retries,
-                        ..Default::default()
-                    };
-
-                    #[allow(deprecated)]
-                    {
-                        map_rule.threads = rule.threads;
-                        map_rule.memory = rule.memory.clone();
-                    }
+                    // Clone the authored rule and override only generated
+                    // identity and I/O/command fields. Reconstructing from
+                    // Rule::default silently dropped env_group, hooks,
+                    // localrule, staging, benchmark/report settings, tags,
+                    // groups, and other execution semantics.
+                    let mut map_rule = rule.clone();
+                    map_rule.name = map_rule_name;
+                    map_rule.input = map_input;
+                    map_rule.output = vec![chunk_output].into();
+                    map_rule.shell = Some(map_shell);
+                    map_rule.transform = None;
+                    map_rule.scatter = None;
+                    map_rule.output_pattern = None;
+                    map_rule.cleanup_chunks = false;
 
                     final_rules.push(map_rule);
                 }
@@ -1413,25 +1417,15 @@ impl WorkflowConfig {
                         });
                     };
 
-                    let mut combine_rule = Rule {
-                        name: combine_rule_name,
-                        input: FilePatterns::List(all_chunk_outputs.clone()),
-                        output: rule.output.clone(),
-                        shell: Some(combine_shell),
-                        required: rule.required,
-                        cleanup_chunks: transform.cleanup,
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        ..Default::default()
-                    };
-
-                    #[allow(deprecated)]
-                    {
-                        combine_rule.threads = rule.threads;
-                        combine_rule.memory = rule.memory.clone();
-                    }
+                    let mut combine_rule = rule.clone();
+                    combine_rule.name = combine_rule_name;
+                    combine_rule.input = FilePatterns::List(all_chunk_outputs.clone());
+                    combine_rule.output = rule.output.clone();
+                    combine_rule.shell = Some(combine_shell);
+                    combine_rule.transform = None;
+                    combine_rule.scatter = None;
+                    combine_rule.output_pattern = None;
+                    combine_rule.cleanup_chunks = transform.cleanup;
 
                     final_rules.push(combine_rule);
                 }
@@ -3002,33 +2996,70 @@ impl WorkflowConfig {
             let n = self
                 .resolve_config_list(n_str)
                 .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()));
-            let n = match n {
-                Some(n) => n,
-                None => match n_str.parse::<usize>() {
-                    Ok(n) => n,
-                    Err(_) => {
-                        tracing::warn!(
-                            "split.n '{}' is not a number — falling back to a single chunk",
-                            n_str
-                        );
-                        1
-                    }
-                },
-            };
+            let n =
+                match n {
+                    Some(n) => n,
+                    None => match n_str.parse::<usize>() {
+                        Ok(n) => n,
+                        Err(_) => return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform.split.n '{}' is neither a positive integer nor a \
+                             numeric config value",
+                                n_str
+                            ),
+                            rule: None,
+                            suggestion: Some(
+                                "set split.n to an integer or a config key that resolves to one; \
+                             a fallback would silently change the analysis fan-out"
+                                    .to_string(),
+                            ),
+                        }),
+                    },
+                };
+            if n == 0 {
+                return Err(OxoFlowError::Validation {
+                    message: "transform.split.n must be greater than zero".to_string(),
+                    rule: None,
+                    suggestion: Some(
+                        "use a positive integer or provide split.values/split.values_from"
+                            .to_string(),
+                    ),
+                });
+            }
             // Generate chunk indices: 0, 1, 2, ..., n-1
             return Ok((0..n).map(|i| i.to_string()).collect());
         }
 
         if let Some(ref glob) = split.glob {
             // Glob expansion - find matching files
-            let matches: Vec<String> = glob::glob(glob)
+            let glob_path = std::path::Path::new(glob);
+            let search_pattern = if glob_path.is_absolute() {
+                glob_path.to_path_buf()
+            } else if let Some(base_dir) = self.base_dir.as_deref() {
+                base_dir.join(glob_path)
+            } else {
+                glob_path.to_path_buf()
+            };
+            let search_pattern = search_pattern.to_string_lossy();
+            let matches: Vec<String> = glob::glob(&search_pattern)
                 .map_err(|e| OxoFlowError::Validation {
                     message: format!("invalid glob pattern: {}", e),
                     rule: None,
                     suggestion: None,
                 })?
                 .filter_map(|p| p.ok())
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|p| {
+                    if !glob_path.is_absolute()
+                        && let Some(base_dir) = self.base_dir.as_deref()
+                    {
+                        return p
+                            .strip_prefix(base_dir)
+                            .unwrap_or(&p)
+                            .to_string_lossy()
+                            .to_string();
+                    }
+                    p.to_string_lossy().to_string()
+                })
                 .collect();
             if matches.is_empty() {
                 return Err(OxoFlowError::Validation {
