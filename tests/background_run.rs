@@ -11,16 +11,11 @@
 //! compiles and links on its own).
 
 mod common;
-use common::workspace_bin;
+use common::oxo_flow_cmd;
 
-use assert_cmd::Command;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 // ─── helpers ───────────────────────────────────────────────────────────
 

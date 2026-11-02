@@ -7,16 +7,12 @@
 //! defined in sub-crates rather than the root package.
 
 mod common;
-use common::workspace_bin;
+use common::{oxo_flow_cmd, workspace_bin};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use std::path::PathBuf;
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 /// Tests assert on the archived log's *default* content (progress narrative +
 /// execution events). A developer shell exporting `RUST_LOG=warn` (or

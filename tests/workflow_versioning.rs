@@ -7,23 +7,16 @@
 //! compiles and links on its own).
 
 mod common;
-use common::workspace_bin;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 
 fn oxo_flow_cmd() -> Command {
-    let mut cmd = Command::new(workspace_bin("oxo-flow"));
-    cmd.env_remove("RUST_LOG");
-    cmd
-}
-
-/// Log-assertion tests must see the engine's default (info) tracing level —
-/// a dev shell exporting `RUST_LOG=warn` filters the teed stream and breaks
-/// them (same pin as oxo_flow_cmd_without_rust_log in cli_integration.rs).
-fn oxo_flow_cmd_without_rust_log() -> Command {
-    let mut cmd = oxo_flow_cmd();
+    // Log-assertion tests must see the engine's default (info) tracing
+    // level — a developer shell exporting RUST_LOG=warn would suppress the
+    // asserted log lines, so this variant always strips it.
+    let mut cmd = common::oxo_flow_cmd();
     cmd.env_remove("RUST_LOG");
     cmd
 }
@@ -87,7 +80,7 @@ fn cli_run_records_workflow_git_sha_in_git_repo() {
     let head = git(&["rev-parse", "HEAD"]);
     let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
 
-    oxo_flow_cmd_without_rust_log()
+    oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()

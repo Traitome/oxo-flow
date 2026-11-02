@@ -41,6 +41,13 @@ pub fn workspace_bin(name: &str) -> PathBuf {
     );
 }
 
+/// An `oxo-flow` command builder (assert_cmd): the canonical way every
+/// integration test spawns the CLI. Tests needing raw `std::process::Command`
+/// (stdio piping, abort signalling) construct it from `workspace_bin`.
+pub fn oxo_flow_cmd() -> assert_cmd::Command {
+    assert_cmd::Command::new(workspace_bin("oxo-flow"))
+}
+
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
