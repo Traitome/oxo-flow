@@ -169,7 +169,9 @@ fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
         let Ok(content) = std::fs::read_to_string(&skill_md) else {
             continue;
         };
-        if let Some(manifest) = parse_skill_md(&content) {
+        if let Some(manifest) = parse_skill_md(&content)
+            && manifest.validate().is_ok()
+        {
             manifests.push(manifest);
         }
     }
@@ -180,8 +182,16 @@ fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
 /// followed by a markdown body. Returns None if the frontmatter lacks the
 /// required `name`/`description` fields.
 pub fn parse_skill_md(content: &str) -> Option<SkillManifest> {
-    let body = content.strip_prefix("---")?;
-    let (frontmatter, markdown) = body.split_once("---")?;
+    // Fence split must be line-anchored: a `---` inside a frontmatter
+    // value (e.g. `description: A --- B`) is content, not the closing
+    // fence — splitting on the first substring truncates the header.
+    let rest = content.strip_prefix("---\n")?;
+    let fence_start = rest
+        .find("\n---\n")
+        .map(|i| i + 1) // keep the newline on the opening side
+        .or_else(|| (rest == "---").then_some(0))?;
+    let frontmatter = &rest[..fence_start];
+    let markdown = &rest[fence_start + 4..];
 
     let mut name = None;
     let mut description = None;

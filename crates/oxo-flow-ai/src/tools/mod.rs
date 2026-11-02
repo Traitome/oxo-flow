@@ -119,7 +119,7 @@ impl ToolRegistry {
     /// The key is [`sanitize_tool_name`]-normalized so it always matches
     /// the name the model is given (see [`Self::to_defs`]) and calls back.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        let name = sanitize_tool_name(tool.name());
+        let name = sanitize_tool_name(&tool.def().name);
         self.tools.insert(name, Arc::from(tool));
     }
 

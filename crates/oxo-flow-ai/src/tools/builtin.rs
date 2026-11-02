@@ -964,7 +964,7 @@ impl Tool for LookupTool {
         let mut results = crate::knowledge::bioconda::format_search_results(query, limit);
         // When Bioconda has no match, extend the answer with the merged
         // registry (nf-core modules, commercial tools, bio.tools overlay).
-        if results.starts_with("No Bioconda") {
+        if crate::knowledge::bioconda::search_tools(query, limit).is_empty() {
             let registry = crate::knowledge::registry::format_registry_results(query, limit);
             if !registry.is_empty() {
                 results.push('\n');

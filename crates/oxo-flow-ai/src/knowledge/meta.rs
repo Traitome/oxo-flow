@@ -184,26 +184,31 @@ pub fn embedded_meta() -> Option<&'static KnowledgeMeta> {
     EMBEDDED.as_ref()
 }
 
-/// Compact freshness note appended to tool responses, e.g.
-/// `Data: bioconda_tools generated 2026-08-22 (1 day ago), 6132 records`.
-pub fn freshness_line(source: &KnowledgeSource, now: chrono::DateTime<chrono::Utc>) -> String {
+/// Shared staleness rendering consumed by both freshness formatters:
+/// resolved display date plus the `(N days ago)` / `(date unparsable)` age
+/// clause. One definition for the date-fallback and pluralization rules.
+fn staleness_parts(
+    source: &KnowledgeSource,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (String, String) {
     let date = source
         .generated_date()
         .unwrap_or_else(|| source.generated_at.clone());
-    match source.staleness_days(now) {
-        Some(days) => format!(
-            "Data: {} generated {} ({} day{} ago), {} records",
-            source.name,
-            date,
-            days,
-            if days == 1 { "" } else { "s" },
-            source.count
-        ),
-        None => format!(
-            "Data: {} generated {} (date unparsable), {} records",
-            source.name, date, source.count
-        ),
-    }
+    let age = match source.staleness_days(now) {
+        Some(days) => format!("{} day{} ago", days, if days == 1 { "" } else { "s" }),
+        None => "date unparsable".to_string(),
+    };
+    (date, age)
+}
+
+/// Compact freshness note appended to tool responses, e.g.
+/// `Data: bioconda_tools generated 2026-08-22 (1 day ago), 6132 records`.
+pub fn freshness_line(source: &KnowledgeSource, now: chrono::DateTime<chrono::Utc>) -> String {
+    let (date, age) = staleness_parts(source, now);
+    format!(
+        "Data: {} generated {} ({}), {} records",
+        source.name, date, age, source.count
+    )
 }
 
 /// Freshness note for a source looked up by name (used by tool handlers).
@@ -219,24 +224,11 @@ pub fn freshness_line_for(
 /// `bioconda_tools (auto) 6132 records, generated 2026-08-22 (1 day ago)`.
 pub fn format_source_row(source: &KnowledgeSource, now: chrono::DateTime<chrono::Utc>) -> String {
     let mode = if source.auto { "auto" } else { "manual" };
-    let date = source
-        .generated_date()
-        .unwrap_or_else(|| source.generated_at.clone());
-    match source.staleness_days(now) {
-        Some(days) => format!(
-            "{} ({}) {} records, generated {} ({} day{})",
-            source.name,
-            mode,
-            source.count,
-            date,
-            days,
-            if days == 1 { "" } else { "s" }
-        ),
-        None => format!(
-            "{} ({}) {} records, generated {} (date unparsable)",
-            source.name, mode, source.count, date
-        ),
-    }
+    let (date, age) = staleness_parts(source, now);
+    format!(
+        "{} ({}) {} records, generated {} ({})",
+        source.name, mode, source.count, date, age
+    )
 }
 
 #[cfg(test)]
