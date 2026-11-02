@@ -19,7 +19,12 @@ import {
   type ReportContext,
   type ReportEnvironment,
 } from "./core/reportIssue";
-import { buildGenerationPrompt, extractToml, resolveBackend } from "./core/aiBackend";
+import {
+  buildGenerationPrompt,
+  extractToml,
+  pipelineSlug,
+  resolveBackend,
+} from "./core/aiBackend";
 import { ruleLensInfos } from "./core/ruleIndex";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCodeActionProvider } from "./providers/codeActions";
@@ -476,12 +481,7 @@ async function cliAiConfigured(statusBar: StatusBar): Promise<boolean> {
 
 /** CLI engine path: the eval-tuned generation loop runs as a task. */
 async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFolder, description: string): Promise<void> {
-  const slug =
-    description
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "generated-pipeline";
+  const slug = pipelineSlug(description);
   const target = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
     filters: { "oxo-flow pipeline": ["oxoflow"] },
@@ -531,12 +531,7 @@ async function generateWithIdeModel(
       ? picks[0]
       : await vscode.window.showQuickPick(picks, { placeHolder: "Language model for this generation" });
   if (!pick) return;
-  const slug =
-    description
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "generated-pipeline";
+  const slug = pipelineSlug(description);
   const target = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
     filters: { "oxo-flow pipeline": ["oxoflow"] },

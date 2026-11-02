@@ -91,6 +91,21 @@ export function schemaDigest(): string {
     .join("\n\n");
 }
 
+/**
+ * Filesystem-safe filename stem for a generated pipeline: lowercase,
+ * non-alphanumerics collapsed to dashes, edge dashes trimmed, capped at
+ * 40 chars, with a neutral fallback when nothing usable survives.
+ */
+export function pipelineSlug(description: string): string {
+  return (
+    description
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "generated-pipeline"
+  );
+}
+
 export function buildGenerationPrompt(description: string): string {
   return [
     "You are generating an oxo-flow pipeline file (TOML dialect, schema oxoflow-v1).",
