@@ -472,7 +472,7 @@ fn env_file_candidates(env: &crate::rule::EnvironmentSpec) -> Vec<(String, Strin
         // Bare env names are legal (`conda_env_name_from_spec` falls back to
         // the file stem); only file-like specs are repository files.
         if let Some(value) = spec
-            && looks_file_like(value)
+            && crate::rule::EnvironmentSpec::spec_is_file_backed(value)
         {
             candidates.push((value.clone(), what.to_string()));
         }
@@ -487,12 +487,6 @@ fn env_file_candidates(env: &crate::rule::EnvironmentSpec) -> Vec<(String, Strin
         candidates.push(("pixi.toml".to_string(), "pixi project file".to_string()));
     }
     candidates
-}
-
-/// True when a conda/mamba spec looks like a repository file (has a
-/// directory component or a YAML extension) rather than a bare env name.
-fn looks_file_like(value: &str) -> bool {
-    value.contains('/') || value.ends_with(".yaml") || value.ends_with(".yml")
 }
 
 /// Map every `[config]` value to the `config.<key>` form the executor

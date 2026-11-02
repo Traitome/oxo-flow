@@ -3,7 +3,9 @@
 //! Maps ScheduledRule resources and container specifications onto Kubernetes
 //! batch/v1 Job manifests with deterministic labels and fail-fast semantics.
 
-use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
+use super::{
+    BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name,
+};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;

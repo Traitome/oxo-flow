@@ -89,7 +89,12 @@ impl CloudCli {
 /// (AWS Batch allows 128) and `lowercase = false` to preserve case.
 /// `extra_allowed` may contain additional characters that are passed through
 /// verbatim (e.g. `'_'` for AWS Batch job names).
-pub fn sanitize_cloud_name(name: &str, max_len: usize, lowercase: bool, extra_allowed: &str) -> String {
+pub fn sanitize_cloud_name(
+    name: &str,
+    max_len: usize,
+    lowercase: bool,
+    extra_allowed: &str,
+) -> String {
     let mut s = if lowercase {
         name.to_lowercase()
     } else {

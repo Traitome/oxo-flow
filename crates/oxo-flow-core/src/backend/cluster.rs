@@ -1030,10 +1030,17 @@ fn parse_exit_code(raw: &str) -> Option<i32> {
     Some(if signal != 0 { 128 + signal } else { exit })
 }
 
-/// Parse a scheduler duration (`[DD-]HH:MM:SS`, `MM:SS`, or bare seconds)
-/// into seconds. Sub-second precision (`00:00:05.004`, common in SLURM's
-/// `TotalCPU`) truncates.
-fn parse_duration_secs(raw: &str) -> Option<u64> {
+/// Parse a scheduler **accounting** duration (`[DD-]HH:MM:SS`, `MM:SS`, or
+/// bare seconds) into seconds.
+///
+/// Deliberately looser than [`crate::rule::parse_walltime_secs`], which parses
+/// *user* walltime input: accounting output is a fixed machine format, so
+/// bare seconds (PBS) and `MM:SS` (LSF) are unambiguous here while the same
+/// strings are ambiguous in a user config. Sub-second precision
+/// (`00:00:05.004`, common in SLURM's `TotalCPU`) truncates. Keep this name
+/// distinct from the config parser — a future caller must choose the grammar
+/// it actually wants instead of silently inheriting the wrong one.
+fn parse_accounting_duration_secs(raw: &str) -> Option<u64> {
     let raw = raw.trim();
     if raw.is_empty() || raw == "UNLIMITED" || raw == "INVALID" {
         return None;
@@ -1129,9 +1136,10 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                     BackendJobStatus::Failed
                 },
                 exit_code,
-                elapsed_secs: field("resources_used.walltime").and_then(parse_duration_secs),
+                elapsed_secs: field("resources_used.walltime")
+                    .and_then(parse_accounting_duration_secs),
                 max_rss_mb: field("resources_used.mem").and_then(parse_rss_mb),
-                cpu_seconds: field("resources_used.cput").and_then(parse_duration_secs),
+                cpu_seconds: field("resources_used.cput").and_then(parse_accounting_duration_secs),
             })
         }
         ClusterBackend::Sge => {
@@ -1150,9 +1158,9 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                     BackendJobStatus::Failed
                 },
                 exit_code: Some(exit_code),
-                elapsed_secs: field("ru_wallclock").and_then(parse_duration_secs),
+                elapsed_secs: field("ru_wallclock").and_then(parse_accounting_duration_secs),
                 max_rss_mb: field("ru_maxrss").and_then(parse_rss_mb),
-                cpu_seconds: field("cpu").and_then(parse_duration_secs),
+                cpu_seconds: field("cpu").and_then(parse_accounting_duration_secs),
             })
         }
         ClusterBackend::Lsf => {
@@ -1206,12 +1214,15 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
     // TotalCPU is likewise per-step; the allocation row leaves it blank.
     let cpu_seconds = rows
         .iter()
-        .filter_map(|r| r.get(5).copied().and_then(parse_duration_secs))
+        .filter_map(|r| r.get(5).copied().and_then(parse_accounting_duration_secs))
         .max();
     Some(TerminalRecord {
         status,
         exit_code: allocation.get(2).copied().and_then(parse_exit_code),
-        elapsed_secs: allocation.get(3).copied().and_then(parse_duration_secs),
+        elapsed_secs: allocation
+            .get(3)
+            .copied()
+            .and_then(parse_accounting_duration_secs),
         max_rss_mb,
         cpu_seconds,
     })
@@ -2059,15 +2070,15 @@ mod accounting_tests {
     #[test]
     fn parses_scheduler_durations_and_memory_figures() {
         // Arrange / Act / Assert — the formats these four stores emit.
-        assert_eq!(parse_duration_secs("00:00:05"), Some(5));
-        assert_eq!(parse_duration_secs("01:02:03"), Some(3723));
-        assert_eq!(parse_duration_secs("2-00:00:00"), Some(172_800));
-        assert_eq!(parse_duration_secs("04:30"), Some(270));
-        assert_eq!(parse_duration_secs("82"), Some(82));
+        assert_eq!(parse_accounting_duration_secs("00:00:05"), Some(5));
+        assert_eq!(parse_accounting_duration_secs("01:02:03"), Some(3723));
+        assert_eq!(parse_accounting_duration_secs("2-00:00:00"), Some(172_800));
+        assert_eq!(parse_accounting_duration_secs("04:30"), Some(270));
+        assert_eq!(parse_accounting_duration_secs("82"), Some(82));
         // SLURM TotalCPU carries sub-second precision; it truncates.
-        assert_eq!(parse_duration_secs("00:00:04.500"), Some(4));
-        assert_eq!(parse_duration_secs(""), None);
-        assert_eq!(parse_duration_secs("UNLIMITED"), None);
+        assert_eq!(parse_accounting_duration_secs("00:00:04.500"), Some(4));
+        assert_eq!(parse_accounting_duration_secs(""), None);
+        assert_eq!(parse_accounting_duration_secs("UNLIMITED"), None);
 
         assert_eq!(parse_rss_mb("1048576K"), Some(1024));
         assert_eq!(parse_rss_mb("128.2M"), Some(128));

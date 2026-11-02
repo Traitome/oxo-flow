@@ -3,7 +3,9 @@
 //! Maps ScheduledRule specifications onto AWS Batch SubmitJob payloads
 //! with containerOverrides, VCPU/memory resource limits, and array properties.
 
-use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
+use super::{
+    BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name,
+};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;

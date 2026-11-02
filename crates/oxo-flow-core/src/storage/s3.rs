@@ -81,6 +81,17 @@ fn multipart_plan(len: u64) -> Option<(u64, usize)> {
 // Lazily-initialised default client
 // ---------------------------------------------------------------------------
 
+/// The process-wide default client used by [`S3Storage::new`].
+///
+/// The AWS SDK's HTTP connector binds to the tokio runtime it first serves a
+/// request on, so this singleton is only safe when the process runs one
+/// long-lived runtime (the CLI does). Multi-runtime hosts — test suites that
+/// spin a runtime per case, embedded servers — must construct a client per
+/// runtime instead:
+///
+/// ```rust,ignore
+/// let backend = S3Storage::with_client(S3Storage::build_client());
+/// ```
 fn default_client() -> &'static S3Client {
     static CLIENT: OnceLock<S3Client> = OnceLock::new();
     CLIENT.get_or_init(S3Storage::build_client)

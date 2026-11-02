@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation,
-    coercion_rule_for_index,
+    BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation, coercion_rule_for_index,
     normalize_reference_build,
 };
 use crate::config::WorkflowConfig;

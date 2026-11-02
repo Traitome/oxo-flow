@@ -3201,7 +3201,10 @@ fn build_execution_command_inner(
                 }
             }
             let expanded_v = super::expand_to_fixed_point(v, &expand_map, render_wildcard_value);
-            let escaped_v = expanded_v.replace('\'', "'\\''");
+            // Single choke point for shell-quoting (`'` → `'\''`): going
+            // through the shared helper keeps this prefix builder in step
+            // with every other `sh -c '…'` embed site.
+            let escaped_v = crate::environment::escape_for_sh_single_quote(&expanded_v);
             env_prefix.push_str(&format!("export {}='{}'\n", k, escaped_v));
         }
         base_cmd = format!("{}{}", env_prefix, base_cmd);

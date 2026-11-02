@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, IndexKind, SortOrder, TypeViolation,
-    coercion_rule_for_index,
-    normalize_reference_build,
+    coercion_rule_for_index, normalize_reference_build,
 };
 
 /// Bounded byte budget for header introspection: 64 KiB is sufficient to capture

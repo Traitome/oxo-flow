@@ -3,7 +3,9 @@
 //! Maps ScheduledRule specifications onto Google Cloud Batch jobs submit
 //! JSON configurations with cpuMilli/memoryMib, taskGroups, and allocation policies.
 
-use super::{BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name};
+use super::{
+    BackendJobStatus, CloudCli, ExecutorBackend, ScheduledRule, TerminalRecord, sanitize_cloud_name,
+};
 use crate::cluster::ClusterJobConfig;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;

@@ -622,6 +622,18 @@ impl EnvironmentSpec {
         }
     }
 
+    /// True when a conda/mamba spec looks like a repository file (has a
+    /// directory component or a YAML extension) rather than a bare env name
+    /// or an inline package list.
+    ///
+    /// Single source for the deep-check (D002) and `versions.yml` static
+    /// classifiers: both must draw the same line or a spec can be reported
+    /// as "file-backed" by one surface and "bare env name" by the other.
+    #[must_use]
+    pub fn spec_is_file_backed(spec: &str) -> bool {
+        spec.contains('/') || spec.ends_with(".yaml") || spec.ends_with(".yml")
+    }
+
     /// Convenience wrapper: the inline package list for THIS spec's `conda`
     /// field, used by the conda backend's direct-create path and by the
     /// validator's package-list-aware shell-risk scan.

@@ -300,12 +300,8 @@ fn classify_failure(
 
     // No tail (or no match): fall back to the exit-code-only signatures.
     match node.exit_code {
-        Some(137) | Some(9) => (
-            format!(
-                "Rule '{}' killed by OOM (exit {})",
-                node.rule,
-                node.exit_code.unwrap()
-            ),
+        Some(code @ (137 | 9)) => (
+            format!("Rule '{}' killed by OOM (exit {})", node.rule, code),
             "Increase memory allocation and retry from checkpoint.".into(),
             true,
             AlertLevel::Critical,
