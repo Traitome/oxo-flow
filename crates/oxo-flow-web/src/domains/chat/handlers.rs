@@ -12,10 +12,7 @@ use std::convert::Infallible;
 use super::service;
 use super::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{
-    ApiError, ai_not_configured_error, err, error_event, get_pool,
-};
-use crate::infra::db::models;
+use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -309,22 +306,6 @@ pub async fn list_sessions(
                 updated_at: r.updated_at,
             })
             .collect()
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, models::ChatSessionRow>(
-            "SELECT * FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
-        )
-        .bind(&user.id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| ChatSession {
-            id: r.id,
-            title: r.title,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect()
     } else {
         vec![]
     };

@@ -8,8 +8,7 @@ use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_pool};
-use crate::infra::db::models;
+use crate::domains::workflow::handlers::{ApiError, err};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -26,8 +25,6 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 pub async fn health() -> ApiResult<HealthResponse> {
     let db_healthy = if let Some(backend) = crate::infra::db::global_backend() {
         backend.health().await.unwrap_or(false)
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query("SELECT 1").execute(pool).await.is_ok()
     } else {
         false
     };
@@ -81,17 +78,6 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
         crate::infra::db::global_backend()
     {
         backend.get_run_metrics().await.unwrap_or((0, 0))
-    } else if let Ok(pool) = get_pool() {
-        let active: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'queued')")
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-        (active, total as u64)
     } else {
         (0, 0)
     };
@@ -238,36 +224,6 @@ pub async fn get_audit_logs(
                 result: r.result,
             })
             .collect();
-
-        (entries, total as u32)
-    } else if let Ok(pool) = get_pool() {
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
-        let rows: Vec<models::AuditLogRow> = sqlx::query_as(
-            "SELECT * FROM audit_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        )
-        .bind(&cutoff)
-        .bind(per_page as i64)
-        .bind(offset as i64)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        let entries = rows
-            .into_iter()
-            .map(|r| AuditEntry {
-                timestamp: r.timestamp,
-                user: r.user_id,
-                action: r.action,
-                resource: r.target,
-                result: r.result,
-            })
-            .collect();
-
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ?")
-            .bind(&cutoff)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
 
         (entries, total as u32)
     } else {
