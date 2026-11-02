@@ -443,7 +443,9 @@ def main() -> None:
     print("=" * 80)
 
     for r in results:
-        speedup = results[0].wall_time_hours / r.wall_time_hours
+        # Same zero-division guard as the markdown table above (:362): a
+        # sub-timer-resolution measurement can report 0 wall hours.
+        speedup = results[0].wall_time_hours / r.wall_time_hours if r.wall_time_hours > 0 else 1.0
         print(
             f"{r.config_name:<40} | Time: {r.wall_time_hours:6.1f}h | "
             f"Throughput: {r.samples_per_hour:6.2f} smp/h | Speedup: {speedup:4.2f}x | "

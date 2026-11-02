@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import random
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -151,6 +152,24 @@ def mcnemar_test(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, 
         "odds_ratio": round(odds_ratio, 3) if odds_ratio != float("inf") else "inf",
         "significant": p_val < 0.05,
     }
+
+
+def holm_adjust_p_values(comparisons: Dict[str, Dict[str, Any]]) -> None:
+    """Adds Holm step-down adjusted p-values to a fixed family of tests.
+
+    Mutates each comparison in place with ``p_value_holm`` (monotone step-down
+    over raw p-values) and flips ``significant`` to judge the adjusted value —
+    the significance column then controls the family-wise error rate, not the
+    per-test rate.
+    """
+    m = len(comparisons)
+    ordered = sorted(comparisons.items(), key=lambda kv: kv[1]["p_value"])
+    running_max = 0.0
+    for rank, (_name, res) in enumerate(ordered):
+        adjusted = min(1.0, (m - rank) * res["p_value"])
+        running_max = max(running_max, adjusted)  # enforce monotonicity
+        res["p_value_holm"] = round(running_max, 6)
+        res["significant"] = res["p_value_holm"] < 0.05
 
 
 def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
@@ -345,6 +364,11 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
         "arm_c_vs_arm_a": mcnemar_test(passes_a, passes_c),
     }
 
+    # Holm step-down correction over the fixed 3-contrast family: three
+    # correlated McNemar tests at alpha=0.05 inflate the family-wise error
+    # rate up to ~3x without it. Raw p-values are kept alongside.
+    holm_adjust_p_values(comparisons)
+
     return {
         "evidence_mode": dataset["evidence_mode"],
         "inferential": bool(dataset["inferential"]),
@@ -406,17 +430,23 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         "## 2. Paired Hypothesis Testing",
         "",
         "McNemar's test is applied only after exact cell matching across all arms.",
+        "The significance column judges the Holm step-down adjusted p-value over the",
+        "3-contrast family (raw p-values shown alongside) so the family-wise error",
+        "rate stays at alpha=0.05.",
         "",
-        "| Contrast | Discordant Pairs (b/c) | $\\chi^2$ (df=1) | Two-Tailed $p$-value | Odds Ratio | Significant ($\\alpha=0.05$) |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: |",
+        "| Contrast | Discordant Pairs (b/c) | $\\chi^2$ (df=1) | Two-Tailed $p$-value | Holm $p$-value | Odds Ratio | Significant ($\\alpha=0.05$) |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
     ])
 
     for pair, res in c.items():
         label = pair.replace("_", " ").upper()
         p_str = f"{res['p_value']:.4e}" if res["p_value"] < 0.001 else f"{res['p_value']:.4f}"
-        sig_str = "**YES** (p < 0.05)" if res["significant"] else "NO"
+        holm_str = (
+            f"{res['p_value_holm']:.4e}" if res["p_value_holm"] < 0.001 else f"{res['p_value_holm']:.4f}"
+        )
+        sig_str = "**YES** (holm p < 0.05)" if res["significant"] else "NO"
         md.append(
-            f"| **{label}** | {res['b']} / {res['c']} | {res['chi2']} | {p_str} | {res['odds_ratio']} | {sig_str} |"
+            f"| **{label}** | {res['b']} / {res['c']} | {res['chi2']} | {p_str} | {holm_str} | {res['odds_ratio']} | {sig_str} |"
         )
 
     if synthetic:
