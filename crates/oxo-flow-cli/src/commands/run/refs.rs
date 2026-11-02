@@ -74,6 +74,20 @@ pub(crate) fn source_content_sig(path: &std::path::Path) -> Option<String> {
     Some(sig)
 }
 
+/// Persist the reference-checkpoint state map (`auto_build_references`
+/// persists after every mutation so a crash never loses an adoption or a
+/// rebuild's fingerprint). Best-effort: a failed write degrades to an
+/// in-memory-only state, matching the other checkpoint writes.
+fn persist_ref_state(ref_checkpoint: &std::path::Path, ref_state: &HashMap<String, RefRecord>) {
+    if let Some(parent) = ref_checkpoint.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(
+        ref_checkpoint,
+        serde_json::to_string(ref_state).unwrap_or_default(),
+    );
+}
+
 /// Free disk space in KiB on the filesystem holding `path`, read from
 /// `df -Pk` (the portable POSIX form; parses the Available column of the
 /// mount line). `None` when df is unavailable or the output is unparsable —
@@ -310,13 +324,7 @@ pub(crate) async fn auto_build_references(
                     source_path: ref_def.source.clone(),
                 },
             );
-            if let Some(parent) = ref_checkpoint.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(
-                &ref_checkpoint,
-                serde_json::to_string(&ref_state).unwrap_or_default(),
-            );
+            persist_ref_state(&ref_checkpoint, &ref_state);
             None
         } else if source_newer {
             Some("source is newer than output")
@@ -364,13 +372,7 @@ pub(crate) async fn auto_build_references(
                         source_path: ref_def.source.clone(),
                     },
                 );
-                if let Some(parent) = ref_checkpoint.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(
-                    &ref_checkpoint,
-                    serde_json::to_string(&ref_state).unwrap_or_default(),
-                );
+                persist_ref_state(&ref_checkpoint, &ref_state);
                 None
             } else {
                 Some("definition, source content, or referenced config changed")
@@ -528,13 +530,7 @@ pub(crate) async fn auto_build_references(
                         },
                     );
                     rebuilt_outputs.push(output_path.clone());
-                    if let Some(parent) = ref_checkpoint.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(
-                        &ref_checkpoint,
-                        serde_json::to_string(&ref_state).unwrap_or_default(),
-                    );
+                    persist_ref_state(&ref_checkpoint, &ref_state);
                     eprintln!("    {} {} built", "✓".green(), ref_def.name);
                 }
                 Ok(s) => {
@@ -562,13 +558,7 @@ pub(crate) async fn auto_build_references(
                     source_path: ref_def.source.clone(),
                 },
             );
-            if let Some(parent) = ref_checkpoint.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(
-                &ref_checkpoint,
-                serde_json::to_string(&ref_state).unwrap_or_default(),
-            );
+            persist_ref_state(&ref_checkpoint, &ref_state);
         }
     }
 
