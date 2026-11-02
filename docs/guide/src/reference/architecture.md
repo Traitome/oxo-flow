@@ -605,7 +605,17 @@ draft) and
 `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 — non-thinking generations run
 12–20 s, but a single thinking round routinely passes two minutes; a
 measured GLM round took 145 s, which the old 120 s default killed
-mid-round). Below the orchestrator, the
+mid-round). A third knob covers third-party Anthropic-compatible proxies
+fronting a *smaller* model: `OXO_FLOW_AI_CONTEXT_TOKENS` declares the
+endpoint's full context window (e.g. 131072 for a GLM/DeepSeek relay that
+rejects overflow with HTTP 400), and the Claude backend then clamps
+`max_tokens` per request — estimated input size (UTF-16-weighted chars/4
+with a 1.5× safety factor and 4096-token margin) is subtracted from the
+window before the configured output budget is sent, floored at 1024 so a
+hopelessly oversized request still reaches the server and its 400 drives
+the transcript-compression retry. Unset, the budget is sent as configured
+(real Anthropic models size their window server-side). Below the
+orchestrator, the
 provider backends retry transient transport failures (dropped or
 reset connections, response bodies that fail to decode), plus the
 gateway-outage signature — a transient HTTP status (408, 502, 503,
