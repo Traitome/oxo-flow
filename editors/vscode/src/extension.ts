@@ -109,7 +109,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const taskProvider = new OxoflowTaskProvider(() => statusBar.executable());
   context.subscriptions.push(
-    vscode.tasks.registerTaskProvider("oxo-flow", taskProvider),
+    vscode.tasks.registerTaskProvider(TASK_TYPE, taskProvider),
     vscode.languages.registerCompletionItemProvider("oxoflow", new OxoflowCompletionProvider(), "[", "{", ".", '"'),
     vscode.languages.registerHoverProvider("oxoflow", new OxoflowHoverProvider()),
     vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider()),
@@ -152,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.onDidEndTaskProcess((event) => {
       if (event.exitCode !== 0) return;
       const runDef = event.execution.task.definition as OxoflowTaskDefinition;
-      if (runDef?.type !== "oxo-flow" || (runDef.kind ?? "run") !== "run") return;
+      if (runDef?.type !== TASK_TYPE || (runDef.kind ?? "run") !== "run") return;
       const cfg = vscode.workspace.getConfiguration("oxo-flow");
       if (!cfg.get<boolean>("autoOpenGraph", false)) return;
       const folder = folderFor(vscode.Uri.file(runDef.workflow));
@@ -175,7 +175,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
   register("oxo-flow.format", () => formatDocument());
   register("oxo-flow.resume", () => resumePipeline(statusBar));
-  register("oxo-flow.generate", () => generateWithAI(statusBar, context));
+  register("oxo-flow.generate", () => generateWithAI(output, statusBar, context));
   register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
   register("oxo-flow.exportSchema", () => exportSchema(statusBar));
   register("oxo-flow.clean", () => cleanOutputs(output, statusBar));
@@ -422,7 +422,11 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
   );
 }
 
-async function generateWithAI(statusBar: StatusBar, extContext: vscode.ExtensionContext): Promise<void> {
+async function generateWithAI(
+  output: vscode.OutputChannel,
+  statusBar: StatusBar,
+  extContext: vscode.ExtensionContext
+): Promise<void> {
   const description = await vscode.window.showInputBox({
     prompt: "Describe the pipeline to generate (e.g. 'RNA-seq with STAR and featureCounts')",
     placeHolder: "Natural-language description",
@@ -455,7 +459,7 @@ async function generateWithAI(statusBar: StatusBar, extContext: vscode.Extension
     await generateWithCli(statusBar, folder, description);
     return;
   }
-  await generateWithIdeModel(extContext, statusBar, folder, description, resolution.reason);
+  await generateWithIdeModel(output, statusBar, folder, description, resolution.reason);
 }
 
 /** Best-effort CLI AI probe: `oxo-flow ai` JSON reports the active provider. */
@@ -512,7 +516,7 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
  * repair round feeding the findings back to the model.
  */
 async function generateWithIdeModel(
-  extContext: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
   statusBar: StatusBar,
   folder: vscode.WorkspaceFolder,
   description: string,
@@ -539,8 +543,6 @@ async function generateWithIdeModel(
   });
   if (!target) return;
 
-  const output = vscode.window.createOutputChannel("oxo-flow");
-  extContext.subscriptions.push(output);
   await withOxoProgress("oxo-flow: generating pipeline via the editor model…", async () => {
     const prompt = buildGenerationPrompt(description);
     const chat = async (messages: vscode.LanguageModelChatMessage[]): Promise<string> => {
