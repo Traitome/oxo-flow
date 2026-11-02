@@ -918,11 +918,11 @@ pub fn validate_resources_against_system(
 /// Warn about rules whose declared `resources.disk` exceeds the free space
 /// in the working directory (issue #75). Warning-only: the run proceeds,
 /// but the user knows before committing hours of compute.
-pub fn validate_disk_requirements(rules: &[Rule], workdir: &std::path::Path) -> Vec<String> {
+pub fn validate_disk_requirements(rules: &[&Rule], workdir: &std::path::Path) -> Vec<String> {
     let mut warnings = Vec::new();
     let available_mb = check_available_disk_mb(workdir).unwrap_or(u64::MAX);
 
-    for rule in rules {
+    for rule in rules.iter().copied() {
         if let Some(ref disk) = rule.resources.disk
             && let Some(req_mb) = parse_memory_mb(disk)
             && req_mb > available_mb

@@ -258,8 +258,7 @@ pub(crate) fn warn_disk_preflight(
     workdir: &Path,
     engine: Option<&oxo_flow_core::config::EngineConfig>,
 ) {
-    let rules: Vec<Rule> = scheduled.iter().map(|r| (*r).clone()).collect();
-    let disk_warnings = oxo_flow_core::scheduler::validate_disk_requirements(&rules, workdir);
+    let disk_warnings = oxo_flow_core::scheduler::validate_disk_requirements(scheduled, workdir);
     for warning in &disk_warnings {
         eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
