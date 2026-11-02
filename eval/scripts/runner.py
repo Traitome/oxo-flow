@@ -226,13 +226,6 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def parse_trial(value, default=1):
-    try:
-        return int(value or default)
-    except (TypeError, ValueError):
-        return default
-
-
 def trial_from_path(path):
     for part in path.replace("\\", "/").split("/"):
         m = TRIAL_RE.search(part)
@@ -530,7 +523,7 @@ def judge_tool(gold_rows, captures_path):
     by_id = {}
     with open(captures_path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            row["trial"] = parse_trial(row.get("trial"))
+            row["trial"] = common.parse_trial(row.get("trial"))
             by_id.setdefault(row["id"], []).append(row)
 
     known_names = common.known_tool_names()

@@ -51,6 +51,14 @@ def gold_csv_path(layer, override=None):
     return os.path.abspath(override or os.path.join(GOLD_DIR, f"{layer}.csv"))
 
 
+def parse_trial(value, default=1):
+    """Trial column values are '1', '2', … but tolerate blank/malformed cells."""
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def manifest_path(out_path):
     out_path = os.path.abspath(out_path)
     if out_path.endswith(os.sep) or (not os.path.splitext(out_path)[1]):

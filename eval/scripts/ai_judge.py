@@ -101,7 +101,7 @@ def artifact_for(layer, result, captures_path):
     if layer == "tool":
         with open(captures_path, newline="", encoding="utf-8") as fh:
             for row in csv.DictReader(fh):
-                if row.get("id") == result["id"] and parse_trial(row.get("trial")) == int(result["trial"]):
+                if row.get("id") == result["id"] and common.parse_trial(row.get("trial")) == int(result["trial"]):
                     return row.get("answer", ""), row.get("error", "")
         return "", "capture row not found"
     path = result.get("capture_path", "")
@@ -109,13 +109,6 @@ def artifact_for(layer, result, captures_path):
         return "", "capture file not found"
     with open(path, encoding="utf-8") as fh:
         return fh.read(), ""
-
-
-def parse_trial(value, default=1):
-    try:
-        return int(value or default)
-    except (TypeError, ValueError):
-        return default
 
 
 def _json_object(text):
