@@ -68,13 +68,13 @@ pub struct Paginated<T: serde::Serialize> {
 /// The #207 migration surface: one storage abstraction the domains route
 /// through, so a PostgreSQL backend becomes a matter of wiring, not rewrites.
 ///
-/// HONEST SCOPE — runs/auth-session/user, API keys, OAuth CSRF state,
-/// pipeline/template, share, cluster lookup, and AI provider configuration
-/// operations consume this trait. Remaining full chat history, audit, webhook,
-/// observability, and some unmigrated workflow queries still read the SQLite pool
-/// directly, so PostgreSQL deployments retain a published served/gated matrix
-/// (`PG_CAPABILITY_MATRIX` in lib.rs). A new domain handler must call the trait,
-/// not add another raw-SQL path.
+/// Scope — users, auth sessions, API keys, OAuth CSRF state, pipelines and
+/// revisions, templates, shares, run-record metadata, clusters, chat history,
+/// audit logging, webhook configuration, and AI provider configuration all
+/// consume this trait. Actual run execution remains SQLite-only and gates
+/// `/api/runs*` with `RUNS_REQUIRE_SQLITE`; PostgreSQL deployments advertise
+/// that split through `PG_CAPABILITY_MATRIX`. A new domain handler must call
+/// the trait, not add another raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<(), String>;

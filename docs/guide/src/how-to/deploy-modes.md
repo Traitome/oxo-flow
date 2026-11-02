@@ -150,7 +150,7 @@ selects the PostgreSQL backend; anything else (including unset, which
 defaults to `sqlite://oxo-flow.db` in the working directory) stays SQLite.
 
 ```bash
-# PostgreSQL (storage-backed metadata, sessions, API keys, and AI config; execution stays SQLite-only)
+# PostgreSQL (all storage-backed web metadata; run execution stays SQLite-only)
 export DATABASE_URL=postgres://oxo:secret@db.lab.example.edu:5432/oxo_flow
 oxo-flow serve --mode team --host 0.0.0.0
 ```
@@ -162,9 +162,11 @@ Two constraints apply:
   `cargo build --features postgres` (or the equivalent in your own
   image). On a build without the feature, a `postgres://` `DATABASE_URL`
   aborts startup with a clear error instead of silently falling back.
-- **Run-execution persistence**: run execution and its lifecycle
-  bookkeeping are decoupled across the `StorageBackend` trait,
-  persisting state into either SQLite or PostgreSQL seamlessly.
+- **Run execution**: the `StorageBackend` trait has PostgreSQL parity for
+  run-record persistence, but the executable `/api/runs*` surface is still
+  gated with `503 RUNS_REQUIRE_SQLITE`. Use the CLI for execution or a
+  personal-mode server backed by SQLite. The startup capability matrix
+  reports this split explicitly.
 
 ## Startup Verification
 

@@ -74,7 +74,11 @@ impl PostgresBackend {
 #[async_trait]
 impl StorageBackend for PostgresBackend {
     async fn init(&self) -> Result<(), String> {
-        sqlx::query(
+        // `sqlx::query` uses the extended protocol, which PostgreSQL refuses
+        // to prepare when it contains multiple commands. `raw_sql` uses the
+        // simple protocol and is the supported path for this idempotent
+        // schema bootstrap batch.
+        sqlx::raw_sql(
             r#"
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -189,10 +193,10 @@ impl StorageBackend for PostgresBackend {
                 api_key TEXT DEFAULT '',
                 api_url TEXT DEFAULT '',
                 model TEXT DEFAULT '',
-                search_enabled INTEGER NOT NULL DEFAULT 1,
-                monitor_enabled INTEGER NOT NULL DEFAULT 1,
-                auto_retry_enabled INTEGER NOT NULL DEFAULT 1,
-                max_correction_rounds INTEGER NOT NULL DEFAULT 3,
+                search_enabled BIGINT NOT NULL DEFAULT 1,
+                monitor_enabled BIGINT NOT NULL DEFAULT 1,
+                auto_retry_enabled BIGINT NOT NULL DEFAULT 1,
+                max_correction_rounds BIGINT NOT NULL DEFAULT 3,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -257,14 +261,25 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| format!("PG init schema: {e}"))?;
 
         // Migration for pre-existing postgres databases: the runs table
-        // gained `config_overrides` after #930. Idempotent (duplicates the
-        // established ALTER...ok() swallow pattern); run execution remains
-        // SQLite-only (#207) so this only keeps the pg StorageBackend's
-        // run methods from failing on legacy tables.
+        // gained `config_overrides` after #930. Run execution remains
+        // SQLite-only (#207), but keeping the storage contract healthy lets
+        // metadata tools and pre-execution checks work on legacy tables.
         sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS config_overrides TEXT")
             .execute(&self.pool)
             .await
-            .ok();
+            .map_err(|e| format!("PG migration config_overrides: {e}"))?;
+
+        // AI config flags are part of the public model as i64 (matching
+        // SQLite); PostgreSQL INT4 columns cannot decode into that type.
+        sqlx::raw_sql(
+            "ALTER TABLE ai_provider_config ALTER COLUMN search_enabled TYPE BIGINT;
+             ALTER TABLE ai_provider_config ALTER COLUMN monitor_enabled TYPE BIGINT;
+             ALTER TABLE ai_provider_config ALTER COLUMN auto_retry_enabled TYPE BIGINT;
+             ALTER TABLE ai_provider_config ALTER COLUMN max_correction_rounds TYPE BIGINT;",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("PG migration AI config integer widths: {e}"))?;
 
         // Seed admin user
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
@@ -363,20 +378,26 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn delete_user(&self, id: &str) -> Result<(), String> {
-        // Cascade the user's live credentials (#520): sessions and API keys
-        let _ = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        // Cascade the user's live credentials (#520) atomically. If any step
+        // fails, keep the user row so a retry can finish the cleanup instead
+        // of leaving orphaned sessions or API keys behind.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
             .bind(id)
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await;
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -937,7 +958,7 @@ impl StorageBackend for PostgresBackend {
                     "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
                      search_enabled, monitor_enabled, auto_retry_enabled, \
                      max_correction_rounds, created_at, updated_at) \
-                     VALUES ($1, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                     VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                 )
                 .bind(&saved.id)
                 .bind(&saved.provider)
@@ -1216,11 +1237,17 @@ impl StorageBackend for PostgresBackend {
             return Ok(None);
         };
 
-        let _ = sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE key_hash = $2")
+        if let Err(error) = sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE key_hash = $2")
             .bind(touched_at)
             .bind(key_hash)
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                "API key authenticated but last_used_at could not be updated"
+            );
+        }
 
         Ok(Some((user_id, role)))
     }
@@ -1249,18 +1276,15 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+        // DELETE ... RETURNING consumes the state atomically: concurrent
+        // callbacks cannot both validate the same CSRF token. A delete error
+        // fails the callback closed instead of accepting a reusable state.
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT created_at FROM oauth_states WHERE state = $1")
+            sqlx::query_as("DELETE FROM oauth_states WHERE state = $1 RETURNING created_at")
                 .bind(state)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| e.to_string())?;
-        if row.is_some() {
-            let _ = sqlx::query("DELETE FROM oauth_states WHERE state = $1")
-                .bind(state)
-                .execute(&self.pool)
-                .await;
-        }
         Ok(row.map(|(c,)| c))
     }
 
@@ -1283,7 +1307,7 @@ impl StorageBackend for PostgresBackend {
         role: &str,
     ) -> Result<Option<(String, String)>, String> {
         let now = Self::now();
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES ($1, $2, $3, 'password', '', $4)              ON CONFLICT (username) DO NOTHING",
         )
         .bind(username)
@@ -1291,7 +1315,8 @@ impl StorageBackend for PostgresBackend {
         .bind(role)
         .bind(&now)
         .execute(&self.pool)
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
 
         let row: Option<(String, String)> =
             sqlx::query_as("SELECT id, role FROM users WHERE id = $1")
@@ -1368,16 +1393,18 @@ impl StorageBackend for PostgresBackend {
     ) -> Result<(), String> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
-        let _ = sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (, , 'viewer', 'audit', NULL, )              ON CONFLICT (id) DO NOTHING",
+        sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES ($1, $2, 'viewer', 'audit', NULL, $3)              ON CONFLICT (id) DO NOTHING",
         )
+        .bind(user_id)
         .bind(user_id)
         .bind(&now)
         .execute(&self.pool)
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
 
         sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (, , , , , , )",
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&id)
         .bind(user_id)
@@ -1399,7 +1426,7 @@ impl StorageBackend for PostgresBackend {
         offset: u32,
     ) -> Result<(Vec<models::AuditLogRow>, i64), String> {
         let rows: Vec<models::AuditLogRow> = sqlx::query_as(
-            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs WHERE timestamp >=  ORDER BY timestamp DESC LIMIT  OFFSET ",
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs WHERE timestamp >= $1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
         )
         .bind(cutoff)
         .bind(limit as i64)
@@ -1408,18 +1435,19 @@ impl StorageBackend for PostgresBackend {
         .await
         .map_err(|e| e.to_string())?;
 
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ")
-            .bind(cutoff)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= $1")
+                .bind(cutoff)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
 
         Ok((rows, total))
     }
 
     async fn list_recent_audit_logs(&self, limit: u32) -> Result<Vec<models::AuditLogRow>, String> {
         sqlx::query_as(
-            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT ",
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -1459,7 +1487,7 @@ impl StorageBackend for PostgresBackend {
     ) -> Result<(), String> {
         let now = Self::now();
         sqlx::query(
-            "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at)              VALUES (1, , , , , , )              ON CONFLICT(id) DO UPDATE SET              url = EXCLUDED.url,              secret = COALESCE(EXCLUDED.secret, webhook_config.secret),              enabled = EXCLUDED.enabled,              events = EXCLUDED.events,              signature_scheme = EXCLUDED.signature_scheme,              updated_at = EXCLUDED.updated_at",
+            "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at)              VALUES (1, $1, $2, $3, $4, $5, $6)              ON CONFLICT(id) DO UPDATE SET              url = EXCLUDED.url,              secret = COALESCE(EXCLUDED.secret, webhook_config.secret),              enabled = EXCLUDED.enabled,              events = EXCLUDED.events,              signature_scheme = EXCLUDED.signature_scheme,              updated_at = EXCLUDED.updated_at",
         )
         .bind(url)
         .bind(secret)
@@ -1479,7 +1507,7 @@ impl StorageBackend for PostgresBackend {
         user_id: &str,
     ) -> Result<bool, String> {
         sqlx::query_scalar::<_, bool>(
-            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id =  AND user_id != )",
+            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1 AND user_id != $2)",
         )
         .bind(session_id)
         .bind(user_id)
@@ -1495,33 +1523,35 @@ impl StorageBackend for PostgresBackend {
         title: &str,
         message: &str,
     ) -> Result<bool, String> {
-        if !self.is_chat_session_writable(session_id, user_id).await? {
-            return Ok(false);
-        }
         let now = Self::now();
         let msg_id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)              VALUES (, , , , )              ON CONFLICT(id) DO UPDATE SET title = EXCLUDED.title, updated_at = EXCLUDED.updated_at              WHERE chat_sessions.user_id = EXCLUDED.user_id",
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session = sqlx::query(
+            "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)              VALUES ($1, $2, $3, $4, $5)              ON CONFLICT(id) DO UPDATE SET title = EXCLUDED.title, updated_at = EXCLUDED.updated_at              WHERE chat_sessions.user_id = EXCLUDED.user_id",
         )
         .bind(session_id)
         .bind(user_id)
         .bind(title)
         .bind(&now)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
 
         sqlx::query(
-            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (, , 'user', , NULL, )",
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES ($1, $2, 'user', $3, NULL, $4)",
         )
         .bind(&msg_id)
         .bind(session_id)
         .bind(message)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
 
         Ok(true)
     }
@@ -1532,28 +1562,32 @@ impl StorageBackend for PostgresBackend {
         user_id: &str,
         content: &str,
     ) -> Result<bool, String> {
-        if !self.is_chat_session_writable(session_id, user_id).await? {
-            return Ok(false);
-        }
         let now = Self::now();
         let msg_id = Uuid::new_v4().to_string();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session =
+            sqlx::query("UPDATE chat_sessions SET updated_at = $1 WHERE id = $2 AND user_id = $3")
+                .bind(&now)
+                .bind(session_id)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
+
         sqlx::query(
-            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (, , 'assistant', , NULL, )",
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES ($1, $2, 'assistant', $3, NULL, $4)",
         )
         .bind(&msg_id)
         .bind(session_id)
         .bind(content)
         .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query("UPDATE chat_sessions SET updated_at =  WHERE id = ")
-            .bind(&now)
-            .bind(session_id)
-            .execute(&self.pool)
+        .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
 
         Ok(true)
     }
@@ -1564,7 +1598,7 @@ impl StorageBackend for PostgresBackend {
         limit: u32,
     ) -> Result<Vec<models::ChatSessionRow>, String> {
         sqlx::query_as(
-            "SELECT id, user_id, title, created_at, updated_at FROM chat_sessions WHERE user_id =  ORDER BY updated_at DESC LIMIT ",
+            "SELECT id, user_id, title, created_at, updated_at FROM chat_sessions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT $2",
         )
         .bind(user_id)
         .bind(limit as i64)
@@ -1582,7 +1616,7 @@ impl StorageBackend for PostgresBackend {
 
     async fn save_cluster(&self, cluster: &models::ClusterRow) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at)              VALUES (, , , , , , , , , )              ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, ssh_host = EXCLUDED.ssh_host,              ssh_port = EXCLUDED.ssh_port, ssh_user = EXCLUDED.ssh_user, ssh_key = EXCLUDED.ssh_key,              scheduler = EXCLUDED.scheduler, remote_dir = EXCLUDED.remote_dir, enabled = EXCLUDED.enabled",
+            "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)              ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, ssh_host = EXCLUDED.ssh_host,              ssh_port = EXCLUDED.ssh_port, ssh_user = EXCLUDED.ssh_user, ssh_key = EXCLUDED.ssh_key,              scheduler = EXCLUDED.scheduler, remote_dir = EXCLUDED.remote_dir, enabled = EXCLUDED.enabled",
         )
         .bind(&cluster.id)
         .bind(&cluster.name)
@@ -1601,7 +1635,7 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn delete_cluster(&self, id: &str) -> Result<bool, String> {
-        let affected = sqlx::query("DELETE FROM clusters WHERE id = ")
+        let affected = sqlx::query("DELETE FROM clusters WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -1615,7 +1649,7 @@ impl StorageBackend for PostgresBackend {
         pipeline_id: &str,
     ) -> Result<Option<(String, Option<String>)>, String> {
         sqlx::query_as(
-            "SELECT status, finished_at FROM runs WHERE pipeline_id =               AND status IN ('completed', 'failed', 'cancelled')              ORDER BY created_at DESC LIMIT 1",
+            "SELECT status, finished_at FROM runs WHERE pipeline_id = $1               AND status IN ('completed', 'failed', 'cancelled')              ORDER BY created_at DESC LIMIT 1",
         )
         .bind(pipeline_id)
         .fetch_optional(&self.pool)
@@ -1633,7 +1667,7 @@ impl StorageBackend for PostgresBackend {
         let now = Self::now();
         let rev_id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES (, , , , , )",
+            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&rev_id)
         .bind(pipeline_id)
@@ -1646,8 +1680,9 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| e.to_string())?;
 
         sqlx::query(
-            "DELETE FROM pipeline_revisions WHERE pipeline_id =  AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id =                ORDER BY created_at DESC, id DESC LIMIT 50)",
+            "DELETE FROM pipeline_revisions WHERE pipeline_id = $1 AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2                ORDER BY created_at DESC, id DESC LIMIT 50)",
         )
+        .bind(pipeline_id)
         .bind(pipeline_id)
         .execute(&self.pool)
         .await
@@ -1662,7 +1697,7 @@ impl StorageBackend for PostgresBackend {
         limit: u32,
     ) -> Result<Vec<models::PipelineRevisionRow>, String> {
         sqlx::query_as(
-            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id =  ORDER BY created_at DESC, id DESC LIMIT ",
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
         )
         .bind(pipeline_id)
         .bind(limit as i64)
@@ -1677,7 +1712,7 @@ impl StorageBackend for PostgresBackend {
         revision_id: &str,
     ) -> Result<Option<models::PipelineRevisionRow>, String> {
         sqlx::query_as(
-            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id =  AND id = ",
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id = $1 AND id = $2",
         )
         .bind(pipeline_id)
         .bind(revision_id)
@@ -1696,7 +1731,7 @@ impl StorageBackend for PostgresBackend {
         let pattern = format!("%{}%", query);
         if is_admin {
             sqlx::query_as(
-                "SELECT * FROM pipelines WHERE name ILIKE  OR toml_content ILIKE  ORDER BY updated_at DESC LIMIT ",
+                "SELECT * FROM pipelines WHERE name ILIKE $1 OR toml_content ILIKE $2 ORDER BY updated_at DESC LIMIT $3",
             )
             .bind(&pattern)
             .bind(&pattern)
@@ -1707,7 +1742,7 @@ impl StorageBackend for PostgresBackend {
         } else {
             let uid = user_id.unwrap_or("");
             sqlx::query_as(
-                "SELECT * FROM pipelines WHERE (user_id =  OR visibility = 'workspace')                  AND (name ILIKE  OR toml_content ILIKE ) ORDER BY updated_at DESC LIMIT ",
+                "SELECT * FROM pipelines WHERE (user_id = $1 OR visibility = 'workspace')                  AND (name ILIKE $2 OR toml_content ILIKE $3) ORDER BY updated_at DESC LIMIT $4",
             )
             .bind(uid)
             .bind(&pattern)
@@ -1726,14 +1761,14 @@ impl StorageBackend for PostgresBackend {
         limit: u32,
     ) -> Result<Vec<models::PipelineRow>, String> {
         if is_admin {
-            sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT ")
+            sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT $1")
                 .bind(limit as i64)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| e.to_string())
         } else {
             sqlx::query_as(
-                "SELECT * FROM pipelines WHERE user_id =  OR visibility = 'workspace' ORDER BY updated_at DESC LIMIT ",
+                "SELECT * FROM pipelines WHERE user_id = $1 OR visibility = 'workspace' ORDER BY updated_at DESC LIMIT $2",
             )
             .bind(user_id)
             .bind(limit as i64)

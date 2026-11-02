@@ -20,30 +20,6 @@ use crate::infra::db::models;
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
 /// Server-side chat persistence (issue #81): upsert the session row and
-/// Whether the caller may write into this session: it either does not exist
-/// yet (will be created below) or is already owned by the caller. A foreign
-/// session id must neither hijack the row nor attach messages to another
-/// user's history.
-async fn session_writable(session_id: &str, user_id: &str) -> bool {
-    if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .is_chat_session_writable(session_id, user_id)
-            .await
-            .unwrap_or(true)
-    } else if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ? AND user_id != ?)",
-        )
-        .bind(session_id)
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(true)
-    } else {
-        true
-    }
-}
-
 /// append the user's message. Best-effort — chat works without a DB.
 async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &str) {
     let title: String = message.chars().take(60).collect();
@@ -56,12 +32,15 @@ async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &st
     let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
         return;
     };
-    if !session_writable(session_id, &user.id).await {
-        tracing::warn!("session {session_id} belongs to another user — message dropped");
-        return;
-    }
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            tracing::warn!(%error, "chat session transaction could not start");
+            return;
+        }
+    };
+    let session = sqlx::query(
         "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?) \
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at \
@@ -72,9 +51,20 @@ async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &st
     .bind(&title)
     .bind(&now)
     .bind(&now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
-    let _ = sqlx::query(
+    match session {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            tracing::warn!("session {session_id} belongs to another user — message dropped");
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "chat session could not be persisted");
+            return;
+        }
+    }
+    if let Err(error) = sqlx::query(
         "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
          VALUES (?, ?, 'user', ?, NULL, ?)",
     )
@@ -82,8 +72,15 @@ async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &st
     .bind(session_id)
     .bind(message)
     .bind(&now)
-    .execute(pool)
-    .await;
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::warn!(%error, "user chat message could not be persisted");
+        return;
+    }
+    if let Err(error) = tx.commit().await {
+        tracing::warn!(%error, "user chat transaction could not commit");
+    }
 }
 
 /// Append the assistant's final answer to the session.
@@ -97,11 +94,32 @@ async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content
     let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
         return;
     };
-    if !session_writable(session_id, &user.id).await {
-        return;
-    }
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            tracing::warn!(%error, "chat session transaction could not start");
+            return;
+        }
+    };
+    match sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?")
+        .bind(&now)
+        .bind(session_id)
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            tracing::warn!("session {session_id} belongs to another user — reply dropped");
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "chat session could not be updated");
+            return;
+        }
+    }
+    if let Err(error) = sqlx::query(
         "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
          VALUES (?, ?, 'assistant', ?, NULL, ?)",
     )
@@ -109,13 +127,15 @@ async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content
     .bind(session_id)
     .bind(content)
     .bind(&now)
-    .execute(pool)
-    .await;
-    let _ = sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(session_id)
-        .execute(pool)
-        .await;
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::warn!(%error, "assistant chat message could not be persisted");
+        return;
+    }
+    if let Err(error) = tx.commit().await {
+        tracing::warn!(%error, "assistant chat transaction could not commit");
+    }
 }
 
 #[utoipa::path(

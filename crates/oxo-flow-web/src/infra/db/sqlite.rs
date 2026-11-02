@@ -639,20 +639,26 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_user(&self, id: &str) -> Result<(), String> {
-        // Cascade the user's live credentials (#520): sessions and API keys
-        let _ = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        // Cascade the user's live credentials (#520) atomically. If any step
+        // fails, keep the user row so a retry can finish the cleanup instead
+        // of leaving orphaned sessions or API keys behind.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
             .bind(id)
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await;
-        sqlx::query("DELETE FROM users WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1489,11 +1495,17 @@ impl StorageBackend for SqliteBackend {
             return Ok(None);
         };
 
-        let _ = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
+        if let Err(error) = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
             .bind(touched_at)
             .bind(key_hash)
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                "API key authenticated but last_used_at could not be updated"
+            );
+        }
 
         Ok(Some((user_id, role)))
     }
@@ -1522,18 +1534,15 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+        // DELETE ... RETURNING consumes the state atomically: concurrent
+        // callbacks cannot both validate the same CSRF token. A delete error
+        // fails the callback closed instead of accepting a reusable state.
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT created_at FROM oauth_states WHERE state = ?")
+            sqlx::query_as("DELETE FROM oauth_states WHERE state = ? RETURNING created_at")
                 .bind(state)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| e.to_string())?;
-        if row.is_some() {
-            let _ = sqlx::query("DELETE FROM oauth_states WHERE state = ?")
-                .bind(state)
-                .execute(&self.pool)
-                .await;
-        }
         Ok(row.map(|(c,)| c))
     }
 
@@ -1556,7 +1565,7 @@ impl StorageBackend for SqliteBackend {
         role: &str,
     ) -> Result<Option<(String, String)>, String> {
         let now = Self::now();
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, ?, 'password', '', ?)",
         )
         .bind(username)
@@ -1564,7 +1573,8 @@ impl StorageBackend for SqliteBackend {
         .bind(role)
         .bind(&now)
         .execute(&self.pool)
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
 
         let row: Option<(String, String)> =
             sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
@@ -1641,14 +1651,15 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<(), String> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, 'viewer', 'audit', NULL, ?)",
         )
         .bind(user_id)
         .bind(user_id)
         .bind(&now)
         .execute(&self.pool)
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
 
         sqlx::query(
             "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1769,12 +1780,10 @@ impl StorageBackend for SqliteBackend {
         title: &str,
         message: &str,
     ) -> Result<bool, String> {
-        if !self.is_chat_session_writable(session_id, user_id).await? {
-            return Ok(false);
-        }
         let now = Self::now();
         let msg_id = Uuid::new_v4().to_string();
-        sqlx::query(
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session = sqlx::query(
             "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)              VALUES (?, ?, ?, ?, ?)              ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at              WHERE chat_sessions.user_id = excluded.user_id",
         )
         .bind(session_id)
@@ -1782,9 +1791,12 @@ impl StorageBackend for SqliteBackend {
         .bind(title)
         .bind(&now)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
 
         sqlx::query(
             "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (?, ?, 'user', ?, NULL, ?)",
@@ -1793,9 +1805,10 @@ impl StorageBackend for SqliteBackend {
         .bind(session_id)
         .bind(message)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
 
         Ok(true)
     }
@@ -1806,11 +1819,21 @@ impl StorageBackend for SqliteBackend {
         user_id: &str,
         content: &str,
     ) -> Result<bool, String> {
-        if !self.is_chat_session_writable(session_id, user_id).await? {
-            return Ok(false);
-        }
         let now = Self::now();
         let msg_id = Uuid::new_v4().to_string();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session =
+            sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?")
+                .bind(&now)
+                .bind(session_id)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
+
         sqlx::query(
             "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (?, ?, 'assistant', ?, NULL, ?)",
         )
@@ -1818,16 +1841,10 @@ impl StorageBackend for SqliteBackend {
         .bind(session_id)
         .bind(content)
         .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(session_id)
-            .execute(&self.pool)
+        .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
 
         Ok(true)
     }
@@ -3016,6 +3033,27 @@ mod ai_provider_config_tests {
     }
 
     #[tokio::test]
+    async fn oauth_state_is_consumed_at_most_once_under_concurrency() {
+        let backend = backend().await;
+        let now = SqliteBackend::now();
+        backend
+            .store_oauth_state("concurrent-state", &now)
+            .await
+            .expect("store state");
+
+        let (first, second) = tokio::join!(
+            backend.consume_oauth_state("concurrent-state"),
+            backend.consume_oauth_state("concurrent-state")
+        );
+        let consumed = usize::from(first.expect("first consume").is_some())
+            + usize::from(second.expect("second consume").is_some());
+        assert_eq!(
+            consumed, 1,
+            "a CSRF state must be accepted by exactly one callback"
+        );
+    }
+
+    #[tokio::test]
     async fn user_deletion_cascades_credentials() {
         let backend = backend().await;
         let charlie = backend
@@ -3211,6 +3249,34 @@ mod ai_provider_config_tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_chat_session_claim_has_exactly_one_owner() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        for trial in 0..32 {
+            let session_id = format!("contested-chat-session-{trial}");
+            let (alice, bob) = tokio::join!(
+                backend.save_chat_user_message(&session_id, "user-alice", "Alice", "hello"),
+                backend.save_chat_user_message(&session_id, "user-bob", "Bob", "hello")
+            );
+            let accepted =
+                usize::from(alice.expect("Alice write")) + usize::from(bob.expect("Bob write"));
+            assert_eq!(
+                accepted, 1,
+                "a session id must be claimed by exactly one concurrent writer"
+            );
+        }
+
+        let alice_sessions = backend.list_chat_sessions("user-alice", 100).await.unwrap();
+        let bob_sessions = backend.list_chat_sessions("user-bob", 100).await.unwrap();
+        assert_eq!(
+            alice_sessions.len() + bob_sessions.len(),
+            32,
+            "each session must appear only in one user's history"
         );
     }
 

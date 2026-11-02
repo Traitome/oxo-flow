@@ -348,7 +348,12 @@ file on disk defines the version.
 
 ### Create Run
 
-> **Database Backends**: `/api/runs*` endpoints are supported across both SQLite and PostgreSQL backends via the unified `StorageBackend` persistence layer. If the storage backend is uninitialized, the endpoint returns `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}`.
+> **Database Backends**: run-record persistence is implemented in both
+> SQLite and PostgreSQL through the unified `StorageBackend`, but the
+> executable `/api/runs*` HTTP surface remains SQLite-only. On an
+> uninitialized backend, a PostgreSQL deployment, or a build without the
+> SQLite execution database, these endpoints return
+> `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}`.
 
 ```
 POST /api/runs
