@@ -131,7 +131,7 @@ export default function Settings() {
     setQuotaSaving(true);
     try {
       await api.updateQuota(quotaForm);
-      const q = await fetchQuota();
+      const q = await api.quota();
       setQuota(q);
       setQuotaForm(q.limits);
       setNotice(t('settings.quota.saved'));

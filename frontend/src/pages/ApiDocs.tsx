@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, describeApiError } from '../api/client';
+import { api, apiUrl, describeApiError } from '../api/client';
 import { useI18n } from '../context/I18n';
 
 interface Endpoint {
