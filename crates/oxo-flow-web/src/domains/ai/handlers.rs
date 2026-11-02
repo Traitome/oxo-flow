@@ -29,6 +29,27 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
     )
 }
 
+/// The one `TranslateError` → HTTP contract shared by the JSON and SSE
+/// translate routes: JSON routes pair the `ApiError` with its status code,
+/// the SSE route serializes the same `ApiError` into its terminal `error`
+/// event so clients can branch on `code` on both surfaces.
+fn translate_error_parts(error: &super::service::TranslateError) -> (StatusCode, ApiError) {
+    match error {
+        super::service::TranslateError::Unavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, ai_not_configured_error())
+        }
+        super::service::TranslateError::Failed(message) => (
+            StatusCode::BAD_REQUEST,
+            ApiError {
+                code: "AI_TRANSLATE_ERROR".into(),
+                message: message.clone(),
+                detail: None,
+                suggestion: None,
+            },
+        ),
+    }
+}
+
 /// One owner for every AI-provider storage failure so logs and HTTP errors
 /// cannot drift between config endpoints.
 fn ai_db_error(operation: &'static str, error: String) -> (StatusCode, Json<ApiError>) {
@@ -80,14 +101,9 @@ pub async fn translate(
     super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates)
         .await
         .map(Json)
-        .map_err(|e| match e {
-            super::service::TranslateError::Unavailable => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ai_not_configured_error()),
-            ),
-            super::service::TranslateError::Failed(message) => {
-                err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", message)
-            }
+        .map_err(|e| {
+            let (status, error) = translate_error_parts(&e);
+            (status, Json(error))
         })
 }
 
@@ -172,15 +188,7 @@ pub async fn translate_sse(
                     .data(json));
             }
             Err(e) => {
-                let error = match e {
-                    super::service::TranslateError::Unavailable => ai_not_configured_error(),
-                    super::service::TranslateError::Failed(message) => ApiError {
-                        code: "AI_TRANSLATE_ERROR".into(),
-                        message,
-                        detail: None,
-                        suggestion: None,
-                    },
-                };
+                let (_, error) = translate_error_parts(&e);
                 yield Ok::<_, Infallible>(error_event(&error));
                 yield Ok::<_, Infallible>(Event::default().event("done").data("{}"));
             }
