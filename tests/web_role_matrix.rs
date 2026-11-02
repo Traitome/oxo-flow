@@ -8,7 +8,7 @@
 
 mod common;
 use common::free_port;
-use common::{log_tail, spawn_web_server, spawn_web_server_with_args};
+use common::{api_get, api_post, log_tail, spawn_web_server, spawn_web_server_with_args};
 
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -33,35 +33,6 @@ async fn wait_ready(base: &str) {
     }
 }
 
-async fn post(
-    base: &str,
-    path: &str,
-    token: Option<&str>,
-    body: Value,
-) -> (reqwest::StatusCode, Value) {
-    let client = Client::new();
-    let mut req = client.post(format!("{base}{path}")).json(&body);
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().await.unwrap();
-    let status = resp.status();
-    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
-    (status, value)
-}
-
-async fn get(base: &str, path: &str, token: Option<&str>) -> (reqwest::StatusCode, Value) {
-    let client = Client::new();
-    let mut req = client.get(format!("{base}{path}"));
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().await.unwrap();
-    let status = resp.status();
-    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
-    (status, value)
-}
-
 /// The full matrix, one sequential flow.
 #[tokio::test]
 async fn web_role_matrix_full_flow() {
@@ -80,7 +51,7 @@ async fn web_role_matrix_full_flow() {
 
     // ── 1. Unauthenticated walkthrough ──────────────────────────────────
     for path in ["/api/system", "/api/runs", "/api/users", "/api/audit"] {
-        let (status, body) = get(&base, path, None).await;
+        let (status, body) = api_get(&base, path, None).await;
         assert_eq!(status, 401, "{path} must require auth: {body}");
         assert_eq!(
             body["code"],
@@ -89,9 +60,9 @@ async fn web_role_matrix_full_flow() {
             log_tail(&server)
         );
     }
-    let (status, _) = get(&base, "/api/health", None).await;
+    let (status, _) = api_get(&base, "/api/health", None).await;
     assert_eq!(status, 200, "health must be public");
-    let (status, spec) = get(&base, "/api/openapi.json", None).await;
+    let (status, spec) = api_get(&base, "/api/openapi.json", None).await;
     assert_eq!(status, 200, "OpenAPI spec must be public");
     assert!(
         spec["paths"].as_object().unwrap().len() > 50,
@@ -99,7 +70,7 @@ async fn web_role_matrix_full_flow() {
     );
 
     // ── 2. Admin login + admin surface ──────────────────────────────────
-    let (status, login) = post(
+    let (status, login) = api_post(
         &base,
         "/api/auth/login",
         None,
@@ -109,12 +80,12 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 200, "admin login: {login}");
     assert_eq!(login["role"], "admin", "login role must be admin: {login}");
     let admin_token = login["token"].as_str().unwrap().to_string();
-    let (status, me) = get(&base, "/api/auth/me", Some(&admin_token)).await;
+    let (status, me) = api_get(&base, "/api/auth/me", Some(&admin_token)).await;
     assert_eq!(status, 200);
     assert_eq!(me["role"], "admin", "/me must agree with login role");
 
     // Create a regular user via the admin API.
-    let (status, user) = post(
+    let (status, user) = api_post(
         &base,
         "/api/users",
         Some(&admin_token),
@@ -122,7 +93,7 @@ async fn web_role_matrix_full_flow() {
     )
     .await;
     assert_eq!(status, 200, "create user: {user}");
-    let (status, users) = get(&base, "/api/users", Some(&admin_token)).await;
+    let (status, users) = api_get(&base, "/api/users", Some(&admin_token)).await;
     assert_eq!(status, 200);
     let names: Vec<&str> = users
         .as_array()
@@ -131,11 +102,11 @@ async fn web_role_matrix_full_flow() {
         .filter_map(|u| u["username"].as_str())
         .collect();
     assert!(names.contains(&"alice"), "user list must contain alice");
-    let (status, _) = get(&base, "/api/audit", Some(&admin_token)).await;
+    let (status, _) = api_get(&base, "/api/audit", Some(&admin_token)).await;
     assert_eq!(status, 200, "admin must read the audit trail");
 
     // ── 3. Regular-user login + RBAC ────────────────────────────────────
-    let (status, login) = post(
+    let (status, login) = api_post(
         &base,
         "/api/auth/login",
         None,
@@ -145,16 +116,16 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 200, "alice login: {login}");
     assert_eq!(login["role"], "user");
     let alice = login["token"].as_str().unwrap().to_string();
-    let (status, _) = get(&base, "/api/users", Some(&alice)).await;
+    let (status, _) = api_get(&base, "/api/users", Some(&alice)).await;
     assert_eq!(status, 403, "user must not list users");
-    let (status, _) = get(&base, "/api/audit", Some(&alice)).await;
+    let (status, _) = api_get(&base, "/api/audit", Some(&alice)).await;
     assert_eq!(status, 403, "user must not read the audit trail");
-    let (status, _) = get(&base, "/api/system", Some(&alice)).await;
+    let (status, _) = api_get(&base, "/api/system", Some(&alice)).await;
     assert_eq!(status, 200, "system info is auth-only per docs");
 
     // ── 4. Pipeline + dry-run + execution flows (as alice) ──────────────
     let toml = "[workflow]\nname = \"matrix\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n";
-    let (status, pipeline) = post(
+    let (status, pipeline) = api_post(
         &base,
         "/api/pipelines",
         Some(&alice),
@@ -164,7 +135,7 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 200, "create pipeline: {pipeline}");
     let pipeline_id = pipeline["id"].as_str().unwrap().to_string();
 
-    let (status, run) = post(
+    let (status, run) = api_post(
         &base,
         "/api/runs",
         Some(&alice),
@@ -176,7 +147,8 @@ async fn web_role_matrix_full_flow() {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut preview_ok = false;
     while Instant::now() < deadline {
-        let (_, preview) = get(&base, &format!("/api/runs/{run_id}/preview"), Some(&alice)).await;
+        let (_, preview) =
+            api_get(&base, &format!("/api/runs/{run_id}/preview"), Some(&alice)).await;
         if preview.get("checkpoint_preview").is_some() {
             preview_ok = true;
             break;
@@ -188,7 +160,7 @@ async fn web_role_matrix_full_flow() {
         "dry-run preview must be served (instance-level)"
     );
 
-    let (status, run) = post(
+    let (status, run) = api_post(
         &base,
         "/api/runs",
         Some(&alice),
@@ -200,7 +172,7 @@ async fn web_role_matrix_full_flow() {
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut terminal = String::new();
     while Instant::now() < deadline {
-        let (_, body) = get(&base, &format!("/api/runs/{run_id}"), Some(&alice)).await;
+        let (_, body) = api_get(&base, &format!("/api/runs/{run_id}"), Some(&alice)).await;
         terminal = body["status"].as_str().unwrap_or("").to_string();
         if matches!(terminal.as_str(), "completed" | "failed" | "cancelled") {
             break;
@@ -215,7 +187,7 @@ async fn web_role_matrix_full_flow() {
     );
 
     // Ownership isolation: alice must NOT see an admin run (404, no leak).
-    let (status, admin_run) = post(
+    let (status, admin_run) = api_post(
         &base,
         "/api/runs",
         Some(&admin_token),
@@ -224,12 +196,12 @@ async fn web_role_matrix_full_flow() {
     .await;
     assert_eq!(status, 200, "admin run: {admin_run}");
     let admin_run_id = admin_run["run_id"].as_str().unwrap().to_string();
-    let (status, _) = get(&base, &format!("/api/runs/{admin_run_id}"), Some(&alice)).await;
+    let (status, _) = api_get(&base, &format!("/api/runs/{admin_run_id}"), Some(&alice)).await;
     assert_eq!(status, 404, "alice must get 404 on admin's run (no leak)");
 
     // ── 5. Cancel flow (SIGTERM-immune rule exercises the escalation) ───
     let toml_slow = "[workflow]\nname = \"slow\"\n\n[[rules]]\nname = \"stubborn\"\noutput = [\"later.txt\"]\nshell = \"trap '' TERM; sleep 60; echo done > {output}\"\n";
-    let (status, pipeline_slow) = post(
+    let (status, pipeline_slow) = api_post(
         &base,
         "/api/pipelines",
         Some(&alice),
@@ -237,7 +209,7 @@ async fn web_role_matrix_full_flow() {
     )
     .await;
     assert_eq!(status, 200, "slow pipeline: {pipeline_slow}");
-    let (status, run_slow) = post(
+    let (status, run_slow) = api_post(
         &base,
         "/api/runs",
         Some(&alice),
@@ -247,7 +219,7 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 200);
     let slow_run = run_slow["run_id"].as_str().unwrap().to_string();
     tokio::time::sleep(Duration::from_secs(3)).await; // let it start
-    let (code, _) = post(
+    let (code, _) = api_post(
         &base,
         &format!("/api/runs/{slow_run}/cancel"),
         Some(&alice),
@@ -258,7 +230,7 @@ async fn web_role_matrix_full_flow() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut terminal = String::new();
     while Instant::now() < deadline {
-        let (_, body) = get(&base, &format!("/api/runs/{slow_run}"), Some(&alice)).await;
+        let (_, body) = api_get(&base, &format!("/api/runs/{slow_run}"), Some(&alice)).await;
         terminal = body["status"].as_str().unwrap_or("").to_string();
         if terminal == "cancelled" {
             break;
@@ -273,7 +245,7 @@ async fn web_role_matrix_full_flow() {
     );
 
     // ── 6. Share flow: anonymous read, then ownership persists ─────────
-    let (status, share) = post(
+    let (status, share) = api_post(
         &base,
         &format!("/api/pipelines/{pipeline_id}/share"),
         Some(&alice),
@@ -282,7 +254,7 @@ async fn web_role_matrix_full_flow() {
     .await;
     assert_eq!(status, 200, "share: {share}");
     let token = share["access_token"].as_str().unwrap().to_string();
-    let (status, shared) = get(&base, &format!("/api/share/{token}"), None).await;
+    let (status, shared) = api_get(&base, &format!("/api/share/{token}"), None).await;
     assert_eq!(
         status, 200,
         "shared pipeline must be anonymously readable: {shared}"
@@ -303,7 +275,7 @@ async fn web_role_matrix_full_flow() {
     wait_ready(&server2.base).await;
     let base2 = server2.base.clone();
     // Admin still logs in (bcrypt users persisted).
-    let (status, login) = post(
+    let (status, login) = api_post(
         &base2,
         "/api/auth/login",
         None,
@@ -313,7 +285,7 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 200, "alice must survive restart: {login}");
     let alice2 = login["token"].as_str().unwrap().to_string();
     // Pipeline + runs persisted.
-    let (status, body) = get(&base2, "/api/pipelines", Some(&alice2)).await;
+    let (status, body) = api_get(&base2, "/api/pipelines", Some(&alice2)).await;
     assert_eq!(status, 200, "pipelines after restart: {body}");
     assert!(
         body.as_array()
@@ -322,7 +294,7 @@ async fn web_role_matrix_full_flow() {
             .any(|p| p["id"] == pipeline_id),
         "pipeline must survive restart"
     );
-    let (status, _) = get(&base2, &format!("/api/runs/{run_id}"), Some(&alice2)).await;
+    let (status, _) = api_get(&base2, &format!("/api/runs/{run_id}"), Some(&alice2)).await;
     assert_eq!(status, 200, "run must survive restart");
     server2.child.kill().unwrap();
     let _ = server2.child.wait();

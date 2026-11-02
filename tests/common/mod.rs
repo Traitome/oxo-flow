@@ -56,6 +56,79 @@ pub fn free_port() -> u16 {
         .port()
 }
 
+// ─── Shared HTTP helpers for web-server tests ────────────────────────────
+
+/// Read the response body as JSON, failing loudly when the server did not
+/// answer with JSON (e.g. an HTML 500 error page or an empty body). The
+/// per-file copies this replaces swallowed parse failures into
+/// `Value::Null`, turning a non-JSON response into confusing downstream
+/// assertion failures (or a silent 120 s poll timeout).
+async fn read_json(
+    status: reqwest::StatusCode,
+    resp: reqwest::Response,
+    context: &str,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let text = resp.text().await.unwrap_or_default();
+    match serde_json::from_str(&text) {
+        Ok(value) => (status, value),
+        Err(e) => panic!("{context}: non-JSON response ({e}); status {status}; body: {text}"),
+    }
+}
+
+/// One authenticated JSON API round-trip for any method — the single
+/// definition the per-file `req`/`post`/`get`/`put` copies delegate to.
+pub async fn api_req(
+    base: &str,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let client = reqwest::Client::new();
+    let mut r = match method {
+        "POST" => client.post(format!("{base}{path}")),
+        "PUT" => client.put(format!("{base}{path}")),
+        "GET" => client.get(format!("{base}{path}")),
+        "DELETE" => client.delete(format!("{base}{path}")),
+        other => panic!("unsupported method: {other}"),
+    };
+    if let Some(t) = token {
+        r = r.bearer_auth(t);
+    }
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let context = format!("{method} {base}{path}");
+    let resp = r.send().await.unwrap_or_else(|e| panic!("{context}: {e}"));
+    read_json(resp.status(), resp, &context).await
+}
+
+pub async fn api_get(
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "GET", path, token, None).await
+}
+
+pub async fn api_post(
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "POST", path, token, Some(body)).await
+}
+
+pub async fn api_put(
+    base: &str,
+    path: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "PUT", path, Some(token), Some(body)).await
+}
+
 pub struct WebServer {
     pub child: Child,
     pub base: String,
