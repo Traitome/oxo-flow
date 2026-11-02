@@ -292,6 +292,20 @@ impl fmt::Display for CompressionKind {
     }
 }
 
+/// Return the shell command that recompresses a stream into *kind*, with
+/// `{input}` / `{output}` placeholders. `None` for [`CompressionKind::None`]
+/// (an uncompressed target has no re-compression coercion). Single source of
+/// truth shared by the type checker and the header introspector (DRY).
+#[must_use]
+pub fn coercion_rule_for_compression(kind: CompressionKind) -> Option<&'static str> {
+    match kind {
+        CompressionKind::None => None,
+        CompressionKind::Gzip => Some("gzip -c {input} > {output}"),
+        CompressionKind::Bgzip => Some("bgzip -c {input} > {output}"),
+        CompressionKind::Zstd => Some("zstd -c {input} > {output}"),
+    }
+}
+
 impl FromStr for CompressionKind {
     type Err = String;
 

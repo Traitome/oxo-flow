@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use super::{
-    BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation, coercion_rule_for_index,
-    normalize_reference_build,
+    BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation,
+    coercion_rule_for_compression, coercion_rule_for_index, normalize_reference_build,
 };
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
@@ -220,13 +220,8 @@ impl BioTypeSpec {
                         expected_comp, current_comp
                     ),
                     suggestion: Some(suggestion),
-                    coercion_rule: Some(match expected_comp {
-                        CompressionKind::Bgzip => "bgzip -c {input} > {output}".to_string(),
-                        CompressionKind::Zstd => "zstd -c {input} > {output}".to_string(),
-                        CompressionKind::Gzip => "gzip -c {input} > {output}".to_string(),
-                        // Unreachable: the enclosing `if` excludes `None`.
-                        CompressionKind::None => "gzip -dc {input} > {output}".to_string(),
-                    }),
+                    coercion_rule: coercion_rule_for_compression(expected_comp)
+                        .map(str::to_string),
                 });
             }
         }

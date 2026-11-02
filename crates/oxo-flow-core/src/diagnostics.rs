@@ -44,6 +44,11 @@ pub struct FixAction {
 }
 
 /// Targeted key-value configuration modification.
+///
+/// Advisory only: the diagnostics engine never reads the live config, so
+/// `old_value` / `new_value` are placeholders describing the *intent* of the
+/// change (the user supplies the concrete values). Display surfaces render
+/// them as-is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigChange {
     pub path: String,
@@ -68,6 +73,11 @@ pub enum RepairAction {
         output: Vec<String>,
     },
     /// Redirect scratch workspace to a distinct path under disk pressure.
+    ///
+    /// Advisory only: the diagnostics engine cannot see the run's resolved
+    /// scratch directory (the `[engine] tmp_dir` / `OXO_FLOW_TMPDIR` resolver
+    /// lives in the CLI layer), so `tmp_dir` is a *proposal* for the retry,
+    /// never the path the failed run actually used.
     RerouteScratch { tmp_dir: PathBuf },
 }
 

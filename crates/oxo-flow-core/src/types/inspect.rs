@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, IndexKind, SortOrder, TypeViolation,
-    coercion_rule_for_index, normalize_reference_build,
+    coercion_rule_for_compression, coercion_rule_for_index, normalize_reference_build,
 };
 
 /// Bounded byte budget for header introspection: 64 KiB is sufficient to capture
@@ -171,7 +171,7 @@ impl IntrospectedBioType {
                     expected_comp, self.compression
                 ),
                 suggestion: Some(format!("compress file with {}", expected_comp)),
-                coercion_rule: Some("bgzip -c {input} > {output}".to_string()),
+                coercion_rule: coercion_rule_for_compression(expected_comp).map(str::to_string),
             });
         }
 
