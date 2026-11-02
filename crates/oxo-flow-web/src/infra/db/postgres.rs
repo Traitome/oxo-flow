@@ -254,6 +254,13 @@ impl StorageBackend for PostgresBackend {
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
+
+            -- Parity with the SQLite schema: system-template seeding is
+            -- name-guarded, so "one row per template name" is a schema
+            -- invariant on every backend (partial unique index on system
+            -- templates only — user templates may still share names).
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_name
+                ON templates(name) WHERE is_system = 1;
             "#,
         )
         .execute(&self.pool)

@@ -405,6 +405,18 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
+            -- One-time repair for databases created before seeding was
+            -- name-guarded (db.rs): the old seeder minted a fresh UUID per
+            -- boot, so restarts stacked same-name system templates. Keep the
+            -- oldest row per name, then pin the invariant with a partial
+            -- unique index (user templates may still share names).
+            DELETE FROM templates
+             WHERE is_system = 1
+               AND rowid NOT IN (
+                   SELECT MIN(rowid) FROM templates WHERE is_system = 1 GROUP BY name
+               );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_name
+                ON templates(name) WHERE is_system = 1;
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
             CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);

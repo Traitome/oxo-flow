@@ -18,7 +18,8 @@ use uuid::Uuid;
 
 /// Initialize the canonical SQLite backend (schema, global pool, global
 /// storage backend) and seed the system templates. Idempotent: a second
-/// call only re-runs the (INSERT OR IGNORE) template seed.
+/// call only re-runs the name-guarded template seed. PostgreSQL boots
+/// never run this seed (SQLite-only path in `init_database`).
 pub async fn init_db(database_url: &str) -> Result<()> {
     crate::infra::db::sqlite::init_pool(database_url).await;
     seed_system_templates(crate::infra::db::sqlite::pool()).await
@@ -193,6 +194,21 @@ async fn seed_system_templates(pool: &SqlitePool) -> Result<()> {
     ];
 
     for (name, category, description, tags, toml) in &templates {
+        // Guard on name, not id: the id is freshly minted every boot, so an
+        // id conflict never fires and an id-guarded `INSERT OR IGNORE` would
+        // happily insert a duplicate row (fresh UUID, same name) on each
+        // restart. The pre-check SELECT is the fast path; the INSERT keeps
+        // `OR IGNORE` as the race-tolerant backstop — the partial unique
+        // index on name (created in the migration step below) turns a
+        // concurrent-seeder or restart conflict into a real no-op, and
+        // get_template's `id = ? OR name = ?` lookup keeps resolving by name.
+        let seeded = sqlx::query("SELECT 1 FROM templates WHERE name = ? LIMIT 1")
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+        if seeded.is_some() {
+            continue;
+        }
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT OR IGNORE INTO templates (id, name, category, description, tags, toml_content, is_system, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)"

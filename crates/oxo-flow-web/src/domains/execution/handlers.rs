@@ -1311,9 +1311,9 @@ pub async fn retry_run(
 ) -> ApiResult<RetryResponse> {
     let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    // Read-only: builds the deterministic report and returns a chart spec.
-    // It was mutator-gated, so the documented read-only viewer role got 403
-    // on a chart while report/ask answered freely from the same report.
+    // A retry spawns a real run, so it mutates the run surface — gate it like
+    // create/cancel/resume/delete (viewers are read-only).
+    require_run_mutator(&user)?;
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // A retry spawns a REAL run — it pays the same limiter + quota
@@ -2397,6 +2397,9 @@ pub async fn clean_run(
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let user = current_user::resolve(authenticated.as_ref());
+    // Clean deletes files in the run workdir — mutator-gate it like
+    // cancel/delete; a viewer must never reach `clean --force`.
+    require_run_mutator(&user)?;
     let backend = get_backend()?;
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     let workdir = run.workdir.ok_or_else(|| {
