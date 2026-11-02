@@ -107,8 +107,8 @@ def main():
                     "response_id": meta.get("response_id", ""),
                     "system_fingerprint": meta.get("system_fingerprint", ""),
                     "stop_reason": meta.get("stop_reason", ""),
-                    "seed": meta.get("seed", ""),
-                    "seed_supported": meta.get("seed_supported", ""),
+                    "seed": meta.get("seed", args.seed),
+                    "seed_supported": meta.get("seed_supported", False),
                     "usage_json": json_dump(meta.get("usage", {})),
                     "error": error,
                 }

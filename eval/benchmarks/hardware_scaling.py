@@ -72,15 +72,15 @@ def detect_system_topology() -> Dict[str, Any]:
                     kb = int(line.split()[1])
                     total_mem_gb = kb / (1024 * 1024)
                     break
-        except Exception:
-            pass
+        except (OSError, ValueError, IndexError):
+            print("WARN: could not read /proc/meminfo — memory left as default")
     elif os_name == "Darwin":
         try:
             res = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
             bytes_val = int(res.stdout.strip())
             total_mem_gb = bytes_val / (1024**3)
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            print("WARN: sysctl hw.memsize failed — memory left as default")
 
     return {
         "os": os_name,
@@ -154,6 +154,14 @@ def model_hardware_scaling_projection(
 def _bootstrap_mean_ci(
     data: List[float], seed: int = 20261102, rounds: int = 4000
 ) -> Tuple[float, float]:
+    """Percentile bootstrap CI for a mean (nearest-rank order statistics).
+
+    Same estimator family as ``eval/scripts/runner.py::bootstrap_ci`` but
+    tuned for the small run counts here (4,000 resamples of ~2–6 runs);
+    runner.py needs 10,000 iterations for item-level score stability. The
+    two implementations are kept separate because the percentile index
+    conventions differ intentionally with the iteration counts.
+    """
     if len(data) < 2:
         raise ValueError("confidence intervals require at least two measured runs")
     rng = random.Random(seed)
