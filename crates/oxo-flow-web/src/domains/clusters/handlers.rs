@@ -6,7 +6,7 @@ use axum::{Extension, Json, http::StatusCode};
 
 use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err, now_iso};
+use crate::domains::workflow::handlers::{ApiError, err, get_backend, now_iso};
 use crate::infra::db::models;
 
 use super::service;
@@ -24,17 +24,6 @@ fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<Api
         "admin",
         "Admin role required to manage cluster connections",
     )
-}
-
-fn get_backend()
--> Result<std::sync::Arc<dyn crate::infra::db::StorageBackend>, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::global_backend().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
 }
 
 #[utoipa::path(

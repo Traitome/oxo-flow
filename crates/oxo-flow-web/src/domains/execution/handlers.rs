@@ -15,7 +15,7 @@ use crate::extract::ApiQuery;
 use super::checkpoint_status;
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, can_read_pipeline, err, now_iso};
+use crate::domains::workflow::handlers::{ApiError, can_read_pipeline, err, get_backend, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -24,17 +24,6 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// address any run, everyone else only their own. Foreign and unknown runs
 /// both 404 — the resource set itself is private, so existence must not
 /// leak through a 403.
-fn get_backend()
--> Result<std::sync::Arc<dyn crate::infra::db::StorageBackend>, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::global_backend().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
-
 pub(crate) async fn load_owned_run(
     backend: &dyn crate::infra::db::StorageBackend,
     user: &CurrentUser,

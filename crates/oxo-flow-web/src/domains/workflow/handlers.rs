@@ -27,58 +27,18 @@ fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
 /// Snapshot a pipeline into `pipeline_revisions` (issue #82 P1-14). Keeps
 /// the last 50 revisions per pipeline; older snapshots are pruned.
 async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_content: &str) {
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(error) = backend
-            .record_pipeline_revision(pipeline_id, user_id, version, toml_content)
-            .await
-        {
-            tracing::error!(
-                pipeline_id,
-                version,
-                error = %error,
-                "failed to persist pipeline revision"
-            );
-        }
+    let Some(backend) = crate::infra::db::global_backend() else {
         return;
-    }
-    let Ok(pool) = get_pool() else { return };
-    let now = chrono::Utc::now().to_rfc3339();
-    if let Err(error) = sqlx::query(
-        "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(pipeline_id)
-    .bind(user_id)
-    .bind(version)
-    .bind(toml_content)
-    .bind(&now)
-    .execute(pool)
-    .await
+    };
+    if let Err(error) = backend
+        .record_pipeline_revision(pipeline_id, user_id, version, toml_content)
+        .await
     {
         tracing::error!(
             pipeline_id,
             version,
             error = %error,
             "failed to persist pipeline revision"
-        );
-        return;
-    }
-    // Keep the history bounded: drop everything beyond the newest 50.
-    if let Err(error) = sqlx::query(
-        "DELETE FROM pipeline_revisions WHERE pipeline_id = ? AND id NOT IN \
-         (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? \
-          ORDER BY created_at DESC, rowid DESC LIMIT 50)",
-    )
-    .bind(pipeline_id)
-    .bind(pipeline_id)
-    .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            pipeline_id,
-            error = %error,
-            "failed to prune old pipeline revisions"
         );
     }
 }
@@ -147,24 +107,11 @@ pub fn get_backend()
     })
 }
 
-pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
-
 /// Top-20 template names feeding AI matching (translate, chat).
 ///
-/// Single point of sync for the lookup: prefer the storage backend, fall
-/// back to a direct SQLite query when only the pool is live, and degrade to
-/// an empty list rather than failing the AI call. The backend path inherits
-/// `list_templates`' category/name ordering while the fallback orders by
-/// usage — preserved verbatim from the original call sites; converge the
-/// two deliberately, not as a side effect of a refactor.
+/// Single point of sync for the lookup: read through the storage backend
+/// and degrade to an empty list rather than failing the AI call. The
+/// names inherit `list_templates`' category/name ordering.
 pub async fn top_template_names() -> Vec<String> {
     if let Some(backend) = crate::infra::db::global_backend() {
         backend
@@ -175,16 +122,6 @@ pub async fn top_template_names() -> Vec<String> {
             .take(20)
             .map(|t| t.name)
             .collect()
-    } else if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, crate::infra::db::models::TemplateRow>(
-            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
     } else {
         vec![]
     }

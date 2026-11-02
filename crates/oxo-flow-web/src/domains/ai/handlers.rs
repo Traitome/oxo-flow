@@ -12,7 +12,7 @@ use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{
-    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_backend, get_pool,
+    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_backend,
 };
 use crate::infra::db::{global_backend, models};
 
@@ -394,23 +394,6 @@ pub async fn optimize(
     } else if let Some(backend) = crate::infra::db::global_backend() {
         let pipeline: Option<models::PipelineRow> =
             backend.get_pipeline(&req.pipeline_id).await.unwrap_or(None);
-        match pipeline.filter(|p| can_read_pipeline(&user, p)) {
-            Some(p) => p.toml_content,
-            None => {
-                return Err(err(
-                    StatusCode::NOT_FOUND,
-                    "NOT_FOUND",
-                    format!("Pipeline {} not found", req.pipeline_id),
-                ));
-            }
-        }
-    } else if let Ok(pool) = get_pool() {
-        let pipeline: Option<models::PipelineRow> =
-            sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-                .bind(&req.pipeline_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
         match pipeline.filter(|p| can_read_pipeline(&user, p)) {
             Some(p) => p.toml_content,
             None => {

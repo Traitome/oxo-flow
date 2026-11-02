@@ -74,13 +74,12 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
     let host = crate::sys::get_host_resources();
 
     // Count active runs from DB
-    let (active_workflows, total_requests) = if let Some(backend) =
-        crate::infra::db::global_backend()
-    {
-        backend.get_run_metrics().await.unwrap_or((0, 0))
-    } else {
-        (0, 0)
-    };
+    let (active_workflows, total_requests) =
+        if let Some(backend) = crate::infra::db::global_backend() {
+            backend.get_run_metrics().await.unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
 
     // Process uptime via the shared START_TIME origin — the same source
     // /api/health and /api/system use. sysinfo::System::uptime() is HOST
