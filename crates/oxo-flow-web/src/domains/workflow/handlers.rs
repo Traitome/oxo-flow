@@ -518,22 +518,7 @@ pub async fn search_pipelines(
         .take(20)
         .collect();
 
-    let templates: Vec<Template> = template_rows
-        .into_iter()
-        .map(|r| Template {
-            id: r.id,
-            name: r.name,
-            category: r.category,
-            description: r.description,
-            tags: serde_json::from_str(&r.tags).unwrap_or_default(),
-            toml_content: Some(r.toml_content),
-            is_system: r.is_system != 0,
-            created_by: r.created_by,
-            usage_count: r.usage_count as u64,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect();
+    let templates: Vec<Template> = template_rows.into_iter().map(Template::from).collect();
 
     Ok(Json(service::search_pipelines(
         &req.query, &pipelines, &templates,
@@ -949,6 +934,27 @@ pub async fn delete_pipeline(
 // Templates
 // ---------------------------------------------------------------------------
 
+/// Single conversion from the storage row to the API template type —
+/// every handler that surfaces `templates` rows shares this mapping
+/// (reuse, never retype).
+impl From<models::TemplateRow> for Template {
+    fn from(r: models::TemplateRow) -> Self {
+        Template {
+            id: r.id,
+            name: r.name,
+            category: r.category,
+            description: r.description,
+            tags: serde_json::from_str(&r.tags).unwrap_or_default(),
+            toml_content: Some(r.toml_content),
+            is_system: r.is_system != 0,
+            created_by: r.created_by,
+            usage_count: r.usage_count as u64,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/templates",
@@ -971,22 +977,7 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
         )
     })?;
 
-    let list: Vec<Template> = rows
-        .into_iter()
-        .map(|r| Template {
-            id: r.id,
-            name: r.name,
-            category: r.category,
-            description: r.description,
-            tags: serde_json::from_str(&r.tags).unwrap_or_default(),
-            toml_content: Some(r.toml_content),
-            is_system: r.is_system != 0,
-            created_by: r.created_by,
-            usage_count: r.usage_count as u64,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect();
+    let list: Vec<Template> = rows.into_iter().map(Template::from).collect();
 
     Ok(Json(list))
 }
@@ -1017,19 +1008,7 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     })?;
 
     match row {
-        Some(r) => Ok(Json(Template {
-            id: r.id,
-            name: r.name,
-            category: r.category,
-            description: r.description,
-            tags: serde_json::from_str(&r.tags).unwrap_or_default(),
-            toml_content: Some(r.toml_content),
-            is_system: r.is_system != 0,
-            created_by: r.created_by,
-            usage_count: r.usage_count as u64,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })),
+        Some(r) => Ok(Json(Template::from(r))),
         None => Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
