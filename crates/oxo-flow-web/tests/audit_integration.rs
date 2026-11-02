@@ -7,7 +7,7 @@
 
 use oxo_flow_web::db;
 use oxo_flow_web::infra::db::StorageBackend;
-use oxo_flow_web::infra::db::sqlite::SqliteBackend;
+use oxo_flow_web::infra::db::sqlite::{self, SqliteBackend};
 
 mod common;
 
@@ -36,13 +36,13 @@ async fn audit_log_action_survives_both_init_paths() {
         .expect("log_action must succeed with the unified schema");
 
     // The row must carry both the result and metadata columns.
-    let pool = db::pool();
+    let pool = sqlite::pool();
     let row: (String, String, Option<String>) = sqlx::query_as(
         "SELECT action, result, metadata FROM audit_logs WHERE action = 'test.action'",
     )
     .fetch_one(pool)
     .await
-    .expect("audit row readable through the db.rs pool");
+    .expect("audit row readable through the canonical sqlite pool");
     assert_eq!(row.0, "test.action");
     assert_eq!(row.1, "success");
     assert!(row.2.is_none());
@@ -77,7 +77,7 @@ async fn runs_schema_accepts_backend_insert() {
         .await
         .expect("create_run");
 
-    let pool = db::pool();
+    let pool = sqlite::pool();
     let row: (String, String, String, Option<String>, Option<String>, String) = sqlx::query_as(
         "SELECT pipeline_snapshot, workflow_name, phase, pid, workdir, created_at FROM runs WHERE id = 'run-fill-1'",
     )

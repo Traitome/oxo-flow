@@ -1357,8 +1357,16 @@ impl StorageBackend for PostgresBackend {
     ) -> Result<(), String> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
+        // The audit_logs.user_id FK (REFERENCES users(id)) rejects any id
+        // without a users row — and authenticated ids are not limited to the
+        // seeded 'default' user (OAuth/env-provisioned users never pass
+        // through here). The synthetic viewer row is therefore functionally
+        // required, not bookkeeping garnish; ON CONFLICT (id) DO NOTHING
+        // keeps repeat audits of the same id race-tolerant. (SQLite
+        // record_audit_log mirrors this with INSERT OR IGNORE — keep the
+        // two in step.)
         sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES ($1, $2, 'viewer', 'audit', NULL, $3)              ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, 'viewer', 'audit', NULL, $3) ON CONFLICT (id) DO NOTHING",
         )
         .bind(user_id)
         .bind(user_id)

@@ -58,17 +58,18 @@ async fn init_database_sqlite_initializes_both_layers() {
         .await
         .expect("sqlite URL must initialize cleanly");
 
-    // Both layers usable: the v0.8 pool answers writes…
+    // Both layers usable: `init_database` bootstraps the canonical sqlite
+    // pool that everything — prod code and the legacy db.rs boot helpers —
+    // resolves to, so one probe covers both historical layers.
     sqlx::query("CREATE TABLE IF NOT EXISTS init_database_probe (v TEXT)")
         .execute(pool())
         .await
-        .expect("v0.8 pool initialized");
-    // …and the legacy pool answers reads.
-    let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
-        .fetch_one(oxo_flow_web::db::pool())
+        .expect("canonical pool initialized");
+    let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
+        .fetch_one(pool())
         .await
-        .expect("legacy pool initialized");
-    let _ = legacy;
+        .expect("pool answers reads after init_database");
+    let _ = tables;
 }
 
 /// The registry must surface the DB-tier provider after `init_ai_provider`,

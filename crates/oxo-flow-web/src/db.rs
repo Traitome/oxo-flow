@@ -10,6 +10,11 @@
 //! Failure-mode note: schema/pool initialization aborts via the canonical
 //! `init_pool` retry-then-panic contract instead of returning `Err` — the
 //! server boot terminates either way.
+//!
+//! Pool access goes through `crate::infra::db::sqlite::{pool, try_pool}`
+//! directly — the re-export shims that used to live here were deleted as
+//! unused pass-throughs (the prod call sites resolve the canonical module
+//! already).
 
 use anyhow::Result;
 use chrono::Utc;
@@ -25,22 +30,6 @@ pub async fn init_db(database_url: &str) -> Result<()> {
     seed_system_templates(crate::infra::db::sqlite::pool()).await
 }
 
-/// Obtain a reference to the global pool.
-///
-/// # Panics
-/// Panics if `init_db` has not been called yet.
-pub fn pool() -> &'static SqlitePool {
-    crate::infra::db::sqlite::pool()
-}
-
-/// Obtain a reference to the global pool, or `None` when it was never
-/// initialized (PostgreSQL deployments). Background run-lifecycle tasks run
-/// under `tokio::spawn`, where a panic here would leave runs stuck in
-/// 'running' forever — those callers must degrade gracefully instead.
-pub fn try_pool() -> Option<&'static SqlitePool> {
-    crate::infra::db::sqlite::try_pool().ok()
-}
-
 /// Recover runs left in flight ('running'/'paused') after a server crash
 /// (issue #79 P1-02: the old behavior blindly marked every in-flight run
 /// failed, so a crash-restart lied about runs whose CLI kept executing).
@@ -54,7 +43,7 @@ pub fn try_pool() -> Option<&'static SqlitePool> {
 pub async fn recover_orphaned_runs() -> Result<()> {
     let rows: Vec<(String, Option<i64>, Option<String>)> =
         sqlx::query_as("SELECT id, pid, workdir FROM runs WHERE status IN ('running', 'paused')")
-            .fetch_all(pool())
+            .fetch_all(crate::infra::db::sqlite::pool())
             .await?;
 
     for (id, pid, workdir) in rows {
@@ -122,7 +111,7 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                 .bind(now)
                 .bind(&id)
                 .bind(cutoff)
-                .execute(pool())
+                .execute(crate::infra::db::sqlite::pool())
                 .await?;
                 if result.rows_affected() > 0 {
                     tracing::warn!(
@@ -224,35 +213,5 @@ async fn seed_system_templates(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
     }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Audit persistence (storage backend for the audit middleware — issue #79
-// P1-05). Everything else lives in `infra::db`.
-// ---------------------------------------------------------------------------
-
-/// Insert one audit record with explicit result + metadata.
-pub async fn insert_audit_row(
-    user_id: &str,
-    action: &str,
-    target: &str,
-    result: &str,
-    metadata: &str,
-) -> Result<()> {
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now();
-    sqlx::query(
-        "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(id)
-    .bind(user_id)
-    .bind(action)
-    .bind(target)
-    .bind(result)
-    .bind(metadata)
-    .bind(now)
-    .execute(pool())
-    .await?;
     Ok(())
 }
