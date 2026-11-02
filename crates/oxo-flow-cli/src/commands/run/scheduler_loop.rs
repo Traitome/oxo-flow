@@ -1034,12 +1034,24 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             }
             {
                 let mut f = failures.lock().await;
-                f.push((
-                    completed_rule.clone(),
-                    format!("output_pattern discovery: {e}"),
-                ));
+                let reason = match config.get_rule(&completed_rule).map(|r| r.required) {
+                    Some(false) => format!("output_pattern discovery: {e} (non-required)"),
+                    _ => format!("output_pattern discovery: {e}"),
+                };
+                f.push((completed_rule.clone(), reason));
             }
-            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Mirror the re-entry failure attribution above: honor the
+            // rule's `required` flag so a non-required producer's discovery
+            // hiccup doesn't fail the whole run.
+            if config
+                .get_rule(&completed_rule)
+                .map(|r| r.required)
+                .unwrap_or(true)
+            {
+                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             sched.mark_completed(record);
         }
 
