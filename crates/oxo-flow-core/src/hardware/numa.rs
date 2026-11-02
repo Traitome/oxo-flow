@@ -122,8 +122,12 @@ impl HardwareTopology {
         }
     }
 
-    /// Select the best NUMA node for a job requiring `threads` and `memory_mb`.
-    pub fn select_node_for_job(&self, _threads: u32, memory_mb: Option<u64>) -> Option<u32> {
+    /// Select the best NUMA node for a job needing `memory_mb`.
+    ///
+    /// Placement is memory-capacity-driven only (fit the request, else the
+    /// node with the most memory); core pinning granularity is handled by
+    /// `numactl --cpunodebind` at wrap time, not here.
+    pub fn select_node_for_job(&self, memory_mb: Option<u64>) -> Option<u32> {
         if self.numa_nodes.is_empty() {
             return None;
         }

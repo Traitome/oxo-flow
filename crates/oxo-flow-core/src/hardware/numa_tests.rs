@@ -50,10 +50,10 @@ fn test_select_node_for_job() {
     };
 
     // If required memory fits only on node 1
-    assert_eq!(topo.select_node_for_job(4, Some(32768)), Some(1));
+    assert_eq!(topo.select_node_for_job(Some(32768)), Some(1));
 
     // If no memory requested, picks node with maximum memory
-    assert_eq!(topo.select_node_for_job(2, None), Some(1));
+    assert_eq!(topo.select_node_for_job(None), Some(1));
 
     // Single node returns that node
     let single = HardwareTopology {
@@ -65,7 +65,7 @@ fn test_select_node_for_job() {
         total_memory_mb: 8192,
         cache_l3_mb: 16,
     };
-    assert_eq!(single.select_node_for_job(1, Some(4096)), Some(0));
+    assert_eq!(single.select_node_for_job(Some(4096)), Some(0));
 }
 
 #[test]

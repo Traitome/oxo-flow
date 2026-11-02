@@ -431,6 +431,15 @@ pub const DEFAULT_WAIT_REPORT_INTERVAL: std::time::Duration = std::time::Duratio
 /// (issue #685) — same cadence as the resource-wait diagnostics above.
 const SETUP_WAIT_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Scratch-size default when a rule declares no `resources.disk`: small
+/// enough to fit any tier, large enough to keep scratch jobs off the
+/// workdir disk when a tier exists at all.
+const DEFAULT_SCRATCH_REQUIRED_MB: u64 = 1024;
+
+/// RAM-scratch admission gate: only jobs at or under this size may route to
+/// tmpfs — a bigger working set would swap and defeat the purpose of Tier 0.
+const MAX_RAM_SCRATCH_MB: u64 = 2048;
+
 pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
@@ -1437,7 +1446,7 @@ impl LocalExecutor {
                     .memory
                     .as_deref()
                     .and_then(crate::scheduler::parse_memory_mb);
-                topo.select_node_for_job(rule.resources.threads, mem_mb)
+                topo.select_node_for_job(mem_mb)
                     .unwrap_or(0)
             });
             Ok(topo.wrap_command_with_numa(&wrapped, node))
@@ -1640,8 +1649,8 @@ impl LocalExecutor {
                 .disk
                 .as_deref()
                 .and_then(crate::scheduler::parse_memory_mb)
-                .unwrap_or(1024);
-            let allow_ram = required_mb <= 2048;
+                .unwrap_or(DEFAULT_SCRATCH_REQUIRED_MB);
+            let allow_ram = required_mb <= MAX_RAM_SCRATCH_MB;
             if let Some((_tier, tier_root)) = ladder.select_tier_for_scratch(required_mb, allow_ram)
             {
                 return tier_root.join(".oxo-flow-scratch").join(subpath);
