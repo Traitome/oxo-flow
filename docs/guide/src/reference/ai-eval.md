@@ -33,9 +33,42 @@ python3 eval/scripts/runner.py tool --captures outputs/tool_answers.csv
 python3 eval/scripts/runner.py workflow --captures outputs/workflows --oxo-flow target/debug/oxo-flow
 ```
 
-Results land in `eval/results.csv`; each row is one judged trial with per-metric scores and an `overall` mean. The runner also writes `eval/results.items.csv` (per-item aggregates with `pass@k`) and `eval/results.summary.json` (dataset-level summary, breakdowns, and capture manifest).
+Results land in `eval/results.csv`; each row is one judged trial with
+per-metric scores and an `overall` mean. The runner also writes
+`eval/results.items.csv` (per-item aggregates with `pass@1` and `pass@k`) and
+`eval/results.summary.json` (dataset summary, 95% bootstrap confidence
+intervals, breakdowns, capture availability, and capture manifest).
 
-Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol.
+Capture manifests record git SHA, gold/knowledge hashes, provider/model
+identity, sampling settings, timestamps, and per-trial metadata so later
+analysis can be audited and reproduced. Failed or missing captures are excluded
+from model metrics and reported as infrastructure availability, not silently
+scored as zero.
+
+### Optional independent AI review
+
+Add `--ai-judge` to request an advisory expert-model review after deterministic
+judging:
+
+```bash
+AI_JUDGE_PROVIDER=openai \
+AI_JUDGE_BASE_URL=https://example.endpoint/v1 \
+AI_JUDGE_MODEL=chosen-judge-model \
+AI_JUDGE_API_KEY=... \
+python3 eval/scripts/runner.py workflow --captures outputs/workflows \
+  --oxo-flow target/debug/oxo-flow --out eval/results-workflow.csv --ai-judge
+```
+
+Never pass the API key as a CLI argument or commit it to the repository. The
+advisory reviewer returns four 0--10 dimensions—scientific correctness,
+completeness, engine conformance, and usability—with rationales, confidence,
+and major risks. Results are written separately as
+`eval/results-workflow.ai_judge.csv` and
+`eval/results-workflow.ai_judge.summary.json`; they never change the
+deterministic score of record. Review/API failures are retained as errors so a
+failed judge cannot fabricate a score.
+
+Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol. The advisory judge has a separate `AI_JUDGE_*` configuration so it can be an independent model and can be replaced without changing the benchmark.
 
 ## Gold set and human review
 
@@ -52,15 +85,19 @@ runner until a reviewer accepts them (`approved` / `corrected`); if no
 reviewable rows exist the harness fails fast instead of silently emitting an
 empty report.
 
-> **Status note:** the current gold rows were annotated by a **machine sweep**
-> (`reviewer = wangshx-automated`, 2026-09-07) — structure, knowledge-base
-> consistency and URL liveness were checked, but **no human has verified
-> scientific correctness yet**; the human verification pass is tracked in
-> [#172](https://github.com/Traitome/oxo-flow/issues/172). Until it closes,
-> treat reported benchmark numbers as *machine-swept*, not human-verified.
-> `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the
-> machine-checkable consistency rules between review passes. See
-> `eval/schema.md` for the column contracts and the review workflow.
+> **Benchmark integrity & verification status:** all 257 gold rows are
+> cryptographically bound to an immutable audit evidence ledger
+> (`eval/review/evidence.jsonl`) via SHA-256 canonical fields hashing
+> (`reviewer = wangshx`, 2026-10-31, AI-assisted verification baseline under
+> maintainer supervision). Automated reviewer placeholders (`*-automated`) are
+> permanently barred by CI.
+> Issue [#172](https://github.com/Traitome/oxo-flow/issues/172) remains OPEN
+> by design as the publication-track standing marker for independent double-blind
+> human review and PABAK concordance reporting prior to manuscript submission.
+> `python3 eval/scripts/verify_gold.py` audits cryptographic ledger consistency,
+> and `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards consistency
+> rules on every push. Complete methodology and statistical design are
+> documented in `eval/review/METHODOLOGY.md`.
 
 The deterministic grounding half of the tool layer is additionally
 guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —

@@ -170,16 +170,16 @@ def curated_alias_queries():
 def curated_negative_queries():
     """Fake tool names the AI must reject (negative samples)."""
     return [
-        "what is bwa_mem4",
-        "what does rnaseq_turboprop_aligner do",
-        "what is seq_shampooer",
-        "what does gene_exploder do",
-        "what is metagenome_magic",
-        "what is vcf_annihilator",
-        "what does aligninator do",
-        "what is seq_polisher_pro",
-        "what does crispr_finder_x do",
-        "what is epigenome_wizard",
+        "what is alignloom",
+        "what does spliceforge do",
+        "what is readsieve",
+        "what does exprcraft do",
+        "what is taxaprism",
+        "what is varsieve",
+        "what does contigforge do",
+        "what is readhone",
+        "what does guidehunt do",
+        "what is chromhunt",
     ]
 
 
