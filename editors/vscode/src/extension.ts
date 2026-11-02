@@ -29,6 +29,7 @@ import { OxoflowFormattingProvider } from "./providers/formatting";
 import { OxoflowHoverProvider } from "./providers/hover";
 import { StatusBar } from "./providers/statusBar";
 import {
+  TASK_TYPE,
   createTask,
   OxoflowTaskProvider,
   relativeWorkflow,
@@ -157,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const folder = folderFor(vscode.Uri.file(runDef.workflow));
       if (!folder) return;
       const format = context.workspaceState.get<GraphFormat>("graphFormat") ?? "ascii";
-      const graphDef: OxoflowTaskDefinition = { type: "oxo-flow", workflow: runDef.workflow, kind: "graph", format };
+      const graphDef: OxoflowTaskDefinition = { type: TASK_TYPE, workflow: runDef.workflow, kind: "graph", format };
       void vscode.tasks.executeTask(createTask(statusBar.executable(), folder, graphDef, "graph"));
     })
   );
@@ -268,7 +269,7 @@ async function executePipelineTask(
   const target = await pipelineTarget();
   if (!target) return;
   const def: OxoflowTaskDefinition = {
-    type: "oxo-flow",
+    type: TASK_TYPE,
     workflow: relativeWorkflow(target.folder, target.file),
     kind,
   };
@@ -326,7 +327,7 @@ async function executeRunTargets(statusBar: StatusBar, rawTargets: unknown): Pro
     createTask(
       statusBar.executable(),
       target.folder,
-      { type: "oxo-flow", workflow: runOpts.file, kind: "run" },
+      { type: TASK_TYPE, workflow: runOpts.file, kind: "run" },
       "run",
       runArgs(runOpts)
     )
@@ -412,7 +413,7 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
       statusBar.executable(),
       folder,
       {
-        type: "oxo-flow",
+        type: TASK_TYPE,
         workflow: relativeWorkflow(folder, pick.file),
         kind: "resume",
       },
@@ -492,7 +493,7 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
       statusBar.executable(),
       folder,
       {
-        type: "oxo-flow",
+        type: TASK_TYPE,
         workflow: relativeWorkflow(folder, target),
         kind: "generate",
       },
@@ -680,7 +681,7 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
       createTask(
         executable,
         target.folder,
-        { type: "oxo-flow", workflow: rel, kind: "run" },
+        { type: TASK_TYPE, workflow: rel, kind: "run" },
         "run",
         cleanArgs(target.file.fsPath, { force: true, orphans: true }),
         `clean (orphans) ${rel}`
@@ -693,7 +694,7 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
     createTask(
       executable,
       target.folder,
-      { type: "oxo-flow", workflow: rel, kind: "run" },
+      { type: TASK_TYPE, workflow: rel, kind: "run" },
       "run",
       cleanArgs(target.file.fsPath, { force: true }),
       `clean ${rel}`
