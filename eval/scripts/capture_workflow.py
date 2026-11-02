@@ -149,7 +149,11 @@ def capture_workflows(rows, out_dir, oxo_flow_bin, provider, args):
                         "--ai",
                         row["requirement_text"],
                         "-o",
-                        tmpdir,
+                        # `template -o` treats the value as a FILE unless a
+                        # trailing slash forces directory semantics (engine
+                        # CLI contract) — a bare tempdir path fails with
+                        # "Is a directory (os error 21)".
+                        tmpdir + "/",
                     ],
                     capture_output=True,
                     text=True,

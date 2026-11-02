@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -275,14 +276,48 @@ def resolve_provider():
     return {"kind": kind, "api_url": api_url, "api_key": api_key, "model": model}
 
 
-def _json_request(url, body, headers, timeout=120):
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        headers=headers,
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+DEFAULT_TIMEOUT_SECS = 300
+# Mirror the Rust provider's send_with_retry contract: a transient status
+# answering with an EMPTY body is the proxy-outage signature and is replayed;
+# a parseable error payload surfaces immediately and 4xx never replays.
+# GLM thinking rounds measured 145s — the old 120s default killed them
+# mid-round (same calibration as OXO_FLOW_AI_TIMEOUT_SECS=300).
+TRANSIENT_EMPTY_STATUS = frozenset({408, 502, 503, 504, 522, 524})
+
+
+def _json_request(url, body, headers, timeout=DEFAULT_TIMEOUT_SECS, retries=4):
+    last_error = ""
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = exc.read().decode("utf-8", "replace").strip()
+            except Exception:
+                payload = ""
+            last_error = f"HTTP {exc.code}: {payload[:200] or 'empty body'}"
+            if exc.code == 429 and attempt < retries - 1:
+                # Rate limiter (the school gateway answers with an HTML page,
+                # not a parseable API error): back off and replay regardless
+                # of body. Honor Retry-After seconds when the endpoint sends it.
+                delay = None
+                try:
+                    delay = float(exc.headers.get("Retry-After", "")) if exc.headers else None
+                except (TypeError, ValueError):
+                    delay = None
+                time.sleep(delay if delay and delay > 0 else 10.0 * (attempt + 1))
+                continue
+            if exc.code in TRANSIENT_EMPTY_STATUS and not payload and attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise RuntimeError(f"chat completion failed ({last_error})") from exc
+    raise RuntimeError(f"chat completion failed after {retries} attempts ({last_error})")
 
 
 def _ensure_openai_chat_url(api_url):
@@ -323,7 +358,7 @@ def _claude_payload(messages, model, max_tokens, temperature):
     }
 
 
-def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
+def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None, timeout=DEFAULT_TIMEOUT_SECS):
     """One non-streaming chat call against the configured provider."""
     kind = provider["kind"]
     api_url = provider["api_url"]
@@ -340,11 +375,20 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                 },
+                timeout=timeout,
             )
             blocks = data.get("content") or []
             text = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
             if not text:
-                raise KeyError("missing Claude text content")
+                # Thinking backends can burn the whole budget on reasoning
+                # blocks (stop_reason=max_tokens, zero text) — a plain
+                # "missing content" hides the fix (raise --max-tokens).
+                stop = data.get("stop_reason", "")
+                raise RuntimeError(
+                    f"no text content in response (stop_reason={stop!r}); "
+                    "for thinking models this usually means reasoning consumed "
+                    "max_tokens before any text was emitted"
+                )
             return {
                 "content": text.strip(),
                 "meta": {
@@ -370,6 +414,7 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                     "options": options,
                 },
                 {"Content-Type": "application/json"},
+                timeout=timeout,
             )
             return {
                 "content": data["message"]["content"].strip(),
@@ -404,10 +449,22 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + api_key,
             },
+            timeout=timeout,
         )
         choice = data["choices"][0]
+        content = (choice.get("message", {}).get("content") or "").strip()
+        if not content:
+            # Thinking-compatible OpenAI proxies can spend the whole budget in
+            # a separate reasoning field; an empty final message must not be
+            # mistaken for a valid empty answer.
+            reasoning = choice.get("message", {}).get("reasoning_content") or ""
+            raise RuntimeError(
+                "no text content in response "
+                f"(finish_reason={choice.get('finish_reason', '')!r}, "
+                f"reasoning_chars={len(reasoning)})"
+            )
         return {
-            "content": choice["message"]["content"].strip(),
+            "content": content,
             "meta": {
                 "response_id": data.get("id", ""),
                 "response_model": data.get("model", model),
@@ -466,44 +523,238 @@ def step_tokens(text):
     return [norm(part) for part in re.split(r"[:/_.-]+", text) if norm(part)]
 
 
-def loose_step_match(gold_step, candidate_name):
-    """Loose but structure-aware match between expected and generated rule names."""
+MORPHOLOGICAL_SUFFIXES = frozenset({
+    "s", "es", "ed", "ing", "ings", "ment", "ments",
+    "ation", "ization", "isation", "ification",
+})
+
+
+def _tokens_equivalent(left, right):
+    """Match rule vocabulary without accepting unrelated compounds.
+
+    `greet`/`greeting`, `align`/`alignment`, and `count`/`counts` are the
+    same role.  `star` must not match `starfish`: arbitrary substring matching
+    is exactly the failure mode that produced false workflow credit in earlier
+    audits.  We therefore allow only exact equality or a prefix with a common
+    morphological ending.
+    """
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    short, long = sorted((left, right), key=len)
+    if len(short) < 4 or not long.startswith(short):
+        return False
+    suffix = long[len(short):]
+    return suffix in MORPHOLOGICAL_SUFFIXES
+
+
+def rule_environment_tools(rule):
+    """Tool identities declared by a rule's conda/docker environment."""
+    env = rule.get("environment") or {}
+    if isinstance(env, str):
+        env = {"conda": env}
+    if not isinstance(env, dict):
+        return set()
+    values = []
+    for key in ("conda", "docker", "singularity", "apptainer"):
+        value = env.get(key)
+        if isinstance(value, str):
+            values.append(value)
+    tools = set()
+    for value in values:
+        value = re.sub(r"^(?:docker|podman|singularity|apptainer|oras|https?)://", "", value)
+        package = value
+        if "::" in package:
+            package = package.split("::", 1)[1]
+        package = package.rsplit("/", 1)[-1]
+        package = re.split(r"[=:@]", package, maxsplit=1)[0]
+        package = norm(package)
+        if package:
+            tools.add(package)
+    return tools
+
+
+def rule_role_text(rule):
+    """Normalized identity text used to disambiguate generic action names."""
+    values = [rule.get("name", "")]
+    env = rule.get("environment") or {}
+    if isinstance(env, str):
+        values.append(env)
+    elif isinstance(env, dict):
+        values.extend(str(env[key]) for key in ("conda", "docker", "singularity", "apptainer") if env.get(key))
+    output = rule.get("output", [])
+    values.extend(str(value) for value in (output if isinstance(output, list) else [output]))
+    return norm(" ".join(values))
+
+
+def step_match_score(gold_step, candidate_name, expected_tools=(), rules=None):
+    """Return a priority for an expected/generated step pair (0 = no match).
+
+    Naming is deliberately allowed to differ (`fastp_trim` vs `fastp`,
+    `greet` vs `write_greeting`), but the scientific identity still has to
+    agree.  Environment packages break the `featureCounts` -> `subread`
+    alias case, while structural token checks avoid binding unrelated rules
+    merely because both contain a generic word such as `alignment`.
+    """
     g_full = norm(gold_step)
     c_full = norm(candidate_name)
     if not g_full or not c_full:
-        return False
+        return 0
     if g_full == c_full:
-        return True
+        return 1000
     g_last = norm(gold_step.split("::")[-1])
     c_last = norm(candidate_name.split("::")[-1])
     if g_last and c_last and g_last == c_last:
-        return True
+        return 900
     g_tokens = step_tokens(gold_step)
     c_tokens = step_tokens(candidate_name)
     if not g_tokens or not c_tokens:
-        return False
-    short, long = (g_tokens, c_tokens) if len(g_tokens) <= len(c_tokens) else (c_tokens, g_tokens)
-    return len(short) >= 2 and all(token in long for token in short)
+        return 0
+
+    matched_g = {
+        g_token: next((c_token for c_token in c_tokens if _tokens_equivalent(g_token, c_token)), "")
+        for g_token in g_tokens
+    }
+    exact_overlap = sum(1 for g_token, c_token in matched_g.items() if g_token == c_token)
+    morphological_overlap = sum(1 for g_token, c_token in matched_g.items() if c_token and g_token != c_token)
+
+    rule = None
+    if rules and candidate_name in names_from_rules(rules):
+        rule = next(item for item in rules if item.get("name") == candidate_name)
+    env_tools = rule_environment_tools(rule) if rule else set()
+    role_text = rule_role_text(rule) if rule else ""
+    expected_tool_tokens = {norm(tool) for tool in expected_tools if norm(tool)}
+    identity_overlap = bool(env_tools & expected_tool_tokens)
+    candidate_is_identity = bool(env_tools & set(c_tokens)) and len(c_tokens) == 1
+    step_has_identity = bool(env_tools & set(g_tokens)) or any(
+        _tokens_equivalent(g, c) for g in g_tokens for c in c_tokens
+    )
+    action_overlap = (
+        any(c_token and c_token not in env_tools for c_token in matched_g.values())
+        and all(token in role_text for token in g_tokens)
+    )
+
+    # Prefer full structural agreement.  A bare `fastp` rule can legitimately
+    # implement gold `fastp_trim`; a `samtools_index` rule can implement gold
+    # `index_bam` because the environment supplies `samtools`.  However, a
+    # `star_genome_generate` rule must lose to an exact `star_align` rule and
+    # must not silently satisfy an unrelated expected alignment step.
+    # A bare-tool rule is evidence only when the expected step names that tool
+    # (`fastp` -> `fastp_trim`) or contributes a matched action
+    # (`samtools` -> `index_bam`).  It is not a free fallback for every
+    # unmapped expected step.
+    if identity_overlap and candidate_is_identity and (step_has_identity or action_overlap):
+        return 700 + 20 * exact_overlap + 10 * morphological_overlap
+    if identity_overlap and action_overlap:
+        return 650 + 20 * exact_overlap + 10 * morphological_overlap
+    if all(matched_g.values()):
+        return 500 + 20 * exact_overlap + 10 * morphological_overlap
+    if morphological_overlap and exact_overlap:
+        return 300 + 20 * exact_overlap
+    return 0
 
 
-def map_expected_steps(expected_steps, names):
+def names_from_rules(rules):
+    return [rule.get("name", "") for rule in rules]
+
+
+def loose_step_match(gold_step, candidate_name, expected_tools=(), rules=None):
+    """Compatibility wrapper for boolean, structure-aware step matching."""
+    return step_match_score(gold_step, candidate_name, expected_tools, rules) > 0
+
+
+def map_expected_steps(expected_steps, names, expected_tools=(), rules=None):
     """Expected step name -> workflow rule name.
 
-    Exact (normalized) name equality wins over loose matching: with both
-    `vqsr_indels` and `apply_vqsr_indels` present, loose matching alone binds
-    the wrong rule and silently mis-scores DAG edges.
+    Assignment is greedy one-to-one.  Earlier first-match logic could bind two
+    expected GATK steps to the same rule and leave a real edge unmapped.  Exact
+    names win before environment identity and morphology.
     """
     exact = {norm(name): name for name in names}
-    mapping = {}
+    rules_by_name = {rule.get("name", ""): rule for rule in (rules or [])}
+    candidates = []
     for step in expected_steps:
         if norm(step) in exact:
-            mapping[step] = exact[norm(step)]
+            candidates.append((1000, step, exact[norm(step)]))
             continue
         for name in names:
-            if loose_step_match(step, name):
-                mapping[step] = name
-                break
+            score = step_match_score(step, name, expected_tools, list(rules_by_name.values()))
+            if score > 0:
+                candidates.append((score, step, name))
+
+    mapping = {}
+    used = set()
+    # Python sorts stably; the gold order is the final deterministic tie-break.
+    for _, step, name in sorted(candidates, key=lambda item: (-item[0], item[1], item[2])):
+        if step in mapping or name in used:
+            continue
+        mapping[step] = name
+        used.add(name)
     return mapping
+
+
+COMPOUND_PATH_EXTENSIONS = (
+    ".g.vcf.gz",
+    ".vcf.gz",
+    ".bcf.gz",
+    ".fastq.gz",
+    ".fq.gz",
+    ".tar.gz",
+    ".bam.bai",
+    ".fasta.gz",
+    ".fa.gz",
+)
+
+
+def _filename_signature_parts(path):
+    """Return (format extension, token set) for scientific artifact comparison."""
+    normalized = path.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part not in ("", ".")]
+    if not parts:
+        return "", set()
+    base = parts[-1]
+    base_lower = base.lower()
+    ext = ""
+    stem = base
+    for compound in COMPOUND_PATH_EXTENSIONS:
+        if base_lower.endswith(compound):
+            ext = compound.lstrip(".")
+            stem = base[:-len(compound)]
+            break
+    if not ext:
+        if "." in base:
+            stem, ext = base.rsplit(".", 1)
+        else:
+            stem, ext = base, ""
+    has_placeholder = bool(re.search(r"\{[^}]*\}", stem))
+    tokens = {norm(tok) for tok in re.split(r"[-_.]+", stem) if norm(tok)}
+    if has_placeholder:
+        tokens.add("__x__")
+    return ext.lower(), tokens
+
+
+def path_role_matches(expected, declared):
+    """Match output roles when generated directory/file layout differs.
+
+    A benchmark should ask whether the workflow emits the required scientific
+    artifact, not whether the model chose `results/` or `qc/`. Role matching
+    requires the exact compound extension (e.g. .g.vcf.gz vs .vcf.gz) and every
+    expected stem token (e.g. counts in gene_counts), with wildcard placeholder
+    parity so a per-sample pattern cannot be satisfied by a single static file.
+    """
+    expected_ext, expected_tokens = _filename_signature_parts(expected)
+    declared_ext, declared_tokens = _filename_signature_parts(declared)
+    if not expected_tokens or not declared_tokens:
+        return False
+    if expected_ext != declared_ext:
+        return False
+    if "__x__" in expected_tokens and "__x__" not in declared_tokens:
+        return False
+    expected_content = expected_tokens - {"__x__"}
+    if not expected_content:
+        return False
+    return expected_content.issubset(declared_tokens)
 
 
 def path_parts(path):
