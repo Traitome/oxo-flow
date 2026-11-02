@@ -136,6 +136,9 @@ export const api = {
   health: () => get<HealthResponse>('/api/health'),
   system: () => get<SystemInfo>('/api/system'),
   metrics: () => get<RuntimeMetrics>('/api/metrics'),
+  // Generated OpenAPI document — untyped by nature, so it rides the same
+  // private get() wrapper instead of a hand-rolled fetch in the page.
+  openApiSpec: () => get<Record<string, unknown>>('/api/openapi.json'),
   quota: () => get<QuotaInfo>('/api/quota'),
   audit: (days = 7, page = 1, perPage = 50) =>
     get<AuditLogResponse>(`/api/audit?days=${days}&page=${page}&per_page=${perPage}`),

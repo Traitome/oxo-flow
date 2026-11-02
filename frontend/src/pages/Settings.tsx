@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, oxoBase } from '../api/client';
+import { api } from '../api/client';
 import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
@@ -18,19 +18,6 @@ const DEFAULT_QUOTA: QuotaFormState = {
   max_total_memory_mb: 262144,
   max_runs_per_day: 100,
 };
-
-// The typed client has no quota endpoint — mirror its request pattern
-// (base-path prefix + bearer token, see api/client.ts) so team-mode
-// deployments under a sub-path or with auth enabled still load.
-function fetchQuota(): Promise<QuotaInfo> {
-  const token = localStorage.getItem('oxo_token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(`${oxoBase()}/api/quota`, { headers }).then((r) => {
-    if (!r.ok) throw new Error(`quota: ${r.status}`);
-    return r.json() as Promise<QuotaInfo>;
-  });
-}
 
 // Module-level components — defined outside the render function so React
 // preserves their identity across re-renders (prevents input focus loss).
@@ -96,7 +83,7 @@ export default function Settings() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
-    fetchQuota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed')));
+    api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed')));
     api.referenceStatus().then(setRefs).catch(() => {});
     api.aiConfigUser().then((c) => {
       const u = c.user_config as Partial<typeof adv> | undefined;
