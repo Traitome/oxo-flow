@@ -70,7 +70,7 @@ Deep check summary: 1 error, 3 warnings
 | `D002` | warning | Environment definition exists (conda/mamba YAML, venv directory, `venv_requirements`, `pixi.toml`) | Environment files may be provisioned outside the repository |
 | `D003` | warning | System-backend binaries are in `PATH` | PATH is machine-specific (HPC module systems, containers) |
 | `D004` | warning | Reference data exists (path-like `[config]` values used in commands, `reference_dir`-derived tool indexes, `[[references]]` outputs) | Data can arrive later — see incremental arrival |
-| `D005` | warning | Biological header contract matches `[types.*]` declarations (only for files that exist and are declared with a `[[types]]` spec — e.g. FASTQ read groups, BAM sort order, VCF reference build) | Header introspection is evidence-based; a mismatch is a data-level contract violation, not a workflow error |
+| `D005` | warning | Biological header contract matches `[rules.types]` annotations (only for files that exist and are declared with a `[types.*]` spec or a type expression — e.g. FASTQ read groups, BAM sort order, VCF reference build) | Header introspection is evidence-based; a mismatch is a data-level contract violation, not a workflow error |
 
 All relative paths resolve against the workflow file's directory (or
 `--workdir`), the same base the executor runs rules from. `{config.x}`

@@ -44,6 +44,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[include]]         # Optional: include external workflow files
 [[references]]      # Optional: auto-built indexes and reference data
 [[rules]]           # Required: one or more rules
+[types.*]           # Optional: biological type contracts referenced by rules
 [[pairs]]           # Optional: experiment-control pairs (WC-01)
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [[values]]          # Optional: named value lists for parameter wildcards
@@ -701,6 +702,7 @@ memory = "32G"
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 | `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
 | `rule_metadata` | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
+| `types` | Table | No | Biological type contracts for the rule's channels: `inputs` / `outputs` maps from a channel name (or `default`) to a type expression. Violations fail validation and abort `run` before any compute — see [Biological Type Contracts](#biological-type-contracts-types) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
 | `extends` | String | No | Inherit settings from a base rule |
@@ -2685,6 +2687,116 @@ input = ["intermediate.txt"]   # depends on step1
 ```
 
 No explicit dependency declaration is needed.
+
+---
+
+## Biological Type Contracts (`[types.*]`)
+
+The optional type system attaches **biological data contracts** — format,
+sort order, index accompaniment, reference build, compression, read groups,
+and extensible attributes — to the files flowing across DAG edges. Contracts
+are checked statically before any compute: a producer whose output violates
+a consumer's declared type fails `oxo-flow validate` (error) and aborts
+`oxo-flow run` in preflight with a `[TYPE-0xx]` diagnostic (see
+[TYPE-001..007](diagnostics-engine.md#biological-subtyping-violations-type) —
+each includes an automated coercion hint such as `samtools view -b` or
+`samtools sort`).
+
+### Named type declarations
+
+Declare a reusable contract under a top-level `[types.<name>]` table:
+
+```toml
+[types.raw_sam]
+format = "sam"
+sort_order = "unsorted"
+
+[types.sorted_bam]
+format = "bam"
+sort_order = "coordinate"
+index = "bai"
+```
+
+The name is your choice (it is referenced by rules, not derived from files).
+`format` is the only required field; the full field set:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `format` | `fastq` (`fq`), `sam`, `bam`, `cram`, `vcf`, `bcf`, `bed`, `gtf`, `gff`/`gff3`, `fasta` (`fa`, `fna`), `h5ad`, `rds`, `parquet`, `tsv` (`txt`), `generic` | Required. The biological file format category |
+| `sort_order` | `unsorted`, `queryname`, `coordinate`, `unknown` | Record ordering within alignment/variant files |
+| `index` | `bai`, `csi`, `crai`, `tbi`, `fai` | Companion index artifact the file must be accompanied by |
+| `reference_build` | String (e.g. `"GRCh38"`) | Reference genome build the data was produced against |
+| `compression` | `none`, `gzip`, `bgzip`, `zstd` | Block/stream compression of the file |
+| `read_groups` | Table: `{ required = true, fields = ["ID", "SM", ...] }` | `@RG` header metadata the consumer requires |
+| `attributes` | Map of string → string | Extensible contract attributes (e.g. `variant_type = "germline"`) |
+
+### Annotating rules with `[rules.types]`
+
+Attach contracts to a rule's channels with a `[rules.types]` table. `inputs`
+and `outputs` map a **channel** to a *type expression*. The channel name is
+either `default` (covering the rule's file list when no per-channel split is
+needed) or a name shared between the producer's output map and the
+consumer's input map (by convention the shared path fragment, e.g. the
+output filename `out.bam`):
+
+```toml
+[[rules]]
+name = "align"
+output = ["out.sam"]
+shell = "bwa mem ref.fa reads.fq > out.sam"
+[rules.types]
+outputs = { default = "raw_sam" }        # named-spec reference
+
+[[rules]]
+name = "call_variants"
+input = ["out.sam"]
+output = ["calls.vcf"]
+shell = "gatk HaplotypeCaller -I out.sam -O calls.vcf"
+[rules.types]
+inputs = { default = "sorted_bam" }      # producer declared SAM; TYPE-001 + TYPE-002 fire
+```
+
+A multi-output rule annotates each file by channel — the channel keys here
+are the shared paths both sides list:
+
+```toml
+[rules.types]
+outputs = { "out.bam" = "my_bam", "out.tsv" = "my_tsv" }
+```
+
+### Inline type expressions
+
+Instead of naming a `[types.*]` table, a type expression may be written
+inline as `FORMAT[key=value, ...]`:
+
+```toml
+[rules.types]
+outputs = { default = "GVCF[compression=bgzip]" }
+inputs  = { default = "BAM[sort_order=coordinate,index=bai]" }
+```
+
+Inline attribute keys accept the same fields as the table form
+(`sort_order`, `index`, `reference_build`, `compression`, `attributes`).
+The special spelling `gvcf` is a built-in alias: it parses as `vcf` with
+the attribute `variant_type = "germline"` pre-set, so a plain-`VCF`
+producer feeding a `gvcf` consumer fails with `TYPE-007` until the producer
+declares the same attribute.
+
+### What is checked
+
+The checker walks every producer → consumer edge in the DAG and accumulates
+violations across format (`TYPE-001`), sort order (`TYPE-002`), index
+accompaniment (`TYPE-003`), reference build (`TYPE-004`), read groups
+(`TYPE-005`), compression (`TYPE-006`), and attributes (`TYPE-007`); a
+channel reference that matches no `[types.*]` declaration (or an unparsable
+inline spec) reports `TYPE-UNKNOWN`. Channel semantics: identical channel
+names always match; `default` matches when either side declares only one
+channel; and with a single channel on each side, a shared output/input path
+also matches. Beyond static checking, `oxo-flow test`'s deep check (`D005`)
+introspects the headers of input files that exist on disk and compares them
+against the declared contract — see
+[Biological Subtyping Violations](diagnostics-engine.md#biological-subtyping-violations-type)
+for the full diagnostic table with coercion hints.
 
 ---
 
