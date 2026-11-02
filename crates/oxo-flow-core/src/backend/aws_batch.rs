@@ -4,9 +4,14 @@
 //! with containerOverrides, VCPU/memory resource limits, and array properties.
 //! Submission/polling goes through the shared `ClusterExecutor`
 //! (`backend/cluster.rs`).
+//!
+//! `walltime` and `extra_args` are deliberately not mapped: an AWS Batch
+//! SubmitJob payload carries neither — retry behavior lives in the job
+//! definition and timeouts in `timeout.retryStrategy`, both operator-managed.
 
-use super::sanitize_cloud_name;
+use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
+use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
 
@@ -21,8 +26,7 @@ pub fn sanitize_aws_batch_name(name: &str) -> String {
 /// `gpu_spec`). Array specs previously dropped the GPU requirement,
 /// silently scheduling GPU rules onto CPU-only compute environments.
 fn resource_requirements(rule: &Rule) -> Vec<serde_json::Value> {
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
+    let (threads, mem_mb) = scheduled_resources(rule);
 
     let mut requirements = vec![
         json!({
@@ -59,7 +63,7 @@ pub fn generate_aws_batch_job_spec(
     rule: &Rule,
     shell_cmd: &str,
     cluster_config: &ClusterJobConfig,
-) -> String {
+) -> Result<String> {
     let job_name = format!("oxoflow-{}", sanitize_aws_batch_name(&rule.name));
 
     let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
@@ -79,7 +83,7 @@ pub fn generate_aws_batch_job_spec(
         }
     });
 
-    serde_json::to_string_pretty(&payload).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&payload)?)
 }
 
 /// Generate an AWS Batch array job specification.
@@ -88,7 +92,7 @@ pub fn generate_aws_batch_array_spec(
     cmd_dir: &str,
     count: usize,
     cluster_config: &ClusterJobConfig,
-) -> String {
+) -> Result<String> {
     let job_name = format!("oxoflow-array-{}", sanitize_aws_batch_name(&rule.name));
 
     let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
@@ -114,8 +118,9 @@ pub fn generate_aws_batch_array_spec(
         }
     });
 
-    serde_json::to_string_pretty(&payload).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&payload)?)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,7 +157,8 @@ mod tests {
             ..Default::default()
         };
 
-        let spec_str = generate_aws_batch_job_spec(&rule, "STAR --genomeDir ref", &test_config());
+        let spec_str = generate_aws_batch_job_spec(&rule, "STAR --genomeDir ref", &test_config())
+            .expect("spec generation must succeed");
         let val: Value = serde_json::from_str(&spec_str).expect("spec must be valid json");
 
         assert_eq!(val["jobName"], "oxoflow-star_align");
@@ -179,7 +185,8 @@ mod tests {
             ..Default::default()
         };
 
-        let spec_str = generate_aws_batch_array_spec(&rule, "runs/cmds", 10, &test_config());
+        let spec_str = generate_aws_batch_array_spec(&rule, "runs/cmds", 10, &test_config())
+            .expect("spec generation must succeed");
         let val: Value = serde_json::from_str(&spec_str).expect("spec must be valid json");
 
         assert_eq!(val["arrayProperties"]["size"], 10);

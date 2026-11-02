@@ -10,8 +10,9 @@
 //! (InstanceTemplate or `installGpus`), not the task payload's
 //! `computeResource` — GPU provisioning stays operator infrastructure.
 
-use super::sanitize_cloud_name;
+use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
+use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
 
@@ -25,10 +26,12 @@ pub fn sanitize_gcp_batch_name(name: &str) -> String {
 pub fn generate_gcp_batch_job_spec(
     rule: &Rule,
     shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-) -> String {
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
+    // Kept for dispatch uniformity; GCP Batch specs currently derive
+    // everything from the rule itself (GPU stays in operator infrastructure,
+    // see the module docs).
+    _cluster_config: &ClusterJobConfig,
+) -> Result<String> {
+    let (threads, mem_mb) = scheduled_resources(rule);
 
     let mut runnable = json!({
         "script": {
@@ -63,8 +66,7 @@ pub fn generate_gcp_batch_job_spec(
         }
     });
 
-    let _ = cluster_config;
-    serde_json::to_string_pretty(&payload).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&payload)?)
 }
 
 /// Generate a Google Cloud Batch array job JSON configuration.
@@ -72,10 +74,9 @@ pub fn generate_gcp_batch_array_spec(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
-    cluster_config: &ClusterJobConfig,
-) -> String {
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
+    _cluster_config: &ClusterJobConfig,
+) -> Result<String> {
+    let (threads, mem_mb) = scheduled_resources(rule);
 
     let dispatch_cmd =
         format!("INDEX=$((BATCH_TASK_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
@@ -115,8 +116,7 @@ pub fn generate_gcp_batch_array_spec(
         }
     });
 
-    let _ = cluster_config;
-    serde_json::to_string_pretty(&payload).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&payload)?)
 }
 
 #[cfg(test)]
@@ -159,7 +159,8 @@ mod tests {
         };
 
         let spec_str =
-            generate_gcp_batch_job_spec(&rule, "gatk HaplotypeCaller -I in.bam", &test_config());
+            generate_gcp_batch_job_spec(&rule, "gatk HaplotypeCaller -I in.bam", &test_config())
+                .expect("spec generation must succeed");
         let val: Value = serde_json::from_str(&spec_str).expect("spec must be valid json");
 
         let group = &val["taskGroups"][0];
@@ -184,7 +185,8 @@ mod tests {
             ..Default::default()
         };
 
-        let spec_str = generate_gcp_batch_array_spec(&rule, "runs/cmds", 6, &test_config());
+        let spec_str = generate_gcp_batch_array_spec(&rule, "runs/cmds", 6, &test_config())
+            .expect("spec generation must succeed");
         let val: Value = serde_json::from_str(&spec_str).expect("spec must be valid json");
 
         let group = &val["taskGroups"][0];

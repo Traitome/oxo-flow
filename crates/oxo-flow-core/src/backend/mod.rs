@@ -61,6 +61,17 @@ pub fn sanitize_cloud_name(
     s
 }
 
+/// Scheduler-facing resource sizing shared by the cloud job generators
+/// (Kubernetes, AWS Batch, GCP Batch): at least one thread, and memory from
+/// the rule's effective declaration with the scheduler-default 1024 MiB
+/// fallback floored at 256 MiB.
+pub fn scheduled_resources(rule: &Rule) -> (u32, u64) {
+    (
+        rule.resources.threads.max(1),
+        crate::scheduler::effective_memory_mb(rule, 1024).max(256),
+    )
+}
+
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendJobStatus {

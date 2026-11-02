@@ -4,8 +4,9 @@
 //! batch/v1 Job manifests with deterministic labels. Submission/polling goes
 //! through the shared `ClusterExecutor` (`backend/cluster.rs`).
 
-use super::sanitize_cloud_name;
+use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
+use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
 
@@ -20,8 +21,7 @@ pub fn sanitize_k8s_name(name: &str) -> String {
 /// limit (`gpu` or `gpu_spec`). Array jobs previously dropped the GPU
 /// limit, silently scheduling GPU rules onto CPU-only nodes.
 fn container_resources(rule: &Rule) -> serde_json::Value {
-    let threads = rule.resources.threads.max(1);
-    let mem_mb = crate::scheduler::effective_memory_mb(rule, 1024).max(256);
+    let (threads, mem_mb) = scheduled_resources(rule);
 
     let mut limits = json!({
         "cpu": format!("{threads}"),
@@ -51,8 +51,10 @@ fn container_resources(rule: &Rule) -> serde_json::Value {
 pub fn generate_k8s_job_manifest(
     rule: &Rule,
     shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-) -> String {
+    // Kept for dispatch uniformity with the other generators; Kubernetes
+    // manifests currently derive everything from the rule itself.
+    _cluster_config: &ClusterJobConfig,
+) -> Result<String> {
     let job_name = format!("oxoflow-{}", sanitize_k8s_name(&rule.name));
 
     let container_image = rule
@@ -96,8 +98,7 @@ pub fn generate_k8s_job_manifest(
         }
     });
 
-    let _ = cluster_config;
-    serde_json::to_string_pretty(&manifest).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&manifest)?)
 }
 
 /// Generate a Kubernetes indexed Job manifest for an array submission.
@@ -105,8 +106,8 @@ pub fn generate_k8s_array_job_manifest(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
-    cluster_config: &ClusterJobConfig,
-) -> String {
+    _cluster_config: &ClusterJobConfig,
+) -> Result<String> {
     let job_name = format!("oxoflow-array-{}", sanitize_k8s_name(&rule.name));
 
     let container_image = rule
@@ -156,8 +157,7 @@ pub fn generate_k8s_array_job_manifest(
         }
     });
 
-    let _ = cluster_config;
-    serde_json::to_string_pretty(&manifest).unwrap_or_default()
+    Ok(serde_json::to_string_pretty(&manifest)?)
 }
 
 #[cfg(test)]
@@ -200,7 +200,8 @@ mod tests {
         };
 
         let manifest_str =
-            generate_k8s_job_manifest(&rule, "bwa mem ref.fa reads.fq", &test_config());
+            generate_k8s_job_manifest(&rule, "bwa mem ref.fa reads.fq", &test_config())
+                .expect("manifest generation must succeed");
         let val: Value = serde_json::from_str(&manifest_str).expect("manifest must be valid json");
 
         assert_eq!(val["apiVersion"], "batch/v1");
@@ -229,7 +230,8 @@ mod tests {
             ..Default::default()
         };
 
-        let manifest_str = generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &test_config());
+        let manifest_str = generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &test_config())
+            .expect("manifest generation must succeed");
         let val: Value = serde_json::from_str(&manifest_str).expect("manifest must be valid json");
 
         assert_eq!(val["spec"]["completions"], 5);

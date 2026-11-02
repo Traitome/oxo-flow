@@ -708,7 +708,7 @@ impl super::ExecutorBackend for ClusterExecutor {
 
     fn render_script(&self, rule: &ScheduledRule) -> Result<String> {
         Ok(finish_script(
-            &generate_submit_script(&self.backend, &rule.rule, &rule.shell_cmd, &self.cluster),
+            &generate_submit_script(&self.backend, &rule.rule, &rule.shell_cmd, &self.cluster)?,
             &self.backend,
             &rule.workdir,
         ))
@@ -721,7 +721,7 @@ impl super::ExecutorBackend for ClusterExecutor {
         count: usize,
     ) -> Result<String> {
         Ok(finish_script(
-            &generate_array_submit_script(&self.backend, rule, cmd_dir, count, &self.cluster),
+            &generate_array_submit_script(&self.backend, rule, cmd_dir, count, &self.cluster)?,
             &self.backend,
             &self.workdir,
         ))
@@ -1327,7 +1327,8 @@ mod tests {
                 &plan.rules["align"].rule,
                 &plan.rules["align"].shell_cmd,
                 &cluster_config(),
-            ),
+            )
+            .expect("script generation must succeed"),
             &ClusterBackend::Slurm,
             &plan.rules["align"].workdir,
         );
