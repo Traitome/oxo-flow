@@ -118,16 +118,22 @@ pub fn clean_command(
             return Ok(());
         }
 
-        // Collect orphan chunk directories
-        let mut orphan_dirs: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&chunks_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    orphan_dirs.push(path);
-                }
-            }
-        }
+        // Collect orphan chunk directories. A failing read_dir must not
+        // fall through to "No orphan chunks found" — that masquerades an
+        // unreadable directory as a clean one and would also delete
+        // nothing silently.
+        let orphan_dirs: Vec<PathBuf> = match std::fs::read_dir(&chunks_dir) {
+            Ok(entries) => entries
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    path.is_dir().then_some(path)
+                })
+                .collect(),
+            Err(e) => anyhow::bail!(
+                "failed to read chunk directory {}: {e}",
+                chunks_dir.display()
+            ),
+        };
 
         if orphan_dirs.is_empty() {
             eprintln!("{} No orphan chunks found", "Clean:".bold());

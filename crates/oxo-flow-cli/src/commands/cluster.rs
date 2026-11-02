@@ -355,11 +355,12 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             // the plain constructor left `{config.x}` unexpanded, so edges
             // between a producer's declared output and a consumer's concrete
             // input were lost and the generated scripts had no dependencies).
-            let dag = WorkflowDag::from_rules_with_config(
-                &config.rules,
-                &crate::commands::run::config_placeholder_values(&config.config),
-            )
-            .context("failed to build workflow DAG")?;
+            // One map serves the whole command (DAG edges, when-gating, and
+            // script rendering below) — computing it once keeps the three
+            // consumers in sync by construction.
+            let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
+            let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values)
+                .context("failed to build workflow DAG")?;
 
             // --module partial runs (issue #112 elasticity) — the same
             // resolution `run` and `dry-run` use: each module name resolves
@@ -392,8 +393,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
                 std::collections::HashSet::new()
             } else {
-                let wildcard_values =
-                    crate::commands::run::config_placeholder_values(&config.config);
                 config
                     .rules
                     .iter()
@@ -514,9 +513,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-
-            // Build config variable map for placeholder expansion
-            let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
 
             for rule_name in &order {
                 let rule = config
