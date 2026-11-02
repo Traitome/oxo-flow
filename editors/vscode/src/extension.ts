@@ -577,6 +577,11 @@ async function generateWithIdeModel(
       if (fixed) {
         toml = fixed;
         await vscode.workspace.fs.writeFile(target, Buffer.from(fixed, "utf8"));
+      } else {
+        appendLog(output, "[ai:ide] repair round produced no toml block — keeping the unvalidated draft");
+        void vscode.window.showWarningMessage(
+          "The repair round produced no pipeline — the file holds the original UNVALIDATED draft. Check the oxo-flow output panel."
+        );
       }
     }
     void vscode.window.showInformationMessage(
