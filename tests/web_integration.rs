@@ -2474,9 +2474,15 @@ async fn web_webhook_fires_on_run_completion_with_hmac() {
             use std::io::Read as _;
             let mut buf = [0u8; 8192];
             let mut request = String::new();
-            // Read until headers end, then honor Content-Length.
+            // Read until headers end, then honor Content-Length. A read
+            // error is a test-environment failure, not a clean EOF —
+            // swallowing it would leave the capture truncated and the
+            // assertions below would fail confusingly far from the cause.
             loop {
-                let n = stream.read(&mut buf).unwrap_or(0);
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => panic!("webhook capture read failed: {e}"),
+                };
                 if n == 0 {
                     break;
                 }
@@ -2494,7 +2500,10 @@ async fn web_webhook_fires_on_run_completion_with_hmac() {
                 .unwrap_or(0);
             let mut body = request[body_start..].to_string();
             while body.len() < content_len {
-                let n = stream.read(&mut buf).unwrap_or(0);
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => panic!("webhook capture body read failed: {e}"),
+                };
                 if n == 0 {
                     break;
                 }
