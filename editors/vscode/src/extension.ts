@@ -32,6 +32,7 @@ import {
   createTask,
   OxoflowTaskProvider,
   relativeWorkflow,
+  resolveFolder,
   type OxoflowTaskDefinition,
   type TaskKind,
 } from "./providers/taskProvider";
@@ -242,7 +243,7 @@ async function pipelineTarget(): Promise<{ folder: vscode.WorkspaceFolder; file:
 }
 
 function folderFor(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
-  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+  return resolveFolder(uri);
 }
 
 async function jumpToRule(ruleName: string): Promise<void> {

@@ -66,7 +66,7 @@ export class OxoflowTaskProvider implements vscode.TaskProvider {
   }
 }
 
-function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+export function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
 }
 
