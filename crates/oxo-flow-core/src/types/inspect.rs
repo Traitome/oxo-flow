@@ -626,7 +626,7 @@ pub fn introspect_path_with_spec(
         Ok(t) => t,
         Err(e) => {
             violations.push(TypeViolation {
-                code: "TYPE-001".to_string(),
+                code: "TYPE-INSPECT".to_string(),
                 message: format!("failed to introspect header of '{}': {}", path.display(), e),
                 suggestion: Some("verify file integrity and permissions".to_string()),
                 coercion_rule: None,

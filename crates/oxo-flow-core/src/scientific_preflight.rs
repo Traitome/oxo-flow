@@ -84,9 +84,16 @@ fn is_leading_noise(word: &str) -> bool {
 /// passing its output *directory* `.../featurecounts` to a python helper
 /// fired the strand warning, while the real featureCounts rule was
 /// correctly flagged as silent.
-fn featurecounts_without_strand(shell: &str) -> bool {
-    // Join bash line continuations so a multi-line command stays one
-    // segment, then neutralize `$(...)` openers as segment boundaries.
+/// Join bash line continuations so a multi-line command stays one
+/// segment, then neutralize `$(...)` openers as segment boundaries, and
+/// split into command segments — shared by every featureCounts probe so
+/// the normalization rules never drift apart.
+/// Run `probe` against every command segment of a shell snippet, scoped to
+/// featureCounts invocations. Join bash line continuations so a multi-line
+/// command stays one segment, then neutralize `$(...)` openers as segment
+/// boundaries — shared by every featureCounts probe so the normalization
+/// rules never drift apart.
+fn any_featurecounts_segment(shell: &str, probe: impl Fn(&str) -> bool) -> bool {
     let normalized = shell
         .replace("\\\r\n", " ")
         .replace("\\\n", " ")
@@ -94,34 +101,30 @@ fn featurecounts_without_strand(shell: &str) -> bool {
     normalized
         .split([';', '\n', '\r', '|', '&', '`'])
         .any(|segment| {
-            let Some(command) = segment.split_whitespace().find(|w| !is_leading_noise(w)) else {
+            let Some(base) = segment_command_word(segment) else {
                 return false;
             };
-            let base = command.rsplit('/').next().unwrap_or(command);
-            if !base.eq_ignore_ascii_case("featurecounts") {
-                return false;
-            }
-            !segment.split_whitespace().any(is_strand_flag)
+            base.eq_ignore_ascii_case("featurecounts") && probe(segment)
         })
 }
 
+/// First command word of the segment (env assignments and redirections
+/// skipped), compared by basename.
+fn segment_command_word(segment: &str) -> Option<&str> {
+    let command = segment.split_whitespace().find(|w| !is_leading_noise(w))?;
+    Some(command.rsplit('/').next().unwrap_or(command))
+}
+
+fn featurecounts_without_strand(shell: &str) -> bool {
+    any_featurecounts_segment(shell, |segment| {
+        !segment.split_whitespace().any(is_strand_flag)
+    })
+}
+
 fn featurecounts_has_multi_overlap(shell: &str) -> bool {
-    let normalized = shell
-        .replace("\\\r\n", " ")
-        .replace("\\\n", " ")
-        .replace("$(", ";");
-    normalized
-        .split([';', '\n', '\r', '|', '&', '`'])
-        .any(|segment| {
-            let Some(command) = segment.split_whitespace().find(|w| !is_leading_noise(w)) else {
-                return false;
-            };
-            let base = command.rsplit('/').next().unwrap_or(command);
-            if !base.eq_ignore_ascii_case("featurecounts") {
-                return false;
-            }
-            segment.split_whitespace().any(|t| t == "-O")
-        })
+    any_featurecounts_segment(shell, |segment| {
+        segment.split_whitespace().any(|t| t == "-O")
+    })
 }
 
 /// Whether a Mutect2 command declares a matched normal. GATK accepts both
