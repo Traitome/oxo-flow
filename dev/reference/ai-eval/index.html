@@ -3290,6 +3290,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="The loop">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-independent-ai-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional independent AI review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3804,6 +3821,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="The loop">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-independent-ai-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional independent AI review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3903,8 +3937,35 @@ gate verdicts are listed under
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>python3<span class="w"> </span>eval/scripts/runner.py<span class="w"> </span>tool<span class="w"> </span>--captures<span class="w"> </span>outputs/tool_answers.csv
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>python3<span class="w"> </span>eval/scripts/runner.py<span class="w"> </span>workflow<span class="w"> </span>--captures<span class="w"> </span>outputs/workflows<span class="w"> </span>--oxo-flow<span class="w"> </span>target/debug/oxo-flow
 </span></code></pre></div>
-<p>Results land in <code>eval/results.csv</code>; each row is one judged trial with per-metric scores and an <code>overall</code> mean. The runner also writes <code>eval/results.items.csv</code> (per-item aggregates with <code>pass@k</code>) and <code>eval/results.summary.json</code> (dataset-level summary, breakdowns, and capture manifest).</p>
-<p>Capture uses the same provider resolution order as oxo-flow itself: <code>OXO_FLOW_AI_PROVIDER</code>, generic <code>OXO_FLOW_AI_*</code> overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then <code>~/.oxo-flow/ai_config.json</code>. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol.</p>
+<p>Results land in <code>eval/results.csv</code>; each row is one judged trial with
+per-metric scores and an <code>overall</code> mean. The runner also writes
+<code>eval/results.items.csv</code> (per-item aggregates with <code>pass@1</code> and <code>pass@k</code>) and
+<code>eval/results.summary.json</code> (dataset summary, 95% bootstrap confidence
+intervals, breakdowns, capture availability, and capture manifest).</p>
+<p>Capture manifests record git SHA, gold/knowledge hashes, provider/model
+identity, sampling settings, timestamps, and per-trial metadata so later
+analysis can be audited and reproduced. Failed or missing captures are excluded
+from model metrics and reported as infrastructure availability, not silently
+scored as zero.</p>
+<h3 id="optional-independent-ai-review">Optional independent AI review<a class="headerlink" href="#optional-independent-ai-review" title="Permanent link">#</a></h3>
+<p>Add <code>--ai-judge</code> to request an advisory expert-model review after deterministic
+judging:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">AI_JUDGE_PROVIDER</span><span class="o">=</span>openai<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">AI_JUDGE_BASE_URL</span><span class="o">=</span>https://example.endpoint/v1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">AI_JUDGE_MODEL</span><span class="o">=</span>chosen-judge-model<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nv">AI_JUDGE_API_KEY</span><span class="o">=</span>...<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>python3<span class="w"> </span>eval/scripts/runner.py<span class="w"> </span>workflow<span class="w"> </span>--captures<span class="w"> </span>outputs/workflows<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--oxo-flow<span class="w"> </span>target/debug/oxo-flow<span class="w"> </span>--out<span class="w"> </span>eval/results-workflow.csv<span class="w"> </span>--ai-judge
+</span></code></pre></div>
+<p>Never pass the API key as a CLI argument or commit it to the repository. The
+advisory reviewer returns four 0--10 dimensions—scientific correctness,
+completeness, engine conformance, and usability—with rationales, confidence,
+and major risks. Results are written separately as
+<code>eval/results-workflow.ai_judge.csv</code> and
+<code>eval/results-workflow.ai_judge.summary.json</code>; they never change the
+deterministic score of record. Review/API failures are retained as errors so a
+failed judge cannot fabricate a score.</p>
+<p>Capture uses the same provider resolution order as oxo-flow itself: <code>OXO_FLOW_AI_PROVIDER</code>, generic <code>OXO_FLOW_AI_*</code> overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then <code>~/.oxo-flow/ai_config.json</code>. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol. The advisory judge has a separate <code>AI_JUDGE_*</code> configuration so it can be an independent model and can be replaced without changing the benchmark.</p>
 <h2 id="gold-set-and-human-review">Gold set and human review<a class="headerlink" href="#gold-set-and-human-review" title="Permanent link">#</a></h2>
 <p>The gold answers live in <code>eval/gold/*.csv</code>. <code>tool.csv</code> is generated
 deterministically from the embedded knowledge base
@@ -3918,15 +3979,19 @@ runner until a reviewer accepts them (<code>approved</code> / <code>corrected</c
 reviewable rows exist the harness fails fast instead of silently emitting an
 empty report.</p>
 <blockquote>
-<p><strong>Status note:</strong> the current gold rows were annotated by a <strong>machine sweep</strong>
-(<code>reviewer = wangshx-automated</code>, 2026-09-07) — structure, knowledge-base
-consistency and URL liveness were checked, but <strong>no human has verified
-scientific correctness yet</strong>; the human verification pass is tracked in
-<a href="https://github.com/Traitome/oxo-flow/issues/172">#172</a>. Until it closes,
-treat reported benchmark numbers as <em>machine-swept</em>, not human-verified.
-<code>python3 eval/scripts/check_gold.py</code> (<code>make eval-lint</code>) guards the
-machine-checkable consistency rules between review passes. See
-<code>eval/schema.md</code> for the column contracts and the review workflow.</p>
+<p><strong>Benchmark integrity &amp; verification status:</strong> all 257 gold rows are
+cryptographically bound to an immutable audit evidence ledger
+(<code>eval/review/evidence.jsonl</code>) via SHA-256 canonical fields hashing
+(<code>reviewer = wangshx</code>, 2026-10-31, AI-assisted verification baseline under
+maintainer supervision). Automated reviewer placeholders (<code>*-automated</code>) are
+permanently barred by CI.
+Issue <a href="https://github.com/Traitome/oxo-flow/issues/172">#172</a> remains OPEN
+by design as the publication-track standing marker for independent double-blind
+human review and PABAK concordance reporting prior to manuscript submission.
+<code>python3 eval/scripts/verify_gold.py</code> audits cryptographic ledger consistency,
+and <code>python3 eval/scripts/check_gold.py</code> (<code>make eval-lint</code>) guards consistency
+rules on every push. Complete methodology and statistical design are
+documented in <code>eval/review/METHODOLOGY.md</code>.</p>
 </blockquote>
 <p>The deterministic grounding half of the tool layer is additionally
 guarded in CI by <code>crates/oxo-flow-ai/tests/knowledge_grounding.rs</code> —
@@ -3948,7 +4013,7 @@ the provider response (naive-prompt variant), so each cell of the
 cost, and wall time. This is the evidence base for the unified
 generation harness (see <a href="../architecture/">Architecture → AI Subsystem</a>)
 and for sizing its cost tiers.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python3<span class="w"> </span>eval/frontier/run_eval.py<span class="w"> </span>--variants<span class="w"> </span>naive-prompt,cli
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python3<span class="w"> </span>eval/frontier/run_eval.py<span class="w"> </span>--variants<span class="w"> </span>naive-prompt,cli
 </span></code></pre></div>
 <p>See <code>eval/frontier/README.md</code> for the full method, price-table
 configuration, and known limitations.</p>
