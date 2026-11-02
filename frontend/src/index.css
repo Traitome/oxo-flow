@@ -313,8 +313,6 @@ select.search-input{padding-right:1.75rem}
 .left-rail--collapsed .left-rail-tab span{display:none}
 .left-rail--collapsed .left-rail-tab{padding:8px 0}
 .left-rail--collapsed .left-rail-body{opacity:0;pointer-events:none}
-.panel-resize{position:relative}
-.panel-resize::after{content:"";position:absolute;right:-8px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:10}
 .panel-header{padding:.6rem .75rem;border-bottom:1px solid var(--color-border);display:flex;justify-content:space-between;align-items:center;gap:.5rem;font-size:.75rem;font-weight:600;color:var(--color-text-secondary)}
 .panel-actions{display:flex;align-items:center;gap:.5rem}
 .dag-counts{font-size:.7rem;color:var(--color-text-tertiary)}
@@ -360,7 +358,6 @@ select.search-input{padding-right:1.75rem}
 
 /* ── Empty State / Error ── */
 .empty-state{text-align:center;color:var(--color-text-tertiary);padding:3rem 1rem}
-.error-banner{background:var(--color-error-bg);color:var(--color-error);border-radius:var(--radius-sm);padding:.6rem .75rem;margin-bottom:1rem;font-size:.85rem}
 
 /* ── WorkflowCanvas: the rule node is a terminal snippet ── */
 .workflow-canvas { position: relative; height: 100%; min-height: 420px; flex: 1; }
@@ -780,43 +777,6 @@ select.search-input{padding-right:1.75rem}
   color: var(--color-text-tertiary);
 }
 
-.lifecycle-pill-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 2px 6px;
-  font-size: 0.72rem;
-}
-.lifecycle-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: var(--color-text-tertiary);
-  text-decoration: none;
-  font-weight: 500;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-.lifecycle-pill:hover {
-  color: var(--color-text);
-  background: var(--color-bg-tertiary);
-}
-.lifecycle-pill.active {
-  background: var(--color-primary-light);
-  color: var(--color-primary);
-  font-weight: 600;
-}
-.lifecycle-sep {
-  color: var(--color-border);
-  font-size: 0.65rem;
-  user-select: none;
-}
-
 /* 5-Stage Lifecycle Architecture Grid on Dashboard */
 .lifecycle-grid {
   display: grid;
@@ -965,9 +925,6 @@ select.search-input{padding-right:1.75rem}
   box-shadow: var(--shadow-card);
 }
 
-@media (max-width: 1023px) {
-  .lifecycle-pill-bar { display: none; }
-}
 @media (max-width: 640px) {
   .cmd-trigger span { display: none; }
 }
