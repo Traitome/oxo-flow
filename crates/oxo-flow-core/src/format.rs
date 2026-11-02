@@ -925,31 +925,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // A scatter rule that fans out over zero values produces zero
         // instances — it can never run, so its inputs existing locally is
         // irrelevant (issue #616, same stance as the `when` gate above).
-        // The values resolution mirrors the executor exactly (expand.rs):
-        // declared `values` win, an empty list falls back to
-        // `resolve_config_list(values_from)`. An UNRESOLVABLE
-        // `values_from` (missing key, non-string/array → `None`) is NOT
-        // empty: the executor expands zero instances silently in that
-        // case, so validate keeps the existence check on purpose — a
-        // typo in `values_from` must surface instead of silently
-        // passing (the stricter cousins, `[[values]]` tables and
-        // `transform.split`, reject an unresolvable reference outright).
-        let rule_scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                // No declared values and no fallback source → zero
-                // instances.
-                Option::None => true,
-                // A resolvable list decides emptiness (empty TOML array
-                // → `Some(vec![])` → empty); an unresolvable reference
-                // keeps the rule existence-checked.
-                Some(v_from) => config
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        });
+        // Values-resolution semantics live in the shared predicate
+        // (config `scatter_fan_out_is_empty`): an unresolvable
+        // `values_from` is NOT empty — validate keeps the existence check
+        // so a typo surfaces instead of silently passing.
+        let rule_scatter_empty = config.scatter_fan_out_is_empty(rule);
         // Check for path traversal (..) in inputs
         for input in &rule.input {
             // W020: Warn about non-existent concrete input files (non-wildcard, non-generated)
@@ -2173,21 +2153,12 @@ pub fn lint_format(
         // instances (issue #616) — its template colliding with another
         // rule's is noise (9 W033 hits in the enrichment repo came from
         // this), and the "gate one with `when`" suggestion cannot apply.
-        // Same semantics as the E010/W020 gate above: declared `values`
-        // win, and an unresolvable `values_from` conservatively keeps
-        // the rule in the comparison (validate treats it as a typo to
-        // surface, not as an empty fan-out).
-        let scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => config
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        });
+        // Same semantics as the E010/W020 gate above (shared
+        // `scatter_fan_out_is_empty` predicate): declared `values` win,
+        // and an unresolvable `values_from` conservatively keeps the rule
+        // in the comparison (validate treats it as a typo to surface, not
+        // as an empty fan-out).
+        let scatter_empty = config.scatter_fan_out_is_empty(rule);
         if scatter_empty {
             continue;
         }

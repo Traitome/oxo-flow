@@ -660,6 +660,17 @@ async fn create_env_from_ai(
         }
     }
 
+    // Shared by both prompt variants below — one place to keep in sync.
+    let matched_tools_block = if matched.is_empty() {
+        "(none matched)".to_string()
+    } else {
+        matched
+            .iter()
+            .map(|(n, v, s)| format!("- {n} {v} — {s}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     let system = if is_pixi {
         format!(
             r#"## Role
@@ -692,15 +703,7 @@ Rules:
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
-            if matched.is_empty() {
-                "(none matched)".to_string()
-            } else {
-                matched
-                    .iter()
-                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            matched_tools_block
         )
     } else {
         format!(
@@ -734,15 +737,7 @@ Rules:
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
-            if matched.is_empty() {
-                "(none matched)".to_string()
-            } else {
-                matched
-                    .iter()
-                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            matched_tools_block
         )
     };
 

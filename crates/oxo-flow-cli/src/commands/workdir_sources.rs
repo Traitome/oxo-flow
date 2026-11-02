@@ -185,17 +185,7 @@ fn source_link_candidates(
         if run_preview::when_condition_false(rule, config, wildcard_values) {
             continue;
         }
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                None => true,
-                Some(values_from) => config
-                    .resolve_config_list(values_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if config.scatter_fan_out_is_empty(rule) {
             continue;
         }
         if rule.optional.is_optional() {

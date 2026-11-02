@@ -885,17 +885,7 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
         // Same stance for a scatter rule with zero fan-out (issue #616):
         // declared `values` win; an unresolvable `values_from` keeps the
         // rule checked so the typo surfaces instead of passing silently.
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => cfg
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if cfg.scatter_fan_out_is_empty(rule) {
             continue;
         }
         for input in &rule.input {
@@ -952,17 +942,7 @@ fn collect_missing_pixi_manifests(
         }) {
             continue;
         }
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => cfg
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if cfg.scatter_fan_out_is_empty(rule) {
             continue;
         }
         let resolved = rule.environment.resolve_relative_paths(Some(workflow_dir));

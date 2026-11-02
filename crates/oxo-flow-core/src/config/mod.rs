@@ -513,6 +513,30 @@ impl WorkflowConfig {
         )
     }
 
+    /// Whether the rule's `scatter` fans out over zero values (issue #616):
+    /// declared `values` win (non-empty → never empty); with no declared
+    /// values, a missing `values_from` means zero instances and a
+    /// resolvable list decides emptiness. An UNRESOLVABLE `values_from`
+    /// (missing key, non-string/array → `None`) is NOT empty: the executor
+    /// expands zero instances silently in that case, so callers keep the
+    /// rule checked on purpose — a typo in `values_from` must surface
+    /// instead of silently passing. One place for the predicate the
+    /// executor expansion (expand.rs), validate/lint (format.rs), and the
+    /// CLI input-source scans share.
+    pub fn scatter_fan_out_is_empty(&self, rule: &Rule) -> bool {
+        rule.scatter.as_ref().is_some_and(|scatter| {
+            if !scatter.values.is_empty() {
+                return false;
+            }
+            match scatter.values_from.as_deref() {
+                None => true,
+                Some(values_from) => self
+                    .resolve_config_list(values_from)
+                    .is_some_and(|values| values.is_empty()),
+            }
+        })
+    }
+
     /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.
     ///
     /// The checksum is computed from a deterministic hash of the config,
