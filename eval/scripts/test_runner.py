@@ -252,6 +252,17 @@ class RuleJudgingTests(unittest.TestCase):
         self.assertFalse(runner.param_present("-R", "gatk -RNA ref.fa"))
         self.assertFalse(runner.param_present("index", "tool indexing"))
 
+    def test_corrupted_gold_cell_is_surfaced_not_vacuously_perfect(self):
+        # A malformed JSON cell must not read as "no expectations" — the
+        # row's capture_error carries the corruption like a capture failure
+        # would (same policy as check_gold.py's hard finding).
+        result = self._judge(
+            self._row(expected_key_params="not-json["),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\nshell = "tool"\n',
+        )
+        self.assertIn("expected_key_params", result["capture_error"])
+        self.assertNotIn("key_params", result)
+
 
 class FailedRuleCaptureTests(unittest.TestCase):
     def test_meta_error_is_skipped_not_scored_zero(self):
