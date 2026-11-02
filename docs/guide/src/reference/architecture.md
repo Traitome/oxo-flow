@@ -190,7 +190,7 @@ flowchart TB
 | `rule.rs` | The rule record: inputs/outputs (list, map, dir patterns), shell/script, `when` gates, `[[transform]]` split→map→combine, `EnvironmentSpec`, `Resources` |
 | `wildcard.rs` | Pattern grammar (`{sample}`, `{values.name}`, `{config.x}`, `{meta.col}`), pattern→regex compilation, discovery walkers, Cartesian combination |
 | `references.rs` | `@reference` resolution against known databases |
-| `deep_check.rs` | Static consistency checks beyond `validate` (D001–D004 codes) |
+| `deep_check.rs` | Static consistency checks beyond `validate` (D001–D005 codes) |
 | `config_impact.rs` | Config-key → rule reference graph; fingerprints decide precise checkpoint invalidation |
 
 ### Layer 3 — Planning

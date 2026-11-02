@@ -1,6 +1,6 @@
 # Run on a Cluster
 
-This guide explains how to execute oxo-flow workflows on HPC clusters using SLURM, PBS, SGE, and LSF backends.
+This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, and GCP Batch for cloud runs.
 
 ---
 
@@ -29,6 +29,9 @@ There are two ways to reach a scheduler, and they suit different jobs:
 | **PBS/Torque** | Supported | `#PBS` |
 | **SGE** | Supported | `#$` |
 | **LSF** | Supported | `#BSUB` |
+| **Kubernetes** | Supported (spec generation) | `k8s Job` |
+| **AWS Batch** | Supported (spec generation) | `aws-batch` |
+| **GCP Batch** | Supported (spec generation) | `gcp-batch` |
 
 ---
 
@@ -463,7 +466,8 @@ Every cluster action resolves its backend the same way: the `--backend` /
 SLURM site you never type `-b`; on a PBS site set the environment variable
 once (`export OXO_FLOW_CLUSTER_BACKEND=pbs`). An explicit-but-typoed value
 is still rejected outright (`unknown cluster backend '…' — expected slurm,
-pbs, sge, or lsf`) — the default never swallows a bad name.
+pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch`) — the default
+never swallows a bad name.
 
 ---
 

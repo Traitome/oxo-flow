@@ -18,7 +18,10 @@ use crate::commands::print_banner;
 /// `-b pbs-torque`) submitted real jobs to, or queried, the wrong scheduler.
 fn parse_backend(name: &str) -> Result<ClusterBackend> {
     ClusterBackend::from_str(name).map_err(|_| {
-        anyhow::anyhow!("unknown cluster backend '{name}' — expected slurm, pbs, sge, or lsf")
+        anyhow::anyhow!(
+            "unknown cluster backend '{name}' — expected slurm, pbs, sge, lsf, kubernetes (k8s), \
+             aws-batch, or gcp-batch"
+        )
     })
 }
 
@@ -916,7 +919,9 @@ mod tests {
                 "must name the offending backend: {msg}"
             );
             assert!(
-                msg.contains("expected slurm, pbs, sge, or lsf"),
+                msg.contains(
+                    "expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch"
+                ),
                 "must list the accepted values: {msg}"
             );
         }

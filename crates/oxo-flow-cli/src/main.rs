@@ -1051,7 +1051,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(short = 'q', long, help = "Cluster queue or partition name")]
@@ -1101,7 +1101,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
@@ -1112,7 +1112,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
@@ -1123,7 +1123,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_ID", help = "Cluster job ID")]

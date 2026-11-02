@@ -175,7 +175,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_REGISTRY_MIRRORS` | No | — | Container-registry mirror map for singularity/apptainer/docker image pulls: semicolon-separated `host=mirror` pairs (e.g. `docker.io=mirror.gcr.io;quay.io=quay-mirror.example.com`); case-insensitive, rewrites registry-qualified specs only (other schemes pass through); cache keys keep the original spec. See the China-mirrors reference |
 | `OXO_ENV_LOCK_TIMEOUT_SECS` | No | `7200` (2 h) | Max wait for the per-environment creation lock (flock under `~/.oxo-flow/locks/`, one per env — different envs never block each other); concurrent runs building the same env queue instead of racing, and expiry fails fast with a diagnostic instead of hanging. OS releases the lock if the holder dies |
 | `OXO_S3_FORCE_PATH_STYLE` | No | unset | `"1"`/`"true"` forces path-style S3 addressing (`https://endpoint/bucket/key` instead of virtual-host style) for S3-compatible servers (MinIO, LocalStack); pair with `AWS_ENDPOINT_URL`. See the cloud-storage reference |
-| `OXO_FLOW_CLUSTER_BACKEND` | No | `slurm` | Default backend for `oxo-flow cluster submit` when `-b/--backend` is absent: `slurm`, `pbs`, `sge`, or `lsf`. See the cluster command reference |
+| `OXO_FLOW_CLUSTER_BACKEND` | No | `slurm` | Default backend for `oxo-flow cluster submit` when `-b/--backend` is absent: `slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, or `gcp-batch`. See the cluster command reference |
 
 ### AI Provider Examples
 

@@ -45,16 +45,16 @@ Every action accepts `--backend` / `-b`:
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) — on a SLURM site you never need to type it |
+| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`) — on a SLURM site you never need to type it |
 
 An **explicit** value is always validated — `-b slrm` fails with
-`unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf` rather
+`unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch` rather
 than silently querying SLURM. The default applies only when the flag is
 omitted entirely. On a non-SLURM site set the default once in your shell
 profile:
 
 ```bash
-export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf
+export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf / kubernetes / aws-batch / gcp-batch
 ```
 
 ---
