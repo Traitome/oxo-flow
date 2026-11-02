@@ -607,7 +607,8 @@ shared between the submitting host and the compute nodes.
 > `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean up an
 > interrupted run.
 
-Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured
+Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
+GCP Batch) is configured
 separately — see the [`cluster`](cluster.md) command.
 
 ### Execute a published bundle

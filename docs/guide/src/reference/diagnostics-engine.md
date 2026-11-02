@@ -13,7 +13,7 @@ The Diagnostics Engine analyzes failed pipeline runs and returns:
 - **Relevant log lines** for context
 
 It does NOT use AI. It matches error signatures (log keywords, exit codes)
-against a curated library of 30 error patterns (tool, resource, data,
+against a curated library of 31 error patterns (tool, resource, data,
 system, and config classes — see
 `crates/oxo-flow-web/src/domains/execution/diagnostics.rs` for the full
 list).

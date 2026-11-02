@@ -52,7 +52,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
-[cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF)
+[cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP Batch)
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
@@ -966,7 +966,8 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 
 **HPC clusters:**
 
-- Resources translated to scheduler directives (SLURM, PBS, SGE, LSF)
+- Resources translated to scheduler directives (SLURM, PBS, SGE, LSF, k8s,
+  AWS/GCP Batch)
 - Scheduler enforces limits - jobs requesting more than allocated will fail
 
 ### Platform Detection

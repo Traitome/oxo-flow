@@ -64,7 +64,7 @@ flowchart LR
     subgraph world["Execution substrate"]
         fs["Working directory<br/>inputs / outputs / logs"]
         env["Environment engines<br/>conda · mamba · pixi<br/>docker · singularity<br/>venv · modules · system"]
-        hpc["HPC schedulers<br/>SLURM · PBS · SGE · LSF"]
+        hpc["HPC schedulers<br/>SLURM · PBS · SGE · LSF<br/>k8s · AWS Batch · GCP Batch"]
         obj["Object storage<br/>S3 · GCS"]
         llm["LLM providers<br/>DeepSeek · Claude<br/>OpenAI-compatible · Ollama"]
         git["Git remotes<br/>workflow repositories"]
@@ -172,7 +172,7 @@ flowchart TB
         direction LR
         envm["environment.rs<br/>8 backends"]
         storm["storage/<br/>local · s3 · gcs"]
-        clum["cluster.rs<br/>SLURM · PBS · SGE · LSF"]
+        clum["cluster.rs<br/>7 backends: SLURM · PBS · SGE · LSF<br/>k8s · AWS Batch · GCP Batch"]
         misc["report · container<br/>webhook · git · format"]
     end
 

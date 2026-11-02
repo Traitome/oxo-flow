@@ -59,7 +59,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Web interface** | Built-in React 19 SPA + 100+ OpenAPI REST endpoints + SSE live events | External Snakemake-UI / panoptes | Nextflow Tower / Seqera Platform (commercial) |
 | **Editor & IDE** | First-party VS Code IDE (Open VSX + VS Code Marketplace) & native desktop shell | Community editor plugins | Community editor plugins |
 | **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data + domain QC parser + `--r-data` TSV | Via MultiQC | Via Nextflow Tower / MultiQC |
-| **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
+| **Cluster backends** | SLURM, PBS, SGE, LSF, k8s, AWS Batch, GCP Batch | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting; no OS-level tenant boundary yet | Limited | Limited |
 | **AI Companion** | Architectural citizen — unified agent, 30+ domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
 | **Testing** | Rust unit/integration suites, schema-drift checks, and AI evaluations; exact results are recorded per commit | pytest-based | Spock / varied |
@@ -351,8 +351,9 @@ oxo-flow serve
 # Mode 2: Team server — multi-user (env-var passwords + optional ORCID/GitHub OAuth2)
 oxo-flow serve --mode team --host 0.0.0.0
 
-# Mode 3: HPC submit panel — the scheduler (SLURM/PBS/SGE/LSF) is probed at
-#   startup when the server itself runs on a cluster login node
+# Mode 3: HPC submit panel — the scheduler (SLURM/PBS/SGE/LSF/k8s/AWS Batch/
+#   GCP Batch) is probed at startup when the server itself runs on a cluster
+#   login node
 oxo-flow serve --mode hpc
 ```
 

@@ -52,7 +52,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **VS Code extension** | First-party `traitome.oxo-flow` IDE for `.oxoflow` — schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (published to [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow); also attached as a VSIX to every release) |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
-| **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
+| **Cluster backends** | Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling |
 | **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
 
 ---

@@ -51,7 +51,8 @@ pub trait ExecutorBackend: Send + Sync {
 }
 ```
 
-The first implementation, `ClusterExecutor` (SLURM/PBS/SGE/LSF), renders
+The first implementation, `ClusterExecutor` (SLURM/PBS/SGE/LSF, extended
+by k8s and the AWS/GCP Batch backends), renders
 scripts with the existing directive generator (`core/cluster.rs`, unchanged)
 and performs real submission and tracking:
 
