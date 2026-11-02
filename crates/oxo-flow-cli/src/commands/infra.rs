@@ -808,22 +808,25 @@ fn first_fenced(response: &str, tag: &str) -> Option<String> {
         .map(|(_, body)| body)
 }
 
-/// Extract YAML content from an AI response (```yaml fence or raw `name:`).
-fn extract_yaml(response: &str) -> Option<String> {
-    first_fenced(response, "yaml").or_else(|| {
+/// Fenced segment first, else the text from the first raw marker on —
+/// models sometimes emit the spec without any fence at all. One place for
+/// the fallback both spec flavors share.
+fn fenced_or_after(response: &str, tag: &str, raw_marker: &str) -> Option<String> {
+    first_fenced(response, tag).or_else(|| {
         response
-            .find("name:")
+            .find(raw_marker)
             .map(|pos| response[pos..].trim().to_string())
     })
 }
 
+/// Extract YAML content from an AI response (```yaml fence or raw `name:`).
+fn extract_yaml(response: &str) -> Option<String> {
+    fenced_or_after(response, "yaml", "name:")
+}
+
 /// Extract TOML content from an AI response (```toml fence or raw `[project]`).
 fn extract_toml(response: &str) -> Option<String> {
-    first_fenced(response, "toml").or_else(|| {
-        response
-            .find("[project]")
-            .map(|pos| response[pos..].trim().to_string())
-    })
+    fenced_or_after(response, "toml", "[project]")
 }
 
 #[cfg(test)]
