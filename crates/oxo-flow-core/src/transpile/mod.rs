@@ -56,6 +56,22 @@ pub fn transpile(source: &str, format: SourceFormat) -> Result<String> {
     }
 }
 
+/// Normalize a memory string from either DSL to the engine's `N G` / `N M` form.
+///
+/// Shared single point of sync: both transpilers must canonicalize `mem` the
+/// same way (`GB`/`gb` → `G`, `MB`/`mb` → `M`, whitespace stripped), or the
+/// emitted `[resources]` sections drift apart.
+pub(crate) fn normalize_memory(raw: &str) -> String {
+    let s = raw.trim().replace(" ", "");
+    if s.ends_with("GB") || s.ends_with("gb") {
+        format!("{}G", s[..s.len() - 2].trim())
+    } else if s.ends_with("MB") || s.ends_with("mb") {
+        format!("{}M", s[..s.len() - 2].trim())
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

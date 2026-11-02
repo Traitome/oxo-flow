@@ -4,7 +4,6 @@
 //! - Tier 0: In-memory RAM disk / tmpfs (lowest latency, highest IOPS, capacity-constrained)
 //! - Tier 1: Local node NVMe / SSD scratch (high IOPS, moderate capacity)
 //! - Tier 2: Shared cluster distributed filesystem (Lustre, GPFS, BeeGFS, NFS)
-//! - Tier 3: Cloud remote object storage (S3, GCS, Azure Blob)
 
 use std::path::{Path, PathBuf};
 
@@ -21,8 +20,6 @@ pub enum StorageTier {
     Tier1Nvme = 1,
     /// Cluster shared parallel filesystem scratch.
     Tier2Shared = 2,
-    /// Remote cloud object storage.
-    Tier3Cloud = 3,
 }
 
 impl StorageTier {
@@ -32,7 +29,6 @@ impl StorageTier {
             Self::Tier0Ram => "tier0_ram",
             Self::Tier1Nvme => "tier1_nvme",
             Self::Tier2Shared => "tier2_shared",
-            Self::Tier3Cloud => "tier3_cloud",
         }
     }
 }
@@ -46,8 +42,6 @@ pub struct StorageTierLadder {
     pub tier1_nvme_scratch: Option<PathBuf>,
     /// Tier 2 shared cluster scratch directory.
     pub tier2_shared_scratch: Option<PathBuf>,
-    /// Tier 3 remote cloud storage URI prefix.
-    pub tier3_cloud_remote: Option<String>,
 }
 
 impl StorageTierLadder {
@@ -56,13 +50,11 @@ impl StorageTierLadder {
         tier0: Option<impl Into<PathBuf>>,
         tier1: Option<impl Into<PathBuf>>,
         tier2: Option<impl Into<PathBuf>>,
-        tier3: Option<impl Into<String>>,
     ) -> Self {
         Self {
             tier0_ram_scratch: tier0.map(Into::into),
             tier1_nvme_scratch: tier1.map(Into::into),
             tier2_shared_scratch: tier2.map(Into::into),
-            tier3_cloud_remote: tier3.map(Into::into),
         }
     }
 
@@ -76,7 +68,6 @@ impl StorageTierLadder {
             tier0_ram_scratch: cfg.tier0_ram_scratch.as_ref().map(PathBuf::from),
             tier1_nvme_scratch: cfg.tier1_nvme_scratch.as_ref().map(PathBuf::from),
             tier2_shared_scratch: cfg.tier2_shared_scratch.as_ref().map(PathBuf::from),
-            tier3_cloud_remote: None,
         }
     }
 

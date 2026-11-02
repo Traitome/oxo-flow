@@ -1,5 +1,6 @@
 //! Nextflow DSL2 transpiler for converting Nextflow process blocks into oxo-flow rules.
 
+use super::normalize_memory;
 use crate::error::{OxoFlowError, Result};
 
 /// Extracted intermediate representation of a Nextflow process.
@@ -434,13 +435,3 @@ fn translate_nextflow_script(script: &str, _process_name: &str) -> String {
     out.join("\n").trim().to_string()
 }
 
-fn normalize_memory(raw: &str) -> String {
-    let s = raw.trim().replace(" ", "");
-    if s.ends_with("GB") || s.ends_with("gb") {
-        format!("{}G", s[..s.len() - 2].trim())
-    } else if s.ends_with("MB") || s.ends_with("mb") {
-        format!("{}M", s[..s.len() - 2].trim())
-    } else {
-        s
-    }
-}

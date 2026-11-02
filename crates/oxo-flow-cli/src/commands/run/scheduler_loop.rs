@@ -337,6 +337,10 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                 }
                 disk_hold_rounds += 1;
                 tokio::time::sleep(std::time::Duration::from_secs(disk_tick_secs())).await;
+                // Park takes precedence over the deadlock check below: a
+                // stalled-but-under-pressure run still terminates here via the
+                // abort rounds above (bounded by disk_hold_abort_rounds ×
+                // disk_tick_secs), so delaying the check cannot hang the run.
                 continue;
             }
             // Any pass that is not a parked hold clears the grace counter.

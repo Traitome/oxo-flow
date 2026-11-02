@@ -1,5 +1,6 @@
 //! Snakemake transpiler for converting Snakemake rules into oxo-flow workflows.
 
+use super::normalize_memory;
 use crate::error::{OxoFlowError, Result};
 
 /// Extracted intermediate representation of a Snakemake rule.
@@ -527,16 +528,6 @@ fn extract_output_paths(
     }
 }
 
-fn normalize_memory(raw: &str) -> String {
-    let s = raw.trim().replace(" ", "");
-    if s.ends_with("GB") || s.ends_with("gb") {
-        format!("{}G", s[..s.len() - 2].trim())
-    } else if s.ends_with("MB") || s.ends_with("mb") {
-        format!("{}M", s[..s.len() - 2].trim())
-    } else {
-        s
-    }
-}
 
 fn translate_snakemake_shell(shell: &str) -> String {
     let mut s = shell.trim().to_string();

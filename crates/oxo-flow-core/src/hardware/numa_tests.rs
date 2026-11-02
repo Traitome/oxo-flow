@@ -93,7 +93,6 @@ fn test_storage_tier_ladder_selection() {
         Some(ram_scratch.clone()),
         Some(nvme_scratch.clone()),
         Some(shared_scratch.clone()),
-        Some("s3://bucket/scratch"),
     );
 
     // When allow_ram = true, selects Tier 0 (RAM)
@@ -130,9 +129,7 @@ fn test_storage_tier_ladder_from_engine_config() {
         ladder.tier2_shared_scratch,
         Some(PathBuf::from("/shared/scratch"))
     );
-    assert_eq!(ladder.tier3_cloud_remote, None);
     assert_eq!(StorageTier::Tier0Ram.as_str(), "tier0_ram");
     assert_eq!(StorageTier::Tier1Nvme.as_str(), "tier1_nvme");
     assert_eq!(StorageTier::Tier2Shared.as_str(), "tier2_shared");
-    assert_eq!(StorageTier::Tier3Cloud.as_str(), "tier3_cloud");
 }

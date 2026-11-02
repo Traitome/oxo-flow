@@ -6533,7 +6533,6 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
             None::<std::path::PathBuf>,
             Some(nvme_scratch.clone()),
             None::<std::path::PathBuf>,
-            None::<String>,
         );
 
         let ex = LocalExecutor::new(ExecutorConfig {
