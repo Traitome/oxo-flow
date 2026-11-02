@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
+use crate::broadcast_event_for;
 use crate::domains::execution::checkpoint_status;
 use crate::workspace::get_run_directory;
-use crate::{broadcast_event_for, db};
 
 /// Locate the `oxo-flow` CLI binary.
 ///
@@ -438,52 +438,28 @@ pub fn spawn_background_run_with_args(
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
-        let pool = db::try_pool();
-        if crate::infra::db::global_backend().is_none() && pool.is_none() {
+        let Some(backend) = crate::infra::db::global_backend() else {
             error!(
                 "Storage backend unavailable — cannot run                  workflow '{}' in background; marking as failed is impossible                  so it stays 'queued' for manual cleanup",
                 run_id
             );
             return;
-        }
+        };
 
         let now = Utc::now();
         let now_str = now.to_rfc3339();
-        if let Some(backend) = crate::infra::db::global_backend() {
-            match backend.mark_run_running(&run_id, &now_str).await {
-                Ok(false) => {
-                    info!(
-                        "Run {run_id} left 'queued' before spawn — honouring the earlier terminal state"
-                    );
-                    return;
-                }
-                Err(e) => {
-                    error!("Failed to update status to running for {run_id}: {e}");
-                    return;
-                }
-                Ok(true) => {}
+        match backend.mark_run_running(&run_id, &now_str).await {
+            Ok(false) => {
+                info!(
+                    "Run {run_id} left 'queued' before spawn — honouring the earlier terminal state"
+                );
+                return;
             }
-        } else if let Some(p) = pool {
-            match sqlx::query(
-                "UPDATE runs SET status = 'running', phase = 'executing', started_at = ?                  WHERE id = ? AND status = 'queued'",
-            )
-            .bind(now)
-            .bind(&run_id)
-            .execute(p)
-            .await
-            {
-                Ok(r) if r.rows_affected() == 0 => {
-                    info!(
-                        "Run {run_id} left 'queued' before spawn — honouring the earlier terminal state"
-                    );
-                    return;
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Failed to update run {run_id} to running: {e}");
-                    return;
-                }
+            Err(e) => {
+                error!("Failed to update status to running for {run_id}: {e}");
+                return;
             }
+            Ok(true) => {}
         }
 
         // Broadcast run start event, scoped to the run owner (issue #82
@@ -651,20 +627,11 @@ pub fn spawn_background_run_with_args(
                         );
                     }
                 }
-                if let Some(pid) = child.id() {
-                    if let Some(backend) = crate::infra::db::global_backend() {
-                        if let Err(e) = backend.update_run_pid(&run_id, pid as i64).await {
-                            warn!("Failed to record PID for run {run_id} via backend: {e}");
-                        }
-                    } else if let Some(p) = pool
-                        && let Err(e) = sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
-                            .bind(pid as i64)
-                            .bind(&run_id)
-                            .execute(p)
-                            .await
-                    {
-                        warn!("Failed to record PID for run {run_id}: {e}");
-                    }
+                if let Some(pid) = child.id()
+                    && let Some(backend) = crate::infra::db::global_backend()
+                    && let Err(e) = backend.update_run_pid(&run_id, pid as i64).await
+                {
+                    warn!("Failed to record PID for run {run_id}: {e}");
                 }
 
                 // Real resource telemetry (issue #82 P1-2): sample the
@@ -718,18 +685,8 @@ pub fn spawn_background_run_with_args(
 /// never be overwritten nor executed past (a cancel is the user's last
 /// word; the kill fallout must not rewrite it).
 async fn run_is_cancelled(run_id: &str) -> bool {
-    if let Some(backend) = crate::infra::db::global_backend() {
-        return backend.is_run_cancelled(run_id).await.unwrap_or(false);
-    }
-    match db::try_pool() {
-        Some(pool) => {
-            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
-                .bind(run_id)
-                .fetch_one(pool)
-                .await
-                .map(|n: i64| n > 0)
-                .unwrap_or(false)
-        }
+    match crate::infra::db::global_backend() {
+        Some(backend) => backend.is_run_cancelled(run_id).await.unwrap_or(false),
         None => false,
     }
 }
@@ -760,20 +717,6 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             .await
         {
             error!("Failed to update final status for run {run_id} via backend: {e}");
-        } else {
-            fin_updated = true;
-        }
-    } else if let Some(pool) = db::try_pool() {
-        if let Err(e) =
-            sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
-                .bind(final_state)
-                .bind(final_state)
-                .bind(end)
-                .bind(run_id)
-                .execute(pool)
-                .await
-        {
-            error!("Failed to update final status for run {run_id}: {e}");
         } else {
             fin_updated = true;
         }
@@ -828,12 +771,6 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             .ok()
             .flatten()
             .map(|r| r.user_id)
-    } else if let Some(pool) = db::try_pool() {
-        sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
-            .bind(run_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
     } else {
         None
     };
@@ -900,48 +837,33 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
 /// `⊝ <rule>` (skipped).
 fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
     tokio::spawn(async move {
-        if crate::infra::db::global_backend().is_none() && db::try_pool().is_none() {
-            warn!("Storage backend unavailable — log tailer disabled for run {run_id}");
-            return;
-        }
+        let backend = match crate::infra::db::global_backend() {
+            Some(backend) => backend,
+            None => {
+                warn!("Storage backend unavailable — log tailer disabled for run {run_id}");
+                return;
+            }
+        };
         let log_path = workdir.join("execution.log");
         let mut offset: u64 = 0;
-        let user_id: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-            backend
-                .get_run(&run_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|r| r.user_id)
-        } else if let Some(pool) = db::try_pool() {
-            sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
-                .bind(&run_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None)
-        } else {
-            None
-        };
+        let user_id: Option<String> = backend
+            .get_run(&run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.user_id);
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1500));
         ticker.tick().await; // fire immediately
         loop {
             ticker.tick().await;
-            let active: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-                backend
-                    .get_run(&run_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| r.status)
-            } else if let Some(pool) = db::try_pool() {
-                sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
-                    .bind(&run_id)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None)
-            } else {
-                None
-            };
+            // The backend was resolved once at spawn; per-tick re-entry would
+            // re-read the OnceLock every 1.5 s for the same value.
+            let active: Option<String> = backend
+                .get_run(&run_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.status);
             match active.as_deref() {
                 Some("running") | Some("paused") | Some("queued") => {}
                 _ => break,
@@ -1013,10 +935,13 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
 /// run reaches a terminal DB state.
 fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
     tokio::spawn(async move {
-        if crate::infra::db::global_backend().is_none() && db::try_pool().is_none() {
-            warn!("Storage backend unavailable — resource sampler disabled for run {run_id}");
-            return;
-        }
+        let backend = match crate::infra::db::global_backend() {
+            Some(backend) => backend,
+            None => {
+                warn!("Storage backend unavailable — resource sampler disabled for run {run_id}");
+                return;
+            }
+        };
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.tick().await; // fire immediately, then every 5s
         // The sampler is the only writer of metrics.jsonl, so counting the
@@ -1042,22 +967,13 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
         }
         loop {
             ticker.tick().await;
-            let active: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-                backend
-                    .get_run(&run_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| r.status)
-            } else if let Some(pool) = db::try_pool() {
-                sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
-                    .bind(&run_id)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None)
-            } else {
-                None
-            };
+            // Resolved once at spawn (same backend as the log tailer).
+            let active: Option<String> = backend
+                .get_run(&run_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.status);
             match active.as_deref() {
                 Some("running") | Some("paused") | Some("queued") => {}
                 _ => break,
@@ -1156,19 +1072,6 @@ async fn mark_run_failed(run_id: &str) {
         } else {
             updated = true;
         }
-    } else if let Some(pool) = db::try_pool() {
-        if let Err(e) = sqlx::query(
-            "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
-        )
-        .bind(end)
-        .bind(run_id)
-        .execute(pool)
-        .await
-        {
-            error!("Failed to mark run {run_id} as failed: {e}");
-        } else {
-            updated = true;
-        }
     }
 
     if !updated {
@@ -1188,12 +1091,6 @@ async fn mark_run_failed(run_id: &str) {
             .ok()
             .flatten()
             .map(|r| r.user_id)
-    } else if let Some(pool) = db::try_pool() {
-        sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
-            .bind(run_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
     } else {
         None
     };

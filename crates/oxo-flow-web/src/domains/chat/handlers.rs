@@ -23,134 +23,33 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// append the user's message. Best-effort — chat works without a DB.
 async fn persist_user_message(user: &CurrentUser, session_id: &str, message: &str) {
     let title: String = message.chars().take(60).collect();
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(error) = backend
+    if let Some(backend) = crate::infra::db::global_backend()
+        && let Err(error) = backend
             .save_chat_user_message(session_id, &user.id, &title, message)
             .await
-        {
-            tracing::warn!(
-                session_id,
-                user_id = %user.id,
-                error = %error,
-                "user chat message could not be persisted"
-            );
-        }
-        return;
-    }
-    let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
-        return;
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(error) => {
-            tracing::warn!(%error, "chat session transaction could not start");
-            return;
-        }
-    };
-    let session = sqlx::query(
-        "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at \
-         WHERE chat_sessions.user_id = excluded.user_id",
-    )
-    .bind(session_id)
-    .bind(&user.id)
-    .bind(&title)
-    .bind(&now)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await;
-    match session {
-        Ok(result) if result.rows_affected() > 0 => {}
-        Ok(_) => {
-            tracing::warn!("session {session_id} belongs to another user — message dropped");
-            return;
-        }
-        Err(error) => {
-            tracing::warn!(%error, "chat session could not be persisted");
-            return;
-        }
-    }
-    if let Err(error) = sqlx::query(
-        "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
-         VALUES (?, ?, 'user', ?, NULL, ?)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(session_id)
-    .bind(message)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await
     {
-        tracing::warn!(%error, "user chat message could not be persisted");
-        return;
-    }
-    if let Err(error) = tx.commit().await {
-        tracing::warn!(%error, "user chat transaction could not commit");
+        tracing::warn!(
+            session_id,
+            user_id = %user.id,
+            error = %error,
+            "user chat message could not be persisted"
+        );
     }
 }
 
 /// Append the assistant's final answer to the session.
 async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content: &str) {
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(error) = backend
+    if let Some(backend) = crate::infra::db::global_backend()
+        && let Err(error) = backend
             .save_chat_assistant_message(session_id, &user.id, content)
             .await
-        {
-            tracing::warn!(
-                session_id,
-                user_id = %user.id,
-                error = %error,
-                "assistant chat message could not be persisted"
-            );
-        }
-        return;
-    }
-    let Some(pool) = crate::infra::db::sqlite::try_pool().ok() else {
-        return;
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(error) => {
-            tracing::warn!(%error, "chat session transaction could not start");
-            return;
-        }
-    };
-    match sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?")
-        .bind(&now)
-        .bind(session_id)
-        .bind(&user.id)
-        .execute(&mut *tx)
-        .await
     {
-        Ok(result) if result.rows_affected() > 0 => {}
-        Ok(_) => {
-            tracing::warn!("session {session_id} belongs to another user — reply dropped");
-            return;
-        }
-        Err(error) => {
-            tracing::warn!(%error, "chat session could not be updated");
-            return;
-        }
-    }
-    if let Err(error) = sqlx::query(
-        "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
-         VALUES (?, ?, 'assistant', ?, NULL, ?)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(session_id)
-    .bind(content)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await
-    {
-        tracing::warn!(%error, "assistant chat message could not be persisted");
-        return;
-    }
-    if let Err(error) = tx.commit().await {
-        tracing::warn!(%error, "assistant chat transaction could not commit");
+        tracing::warn!(
+            session_id,
+            user_id = %user.id,
+            error = %error,
+            "assistant chat message could not be persisted"
+        );
     }
 }
 

@@ -28,15 +28,10 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
 
 /// Unified pool accessor: returns a reference to the SQLite pool.
 ///
-/// The handlers are SQLite-backed; even with the `postgres` feature enabled,
-/// `init_pool` (main.rs) decides which backend is live and handlers read
-/// through this SQLite pool accessor.
-#[cfg(feature = "postgres")]
-pub fn try_pool() -> Result<&'static sqlx::SqlitePool, String> {
-    sqlite::try_pool()
-}
-
-#[cfg(not(feature = "postgres"))]
+/// `global_backend()` already falls back to this pool internally, so this
+/// is only for call sites that need the pool handle itself. There is no
+/// second body under `#[cfg(feature = "postgres")]` — both feature states
+/// resolved to the same call, and byte-identical cfg twins always drift.
 pub fn try_pool() -> Result<&'static sqlx::SqlitePool, String> {
     sqlite::try_pool()
 }

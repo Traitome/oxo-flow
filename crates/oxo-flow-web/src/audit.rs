@@ -56,11 +56,6 @@ pub async fn audit_middleware(
         {
             tracing::error!("audit insert failed for {action}: {e}");
         }
-    } else if let Some(_pool) = crate::db::try_pool() {
-        if let Err(e) = crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await
-        {
-            tracing::error!("audit insert failed for {action}: {e}");
-        }
     } else {
         tracing::warn!("audit store unavailable: {action} not audited");
     }

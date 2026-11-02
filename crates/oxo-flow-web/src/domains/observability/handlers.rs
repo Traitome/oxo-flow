@@ -329,8 +329,7 @@ pub async fn get_webhook_config(
         "admin",
         "Admin role required to read the webhook configuration",
     )?;
-    if crate::infra::db::global_backend().is_none() && crate::infra::db::sqlite::try_pool().is_err()
-    {
+    if crate::infra::db::global_backend().is_none() {
         return Err(err(
             StatusCode::SERVICE_UNAVAILABLE,
             "DB_ERROR",
@@ -375,8 +374,7 @@ pub async fn put_webhook_config(
         "admin",
         "Admin role required to configure webhooks",
     )?;
-    if crate::infra::db::global_backend().is_none() && crate::infra::db::sqlite::try_pool().is_err()
-    {
+    if crate::infra::db::global_backend().is_none() {
         return Err(err(
             StatusCode::SERVICE_UNAVAILABLE,
             "DB_ERROR",
@@ -519,31 +517,6 @@ pub async fn put_webhook_config(
                     "Internal database error".into(),
                 )
             })?;
-    } else if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET url = excluded.url, \
-             secret = COALESCE(excluded.secret, webhook_config.secret), \
-             enabled = excluded.enabled, events = excluded.events, \
-             signature_scheme = excluded.signature_scheme, updated_at = excluded.updated_at",
-        )
-        .bind(&url)
-        .bind(sealed_secret.as_deref())
-        .bind(enabled as i64)
-        .bind(&events_json)
-        .bind(signature_scheme)
-        .bind(&now)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error saving webhook config: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
     }
 
     Ok(Json(serde_json::json!({
