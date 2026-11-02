@@ -83,6 +83,31 @@ Negative controls evaluate whether an AI assistant resists user prompting that r
 
 ---
 
+## Scope & Comparability Caveats
+
+These limitations do not invalidate layer-level comparisons, but must accompany
+fine-grained published breakdowns:
+
+- **Prompt leakage.** 25 of 38 workflow requirements explicitly name at least one
+  expected tool. This mirrors real task specifications but can raise
+  `tool_coverage` independently of planning ability; compare workflow items with
+  and without lexical cues when drawing that narrower conclusion.
+- **Declared difficulty.** `easy/medium/hard` labels are construction-time
+  metadata, not psychometrically calibrated item difficulty. `by_difficulty`
+  tables are descriptive and should not be interpreted as a validated difficulty
+  scale.
+- **Snapshot-scoped versions.** Gold versions are checked against the embedded
+  knowledge snapshot by CI. A benchmark run must report the capture manifest's
+  knowledge hashes; later registry updates require an explicit gold refresh and
+  fresh evidence records rather than silently reusing old approvals.
+- **Source snapshots.** The baseline evidence records cite primary artifacts but
+  do not yet retain fetched HTTP status, raw-source content hashes, or
+  commit-pinned URLs. This is sufficient for the repository's reproducible hash
+  baseline, while publication-grade source archival remains part of the
+  independent human review tracked by issue #172.
+
+---
+
 ## 4. Cryptographic Provenance & Hash-Binding Architecture
 
 To eliminate reliance on machine self-certification or transient file timestamps, every item in the gold benchmark is bound to an immutable cryptographic evidence ledger: `eval/review/evidence.jsonl`.
@@ -117,7 +142,7 @@ Layer Breakdown:
   - Workflow DAG:            38 total (16 approved, 22 corrected)
 --------------------------------------------------------------------
 Cryptographic Hash Match:   100.0% (257 / 257 items)
-Reviewer Integrity:         100.0% verified human handles (0 automated)
+Reviewer Integrity:         100.0% non-automated reviewer handles (0 automated)
 ====================================================================
 ```
 

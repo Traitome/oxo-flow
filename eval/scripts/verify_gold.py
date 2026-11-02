@@ -12,8 +12,8 @@ Checks:
   2. Cryptographic Integrity: SHA-256 fields_hash in evidence.jsonl strictly matches
      the canonical serialization of the CSV row. Any gold edit without an expert
      audit invalidates verification.
-  3. Reviewer Identity: Approved/corrected items must carry a human reviewer handle
-     (never *-automated).
+  3. Reviewer Identity: Approved/corrected items must carry a non-automated
+     reviewer handle (never *-automated).
   4. Provenance Contract: Non-negative rows must cite an external artifact URL;
      negative controls must carry verified purity attestations.
   5. Rejection Tracking: Explicit rejection reasons for retired/non-tool items.
@@ -193,13 +193,43 @@ def audit_gold_set(repo_root):
             else:
                 stats["hash_matched"] += 1
 
-            # Check 3: Reviewer identity
+            # Check 3: Evidence metadata alignment. The canonical hash covers
+            # scientific gold fields; these checks bind the ledger to the same
+            # review event and source pointer recorded in the CSV.
+            if evidence.get("layer") != layer:
+                findings.append(
+                    f"[{item_id}] evidence layer mismatch: CSV={layer!r} != "
+                    f"ledger={evidence.get('layer')!r}"
+                )
+            if evidence.get("reviewer") != reviewer:
+                findings.append(
+                    f"[{item_id}] reviewer attribution mismatch: CSV={reviewer!r} != "
+                    f"ledger={evidence.get('reviewer')!r}"
+                )
+            if evidence.get("provenance_url", "") != (row.get("provenance_url") or ""):
+                findings.append(
+                    f"[{item_id}] provenance URL mismatch: CSV={row.get('provenance_url')!r} != "
+                    f"ledger={evidence.get('provenance_url')!r}"
+                )
+            verified_at = evidence.get("verified_at", "")
+            review_date = row.get("review_date", "")
+            if verified_at[:10] != review_date:
+                findings.append(
+                    f"[{item_id}] verification date mismatch: CSV={review_date!r} != "
+                    f"ledger={verified_at!r}"
+                )
+            if not (evidence.get("expert_role") or "").strip():
+                findings.append(f"[{item_id}] evidence record missing expert_role")
+            if not (evidence.get("scientific_justification") or "").strip():
+                findings.append(f"[{item_id}] evidence record missing scientific_justification")
+
+            # Check 4: Reviewer identity
             if status in ("approved", "corrected"):
                 if not reviewer or reviewer.endswith("-automated"):
                     stats["reviewer_invalid"] += 1
                     findings.append(
                         f"[{item_id}] invalid reviewer handle {reviewer!r} for status {status!r} "
-                        "(human expert handle required, *-automated forbidden)"
+                        "(non-automated reviewer handle required, *-automated forbidden)"
                     )
                 else:
                     stats["reviewer_valid"] += 1
@@ -207,20 +237,20 @@ def audit_gold_set(repo_root):
                 if not reviewer:
                     findings.append(f"[{item_id}] rejected item missing reviewer attribution")
 
-            # Check 4: Evidence layer alignment
+            # Check 5: Evidence verdict alignment
             if evidence.get("verdict") != status:
                 findings.append(
                     f"[{item_id}] verdict drift: CSV status={status!r} != ledger verdict={evidence.get('verdict')!r}"
                 )
 
-            # Check 5: Negative control purity
+            # Check 6: Negative control purity
             if negative:
                 if not evidence.get("negative_purity_verified"):
                     findings.append(f"[{item_id}] negative control missing negative_purity_verified attestation")
 
         stats["by_layer"][layer] = layer_stats
 
-    # Check 6: Orphan records in evidence ledger
+    # Check 7: Orphan records in evidence ledger
     orphan_ids = set(evidence_records.keys()) - seen_ids
     if orphan_ids:
         for oid in sorted(orphan_ids):
@@ -256,7 +286,7 @@ def print_audit_report(res):
     print(f"Evidence Records:     {stats['total_evidence_rows']}")
     print(f"Cryptographic Hashes: {stats['hash_matched']} matched, {stats['hash_mismatched']} mismatched")
     print(
-        f"Reviewer Handles:     {stats['reviewer_valid']} verified human handles, "
+        f"Reviewer Handles:     {stats['reviewer_valid']} non-automated handles, "
         f"{stats['reviewer_invalid']} automated placeholders"
     )
     print("-" * 68)

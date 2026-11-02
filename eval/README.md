@@ -114,6 +114,9 @@ changed.
   types may average different metric counts.
 - Failed or missing captures are excluded from model metrics and produce an
   explicit availability rate/warning; they are never silently scored as zero.
+- Difficulty and query-type breakdowns are descriptive: difficulty labels are
+  declared rather than calibrated, and 25 of 38 workflow prompts name at least
+  one expected tool. Report these caveats alongside fine-grained comparisons.
 - Advisory AI-judge rows carry four 0--10 dimensions plus rationales, risks,
   confidence, response IDs, and judge errors. The model's raw overall is
   recomputed by the harness; review failures remain explicit rather than

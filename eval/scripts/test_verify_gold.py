@@ -123,6 +123,33 @@ class VerifyGoldTests(unittest.TestCase):
             self.assertFalse(res["ok"])
             self.assertTrue(any("invalid reviewer handle" in f for f in res["findings"]))
 
+    def test_evidence_metadata_mismatch_is_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool_row = make_tool_row()
+            evidence_row = make_evidence_row(
+                tool_row,
+                layer="rule",
+                reviewer="someone-else",
+                provenance_url="https://example.com/other",
+            )
+            write_gold_dir(tmp, [tool_row], [evidence_row])
+
+            res = verify_gold.audit_gold_set(tmp)
+            self.assertFalse(res["ok"])
+            self.assertTrue(any("evidence layer mismatch" in f for f in res["findings"]))
+            self.assertTrue(any("reviewer attribution mismatch" in f for f in res["findings"]))
+            self.assertTrue(any("provenance URL mismatch" in f for f in res["findings"]))
+
+    def test_verification_date_mismatch_is_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool_row = make_tool_row()
+            evidence_row = make_evidence_row(tool_row, verified_at="2026-11-01T00:00:00Z")
+            write_gold_dir(tmp, [tool_row], [evidence_row])
+
+            res = verify_gold.audit_gold_set(tmp)
+            self.assertFalse(res["ok"])
+            self.assertTrue(any("verification date mismatch" in f for f in res["findings"]))
+
     def test_duplicate_gold_id_is_flagged(self):
         with tempfile.TemporaryDirectory() as tmp:
             row_a = make_tool_row()
