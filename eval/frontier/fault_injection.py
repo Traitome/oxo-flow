@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Fault injection & self-healing benchmark harness for oxo-flow.
+"""Fault detection and repair-stage benchmark harness for oxo-flow.
 
 Systematically introduces controlled biological and infrastructure faults into
-candidate pipelines and execution environments to quantify:
-1. Pre-execution static detection rate (BioTypes checker & scientific preflight).
-2. Autonomous runtime self-healing success rate (causal diagnostics & bounded repair).
+candidate pipelines and execution environments to quantify independent stages:
+1. Pre-execution static detection.
+2. Diagnostic attribution to the affected rule.
+3. Repair-proposal availability.
+4. Repair application.
+5. Repair verification.
+6. Successful workflow execution after repair.
+
+The harness does not currently apply or verify repairs. Those columns are
+therefore reported as false with an explicit reason instead of treating static
+detection as evidence of "self-healing".
 
 Controlled Fault Categories:
 - BioTypes Contract Violations:
@@ -28,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -313,15 +322,102 @@ def find_oxo_flow_binary() -> str:
     raise FileNotFoundError("oxo-flow binary not found. Run 'cargo build' first.")
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _lint_diagnostics(stdout: str) -> List[Dict[str, Any]]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    diagnostics = payload.get("diagnostics", [])
+    return diagnostics if isinstance(diagnostics, list) else []
+
+
+def assess_case(
+    case: FaultCase,
+    lint_stdout: str,
+    dry_output: str,
+    run_output: str,
+    run_exit_code: Optional[int],
+    workflow_before_sha256: str,
+    workflow_after_sha256: str,
+) -> Dict[str, Any]:
+    """Classify evidence without conflating detection, repair, and success."""
+    diagnostics = _lint_diagnostics(lint_stdout)
+    matching = [
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.get("code") == case.expected_diagnostic_code
+    ]
+    combined_static = lint_stdout + "\n" + dry_output
+    static_detected = bool(matching) or case.expected_diagnostic_code in combined_static
+
+    attribution = any(
+        diagnostic.get("rule") == case.target_rule for diagnostic in matching
+    )
+    if case.category == "infrastructure":
+        lower_run = run_output.lower()
+        attribution = (
+            case.expected_diagnostic_code.lower() in lower_run
+            or "root cause:" in lower_run
+        ) and case.target_rule.lower() in lower_run
+
+    repair_proposal = any(
+        bool(diagnostic.get("suggestion")) for diagnostic in matching
+    )
+    if case.category == "infrastructure":
+        lower_run = run_output.lower()
+        repair_proposal = (
+            "suggestion:" in lower_run
+            or "remediation:" in lower_run
+            or "one-key remediation" in lower_run
+        )
+
+    # The current harness intentionally performs no mutation or rerun after a
+    # proposal. Keep these independent so a future repair executor can populate
+    # them with artifact hashes instead of rewriting historical reports.
+    repair_applied = False
+    repair_verified = False
+    workflow_success_on_rerun = False
+
+    return {
+        "fault_id": case.fault_id,
+        "category": case.category,
+        "description": case.description,
+        "target_rule": case.target_rule,
+        "expected_code": case.expected_diagnostic_code,
+        "expected_action": case.expected_repair_action,
+        "static_detected": static_detected,
+        "diagnostic_attributed": attribution,
+        "detected_codes": sorted(
+            {
+                diagnostic.get("code")
+                for diagnostic in diagnostics
+                if diagnostic.get("code")
+            }
+        ),
+        "repair_proposed": repair_proposal,
+        "repair_applied": repair_applied,
+        "repair_verified": repair_verified,
+        "workflow_success_on_rerun": workflow_success_on_rerun,
+        "workflow_run_exit_code": run_exit_code,
+        "workflow_sha256_before": workflow_before_sha256,
+        "workflow_sha256_after": workflow_after_sha256,
+        "workflow_unchanged": workflow_before_sha256 == workflow_after_sha256,
+        "repair_status": "not_implemented",
+        "case_status": "static_detected" if static_detected else "missed",
+    }
+
+
 def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
-    """Evaluates a single fault case for static pre-execution detection and runtime diagnosis."""
+    """Evaluate each evidence stage independently for one controlled fault."""
     with tempfile.TemporaryDirectory(prefix="oxo_fault_") as tmpdir:
         tmp_path = Path(tmpdir)
         wf_path = tmp_path / "workflow.oxoflow"
         wf_path.write_text(case.toml_template)
-
-        detected_static = False
-        detected_codes = []
+        before_hash = _sha256(wf_path)
 
         # 1. Evaluate Static Pre-Execution Detection (lint --json & dry-run)
         lint_res = subprocess.run(
@@ -331,35 +427,19 @@ def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
             cwd=tmp_path,
         )
 
-        try:
-            lint_json = json.loads(lint_res.stdout)
-            for diag in lint_json.get("diagnostics", []):
-                code = diag.get("code", "")
-                if code:
-                    detected_codes.append(code)
-                if case.expected_diagnostic_code == code:
-                    detected_static = True
-        except json.JSONDecodeError:
-            pass
-
         dry_res = subprocess.run(
             [binary, "dry-run", str(wf_path)],
             capture_output=True,
             text=True,
             cwd=tmp_path,
         )
-        combined_dry = dry_res.stdout + "\n" + dry_res.stderr
-        if case.expected_diagnostic_code in combined_dry:
-            detected_static = True
-            if case.expected_diagnostic_code not in detected_codes:
-                detected_codes.append(case.expected_diagnostic_code)
+        dry_output = dry_res.stdout + "\n" + dry_res.stderr
 
-        # 2. Evaluate Runtime Self-Healing & Causal Diagnostic Attribution
-        healing_verified = False
-        synthesized_action = None
+        run_output = ""
+        run_exit_code: Optional[int] = None
 
         if case.category == "infrastructure":
-            # Run the workflow and pipe 'A\n' to avoid hanging on interactive prompt
+            # Run the workflow and pipe 'A\n' to abort any interactive prompt.
             run_res = subprocess.run(
                 [binary, "run", str(wf_path)],
                 input="A\n",
@@ -367,77 +447,92 @@ def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
                 text=True,
                 cwd=tmp_path,
             )
-            combined_run = run_res.stdout + "\n" + run_res.stderr
-            lower_run = combined_run.lower()
-            if (
-                case.expected_diagnostic_code.lower() in lower_run
-                or "remediation" in lower_run
-                or "[r] auto-scale" in lower_run
-                or "root cause" in lower_run
-            ):
-                healing_verified = True
-                synthesized_action = case.expected_repair_action
-        else:
-            # For biotypes and preflight, static detection triggers adapter bridge synthesis
-            if detected_static:
-                healing_verified = True
-                synthesized_action = case.expected_repair_action
+            run_output = run_res.stdout + "\n" + run_res.stderr
+            run_exit_code = run_res.returncode
 
-        return {
-            "fault_id": case.fault_id,
-            "category": case.category,
-            "description": case.description,
-            "expected_code": case.expected_diagnostic_code,
-            "expected_action": case.expected_repair_action,
-            "static_detected": detected_static,
-            "detected_codes": detected_codes,
-            "healing_verified": healing_verified,
-            "synthesized_action": synthesized_action,
-            "status": "PASS" if (detected_static or healing_verified) else "FAIL",
-        }
+        return assess_case(
+            case=case,
+            lint_stdout=lint_res.stdout,
+            dry_output=dry_output,
+            run_output=run_output,
+            run_exit_code=run_exit_code,
+            workflow_before_sha256=before_hash,
+            workflow_after_sha256=_sha256(wf_path),
+        )
+
+
+def summarize_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(results)
+
+    def count(field: str) -> int:
+        return sum(1 for result in results if result[field])
+
+    def rate(field: str) -> float:
+        return count(field) / total if total else 0.0
+
+    return {
+        "total_cases": total,
+        "static_detected": count("static_detected"),
+        "diagnostic_attributed": count("diagnostic_attributed"),
+        "repair_proposed": count("repair_proposed"),
+        "repair_applied": count("repair_applied"),
+        "repair_verified": count("repair_verified"),
+        "workflow_success_on_rerun": count("workflow_success_on_rerun"),
+        "static_detection_rate": rate("static_detected"),
+        "diagnostic_attribution_rate": rate("diagnostic_attributed"),
+        "repair_proposal_rate": rate("repair_proposed"),
+        "repair_application_rate": rate("repair_applied"),
+        "repair_verification_rate": rate("repair_verified"),
+        "post_repair_success_rate": rate("workflow_success_on_rerun"),
+        "interpretation": (
+            "Detection and repair are separate outcomes. Repair application, "
+            "verification, and post-repair success are not implemented by this "
+            "harness and must not be inferred from static detection."
+        ),
+    }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fault injection and self-healing benchmark harness")
+    parser = argparse.ArgumentParser(
+        description="Fault detection and repair-stage benchmark harness"
+    )
     parser.add_argument("--binary", default=None, help="Path to oxo-flow binary")
     parser.add_argument("--out-json", default=None, help="Path to export JSON benchmark results")
     args = parser.parse_args()
 
-    binary = args.binary or find_oxo_flow_binary()
+    binary = str(Path(args.binary).resolve()) if args.binary else find_oxo_flow_binary()
     print("=" * 80)
-    print("oxo-flow Scientific & Industrial Fault Injection Benchmark")
+    print("oxo-flow Fault Detection & Repair-Stage Benchmark")
     print(f"Target Binary: {binary}")
     print(f"Total Test Cases: {len(FAULT_CASES)}")
     print("=" * 80)
 
     results = []
-    passed_count = 0
+    detected_count = 0
 
     for i, case in enumerate(FAULT_CASES, 1):
         res = run_test_case(binary, case)
         results.append(res)
-        if res["status"] == "PASS":
-            passed_count += 1
+        if res["static_detected"]:
+            detected_count += 1
 
-        stat_sym = "✓" if res["status"] == "PASS" else "✗"
+        stat_sym = "✓" if res["static_detected"] else "✗"
         print(
             f"[{i:02d}/{len(FAULT_CASES):02d}] {stat_sym} {case.fault_id:<28} "
             f"| Cat: {case.category:<14} | Static: {str(res['static_detected']):<5} "
-            f"| Heal: {str(res['healing_verified']):<5} -> {res['status']}"
+            f"| Attrib: {str(res['diagnostic_attributed']):<5} "
+            f"| Proposal: {str(res['repair_proposed']):<5} "
+            f"| Applied: {str(res['repair_applied']):<5}"
         )
 
-    summary = {
-        "total_cases": len(FAULT_CASES),
-        "passed": passed_count,
-        "failed": len(FAULT_CASES) - passed_count,
-        "success_rate": passed_count / len(FAULT_CASES) if FAULT_CASES else 0.0,
-        "results": results,
-    }
+    summary = summarize_results(results)
+    summary["results"] = results
 
     print("-" * 80)
     print(
-        f"Benchmark Complete: {passed_count}/{len(FAULT_CASES)} passed "
-        f"({summary['success_rate']*100:.1f}%)"
+        f"Static detection: {detected_count}/{len(FAULT_CASES)} "
+        f"({summary['static_detection_rate']*100:.1f}%); "
+        "repair execution is not implemented"
     )
     print("-" * 80)
 
@@ -447,7 +542,7 @@ def main() -> None:
         out_p.write_text(json.dumps(summary, indent=2))
         print(f"Detailed JSON results exported to: {out_p}")
 
-    if passed_count < len(FAULT_CASES):
+    if detected_count < len(FAULT_CASES):
         sys.exit(1)
 
 

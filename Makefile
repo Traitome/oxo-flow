@@ -63,11 +63,13 @@ docs:
 frontend-lint:
 	cd frontend && npm install --no-audit --no-fund && npm run lint
 
-## Eval-harness unit tests: the deterministic judge logic in eval/scripts
-## (runner.py scoring/matching) feeds AI-quality benchmark decisions, so a
-## silent rot would produce garbage numbers (audit #673).
+## Eval-harness unit tests: deterministic judge logic plus evidence-stage,
+## paired-statistics, hardware-ingestion, and cohort-measurement contracts.
+## Silent rot here would turn missing evidence into fabricated conclusions.
 eval-tests:
 	python3 -m unittest discover -s eval/scripts
+	python3 -m unittest discover -s eval/frontier -p 'test_*.py'
+	python3 -m unittest discover -s eval/benchmarks -p 'test_*.py'
 
 ## Eval gold consistency over eval/gold/*.csv (issue #172): fabricated
 ## negative names colliding with the knowledge base, gold-vs-KB version

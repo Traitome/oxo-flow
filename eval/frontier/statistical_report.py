@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Statistical evaluation & rigorous hypothesis testing for oxo-flow.
+"""Paired statistical analysis for oxo-flow benchmark results.
 
-Computes publication-standard statistical metrics for Nature-tier manuscripts:
+The inferential path fails closed: it requires measured ``results.json`` files
+and exactly matched cells for all three arms. A deterministic synthetic fixture
+is available only behind ``--synthetic-fixture`` for testing the analysis code;
+fixture output is explicitly non-inferential.
+
+Metrics:
 1. pass@k estimation (unbiased combinatorial estimator, Chen et al. (HumanEval)).
 2. Empirical bootstrap 95% confidence intervals (BCa / percentile bootstrap).
 3. McNemar's paired test with continuity correction & two-tailed p-values.
@@ -10,10 +15,11 @@ Computes publication-standard statistical metrics for Nature-tier manuscripts:
 Comparison Arms:
 - Arm A: Naive Baseline (Single-shot prompt, zero domain knowledge, no static gates).
 - Arm B: CLI Agent (Multi-turn tool-calling loop, Bioconda/Bio.tools retrieval).
-- Arm C: Type-Directed Continuum (BioTypes static lattice, preflight, self-healing).
+- Arm C: Type-Directed Continuum (BioTypes static lattice and scientific preflight).
 
 Usage:
-  python3 eval/frontier/statistical_report.py [--results-dir DIR] [--out-json PATH] [--out-md PATH]
+  python3 eval/frontier/statistical_report.py --results-dir DIR [--out-json PATH] [--out-md PATH]
+  python3 eval/frontier/statistical_report.py --synthetic-fixture  # test-double only
 """
 
 from __future__ import annotations
@@ -25,6 +31,10 @@ import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+class AnalysisError(ValueError):
+    """Raised when an inferential report would be unsupported by the data."""
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
@@ -144,7 +154,7 @@ def mcnemar_test(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, 
 
 
 def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
-    """Generates a reproducible validation dataset simulating Arms A, B, and C."""
+    """Generate a deterministic test-double dataset for analysis-code tests."""
     rng = random.Random(12345)
 
     arm_a_results = []  # Naive baseline
@@ -162,19 +172,31 @@ def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
         tokens_b = rng.randint(3500, 8000)
         cost_b = (tokens_b / 1_000_000) * 2.50
 
-        # Arm C: ~98% pass rate (BioTypes checker + self-healing adapter injection)
+        # Arm C fixture: high pass rate to exercise a three-arm comparison.
         pass_c = rng.random() < 0.98
         tokens_c = rng.randint(4000, 9500)
         cost_c = (tokens_c / 1_000_000) * 2.50
 
-        arm_a_results.append({"pass": pass_a, "tokens": tokens_a, "cost": cost_a})
-        arm_b_results.append({"pass": pass_b, "tokens": tokens_b, "cost": cost_b})
-        arm_c_results.append({"pass": pass_c, "tokens": tokens_c, "cost": cost_c})
+        cell = {
+            "intent_id": f"synthetic-{i:03d}",
+            "seed": 1,
+            "model": "synthetic-fixture",
+        }
+        arm_a_results.append({**cell, "pass": pass_a, "tokens": tokens_a, "cost": cost_a})
+        arm_b_results.append({**cell, "pass": pass_b, "tokens": tokens_b, "cost": cost_b})
+        arm_c_results.append({**cell, "pass": pass_c, "tokens": tokens_c, "cost": cost_c})
 
     return {
         "arm_a": arm_a_results,
         "arm_b": arm_b_results,
         "arm_c": arm_c_results,
+        "evidence_mode": "synthetic_fixture",
+        "inferential": False,
+        "source_files": [],
+        "interpretation": (
+            "Deterministic test double only. These values were generated to "
+            "exercise the analysis code and are not experimental evidence."
+        ),
     }
 
 
@@ -197,18 +219,21 @@ def load_benchmark_results(results_dir: Path) -> Dict[str, Any]:
         "full": "arm_c",
     }
 
-    dataset: Dict[str, List[Dict[str, Any]]] = {
-        "arm_a": [],
-        "arm_b": [],
-        "arm_c": [],
-    }
-
     results_files = sorted(results_dir.rglob("results.json"))
     if not results_files:
         raise FileNotFoundError(
             f"No results.json files found under {results_dir}. "
             "Run eval/frontier/run_eval.py first or pass --results-dir."
         )
+
+    dataset: Dict[str, Any] = {
+        "arm_a": [],
+        "arm_b": [],
+        "arm_c": [],
+        "evidence_mode": "measured_results",
+        "inferential": True,
+        "source_files": [str(path) for path in results_files],
+    }
 
     for rfile in results_files:
         payload = json.loads(rfile.read_text())
@@ -220,23 +245,57 @@ def load_benchmark_results(results_dir: Path) -> Dict[str, Any]:
                 continue
             tokens = run.get("input_tokens", 0) + run.get("output_tokens", 0)
             dataset[arm].append({
+                "intent_id": run.get("intent_id"),
+                "seed": run.get("seed"),
+                "model": run.get("model"),
                 "pass": bool(run.get("success", False)),
                 "tokens": tokens,
                 "cost": run.get("est_cost_usd", 0.0),
             })
 
-    # Ensure every arm has at least one sample so downstream stats don't
-    # divide by zero.
-    for arm_key, rows in dataset.items():
-        if not rows:
-            print(f"  warning: no runs mapped to {arm_key}; "
-                  f"statistical comparisons involving it will be degenerate.")
-
     return dataset
+
+
+def _pair_key(row: Dict[str, Any]) -> Tuple[str, str, int]:
+    model = row.get("model")
+    intent_id = row.get("intent_id")
+    seed = row.get("seed")
+    if not isinstance(model, str) or not model:
+        raise AnalysisError(f"row is missing model identity: {row}")
+    if not isinstance(intent_id, str) or not intent_id:
+        raise AnalysisError(f"row is missing intent_id: {row}")
+    if not isinstance(seed, int):
+        raise AnalysisError(f"row is missing integer seed: {row}")
+    return model, intent_id, seed
+
+
+def validate_paired_dataset(dataset: Dict[str, Any]) -> List[Tuple[str, str, int]]:
+    """Require identical, unique ``(model, intent, seed)`` cells in every arm."""
+    expected: Optional[set[Tuple[str, str, int]]] = None
+    for arm in ("arm_a", "arm_b", "arm_c"):
+        rows = dataset.get(arm, [])
+        if not rows:
+            raise AnalysisError(f"{arm} has no benchmark runs")
+        keys: set[Tuple[str, str, int]] = set()
+        for row in rows:
+            key = _pair_key(row)
+            if key in keys:
+                raise AnalysisError(f"duplicate paired cell in {arm}: {key}")
+            keys.add(key)
+        if expected is None:
+            expected = keys
+        elif keys != expected:
+            missing = sorted(expected - keys)
+            extra = sorted(keys - expected)
+            raise AnalysisError(
+                f"{arm} is not paired with arm_a; missing={missing}, extra={extra}"
+            )
+    return sorted(expected or set())
 
 
 def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[str, Any]:
     """Performs full statistical evaluation across arms."""
+    pair_keys = validate_paired_dataset(dataset)
     arms = ["arm_a", "arm_b", "arm_c"]
     arm_names = {
         "arm_a": "Arm A (Naive Baseline)",
@@ -272,9 +331,13 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
         }
 
     # Statistical hypothesis comparisons
-    passes_a = [x["pass"] for x in dataset["arm_a"]]
-    passes_b = [x["pass"] for x in dataset["arm_b"]]
-    passes_c = [x["pass"] for x in dataset["arm_c"]]
+    by_key = {
+        arm: {_pair_key(row): row for row in dataset[arm]}
+        for arm in arms
+    }
+    passes_a = [by_key["arm_a"][key]["pass"] for key in pair_keys]
+    passes_b = [by_key["arm_b"][key]["pass"] for key in pair_keys]
+    passes_c = [by_key["arm_c"][key]["pass"] for key in pair_keys]
 
     comparisons = {
         "arm_b_vs_arm_a": mcnemar_test(passes_a, passes_b),
@@ -283,24 +346,50 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
     }
 
     return {
+        "evidence_mode": dataset["evidence_mode"],
+        "inferential": bool(dataset["inferential"]),
+        "source_files": dataset.get("source_files", []),
+        "paired_cells": len(pair_keys),
+        "interpretation": dataset.get("interpretation"),
         "metrics": metrics,
         "comparisons": comparisons,
     }
 
 
 def render_markdown_report(report: Dict[str, Any]) -> str:
-    """Formats statistical report into publication-ready Markdown."""
+    """Render a report whose evidence status is unambiguous."""
     m = report["metrics"]
     c = report["comparisons"]
+    synthetic = report["evidence_mode"] == "synthetic_fixture"
 
     md = [
-        "# Quantitative Statistical Benchmark & Hypothesis Testing Report",
+        (
+            "# Synthetic Statistical Analysis Fixture (Non-Inferential)"
+            if synthetic
+            else "# Paired Statistical Benchmark Report"
+        ),
         "",
-        "## 1. Experimental Arms & Pass@1 Performance",
+    ]
+    if synthetic:
+        md.extend([
+            "> **NOT EXPERIMENTAL EVIDENCE.** This report was generated from a",
+            "> deterministic synthetic fixture to test the analysis code. It must",
+            "> not be cited as a benchmark result or used to claim superiority.",
+            "",
+        ])
+    else:
+        md.extend([
+            f"> Paired cells: {report['paired_cells']}. Source files: "
+            f"{len(report['source_files'])}.",
+            "",
+        ])
+
+    md.extend([
+        "## 1. Arms & Pass@1",
         "",
         "| Arm | Description | Total Samples | Pass@1 | 95% Bootstrap CI | Mean Tokens | Mean Cost ($) |",
         "| :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
-    ]
+    ])
 
     for arm_id in ["arm_a", "arm_b", "arm_c"]:
         info = m[arm_id]
@@ -314,7 +403,9 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
 
     md.extend([
         "",
-        "## 2. Paired Hypothesis Testing (McNemar's Test with Continuity Correction)",
+        "## 2. Paired Hypothesis Testing",
+        "",
+        "McNemar's test is applied only after exact cell matching across all arms.",
         "",
         "| Contrast | Discordant Pairs (b/c) | $\\chi^2$ (df=1) | Two-Tailed $p$-value | Odds Ratio | Significant ($\\alpha=0.05$) |",
         "| :--- | :---: | :---: | :---: | :---: | :---: |",
@@ -328,14 +419,22 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
             f"| **{label}** | {res['b']} / {res['c']} | {res['chi2']} | {p_str} | {res['odds_ratio']} | {sig_str} |"
         )
 
-    md.extend([
-        "",
-        "## 3. Scientific Synthesis",
-        "",
-        "- **Arm C (Type-Directed Continuum)** demonstrates statistically superior pass rates over both Arm A and Arm B.",
-        "- Static semantic validation coupled with causal fault self-healing resolves biological contract mismatches before execution without manual intervention.",
-        "- The modest token expenditure increase in Arm C is offset by eliminating failed cluster job reruns and lost bioinformatician debugging hours.",
-    ])
+    if synthetic:
+        md.extend([
+            "",
+            "## 3. Interpretation",
+            "",
+            "- Fixture-only output; no scientific conclusion is supported.",
+        ])
+    else:
+        md.extend([
+            "",
+            "## 3. Interpretation",
+            "",
+            "- Results are descriptive for the matched cells listed in the source files.",
+            "- Significance does not establish generalization beyond the sampled intents, models, seeds, and execution environment.",
+            "- Repair capability must be reported separately from static detection.",
+        ])
 
     return "\n".join(md)
 
@@ -346,20 +445,34 @@ def main() -> None:
     parser.add_argument("--out-json", default=None, help="Path to export JSON statistical report")
     parser.add_argument("--out-md", default=None, help="Path to export Markdown publication report")
     parser.add_argument("--bootstrap-rounds", type=int, default=2000, help="Number of bootstrap resamples")
+    parser.add_argument(
+        "--synthetic-fixture",
+        action="store_true",
+        help="Use deterministic fake data to test this script; never inferential",
+    )
     args = parser.parse_args()
 
-    # Generate or load dataset
-    if args.results_dir:
-        dataset = load_benchmark_results(Path(args.results_dir))
-        print(f"Loaded real benchmark results from: {args.results_dir}")
-    else:
-        dataset = generate_synthetic_benchmark_dataset(n_intents=36)
-        print("NOTE: using synthetic dataset (pass --results-dir to ingest "
-              "real run_eval.py output)")
-    report = analyze_arms(dataset, bootstrap_rounds=args.bootstrap_rounds)
+    if bool(args.results_dir) == args.synthetic_fixture:
+        parser.error("choose exactly one of --results-dir or --synthetic-fixture")
+
+    try:
+        if args.results_dir:
+            dataset = load_benchmark_results(Path(args.results_dir))
+            print(f"Loaded measured benchmark results from: {args.results_dir}")
+        else:
+            dataset = generate_synthetic_benchmark_dataset(n_intents=36)
+            print("WARNING: synthetic fixture mode is non-inferential")
+        report = analyze_arms(dataset, bootstrap_rounds=args.bootstrap_rounds)
+    except (AnalysisError, FileNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
     print("=" * 80)
-    print("oxo-flow Statistical Rigor & Hypothesis Testing Report")
+    print(
+        "oxo-flow Synthetic Fixture (NON-INFERENTIAL)"
+        if report["evidence_mode"] == "synthetic_fixture"
+        else "oxo-flow Paired Statistical Benchmark Report"
+    )
     print("=" * 80)
     for arm_id, info in report["metrics"].items():
         ci = info["pass_rate_95_ci"]

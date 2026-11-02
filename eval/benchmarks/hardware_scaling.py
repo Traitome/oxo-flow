@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Hardware-aware scaling & heterogeneous compute benchmark harness for oxo-flow.
+"""Hardware-scaling model projections and measured-benchmark ingestion.
 
-Evaluates the architectural impact of the Quad-Pillar hardware/software co-design:
-1. NUMA-aware core affinity & memory locality pinning vs. default OS scheduler.
-2. 4-Tier dynamic scratch storage ladder (Tier 0 RAM -> Tier 1 NVMe -> Tier 2 NFS)
-   vs. monolithic network file system storage.
-3. Heterogeneous GPU acceleration & memory bandwidth saturation.
+The built-in model projects three co-design regimes. Projections are not
+measurements and are generated only with ``--allow-simulation``. Measured data
+must be supplied through ``--measurements-json`` using raw per-run telemetry so
+confidence intervals can be computed from run IDs and seeds.
 
-Outputs publication-ready statistical tables and vector diagrams for Nature-tier manuscripts.
+No output from the projection path may be described as empirical evidence.
 
 Usage:
-  python3 eval/benchmarks/hardware_scaling.py [--cohort-size 1000] [--out-md report.md] [--out-svg chart.svg]
+  python3 eval/benchmarks/hardware_scaling.py --allow-simulation [--cohort-size 1000]
+  python3 eval/benchmarks/hardware_scaling.py --measurements-json measurements.json
 """
 
 from __future__ import annotations
@@ -22,10 +22,16 @@ import os
 import platform
 import random
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+
+MODELLED_TARGET = (
+    "Dual-socket AMD EPYC 9654 model (128 physical Zen4 cores, "
+    "256 threads, 768 MB L3 cache, 12-channel DDR5-4800, "
+    "four PCIe 5.0 NVMe scratch devices)"
+)
 
 
 @dataclass
@@ -41,6 +47,11 @@ class HardwareBenchmarkResult:
     io_wait_time_pct: float
     peak_memory_gb: float
     energy_kwh: float
+    n_runs: int = 1
+    wall_time_ci_hours: Optional[Tuple[float, float]] = None
+    throughput_ci_samples_per_hour: Optional[Tuple[float, float]] = None
+    run_ids: Optional[List[str]] = None
+    seeds: Optional[List[int]] = None
 
 
 def detect_system_topology() -> Dict[str, Any]:
@@ -79,8 +90,10 @@ def detect_system_topology() -> Dict[str, Any]:
     }
 
 
-def simulate_hardware_scaling(cohort_size: int = 1000) -> List[HardwareBenchmarkResult]:
-    """Simulates multi-socket dual AMD EPYC (128 cores, 512GB RAM) across storage & scheduling regimes."""
+def model_hardware_scaling_projection(
+    cohort_size: int = 1000,
+) -> List[HardwareBenchmarkResult]:
+    """Project three regimes from fixed assumptions, not measured telemetry."""
     # Baseline: Default OS scheduler on monolithic NFS (incumbent Nextflow/Snakemake behavior)
     baseline_time = (cohort_size * 18.5) / 128.0  # hours
     baseline_samples_hr = cohort_size / baseline_time
@@ -138,8 +151,118 @@ def simulate_hardware_scaling(cohort_size: int = 1000) -> List[HardwareBenchmark
     return [res_baseline, res_numa, res_full]
 
 
-def generate_svg_chart(results: List[HardwareBenchmarkResult]) -> str:
-    """Generates an publication-ready standalone vector SVG chart (Nature format)."""
+def _bootstrap_mean_ci(
+    data: List[float], seed: int = 20261102, rounds: int = 4000
+) -> Tuple[float, float]:
+    if len(data) < 2:
+        raise ValueError("confidence intervals require at least two measured runs")
+    rng = random.Random(seed)
+    means = []
+    for _ in range(rounds):
+        means.append(sum(rng.choice(data) for _ in data) / len(data))
+    means.sort()
+    lower = means[int(0.025 * rounds)]
+    upper = means[min(rounds - 1, int(0.975 * rounds))]
+    return lower, upper
+
+
+def load_measured_benchmark(path: Path) -> Tuple[
+    List[HardwareBenchmarkResult], Dict[str, Any], Dict[str, Any]
+]:
+    """Load raw run-level measurements and aggregate them by configuration.
+
+    Required run fields: ``run_id``, ``config_name``, ``cohort_size``, ``seed``,
+    ``wall_time_hours``, ``samples_per_hour``, ``l3_cache_miss_rate_pct``,
+    ``remote_numa_access_pct``, ``interconnect_bandwidth_gbps``,
+    ``io_wait_time_pct``, ``peak_memory_gb``, and ``energy_kwh``.
+    """
+    payload = json.loads(path.read_text())
+    host_inventory = payload.get("host_inventory")
+    target_topology = payload.get("target_topology")
+    runs = payload.get("runs")
+    if not isinstance(host_inventory, dict) or not isinstance(target_topology, dict):
+        raise ValueError("measured JSON requires host_inventory and target_topology objects")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("measured JSON requires a non-empty runs array")
+
+    numeric_fields = [
+        "cohort_size",
+        "wall_time_hours",
+        "samples_per_hour",
+        "l3_cache_miss_rate_pct",
+        "remote_numa_access_pct",
+        "interconnect_bandwidth_gbps",
+        "io_wait_time_pct",
+        "peak_memory_gb",
+        "energy_kwh",
+    ]
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    seen_run_ids: set[str] = set()
+    for run in runs:
+        if not isinstance(run, dict):
+            raise ValueError("every measured run must be an object")
+        run_id = run.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("every measured run requires a non-empty run_id")
+        if run_id in seen_run_ids:
+            raise ValueError(f"duplicate measured run_id: {run_id}")
+        seen_run_ids.add(run_id)
+        if not isinstance(run.get("seed"), int):
+            raise ValueError(f"run {run_id} requires an integer seed")
+        config_name = run.get("config_name")
+        if not isinstance(config_name, str) or not config_name:
+            raise ValueError(f"run {run_id} requires config_name")
+        for field in numeric_fields:
+            value = run.get(field)
+            if not isinstance(value, (int, float)) or value < 0:
+                raise ValueError(f"run {run_id} has invalid {field}: {value!r}")
+        grouped.setdefault(config_name, []).append(run)
+
+    aggregated: List[HardwareBenchmarkResult] = []
+    for config_name, config_runs in sorted(grouped.items()):
+        if len(config_runs) < 2:
+            raise ValueError(
+                f"configuration '{config_name}' needs at least two measured runs"
+            )
+        means = {
+            field: sum(float(run[field]) for run in config_runs) / len(config_runs)
+            for field in numeric_fields
+        }
+        wall_ci = _bootstrap_mean_ci(
+            [float(run["wall_time_hours"]) for run in config_runs]
+        )
+        throughput_ci = _bootstrap_mean_ci(
+            [float(run["samples_per_hour"]) for run in config_runs]
+        )
+        aggregated.append(
+            HardwareBenchmarkResult(
+                config_name=config_name,
+                description=str(config_runs[0].get("description", "")),
+                cohort_size=int(means["cohort_size"]),
+                wall_time_hours=means["wall_time_hours"],
+                samples_per_hour=means["samples_per_hour"],
+                l3_cache_miss_rate_pct=means["l3_cache_miss_rate_pct"],
+                remote_numa_access_pct=means["remote_numa_access_pct"],
+                interconnect_bandwidth_gbps=means["interconnect_bandwidth_gbps"],
+                io_wait_time_pct=means["io_wait_time_pct"],
+                peak_memory_gb=means["peak_memory_gb"],
+                energy_kwh=means["energy_kwh"],
+                n_runs=len(config_runs),
+                wall_time_ci_hours=wall_ci,
+                throughput_ci_samples_per_hour=throughput_ci,
+                run_ids=sorted(str(run["run_id"]) for run in config_runs),
+                seeds=sorted(int(run["seed"]) for run in config_runs),
+            )
+        )
+    if len(aggregated) < 2:
+        raise ValueError("measured benchmark requires at least two configurations")
+    return aggregated, host_inventory, target_topology
+
+
+def generate_svg_chart(
+    results: List[HardwareBenchmarkResult], evidence_mode: str
+) -> str:
+    """Generate a standalone vector chart with an explicit evidence label."""
     width = 720
     height = 420
     pad_left = 220
@@ -159,8 +282,11 @@ def generate_svg_chart(results: List[HardwareBenchmarkResult]) -> str:
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'width="{width}" height="{height}" style="background-color: #0f172a; font-family: ui-sans-serif, system-ui, sans-serif;">',
-        f'<text x="{width/2}" y="35" text-anchor="middle" font-size="18" font-weight="700" fill="#f8fafc">Hardware Co-Design Scaling: Dual AMD EPYC 9654 (128 Cores)</text>',
-        f'<text x="{width/2}" y="55" text-anchor="middle" font-size="12" fill="#94a3b8">End-to-End Genomic Pipeline Throughput (Samples per Hour; Higher is Better)</text>',
+        f'<text x="{width/2}" y="35" text-anchor="middle" font-size="18" font-weight="700" fill="#f8fafc">'
+        f'{"Measured" if evidence_mode == "measured" else "Model Projection (Not Measurement)"}: '
+        f'Hardware Scaling</text>',
+        f'<text x="{width/2}" y="55" text-anchor="middle" font-size="12" fill="#94a3b8">'
+        "Genomic Pipeline Throughput (Samples per Hour; Higher is Better)</text>",
     ]
 
     colors = ["#64748b", "#06b6d4", "#10b981"]
@@ -176,50 +302,95 @@ def generate_svg_chart(results: List[HardwareBenchmarkResult]) -> str:
 
     # Axis and footer notes
     svg.append(f'<line x1="{pad_left}" y1="{pad_top}" x2="{pad_left}" y2="{height - pad_bottom}" stroke="#334155" stroke-width="2" />')
-    svg.append(f'<text x="{width/2}" y="{height - 25}" text-anchor="middle" font-size="11" fill="#64748b">Simulated cohort of N=10,000 WGS pipelines (modeled telemetry, not hardware measurement). Throughput gain: +{gain_pct:.1f}% via NUMA pinning and NVMe scratch tiering.</text>')
+    suffix = (
+        "Measured run-level aggregation."
+        if evidence_mode == "measured"
+        else "Deterministic model projection, not hardware measurement."
+    )
+    svg.append(
+        f'<text x="{width/2}" y="{height - 25}" text-anchor="middle" '
+        f'font-size="11" fill="#64748b">{suffix} '
+        f"Projected throughput difference: {gain_pct:+.1f}%.</text>"
+    )
     svg.append('</svg>')
 
     return "\n".join(svg)
 
 
-def generate_markdown_report(results: List[HardwareBenchmarkResult], topo: Dict[str, Any]) -> str:
-    """Renders comprehensive Markdown report for manuscript submission."""
+def generate_markdown_report(
+    results: List[HardwareBenchmarkResult],
+    host_inventory: Dict[str, Any],
+    target_topology: Dict[str, Any],
+    evidence_mode: str,
+) -> str:
+    """Render projections or measurements without changing their evidence class."""
+    simulated = evidence_mode != "measured"
     md = [
-        "# Large-Scale Cohort & Hardware-Aware Scaling Benchmark Report",
+        (
+            "# Hardware Scaling Model Projection (Not Measurement)"
+            if simulated
+            else "# Measured Hardware Scaling Benchmark"
+        ),
         "",
-        "## 1. Experimental Hardware Topology",
+    ]
+    if simulated:
+        md.extend([
+            "> **MODEL PROJECTION.** Values below come from fixed assumptions in",
+            "> `model_hardware_scaling_projection`; they are not experimental data.",
+            "",
+        ])
+    md.extend([
+        "## 1. Host and Target Topology",
         "",
-        f"- **Host Platform**: {topo['os']} ({topo['cores']} physical/logical CPU cores, {topo['numa_nodes']} NUMA domains, {topo['total_memory_gb']} GB total memory).",
-        "- **Target Simulation System**: Dual-socket AMD EPYC 9654 (128 physical Zen4 cores, 256 threads, 768MB L3 cache, 12-channel DDR5-4800, 4x PCIe 5.0 NVMe scratch arrays).",
+        f"- **Execution host inventory**: {json.dumps(host_inventory, sort_keys=True)}.",
+        f"- **Target topology**: {json.dumps(target_topology, sort_keys=True)}.",
+        f"- **Evidence mode**: `{evidence_mode}`.",
         f"- **Cohort Dimension**: $N = {results[0].cohort_size:,}$ whole-genome sequencing (WGS) variant calling pipelines.",
         "",
-        "## 2. Quantitative Performance & Hardware Telemetry Across Regimes",
+        (
+            "## 2. Projected Performance"
+            if simulated
+            else "## 2. Measured Performance"
+        ),
         "",
-        "| Architecture Configuration | Wall Clock (Hours) | Throughput (Samples/Hr) | Speedup Factor | L3 Cache Miss Rate (%) | Remote NUMA Access (%) | I/O Wait Time (%) | Energy (kWh) |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
-    ]
+        "| Architecture Configuration | Runs | Wall Clock (Hours) | Wall-Time 95% CI | Throughput (Samples/Hr) | Throughput 95% CI | Speedup | L3 Miss (%) | Remote NUMA (%) | I/O Wait (%) | Energy (kWh) |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+    ])
 
     base_time = results[0].wall_time_hours
     for r in results:
         speedup = f"{base_time / r.wall_time_hours:.2f}x" if r.wall_time_hours > 0 else "1.00x"
+        wall_ci = (
+            f"[{r.wall_time_ci_hours[0]:.2f}, {r.wall_time_ci_hours[1]:.2f}]"
+            if r.wall_time_ci_hours
+            else "n/a"
+        )
+        throughput_ci = (
+            f"[{r.throughput_ci_samples_per_hour[0]:.1f}, "
+            f"{r.throughput_ci_samples_per_hour[1]:.1f}]"
+            if r.throughput_ci_samples_per_hour
+            else "n/a"
+        )
         md.append(
-            f"| **{r.config_name}** | {r.wall_time_hours:.1f} | **{r.samples_per_hour:.2f}** | **{speedup}** | "
-            f"{r.l3_cache_miss_rate_pct:.1f}% | {r.remote_numa_access_pct:.1f}% | {r.io_wait_time_pct:.1f}% | {r.energy_kwh:.1f} |"
+            f"| **{r.config_name}** | {r.n_runs} | {r.wall_time_hours:.2f} | {wall_ci} | "
+            f"**{r.samples_per_hour:.2f}** | {throughput_ci} | **{speedup}** | "
+            f"{r.l3_cache_miss_rate_pct:.1f}% | {r.remote_numa_access_pct:.1f}% | "
+            f"{r.io_wait_time_pct:.1f}% | {r.energy_kwh:.1f} |"
         )
 
     md.extend([
         "",
-        "## 3. Systems Synergy Findings & Discussion",
+        "## 3. Interpretation",
         "",
-        "### Elimination of Cross-Socket Interconnect Bottlenecks",
-        "",
-        "- Default OS scheduling indiscriminately migrates memory-intensive alignment tasks (`bwa-mem2`, `STAR`) across sockets, incurring a 48.2% remote NUMA access rate and saturating the Infinity Fabric interconnect at 112.5 GB/s.",
-        "- `oxo-flow` NUMA-aware core binding clamps tasks to local DDR memory channels, decreasing remote node accesses to 3.8% and cutting L3 cache misses from 18.4% to 5.4%.",
-        "",
-        "### I/O Wait Mitigation via Multi-Tier Storage Ladder",
-        "",
-        "- Shared network file systems (NFS/Lustre) degrade severely under metadata contention and lock contention during large fan-out runs, resulting in 34.8% I/O wait time.",
-        "- Diverting temporary intermediate SAM/BAM streams into Tier 0 (tmpfs memory pipes) and Tier 1 (local NVMe scratch) lowers I/O wait to 7.6%, yielding a net **2.13x total wall-clock speedup**.",
+        (
+            "- The table is a deterministic projection under stated assumptions, "
+            "not a measurement of oxo-flow on the target topology."
+            if simulated
+            else "- Results aggregate raw run IDs and seeds by configuration; "
+            "confidence intervals are percentile bootstrap intervals over runs."
+        ),
+        "- Cross-host deployment evidence remains required before making a general performance claim.",
+        "- Projected or measured speedup does not by itself establish scientific correctness.",
     ])
 
     return "\n".join(md)
@@ -228,18 +399,47 @@ def generate_markdown_report(results: List[HardwareBenchmarkResult], topo: Dict[
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hardware-aware scaling benchmark harness")
     parser.add_argument("--cohort-size", type=int, default=10000, help="Cohort size for simulated scaling")
+    parser.add_argument(
+        "--allow-simulation",
+        action="store_true",
+        help="Explicitly allow deterministic model projections (never empirical evidence)",
+    )
+    parser.add_argument(
+        "--measurements-json",
+        default=None,
+        help="Raw measured run-level telemetry JSON",
+    )
     parser.add_argument("--out-json", default=None, help="Export path for JSON benchmark results")
-    parser.add_argument("--out-md", default=None, help="Export path for Markdown manuscript report")
+    parser.add_argument("--out-md", default=None, help="Export path for Markdown report")
     parser.add_argument("--out-svg", default=None, help="Export path for SVG vector visualization")
     args = parser.parse_args()
 
-    topo = detect_system_topology()
-    results = simulate_hardware_scaling(cohort_size=args.cohort_size)
+    if bool(args.allow_simulation) == bool(args.measurements_json):
+        parser.error("choose exactly one of --allow-simulation or --measurements-json")
+
+    host_inventory = detect_system_topology()
+    if args.measurements_json:
+        results, supplied_host, target_topology = load_measured_benchmark(
+            Path(args.measurements_json)
+        )
+        host_inventory = supplied_host
+        evidence_mode = "measured"
+    else:
+        results = model_hardware_scaling_projection(cohort_size=args.cohort_size)
+        target_topology = {
+            "description": MODELLED_TARGET,
+            "provenance": "fixed model assumption, not inventory",
+        }
+        evidence_mode = "model_projection"
 
     print("=" * 80)
-    print("oxo-flow Hardware-Aware Systems Synergy & Scaling Benchmark")
-    print(f"Host Topology: {topo['os']} | Cores: {topo['cores']} | RAM: {topo['total_memory_gb']} GB")
-    print(f"Simulation Cohort: {args.cohort_size:,} Genomes")
+    print(
+        "oxo-flow Measured Hardware Scaling Benchmark"
+        if evidence_mode == "measured"
+        else "oxo-flow Hardware Scaling Model Projection (NOT MEASUREMENT)"
+    )
+    print(f"Evidence mode: {evidence_mode}")
+    print(f"Cohort: {results[0].cohort_size:,} Genomes")
     print("=" * 80)
 
     for r in results:
@@ -255,8 +455,16 @@ def main() -> None:
         out_j = Path(args.out_json)
         out_j.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "topology": topo,
+            "evidence_mode": evidence_mode,
+            "inferential": evidence_mode == "measured",
+            "host_inventory": host_inventory,
+            "target_topology": target_topology,
             "results": [r.__dict__ for r in results],
+            "interpretation_warning": (
+                None
+                if evidence_mode == "measured"
+                else "Deterministic model projection; not empirical evidence."
+            ),
         }
         out_j.write_text(json.dumps(data, indent=2))
         print(f"Hardware scaling JSON exported to: {out_j}")
@@ -264,13 +472,17 @@ def main() -> None:
     if args.out_md:
         out_m = Path(args.out_md)
         out_m.parent.mkdir(parents=True, exist_ok=True)
-        out_m.write_text(generate_markdown_report(results, topo))
+        out_m.write_text(
+            generate_markdown_report(
+                results, host_inventory, target_topology, evidence_mode
+            )
+        )
         print(f"Hardware scaling Markdown report exported to: {out_m}")
 
     if args.out_svg:
         out_s = Path(args.out_svg)
         out_s.parent.mkdir(parents=True, exist_ok=True)
-        out_s.write_text(generate_svg_chart(results))
+        out_s.write_text(generate_svg_chart(results, evidence_mode))
         print(f"Hardware scaling SVG chart exported to: {out_s}")
 
 

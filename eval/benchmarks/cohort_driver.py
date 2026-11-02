@@ -23,11 +23,16 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
+
+
+class BenchmarkError(RuntimeError):
+    """Raised when a measured benchmark field cannot be trusted."""
 
 
 @dataclass
@@ -84,8 +89,9 @@ name = "cohort_scale_{num_samples}"
 version = "1.0.0"
 description = "Large-scale cohort processing benchmark workflow"
 
-[values]
-sample = [{formatted_samples}]
+[[values]]
+name = "cohort_sample"
+values = [{formatted_samples}]
 
 [types.bam_coord]
 format = "bam"
@@ -94,8 +100,8 @@ index = "bai"
 
 [[rules]]
 name = "align_bwa"
-output = ["aligned/{{sample}}.bam"]
-shell = "echo 'bwa mem -R @RG ref.fa {{sample}}_R1.fq {{sample}}_R2.fq' > aligned/{{sample}}.bam"
+output = ["aligned/{{cohort_sample}}.bam"]
+shell = "echo 'bwa mem -R @RG ref.fa {{cohort_sample}}_R1.fq {{cohort_sample}}_R2.fq' > aligned/{{cohort_sample}}.bam"
 [rules.types]
 outputs = {{ default = "bam_coord" }}
 
@@ -105,9 +111,9 @@ memory = "8G"
 
 [[rules]]
 name = "qc_check"
-input = ["aligned/{{sample}}.bam"]
-output = ["qc/{{sample}}_metrics.json"]
-shell = "echo '{{\\"coverage\\": 35.2}}' > qc/{{sample}}_metrics.json"
+input = ["aligned/{{cohort_sample}}.bam"]
+output = ["qc/{{cohort_sample}}_metrics.json"]
+shell = "echo '{{\\"coverage\\": 35.2}}' > qc/{{cohort_sample}}_metrics.json"
 
 [rules.resources]
 threads = 1
@@ -115,10 +121,12 @@ memory = "2G"
 
 [[rules]]
 name = "aggregate_cohort"
-input = ["qc/{{sample}}_metrics.json"]
+input = []
+expand_inputs = [{{
+    pattern = "qc/{{cohort_sample}}_metrics.json"
+}}]
 output = ["report/cohort_summary.tsv"]
 shell = "cat qc/*_metrics.json > report/cohort_summary.tsv"
-target = true
 """
 
 
@@ -141,21 +149,37 @@ def benchmark_cohort_expansion(binary: str, num_samples: int, work_dir: Path) ->
     t1 = time.perf_counter()
     latency_ms = (t1 - t0) * 1000.0
 
-    dag_size = 0
-    parse_success = res.returncode == 0
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()
+        raise BenchmarkError(
+            f"dry-run failed for N={num_samples} (exit {res.returncode}): {detail}"
+        )
     try:
         j = json.loads(res.stdout)
-        plan = j.get("plan", [])
-        dag_size = len(plan)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        raise BenchmarkError(
+            f"dry-run for N={num_samples} did not emit valid JSON: {exc}"
+        ) from exc
+    plan = j.get("plan")
+    if not isinstance(plan, list):
+        raise BenchmarkError(
+            f"dry-run for N={num_samples} has no measured 'plan' array"
+        )
+    dag_size = len(plan)
+    if dag_size == 0:
+        raise BenchmarkError(
+            f"dry-run for N={num_samples} returned an empty plan"
+        )
+    elapsed_seconds = latency_ms / 1000.0
+    throughput = dag_size / elapsed_seconds if elapsed_seconds > 0 else None
 
     return {
         "num_samples": num_samples,
-        "dag_nodes": dag_size if dag_size > 0 else (num_samples * 2 + 1),
+        "dag_nodes": dag_size,
         "expansion_latency_ms": round(latency_ms, 2),
-        "parse_success": parse_success,
-        "throughput_nodes_per_sec": round((num_samples * 2 + 1) / (latency_ms / 1000.0), 1) if latency_ms > 0 else 0,
+        "parse_success": True,
+        "measurement_valid": True,
+        "throughput_nodes_per_sec": round(throughput, 1) if throughput else None,
     }
 
 
@@ -193,16 +217,25 @@ def main() -> None:
     work_base.mkdir(parents=True, exist_ok=True)
 
     results = []
-    for sz in sweep_sizes:
-        wdir = work_base / f"cohort_{sz}"
-        wdir.mkdir(parents=True, exist_ok=True)
-        r = benchmark_cohort_expansion(binary, sz, wdir)
-        results.append(r)
-        print(
-            f"Cohort N={sz:5d} | DAG Nodes: {r['dag_nodes']:6d} | "
-            f"Expansion Latency: {r['expansion_latency_ms']:7.2f} ms | "
-            f"Throughput: {r['throughput_nodes_per_sec']:8.1f} nodes/sec"
-        )
+    try:
+        for sz in sweep_sizes:
+            wdir = work_base / f"cohort_{sz}"
+            wdir.mkdir(parents=True, exist_ok=True)
+            r = benchmark_cohort_expansion(binary, sz, wdir)
+            results.append(r)
+            throughput = (
+                f"{r['throughput_nodes_per_sec']:8.1f}"
+                if r["throughput_nodes_per_sec"] is not None
+                else "     n/a"
+            )
+            print(
+                f"Cohort N={sz:5d} | DAG Nodes: {r['dag_nodes']:6d} | "
+                f"Expansion Latency: {r['expansion_latency_ms']:7.2f} ms | "
+                f"Throughput: {throughput} nodes/sec"
+            )
+    except BenchmarkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
     print("=" * 80)
 
@@ -223,12 +256,22 @@ def main() -> None:
         lines = [
             "# Large-Scale Cohort Expansion & DAG Compilation Benchmark",
             "",
+            "Measured from successful `oxo-flow dry-run --json` invocations. "
+            "DAG nodes equal the length of the emitted `plan` array; no node "
+            "count is inferred from cohort size.",
+            "",
             "| Cohort Size ($N$) | Concrete DAG Instances | Expansion Latency (ms) | Compilation Throughput (Nodes/Sec) |",
             "| :---: | :---: | :---: | :---: |",
         ]
         for r in results:
+            throughput = (
+                f"{r['throughput_nodes_per_sec']:,.1f}"
+                if r["throughput_nodes_per_sec"] is not None
+                else "n/a"
+            )
             lines.append(
-                f"| {r['num_samples']} | {r['dag_nodes']:,} | {r['expansion_latency_ms']:.2f} ms | {r['throughput_nodes_per_sec']:,.1f} |"
+                f"| {r['num_samples']} | {r['dag_nodes']:,} | "
+                f"{r['expansion_latency_ms']:.2f} ms | {throughput} |"
             )
         out_m.write_text("\n".join(lines) + "\n")
         print(f"Cohort benchmark Markdown exported to: {out_m}")
