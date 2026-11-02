@@ -248,21 +248,27 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
             } else {
                 format!("{}B", total_size)
             };
-            eprintln!(
-                "{} {} output files verified ({} total)",
-                "✓".green(),
-                verified,
-                size_str
+            progress_narrate(
+                format_args!(
+                    "{} {} output files verified ({} total)",
+                    "✓".green(),
+                    verified,
+                    size_str
+                ),
+                ctx.run_log,
             );
         }
         if !missing_outputs.is_empty() {
-            eprintln!(
-                "{} {} were not found:",
-                "⚠".yellow(),
-                oxo_flow_core::plural(missing_outputs.len(), "output file", "output files")
+            progress_narrate(
+                format_args!(
+                    "{} {} were not found:",
+                    "⚠".yellow(),
+                    oxo_flow_core::plural(missing_outputs.len(), "output file", "output files")
+                ),
+                ctx.run_log,
             );
             for m in &missing_outputs {
-                eprintln!("{}", m.dimmed());
+                progress_narrate(format_args!("{}", m.dimmed()), ctx.run_log);
             }
         }
     }
@@ -416,10 +422,13 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                 }
             }
             if consumers.is_empty() {
-                eprintln!(
-                    "  {} temporary rule '{}' is a leaf — outputs kept",
-                    "ℹ".dimmed(),
-                    rule.name
+                progress_narrate(
+                    format_args!(
+                        "  {} temporary rule '{}' is a leaf — outputs kept",
+                        "ℹ".dimmed(),
+                        rule.name
+                    ),
+                    ctx.run_log,
                 );
                 continue;
             }
@@ -584,11 +593,14 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                             Err(_) => Ok(()),
                         };
                     }
-                    eprintln!(
-                        "  {} temporary outputs deleted for '{}' ({}, regenerated on demand)",
-                        "⊘".dimmed(),
-                        rule,
-                        oxo_flow_core::plural(paths.len(), "file", "files")
+                    progress_narrate(
+                        format_args!(
+                            "  {} temporary outputs deleted for '{}' ({}, regenerated on demand)",
+                            "⊘".dimmed(),
+                            rule,
+                            oxo_flow_core::plural(paths.len(), "file", "files")
+                        ),
+                        ctx.run_log,
                     );
                 }
             }
@@ -612,10 +624,16 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
         };
         let projected_secs = per_sample * total_count as f64;
 
-        eprintln!("\n{}", "Pilot summary:".bold().cyan());
-        eprintln!(
-            "  Samples: {}/{} (pilot) | Wall time: {:.1}s | Per-sample: {:.1}s | Projected full run: ~{:.0}s",
-            pilot_count, total_count, elapsed_secs, per_sample, projected_secs
+        progress_narrate(
+            format_args!("\n{}", "Pilot summary:".bold().cyan()),
+            ctx.run_log,
+        );
+        progress_narrate(
+            format_args!(
+                "  Samples: {}/{} (pilot) | Wall time: {:.1}s | Per-sample: {:.1}s | Projected full run: ~{:.0}s",
+                pilot_count, total_count, elapsed_secs, per_sample, projected_secs
+            ),
+            ctx.run_log,
         );
         let scientific =
             oxo_flow_core::scientific_preflight::analyze_scientific_constraints(ctx.config);
@@ -637,17 +655,23 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                     None => distinct.push((key, vec![w])),
                 }
             }
-            eprintln!(
-                "  {} ({} across sample rules) — see 'oxo-flow dry-run --samples ...'",
-                oxo_flow_core::plural(
-                    distinct.len(),
-                    "distinct scientific preflight finding",
-                    "distinct scientific preflight findings"
+            progress_narrate(
+                format_args!(
+                    "  {} ({} across sample rules) — see 'oxo-flow dry-run --samples ...'",
+                    oxo_flow_core::plural(
+                        distinct.len(),
+                        "distinct scientific preflight finding",
+                        "distinct scientific preflight findings"
+                    ),
+                    oxo_flow_core::plural(scientific.len(), "instance", "instances")
                 ),
-                oxo_flow_core::plural(scientific.len(), "instance", "instances")
+                ctx.run_log,
             );
             for (key, group) in &distinct {
-                eprintln!("    ⚠ [{}] {} (×{})", key.0, group[0].rule, group.len());
+                progress_narrate(
+                    format_args!("    ⚠ [{}] {} (×{})", key.0, group[0].rule, group.len()),
+                    ctx.run_log,
+                );
             }
         }
 
@@ -687,11 +711,16 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                 .await
             {
                 Ok(response) => {
-                    eprintln!();
-                    eprintln!("{}", "Pilot report (AI):".bold().green());
-                    eprintln!("{response}");
+                    progress_narrate(format_args!(""), ctx.run_log);
+                    progress_narrate(
+                        format_args!("{}", "Pilot report (AI):".bold().green()),
+                        ctx.run_log,
+                    );
+                    progress_narrate(format_args!("{response}"), ctx.run_log);
                 }
-                Err(e) => eprintln!("  AI pilot report failed: {e}"),
+                Err(e) => {
+                    progress_narrate(format_args!("  AI pilot report failed: {e}"), ctx.run_log)
+                }
             }
         }
     }
