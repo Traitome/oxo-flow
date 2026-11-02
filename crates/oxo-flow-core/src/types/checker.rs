@@ -49,7 +49,8 @@ impl BioTypeSpec {
     /// `expected` (the required consumer input).
     ///
     /// Accumulates all violations across format, sort order, index accompaniment,
-    /// reference assembly build, read groups, and compression.
+    /// reference assembly build, read groups, compression, and extensible
+    /// biological attributes.
     pub fn is_subtype_of(&self, expected: &BioTypeSpec) -> Result<(), Vec<TypeViolation>> {
         let mut violations = Vec::new();
 
@@ -223,8 +224,45 @@ impl BioTypeSpec {
                         CompressionKind::Bgzip => "bgzip -c {input} > {output}".to_string(),
                         CompressionKind::Zstd => "zstd -c {input} > {output}".to_string(),
                         CompressionKind::Gzip => "gzip -c {input} > {output}".to_string(),
+                        // Unreachable: the enclosing `if` excludes `None`.
                         CompressionKind::None => "gzip -dc {input} > {output}".to_string(),
                     }),
+                });
+            }
+        }
+
+        // 7. Extensible attribute contract (TYPE-007)
+        if !expected.attributes.is_empty() {
+            let unmet: Vec<&String> = expected
+                .attributes
+                .iter()
+                .filter(|(key, value)| self.attributes.get(*key) != Some(*value))
+                .map(|(key, _)| key)
+                .collect();
+            if !unmet.is_empty() {
+                violations.push(TypeViolation {
+                    code: "TYPE-007".to_string(),
+                    message: format!(
+                        "attribute contract mismatch: consumer requires {} that the producer does not declare",
+                        unmet
+                            .iter()
+                            .map(|key| format!("{}={}", key, expected.attributes[*key]))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    suggestion: Some(format!(
+                        "declare the missing attributes on the producer output type: {}",
+                        unmet
+                            .iter()
+                            .map(|key| format!(
+                                "{}={}",
+                                key,
+                                expected.attributes[*key]
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                    coercion_rule: None,
                 });
             }
         }

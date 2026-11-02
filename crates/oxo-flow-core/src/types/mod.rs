@@ -379,7 +379,8 @@ pub struct RuleTypesSpec {
 /// Specific violation identified during biological subtyping check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeViolation {
-    /// Diagnostic identifier (`TYPE-001` .. `TYPE-006`).
+    /// Diagnostic identifier (`TYPE-001` .. `TYPE-007`, or `TYPE-UNKNOWN`
+    /// when a referenced type name cannot be resolved).
     pub code: String,
     /// Clear explanation of the semantic mismatch.
     pub message: String,

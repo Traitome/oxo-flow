@@ -186,6 +186,8 @@ The biological type system verifies formal format and coordination contracts acr
 | `TYPE-004` | Assembly | Reference build conflict (e.g. GRCh38 BAM consumed by GRCh37 variant caller) | Re-aligns or re-indexes with matching reference genome |
 | `TYPE-005` | Metadata | Missing read group `@RG` metadata fields required by downstream tools | Injects read group tags (`bwa mem -R '@RG...'`) |
 | `TYPE-006` | Compression | Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required) | Re-compresses stream (`bgzip`) |
+| `TYPE-007` | Attributes | Extensible attribute contract mismatch: the consumer's declared `[types.*]` attributes (e.g. `variant_type=germline` implied by `gvcf`) are missing or hold different values on the producer side | Declares the missing `key=value` attributes on the producer output type |
+| `TYPE-UNKNOWN` | Resolution | A `types.<name>` reference on a rule input/output does not match any `[types.*]` declaration (or inline spec fails to parse) | Fixes the type name or adds the missing `[types.*]` declaration |
 
 ### Curated Scientific Preflight Catalog (`SCI-*`)
 

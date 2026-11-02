@@ -1396,7 +1396,7 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
         check_concurrency_hardware_rules(rule, shell, &shell_lower, config, &mut warnings);
     }
 
-    // Biological type contract check (TYPE-001 .. TYPE-006)
+    // Biological type contract check (TYPE-001 .. TYPE-007)
     if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
         && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&config.rules)
     {

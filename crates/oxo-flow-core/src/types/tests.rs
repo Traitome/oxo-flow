@@ -253,6 +253,130 @@ fn test_type_coercion_commands_match_index_and_compression_algorithms() {
 }
 
 #[test]
+fn test_type_007_attributes_satisfied() {
+    let producer = BioTypeSpec {
+        format: BioFormat::Vcf,
+        attributes: [
+            ("variant_type".to_string(), "germline".to_string()),
+            ("callers".to_string(), "gatk".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let consumer = BioTypeSpec {
+        format: BioFormat::Vcf,
+        attributes: [("variant_type".to_string(), "germline".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+
+    assert!(producer.is_subtype_of(&consumer).is_ok());
+}
+
+#[test]
+fn test_type_007_attribute_missing_and_mismatched() {
+    let producer = BioTypeSpec {
+        format: BioFormat::Vcf,
+        attributes: [("variant_type".to_string(), "somatic".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let consumer = BioTypeSpec {
+        format: BioFormat::Vcf,
+        attributes: [
+            ("variant_type".to_string(), "germline".to_string()),
+            ("contigs".to_string(), "hg38".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+
+    let err = producer.is_subtype_of(&consumer).unwrap_err();
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0].code, "TYPE-007");
+    assert!(
+        err[0].message.contains("variant_type=germline"),
+        "{}",
+        err[0].message
+    );
+    assert!(
+        err[0].message.contains("contigs=hg38"),
+        "{}",
+        err[0].message
+    );
+    assert!(err[0].coercion_rule.is_none());
+    assert!(
+        err[0]
+            .suggestion
+            .as_ref()
+            .unwrap()
+            .contains("variant_type=germline"),
+        "{}",
+        err[0].suggestion.as_ref().unwrap()
+    );
+}
+
+#[test]
+fn test_type_007_extra_producer_attributes_are_ignored() {
+    let producer = BioTypeSpec {
+        format: BioFormat::Vcf,
+        attributes: [("variant_type".to_string(), "germline".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let consumer = BioTypeSpec::new(BioFormat::Vcf);
+
+    assert!(producer.is_subtype_of(&consumer).is_ok());
+}
+
+#[test]
+fn test_type_007_gvcf_inline_direction_both_ways() {
+    // Consumer declares `gvcf` (expands to variant_type=germline); producer
+    // must declare the same contract or the edge fails.
+    let gvcf_toml = r#"
+        [workflow]
+        name = "gvcf_direction"
+
+        [[rules]]
+        name = "call"
+        output = ["calls.g.vcf.gz"]
+        shell = "touch calls.g.vcf.gz"
+        [rules.types]
+        outputs = { default = "GVCF[compression=bgzip]" }
+
+        [[rules]]
+        name = "joint_genotype"
+        input = ["calls.g.vcf.gz"]
+        output = ["joint.vcf.gz"]
+        shell = "touch joint.vcf.gz"
+        [rules.types]
+        inputs = { default = "gvcf" }
+    "#;
+    let config = WorkflowConfig::parse(gvcf_toml).expect("valid gvcf workflow");
+    let dag = WorkflowDag::from_rules(&config.rules).expect("valid dag");
+    assert!(
+        check_workflow_types(&config, &dag).is_empty(),
+        "gvcf producer with variant_type=germline must satisfy a gvcf consumer"
+    );
+
+    // Plain VCF producer fails the gvcf consumer with TYPE-007.
+    let plain_toml = gvcf_toml.replace("GVCF[compression=bgzip]", "VCF");
+    let config = WorkflowConfig::parse(&plain_toml).expect("valid plain vcf workflow");
+    let dag = WorkflowDag::from_rules(&config.rules).expect("valid dag");
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(
+        diagnostics.iter().any(|d| d.violation.code == "TYPE-007"
+            && d.violation.message.contains("variant_type=germline")),
+        "plain VCF producer must fail a gvcf consumer with TYPE-007: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn test_dag_type_checking_pipeline() {
     let toml = r#"
         [workflow]

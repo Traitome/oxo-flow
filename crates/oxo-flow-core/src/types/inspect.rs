@@ -668,6 +668,11 @@ pub fn introspect_path_with_spec(
 }
 
 /// Check if companion index file exists adjacent to target file on disk.
+///
+/// Both conventions are probed for every kind: a replaced extension
+/// (`sample.bam` -> `sample.bai`) and an appended one
+/// (`sample.bam` -> `sample.bam.bai`), which already covers the
+/// per-kind aliases (`.bam.bai`, `.vcf.gz.tbi`, ...).
 fn check_index_exists_on_disk(path: &Path, index: IndexKind) -> bool {
     let ext = index.as_str();
     let direct_ext = path.with_extension(ext);
@@ -675,30 +680,5 @@ fn check_index_exists_on_disk(path: &Path, index: IndexKind) -> bool {
         return true;
     }
     let appended = format!("{}.{}", path.display(), ext);
-    if Path::new(&appended).exists() {
-        return true;
-    }
-    // Specific aliases: .bam.bai vs .bai, .vcf.gz.tbi vs .tbi
-    match index {
-        IndexKind::Bai => {
-            let s = format!("{}.bai", path.display());
-            Path::new(&s).exists()
-        }
-        IndexKind::Crai => {
-            let s = format!("{}.crai", path.display());
-            Path::new(&s).exists()
-        }
-        IndexKind::Tbi => {
-            let s = format!("{}.tbi", path.display());
-            Path::new(&s).exists()
-        }
-        IndexKind::Fai => {
-            let s = format!("{}.fai", path.display());
-            Path::new(&s).exists()
-        }
-        IndexKind::Csi => {
-            let s = format!("{}.csi", path.display());
-            Path::new(&s).exists()
-        }
-    }
+    Path::new(&appended).exists()
 }
