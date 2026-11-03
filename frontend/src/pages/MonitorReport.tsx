@@ -478,7 +478,7 @@ export default function MonitorReport() {
         <button className="btn-sm" onClick={downloadLogs} title={t('monitor.logs.download')}>
           <Download size={13} /> {t('monitor.logs.download')}
         </button>
-        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reload')} aria-label={t('monitor.logs.reload')}>
+        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reloadLabel')} aria-label={t('monitor.logs.reloadLabel')}>
           <RotateCcw size={13} />
         </button>
       </div>
@@ -695,7 +695,9 @@ export default function MonitorReport() {
                               const run = await api.getRun(selId);
                               session.setPipelineToml(run.pipeline_snapshot ?? '');
                               navigate('/editor');
-                            } catch { /* ignore */ }
+                            } catch (err: unknown) {
+                              setActionError(describeApiError(err, 'Could not load pipeline for editing'));
+                            }
                           }}><FileText size={13} /> Manual Edit</button>
                         </div>
                       )}
@@ -1255,7 +1257,7 @@ export default function MonitorReport() {
       {/* Dry-run preview: instance-level plan from the CLI's --json output
           (issue #79 P2 — the preview used to show unexpanded rules). */}
       {preview && (
-        <div className="dash-card" ref={detailRef}>
+        <div className="dash-card">
           <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)', marginBottom: '0.5rem' }}>
             {t('monitor.dryRunPreview')}
           </h3>
@@ -1290,7 +1292,8 @@ export default function MonitorReport() {
         </div>
       )}
 
-      {/* Run Detail */}
+      {/* Run Detail — the scroll target for selectRun; the dry-run preview
+          card above must not steal this ref. */}
       {(selId) && (
         <div className="dash-card" ref={detailRef}>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>

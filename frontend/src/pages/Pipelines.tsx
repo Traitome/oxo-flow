@@ -14,7 +14,7 @@ export default function Pipelines() {
   const [tab, setTab] = useState<Tab>('templates');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   // A failed load used to render as an empty list — indistinguishable from
   // "you have no templates/pipelines".
   const [error, setError] = useState<string | null>(null);
@@ -65,10 +65,10 @@ export default function Pipelines() {
     try {
       await api.deletePipeline(id);
       setPipelines((prev) => prev.filter((p) => p.id !== id));
-      setNotice(t('pipelines.deleted').replace('{{name}}', name));
+      setNotice({ text: t('pipelines.deleted').replace('{{name}}', name) });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('common.unknownError');
-      setNotice(t('pipelines.deleteFailed').replace('{{error}}', msg));
+      setNotice({ text: t('pipelines.deleteFailed').replace('{{error}}', msg), error: true });
     }
   };
 
@@ -86,7 +86,7 @@ export default function Pipelines() {
       // http(s):// link — stripping `oxo+` leaves the browser URL intact.
       httpsUrl = res.share_url.replace('oxo+', '');
     } catch (err: unknown) {
-      setNotice(t('pipelines.shareFailed') + `: ${describeApiError(err, t('common.unknownError'))}`);
+      setNotice({ text: t('pipelines.shareFailed') + `: ${describeApiError(err, t('common.unknownError'))}`, error: true });
       return;
     }
     try {
@@ -95,17 +95,17 @@ export default function Pipelines() {
       // Clipboard unavailable (plain-HTTP deployment) — the URL is shown
       // in the notice either way.
     }
-    setNotice(t('pipelines.shareCopied').replace('{{days}}', '30') + `: ${httpsUrl}`);
+    setNotice({ text: t('pipelines.shareCopied').replace('{{days}}', '30') + `: ${httpsUrl}` });
   };
 
   const handleFork = async (id: string) => {
     try {
       const res = await api.forkPipeline(id);
-      setNotice(t('pipelines.forked').replace('{{name}}', res.name));
+      setNotice({ text: t('pipelines.forked').replace('{{name}}', res.name) });
       navigate(`/editor?pipeline=${res.forked_id}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('common.unknownError');
-      setNotice(t('pipelines.forkFailed').replace('{{error}}', msg));
+      setNotice({ text: t('pipelines.forkFailed').replace('{{error}}', msg), error: true });
     }
   };
 
@@ -119,10 +119,10 @@ export default function Pipelines() {
       a.download = format === 'dockerfile' ? 'Dockerfile' : 'Singularity.def';
       a.click();
       URL.revokeObjectURL(url);
-      setNotice(t('pipelines.exported').replace('{{format}}', format));
+      setNotice({ text: t('pipelines.exported').replace('{{format}}', format) });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('common.unknownError');
-      setNotice(t('pipelines.exportFailed').replace('{{error}}', msg));
+      setNotice({ text: t('pipelines.exportFailed').replace('{{error}}', msg), error: true });
     }
   };
 
@@ -182,8 +182,12 @@ export default function Pipelines() {
       )}
 
       {notice && (
-        <div className="result-bar success" style={{ cursor: 'pointer' }} onClick={() => setNotice(null)}>
-          {notice}
+        <div
+          className={`result-bar ${notice.error ? 'error' : 'success'}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => setNotice(null)}
+        >
+          {notice.text}
           <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>{t('common.dismiss')}</span>
         </div>
       )}
@@ -227,6 +231,8 @@ export default function Pipelines() {
               <Link to="/editor">{t('pipelines.emptyMineLink')}</Link>
               {t('pipelines.emptyMine').split(t('pipelines.emptyMineLink'))[1]}
             </div>
+          ) : filteredPipelines.length === 0 ? (
+            <div className="empty-state">{t('pipelines.noMatch')}</div>
           ) : (
             <table className="pipeline-table">
               <thead>
@@ -268,9 +274,9 @@ export default function Pipelines() {
                               });
                               const tpl = await api.listTemplates();
                               setTemplates(tpl);
-                              setNotice(`Saved "${full.name}" as reusable template`);
+                              setNotice({ text: `Saved "${full.name}" as reusable template` });
                             } catch (err: unknown) {
-                              setNotice(describeApiError(err, 'Save template failed'));
+                              setNotice({ text: describeApiError(err, 'Save template failed'), error: true });
                             }
                           }}
                         >
@@ -354,7 +360,7 @@ export default function Pipelines() {
                   const res = await api.importPipeline(normalized);
                   setShowImportModal(false);
                   setImportUrl('');
-                  setNotice(t('share.imported'));
+                  setNotice({ text: t('share.imported') });
                   navigate(`/editor?pipeline=${res.pipeline_id}`);
                 } catch (err: unknown) {
                   setError(describeApiError(err, t('share.importFailed')));

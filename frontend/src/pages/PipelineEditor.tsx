@@ -690,7 +690,9 @@ export default function PipelineEditor() {
                   const snap = await api.getRevision(savedPipelineId, r.id);
                   setToml(snap.toml_content);
                   session.setRunResult({ message: `Loaded snapshot ${r.id.slice(0, 8)} into the editor — Save to keep it`, type: 'success' });
-                } catch { /* ignore */ }
+                } catch (err: unknown) {
+                  session.setRunResult({ message: describeApiError(err, 'Snapshot load failed'), type: 'error' });
+                }
               }}>{t('editor.history.load')}</button>
               <button className="btn-sm" onClick={async () => {
                 if (!window.confirm(t('editor.history.rollbackConfirm').replace('{{time}}', new Date(r.created_at).toLocaleString(locale)))) return;
@@ -699,7 +701,9 @@ export default function PipelineEditor() {
                   setToml((await api.getPipeline(savedPipelineId)).toml_content);
                   api.listRevisions(savedPipelineId).then(setRevisions);
                   session.setRunResult({ message: 'Rolled back — the current version was preserved as a revision', type: 'success' });
-                } catch { /* ignore */ }
+                } catch (err: unknown) {
+                  session.setRunResult({ message: describeApiError(err, 'Rollback failed'), type: 'error' });
+                }
               }}>{t('editor.history.rollback')}</button>
             </div>
           </div>
@@ -727,7 +731,13 @@ export default function PipelineEditor() {
       return;
     }
     try {
-      const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'untitled-pipeline';
+      // Scope the name lookup to [workflow]: a first-match regex over the
+      // whole file picks up [[rule]] or [ai] names instead (fix 7).
+      const sections = scanTomlTopLevelSections(toml);
+      const wfSec = sections.find((s) => !s.isArrayTable && s.name === 'workflow');
+      const name = (wfSec ? toml.slice(wfSec.bodyStart, wfSec.end).match(/name\s*=\s*"([^"]+)"/)?.[1] : undefined)
+        || toml.match(/name\s*=\s*"([^"]+)"/)?.[1]
+        || 'untitled-pipeline';
       const savedId = searchParams.get('pipeline');
       if (savedId) {
         // Editing an existing saved pipeline updates it in place (the old

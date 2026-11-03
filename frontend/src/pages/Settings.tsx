@@ -64,7 +64,7 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [model, setModel] = useState('');
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [refs, setRefs] = useState<ReferenceStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -114,17 +114,25 @@ export default function Settings() {
         model: model || undefined,
       });
       const c = await api.aiConfig(); setAiConfig(c);
-      setTestResult(t('settings.ai.saveSuccess').replace('{{provider}}', c.provider));
-    } catch (err: unknown) { setTestResult(t('settings.ai.saveFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))); }
+      setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setTestResult({ ok: false, text: t('settings.ai.saveFailed').replace('{{error}}', msg) });
+    }
     setSaving(false);
   };
 
   const handleTest = async () => {
-    setTestResult(t('settings.ai.testing'));
+    setTestResult({ ok: false, text: t('settings.ai.testing') });
     try {
       const r = await api.aiTest();
-      setTestResult(r.success ? t('settings.ai.testSuccess').replace('{{message}}', r.message) : t('settings.ai.testFailed').replace('{{error}}', r.message));
-    } catch (err: unknown) { setTestResult(t('settings.ai.testFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))); }
+      setTestResult(r.success
+        ? { ok: true, text: t('settings.ai.testSuccess').replace('{{message}}', r.message) }
+        : { ok: false, text: t('settings.ai.testFailed').replace('{{error}}', r.message) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setTestResult({ ok: false, text: t('settings.ai.testFailed').replace('{{error}}', msg) });
+    }
   };
 
   const handleSaveQuota = async () => {
@@ -180,7 +188,7 @@ export default function Settings() {
                 <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
                 <button onClick={handleTest} className="action-btn">{t('settings.ai.test')}</button>
               </div>
-              {testResult && <div className={`result-bar ${testResult.startsWith('✅') ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult}</div>}
+              {testResult && <div className={`result-bar ${testResult.ok ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult.text}</div>}
             </div>
           </div>
           <div className="settings-side">
