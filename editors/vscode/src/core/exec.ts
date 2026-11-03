@@ -4,6 +4,9 @@
  */
 import { execFile } from "node:child_process";
 
+/** Default CLI binary name — mirrors the `oxo-flow.executablePath` default in package.json. */
+export const DEFAULT_EXECUTABLE = "oxo-flow";
+
 export interface CliResult {
   stdout: string;
   stderr: string;

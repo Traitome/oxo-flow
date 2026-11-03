@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { runCli } from "../core/exec";
+import { DEFAULT_EXECUTABLE, runCli } from "../core/exec";
 import {
   dedupeFindings,
   findingsFromLint,
@@ -57,7 +57,7 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     this.killCurrent.set(uriKey, undefined);
 
     const cfg = vscode.workspace.getConfiguration("oxo-flow", doc.uri);
-    const executable = cfg.get<string>("executablePath", "oxo-flow");
+    const executable = cfg.get<string>("executablePath", DEFAULT_EXECUTABLE);
     const includeLint = cfg.get<boolean>("enableLintDiagnostics", true);
     const trace = cfg.get<boolean>("trace", false);
     const cwd = dirname(doc.uri);

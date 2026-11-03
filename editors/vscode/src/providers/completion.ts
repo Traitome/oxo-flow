@@ -3,6 +3,7 @@ import {
   contextKeys,
   enumFor,
   insertionFor,
+  propInfoFor,
   type PropInfo,
 } from "../core/completionData";
 import { resolveEditContext } from "../core/editContext";
@@ -138,7 +139,7 @@ function valueItems(
       return item;
     });
   }
-  const info = contextKeys(context).find((k) => k.key === key);
+  const info = propInfoFor(context, key);
   if (info?.type === "boolean") {
     return ["true", "false"].map((v) => {
       const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Keyword);

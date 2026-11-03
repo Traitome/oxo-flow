@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { versionArgs } from "../core/cliArgs";
-import { parseCliVersion, runCli } from "../core/exec";
+import { DEFAULT_EXECUTABLE, parseCliVersion, runCli } from "../core/exec";
 
 /**
  * Status bar: shows CLI availability + version, click opens a command quick
@@ -60,7 +60,7 @@ export class StatusBar implements vscode.Disposable {
     const uri = vscode.window.activeTextEditor?.document.uri;
     return vscode.workspace
       .getConfiguration("oxo-flow", uri)
-      .get<string>("executablePath", "oxo-flow");
+      .get<string>("executablePath", DEFAULT_EXECUTABLE);
   }
 
   dispose(): void {

@@ -157,10 +157,13 @@ title bar.
 | Open Settings | jumps to `oxo-flow.executablePath` in VS Code settings |
 | Report Issue / Suggest Improvement | opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached) |
 
-Pipeline commands surface in the command palette only while an `.oxoflow`
-editor is active, so the palette stays quiet in other files. Long-running
-operations (validate, lint, clean preview, status, AI status) show a progress
-notification. Error toasts carry a **Report Issue** button that opens the
+The core pipeline commands (Run, Run At Target…, Dry Run, Validate, Lint,
+Format Document, View DAG) surface in the command palette only while an
+`.oxoflow` editor is active, so the palette stays quiet in other files; the
+remaining commands (Resume, Generate with AI, Clean, Status, AI Status,
+Export Schema, Open Docs/Settings, Report Issue, command picker) are always
+available. Long-running operations (validate, lint, clean preview, status,
+AI status) show a progress notification. Error toasts carry a **Report Issue** button that opens the
 report with the error pre-attached.
 
 Run / Dry Run / Graph execute as **tasks** (`type: "oxo-flow"`), so they get

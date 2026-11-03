@@ -9,7 +9,7 @@ import {
   lintArgs,
   versionArgs,
 } from "./core/cliArgs";
-import { parseCliVersion, runCli } from "./core/exec";
+import { DEFAULT_EXECUTABLE, parseCliVersion, runCli } from "./core/exec";
 import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
 import {
@@ -140,6 +140,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!cfg.get<boolean>("formatOnSave", false)) return;
       const editorCfg = vscode.workspace.getConfiguration("editor", doc.uri);
       if (editorCfg.get<boolean>("formatOnSave", false)) return;
+      // No dispose: the token is consumed by the synchronous waitUntil call
+      // below and is garbage-collected with it — a disposal registration per
+      // save event would outlive its usefulness.
       event.waitUntil(
         new OxoflowFormattingProvider().provideDocumentFormattingEdits(
           doc,
@@ -263,6 +266,10 @@ async function jumpToRule(ruleName: string): Promise<void> {
     const pos = new vscode.Position(found.nameLine, 0);
     editor.selection = new vscode.Selection(pos, pos);
     editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+  } else {
+    void vscode.window.showWarningMessage(
+      `Rule \`${ruleName}\` not found in ${vscode.workspace.asRelativePath(target.file)}.`
+    );
   }
 }
 
@@ -729,7 +736,9 @@ async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar)
     output.show(true);
     return;
   }
-  appendLog(output, `$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}${res.stderr.trimEnd()}`);
+  // stdout and stderr interleave in the CLI (progress on stdout, warnings on
+  // stderr) — keep an explicit newline so chunks never fuse mid-line.
+  appendLog(output, `$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}\n${res.stderr.trimEnd()}`);
   output.show(true);
 }
 
@@ -777,7 +786,7 @@ async function reportIssue(statusBar: StatusBar, context: ReportContext): Promis
     cliExecutable: executable,
     cliVersion,
     settings: {
-      "oxo-flow.executablePath": cfg.get("executablePath", "oxo-flow"),
+      "oxo-flow.executablePath": cfg.get("executablePath", DEFAULT_EXECUTABLE),
       "oxo-flow.diagnosticMode": cfg.get("diagnosticMode", "save"),
       "oxo-flow.enableLintDiagnostics": cfg.get("enableLintDiagnostics", true),
       "oxo-flow.formatOnSave": cfg.get("formatOnSave", false),

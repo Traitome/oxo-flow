@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { contextKeys, enumFor } from "../core/completionData";
+import { enumFor, propInfoFor } from "../core/completionData";
 import { resolveEditContext } from "../core/editContext";
 
 /** Hover docs for schema-known keys and enum values. */
@@ -15,11 +15,11 @@ export class OxoflowHoverProvider implements vscode.HoverProvider {
 
     switch (ctx.kind) {
       case "key":
-        info = contextKeys(ctx.context || "root").find((k) => k.key === wordText);
+        info = propInfoFor(ctx.context || "root", wordText);
         break;
       case "inline-table-key": {
         const inline = ctx.context === "rules" ? `rules.${ctx.tableKey}` : null;
-        info = inline ? contextKeys(inline).find((k) => k.key === wordText) : undefined;
+        info = inline ? propInfoFor(inline, wordText) : undefined;
         break;
       }
       case "value":

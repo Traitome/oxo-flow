@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { dryRunArgs, graphArgs, resumeArgs, runArgs, type GraphFormat } from "../core/cliArgs";
+import { dryRunArgs, graphArgs, resumeArgs, runArgs, templateArgs, type GraphFormat } from "../core/cliArgs";
 
 export const TASK_TYPE = "oxo-flow";
 
@@ -101,10 +101,18 @@ export function createTask(
     (kind === "run"
       ? runArgs(runOpts)
       : kind === "dry-run"
+        // CLI dry-run takes neither `-j` nor `-k` (see dryRunArgs) — jobs and
+        // keepGoing on the shared task definition are honored for `run` only.
         ? dryRunArgs(runOpts)
         : kind === "resume"
           ? resumeArgs(def.workflow, def.extraArgs)
-          : graphArgs(def.workflow, def.format));
+          : kind === "generate"
+            // Documented contract (vscode-extension.md): a tasks.json
+            // `generate` task runs AI template generation with extraArgs[0]
+            // as the description — without this branch it fell through to
+            // `graph` and silently produced a DAG instead.
+            ? templateArgs(def.extraArgs?.[0] ?? "", def.workflow)
+            : graphArgs(def.workflow, def.format));
   // ShellQuotedString is a plain object interface, not a constructor: pass
   // {value, quoting} literals so no shell metacharacter in paths/args breaks.
   const strong = (value: string) => ({ value, quoting: vscode.ShellQuoting.Strong });
