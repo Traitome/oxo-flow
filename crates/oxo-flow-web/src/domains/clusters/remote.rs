@@ -376,39 +376,32 @@ async fn mark_failed(run_id: &str, message: &str) {
     tracing::error!("{message}");
     // Quota release must happen even without the SQLite pool — it is
     // in-memory state and leaking it pins resources until restart.
-    if let Some((user, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user, threads, memory_mb);
-    }
+    crate::infra::quota::release_and_complete(run_id);
     let end = chrono::Utc::now();
     let end_str = end.to_rfc3339();
-    let mut updated = false;
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(e) = backend
-            .record_run_terminal(run_id, "failed", "failed", &end_str)
-            .await
-        {
-            tracing::error!("Failed to record remote run failure for {run_id}: {e}");
-        } else {
-            updated = true;
-        }
-    }
-    if !updated {
+    // One backend for the whole helper (mirrors executor::mark_run_failed):
+    // the unavailable path releases the reservation above, so a missing
+    // pool can't pin resources until restart.
+    let Some(backend) = crate::infra::db::global_backend() else {
         tracing::error!(
             "Storage backend unavailable — cannot persist remote-run failure for {run_id}"
         );
-    }
-    let user_id: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .get_run(run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.user_id)
-    } else {
-        None
+        return;
     };
+    if let Err(e) = backend
+        .record_run_terminal(run_id, "failed", "failed", &end_str)
+        .await
+    {
+        tracing::error!("Failed to record remote run failure for {run_id}: {e}");
+    }
     // Remote failure is a terminal path that bypasses finalize_run — the
     // quota reservation was released above before the pool guard.
+    let user_id: Option<String> = backend
+        .get_run(run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.user_id);
     broadcast_event_for(
         "run_failed",
         &serde_json::json!({"run_id": run_id, "status": "failed", "finished_at": end.to_rfc3339(), "error": message}),

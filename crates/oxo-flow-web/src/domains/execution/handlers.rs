@@ -1516,9 +1516,7 @@ pub async fn cancel_run(
     // kill fallout can never flip the status back to completed/failed.
     // The quota reservation is released here — the executor's finalize path
     // early-returns for cancelled runs and never reaches its own release.
-    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(&id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
-    }
+    crate::infra::quota::release_and_complete(&id);
     let now = now_iso();
     backend
         .record_run_terminal(&id, "cancelled", "cancelled", &now)

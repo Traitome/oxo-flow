@@ -440,8 +440,8 @@ pub fn spawn_background_run_with_args(
 
         let Some(backend) = crate::infra::db::global_backend() else {
             error!(
-                "Storage backend unavailable — cannot run                  workflow '{}' in background; marking as failed is impossible                  so it stays 'queued' for manual cleanup",
-                run_id
+                "Storage backend unavailable — cannot run workflow '{run_id}' in background; \
+                 marking as failed is impossible so it stays 'queued' for manual cleanup"
             );
             return;
         };
@@ -699,9 +699,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // Release the run's quota reservation on EVERY terminal path — the
     // cancelled early-return below must not leak the reservation (issue:
     // cancelled runs burned active_runs/threads/memory until restart).
-    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
-    }
+    crate::infra::quota::release_and_complete(run_id);
 
     if run_is_cancelled(run_id).await {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
@@ -710,24 +708,25 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 
     let end = Utc::now();
     let end_str = end.to_rfc3339();
-    let mut fin_updated = false;
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(e) = backend
-            .record_run_terminal(run_id, final_state, final_state, &end_str)
-            .await
-        {
-            error!("Failed to update final status for run {run_id} via backend: {e}");
-        } else {
-            fin_updated = true;
-        }
-    }
-
-    if !fin_updated {
+    // One backend for the whole helper: the terminal write and the owner
+    // lookup below would otherwise re-enter global_backend() and re-derive
+    // the same value (OnceLock makes it cheap, but the dual paths forced a
+    // success flag just to tell "backend missing" from "write failed").
+    let Some(backend) = crate::infra::db::global_backend() else {
         error!(
             "Storage backend unavailable — cannot finalize \
              run {run_id} state in the database"
         );
         return;
+    };
+    if let Err(e) = backend
+        .record_run_terminal(run_id, final_state, final_state, &end_str)
+        .await
+    {
+        // Write failure is logged but not fatal: the run's output is done,
+        // so the remaining terminal bookkeeping (broadcast, webhook) still
+        // runs — only the DB row is stale.
+        error!("Failed to update final status for run {run_id} via backend: {e}");
     }
     // Read the log once, bounded to the head window: both consumers below
     // (dry-run preview JSON, invalidation summary) print at run start,
@@ -763,17 +762,14 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // rule-definition edits, and input-set changes that invalidated
     // checkpoint records this run.
     let summary = log.as_deref().and_then(extract_invalidation_summary);
-    // Scope the terminal event to the run owner (issue #82 P0-5).
-    let user_id: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .get_run(run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.user_id)
-    } else {
-        None
-    };
+    // Scope the terminal event to the run owner (issue #82 P0-5); the
+    // backend resolved above serves this lookup too.
+    let user_id: Option<String> = backend
+        .get_run(run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.user_id);
     broadcast_event_for(
         event,
         &serde_json::json!({
@@ -1061,39 +1057,31 @@ async fn append_metrics(workdir: &std::path::Path, line: &str, existing_lines: u
 async fn mark_run_failed(run_id: &str) {
     let end = Utc::now();
     let end_str = end.to_rfc3339();
-    let mut updated = false;
-
-    if let Some(backend) = crate::infra::db::global_backend() {
-        if let Err(e) = backend
-            .record_run_terminal(run_id, "failed", "failed", &end_str)
-            .await
-        {
-            error!("Failed to mark run {run_id} as failed via backend: {e}");
-        } else {
-            updated = true;
-        }
-    }
-
-    if !updated {
+    // One backend for the whole helper, mirroring finalize_run: the
+    // unavailable path still releases the in-memory quota reservation so a
+    // missing pool can't pin resources until restart.
+    let Some(backend) = crate::infra::db::global_backend() else {
         error!("Storage backend unavailable — cannot mark run {run_id} failed");
-        if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-            crate::infra::quota::global_quota_tracker()
-                .record_complete(&user_id, threads, memory_mb);
-        }
+        crate::infra::quota::release_and_complete(run_id);
         return;
+    };
+
+    if let Err(e) = backend
+        .record_run_terminal(run_id, "failed", "failed", &end_str)
+        .await
+    {
+        // Write failure is logged but not fatal — the broadcast below still
+        // tells the owner the run died.
+        error!("Failed to mark run {run_id} as failed via backend: {e}");
     }
 
     // Broadcast run failure event, scoped to the run owner (issue #82 P0-5).
-    let user_id: Option<String> = if let Some(backend) = crate::infra::db::global_backend() {
-        backend
-            .get_run(run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.user_id)
-    } else {
-        None
-    };
+    let user_id: Option<String> = backend
+        .get_run(run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.user_id);
     broadcast_event_for(
         "run_failed",
         &serde_json::json!({
@@ -1104,9 +1092,7 @@ async fn mark_run_failed(run_id: &str) {
         user_id.as_deref(),
     );
 
-    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
-    }
+    crate::infra::quota::release_and_complete(run_id);
     crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
 }
 
