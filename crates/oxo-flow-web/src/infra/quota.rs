@@ -180,7 +180,6 @@ impl QuotaTracker {
 static QUOTA_TRACKER: std::sync::LazyLock<QuotaTracker> =
     std::sync::LazyLock::new(|| QuotaTracker::new(QuotaConfig::default()));
 
-/// Get a reference to the global quota tracker.
 /// A reservation: (user_id, threads, memory_mb).
 type Reservation = (String, u32, u64);
 
@@ -225,6 +224,7 @@ pub fn release_and_complete(run_id: &str) {
     }
 }
 
+/// Get a reference to the global quota tracker.
 pub fn global_quota_tracker() -> &'static QuotaTracker {
     &QUOTA_TRACKER
 }
