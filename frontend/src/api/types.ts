@@ -55,18 +55,6 @@ export interface ValidateResponse {
   dependencies: number;
   missing_inputs: string[];
 }
-export interface WorkflowStats {
-  rule_count: number;
-  shell_rules: number;
-  script_rules: number;
-  dependency_count: number;
-  parallel_groups: number;
-  max_depth: number;
-  environments: string[];
-  total_threads: number;
-  wildcard_count: number;
-  wildcard_names: string[];
-}
 export interface ParseResponse {
   pipeline_id: string; name: string; version: string;
   rules: Array<{ name: string; shell: string | null; inputs: string[]; outputs: string[]; environment: string | null; threads: number | null }>;
@@ -104,18 +92,6 @@ export interface KnowledgeTool {
 export interface KnowledgeToolsResponse {
   total: number;
   tools: KnowledgeTool[];
-}
-
-export interface KnowledgeSkill {
-  name: string;
-  description: string;
-  domain: string;
-  primary_tool: string;
-}
-
-export interface KnowledgeSkillsResponse {
-  total: number;
-  skills: KnowledgeSkill[];
 }
 
 // ── Runs ──
@@ -165,12 +141,6 @@ export interface ShareLanding {
   recent_run?: { status: string; finished_at?: string } | null;
 }
 
-export interface RunStatus {
-  status: string; phase: string;
-  nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
-  timeline: Array<{ timestamp: string; event: string; node: string | null; message: string | null }>;
-  resources: { cpu_pct: number; memory_mb: number; disk_mb: number };
-}
 export interface DagStatus {
   nodes: Array<{ id: string; label: string; status: string; color: string; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
   edges: Array<{ source: string; target: string }>;
@@ -186,10 +156,7 @@ export interface RetryPlan { new_run_id: string; will_rerun: string[]; will_skip
 
 // ── AI ──
 export interface AiConfig { provider: string; model: string | null; api_url: string | null; is_configured: boolean; }
-export interface AiTranslateResponse { pipeline_id: string; toml_content: string; explanation: { steps: Array<{ rule: string; purpose: string; tool: string; key_params: string; why_chosen: string }> }; alternatives: Array<{ description: string; diff_summary: string; tradeoffs: string }>; confidence: number; }
 export interface AiExplainResponse { summary: string; root_cause: { rule: string; error_type: string; evidence: string; confidence: number } | null; fix_suggestion: { action: string; automated: boolean; estimated_impact: string } | null; }
-export interface AiInterpretResponse { narrative: string; highlights: Array<{ finding: string; significance: string; supporting_evidence: string }>; caveats: string[]; suggested_next: string[]; }
-export interface AiOptimizeResponse { optimized_toml: string; changes: Array<{ rule: string; before: string; after: string; rationale: string; expected_impact: string }>; estimated: { time_saved: string; memory_reduction: string }; }
 
 // ── Templates ──
 export interface Template { id: string; name: string; category: string; description: string; tags: string[]; toml_content: string; is_system: boolean; created_by: string | null; usage_count: number; created_at: string; updated_at: string; }
@@ -200,12 +167,6 @@ export interface ShareResponse { share_url: string; access_token: string; expire
 export interface ImportResponse { pipeline_id: string; }
 
 // ── Data ──
-export interface DataAnalysis {
-  files: Array<{ path: string; size: number; format: string; format_confidence: number; paired_with: string | null; sample_name: string | null }>;
-  summary: { total_size: number; formats_detected: string[]; paired_end_detected: boolean; strand_specific: boolean | null };
-  suggested_workflow: { template: string; confidence: number; reason: string } | null;
-}
-export interface ReferenceResult { found: string[]; missing: string[]; download_commands: string[]; }
 // GET /api/data/reference/status — a genome is `installed` only when at
 // least one expected component exists on disk; `components` lists what was
 // found, `missing_components` what is absent. Guidance lines (no fetchable
@@ -286,12 +247,7 @@ export interface ClusterProbeResult {
   duration_ms: number;
 }
 
-// ── Search ──
-export interface SearchResponse { query: string; total: number; results: Array<{ id: string; name: string; source: string; category: string; description: string; rules_count: number }>; }
-
 // ── Legacy compat ──
-export interface GenerateResponse { toml_content: string; workflow_name: string; rules_count: number; execution_order: string[]; description: string; valid: boolean; }
-export type WorkflowDetail = ParseResponse;
 export interface RunResponse {
   run_id: string;
   status: string;
@@ -307,59 +263,18 @@ export interface RunResponse {
   };
 }
 export interface RunDetail extends RunItem { workflow_name?: string; log_tail?: string; output_files?: string[]; }
-export interface TemplateSummary { id: string; name: string; category: string; description: string; tags: string; is_system: boolean; created_at: string; }
-export interface DagData { dot: string; nodes: number; edges: number; }
 
 // ── v0.8 AI Companion Types ──
 
-// Chat Events (SSE)
-export interface ChatEventV2 {
-  type: 'text' | 'agent' | 'action' | 'error' | 'done';
-  chunk?: string;
-  agent?: string;
-  status?: string;
-  progress?: number;
-  action_type?: string;
-  data?: unknown;
-  code?: string;
-  message?: string;
-  session_id?: string;
-  pipeline_id?: string;
-}
-
-export interface ChatRequestV2 {
-  session_id?: string;
-  message: string;
-  context?: {
-    data_paths?: string[];
-    samplesheet?: string;
-    intent?: string;
-  };
-}
-
 // Data Perception
-export interface DataFindings {
-  field: string;
-  value: unknown;
-  confidence: number;
-  source: string;
-  evidence: string;
-}
-
 export interface DataPerceptionReport {
   data_level: number;
-  findings: DataFindings[];
+  findings: Array<{ field: string; value: unknown; confidence: number; source: string; evidence: string }>;
   warnings: string[];
   suggestions: string[];
 }
 
 // DAG Edit
-export interface DagEditCommand {
-  source: 'dag_editor' | 'chat' | 'proposal';
-  operation: 'add_rule' | 'remove_rule' | 'connect' | 'disconnect' | 'update_rule' | 'update_params' | 'update_workflow';
-  payload: Record<string, unknown>;
-}
-
 export interface DagEditResponse {
   validation_errors?: string[];
   success: boolean;
@@ -395,17 +310,6 @@ export interface MonitorStatus {
   estimated_completion: string | null;
 }
 
-export interface PauseRequest {
-  reason: string;
-}
-
-export interface ResumeRequest {
-  // `from_rule` is intentionally absent: the API rejects it with
-  // `400 UNSUPPORTED_FIELD` (no downstream re-run mode exists).
-  memory_adjust?: string;
-  thread_adjust?: number;
-}
-
 // Report
 export interface ReportFile {
   path: string;
@@ -437,34 +341,6 @@ export interface ReportData {
 }
 
 // AI Config (three-tier)
-export interface AiConfigFull {
-  effective: {
-    provider: string;
-    model: string | null;
-    api_url: string | null;
-    is_configured: boolean;
-  };
-  tiers: {
-    env_provider: string | null;
-    env_model: string | null;
-    env_url: string | null;
-    server_provider: string | null;
-    server_model: string | null;
-    user_provider: string | null;
-  };
-  resolution_order: string[];
-}
-
-export interface ServerAiConfig {
-  server_config: {
-    provider: string;
-    api_url: string;
-    model: string;
-    search_enabled: boolean;
-  } | null;
-  configured: boolean;
-}
-
 export interface UserAiConfig {
   user_config: {
     provider: string;
