@@ -94,5 +94,7 @@ only on an interactive terminal and is suppressed by `--quiet`.
   shows every expanded instance of that template, and the full expanded
   instance name (`bwa_mem2_align_cohort_NA12878`) shows that one instance.
   A typo'd name that matches nothing suggests the nearest rule names
-  before failing
+  (edit-distance capped at 3, sorted) before failing — the same shared
+  heuristic the engine's unknown-key check applies, so the CLI and the
+  engine always agree on what "closest" means
 - Use this command to verify variable substitution before running a workflow

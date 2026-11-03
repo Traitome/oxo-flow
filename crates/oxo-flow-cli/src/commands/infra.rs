@@ -361,6 +361,7 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
 
     let mut total_freed: u64 = 0;
     let mut deleted = 0usize;
+    let mut failed = 0usize;
     for entry in &entries {
         let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
         // Torn or not, an unreferenced dir waits out the age gate: a freshly
@@ -403,11 +404,21 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
         if eligible {
             if !dry_run && let Err(e) = std::fs::remove_dir_all(&entry.path) {
                 eprintln!("    {} failed to delete: {}", "✗".red(), e);
+                failed += 1;
                 continue;
             }
             deleted += 1;
             total_freed += entry.size;
         }
+    }
+
+    if !dry_run && failed > 0 {
+        // Mirror `clean`: partial collection is an error, not a success with
+        // footnotes — scripts gating on the exit code must see the failure.
+        return Err(anyhow::anyhow!(
+            "env gc: {} failed to delete",
+            oxo_flow_core::plural(failed, "store dir", "store dirs")
+        ));
     }
 
     if dry_run {

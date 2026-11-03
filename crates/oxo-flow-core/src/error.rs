@@ -15,11 +15,11 @@ fn rule_not_found_suffix(available_rules: &[String]) -> String {
     if available_rules.is_empty() {
         return String::new();
     }
-    let shown: Vec<&str> = available_rules
-        .iter()
-        .take(10)
-        .map(String::as_str)
-        .collect();
+    // Sorted before take(10): callers pass rule lists in graph-iteration
+    // (HashMap) order, and an error hint must not wobble between runs.
+    let mut names: Vec<&str> = available_rules.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    let shown: Vec<&str> = names.into_iter().take(10).collect();
     let mut suffix = format!("; available rules: {}", shown.join(", "));
     if available_rules.len() > shown.len() {
         suffix.push_str(&format!(
@@ -402,7 +402,9 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("rule not found: 'algn'"), "{msg}");
         assert!(
-            msg.contains("available rules: fastqc, align"),
+            // Sorted before the take(10) cap — the hint must not wobble with
+            // the caller's graph-iteration order.
+            msg.contains("available rules: align, fastqc"),
             "the actionable half of the error must survive Display: {msg}"
         );
         assert!(
@@ -413,14 +415,19 @@ mod tests {
 
     #[test]
     fn rule_not_found_display_bounds_long_rule_lists() {
-        let rules: Vec<String> = (0..25).map(|i| format!("rule{i}")).collect();
+        // Deliberately unsorted input: the hint must sort internally
+        // (deterministic display) and cap at ten names.
+        let rules: Vec<String> = (0..25).rev().map(|i| format!("rule{i}")).collect();
         let err = OxoFlowError::RuleNotFound {
             name: "missing".to_string(),
             available_rules: rules,
         };
         let msg = err.to_string();
-        assert!(msg.contains("rule9"), "{msg}");
-        assert!(!msg.contains("rule10"), "must cap at ten names: {msg}");
+        assert!(msg.contains("rule0,"), "{msg}");
+        assert!(
+            !msg.contains("rule18"),
+            "must cap at ten names (rule0..rule9): {msg}"
+        );
         assert!(msg.contains("and 15 more"), "{msg}");
         assert!(
             err.suggestion()

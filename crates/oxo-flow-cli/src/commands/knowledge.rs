@@ -115,6 +115,53 @@ fn skill_json(skill: &oxo_flow_ai::knowledge::skills::SkillRecord) -> serde_json
     })
 }
 
+// ── Kind dispatch (single source for JSON + text emitters) ──────────────────
+
+/// One resolved `knowledge get` record. Both output modes consume this, so
+/// the kind matching — and its error strings — exist exactly once (reuse,
+/// never retype: hand-twinning the JSON and text dispatches lets the two
+/// surfaces drift, e.g. one gaining a new kind or an improved hint).
+enum KnowledgeRecord {
+    Tool(&'static oxo_flow_ai::knowledge::bioconda::BiocondaTool),
+    Module(oxo_flow_ai::knowledge::registry::RegistryHit),
+    Skill(&'static oxo_flow_ai::knowledge::skills::SkillRecord),
+    Doc(&'static oxo_flow_ai::knowledge::skillgraph_docs::SkillDoc),
+}
+
+fn resolve_kind(kind: &str, name: &str) -> Result<KnowledgeRecord> {
+    match kind {
+        "tool" => get_tool(name)
+            .map(KnowledgeRecord::Tool)
+            .ok_or_else(|| anyhow!("no bioconda tool named '{name}'")),
+        "module" => get_registry_tool(name)
+            .map(KnowledgeRecord::Module)
+            .ok_or_else(|| {
+                anyhow!("no registry record named '{name}' (nf-core, commercial, or bio.tools)")
+            }),
+        "skill" => get_skill(name)
+            .map(KnowledgeRecord::Skill)
+            .ok_or_else(|| anyhow!("no skill named '{name}' (names carry a bio- prefix; see `oxo-flow knowledge search '{name}'`)")),
+        "doc" => get_doc(name)
+            .map(KnowledgeRecord::Doc)
+            .ok_or_else(|| anyhow!("no skill doc for '{name}' (see `oxo-flow knowledge list docs`)")),
+        _ => bail!("unknown kind '{kind}' (expected 'tool', 'module', 'skill', or 'doc')"),
+    }
+}
+
+/// Which embedded index `knowledge list` should dump.
+enum KnowledgeIndex {
+    Docs,
+    Domains,
+}
+
+fn resolve_index(what: &str) -> Result<KnowledgeIndex> {
+    match what {
+        "docs" => Ok(KnowledgeIndex::Docs),
+        "domains" => Ok(KnowledgeIndex::Domains),
+        _ => bail!("unknown index '{what}' (expected 'docs' or 'domains')"),
+    }
+}
+
 // ── JSON emitters ───────────────────────────────────────────────────────────
 
 fn search_json(query: &str) -> serde_json::Value {
@@ -138,57 +185,36 @@ fn search_json(query: &str) -> serde_json::Value {
 }
 
 fn get_json(kind: &str, name: &str) -> Result<serde_json::Value> {
-    match kind {
-        "tool" => get_tool(name)
-            .map(|t| {
-                json!({
-                    "command": "knowledge", "action": "get", "kind": kind,
-                    "found": true,
-                    "record": {
-                        "name": t.name, "version": t.version,
-                        "summary": t.summary, "platforms": t.platforms,
-                    },
-                })
-            })
-            .ok_or_else(|| anyhow!("no bioconda tool named '{name}'")),
-        "module" => get_registry_tool(name)
-            .map(|hit| {
-                json!({
-                    "command": "knowledge", "action": "get", "kind": kind,
-                    "found": true,
-                    "record": registry_hit_json(&hit),
-                })
-            })
-            .ok_or_else(|| {
-                anyhow!("no registry record named '{name}' (nf-core, commercial, or bio.tools)")
-            }),
-        "skill" => get_skill(name)
-            .map(|s| {
-                json!({
-                    "command": "knowledge", "action": "get", "kind": kind,
-                    "found": true,
-                    "record": skill_json(s),
-                })
-            })
-            .ok_or_else(|| anyhow!("no skill named '{name}' (names carry a bio- prefix; see `oxo-flow knowledge search '{name}'`)")),
-        "doc" => get_doc(name)
-            .map(|d| {
-                json!({
-                    "command": "knowledge", "action": "get", "kind": kind,
-                    "found": true,
-                    "record": { "id": d.id, "doc": d.doc },
-                })
-            })
-            .ok_or_else(|| {
-                anyhow!("no skill doc for '{name}' (see `oxo-flow knowledge list docs`)")
-            }),
-        _ => bail!("unknown kind '{kind}' (expected 'tool', 'module', 'skill', or 'doc')"),
+    match resolve_kind(kind, name)? {
+        KnowledgeRecord::Tool(t) => Ok(json!({
+            "command": "knowledge", "action": "get", "kind": kind,
+            "found": true,
+            "record": {
+                "name": t.name, "version": t.version,
+                "summary": t.summary, "platforms": t.platforms,
+            },
+        })),
+        KnowledgeRecord::Module(hit) => Ok(json!({
+            "command": "knowledge", "action": "get", "kind": kind,
+            "found": true,
+            "record": registry_hit_json(&hit),
+        })),
+        KnowledgeRecord::Skill(s) => Ok(json!({
+            "command": "knowledge", "action": "get", "kind": kind,
+            "found": true,
+            "record": skill_json(s),
+        })),
+        KnowledgeRecord::Doc(d) => Ok(json!({
+            "command": "knowledge", "action": "get", "kind": kind,
+            "found": true,
+            "record": { "id": d.id, "doc": d.doc },
+        })),
     }
 }
 
 fn list_json(what: &str) -> Result<serde_json::Value> {
-    match what {
-        "docs" => {
+    match resolve_index(what)? {
+        KnowledgeIndex::Docs => {
             let ids = doc_ids();
             let count = ids.len();
             Ok(json!({
@@ -197,7 +223,7 @@ fn list_json(what: &str) -> Result<serde_json::Value> {
                 "docs": ids,
             }))
         }
-        "domains" => {
+        KnowledgeIndex::Domains => {
             let domains = list_domains();
             Ok(json!({
                 "command": "knowledge", "action": "list", "what": what,
@@ -208,7 +234,6 @@ fn list_json(what: &str) -> Result<serde_json::Value> {
                     .collect::<Vec<_>>(),
             }))
         }
-        _ => bail!("unknown index '{what}' (expected 'docs' or 'domains')"),
     }
 }
 
@@ -259,47 +284,32 @@ fn search_text(query: &str) {
 }
 
 fn get_text(kind: &str, name: &str) -> Result<()> {
-    match kind {
-        "tool" => match get_tool(name) {
-            Some(t) => {
-                println!("{} {} — {}", t.name, t.version, t.summary);
-                if !t.platforms.is_empty() {
-                    println!("platforms: {}", t.platforms.join(", "));
-                }
+    match resolve_kind(kind, name)? {
+        KnowledgeRecord::Tool(t) => {
+            println!("{} {} — {}", t.name, t.version, t.summary);
+            if !t.platforms.is_empty() {
+                println!("platforms: {}", t.platforms.join(", "));
             }
-            None => bail!("no bioconda tool named '{name}'"),
-        },
-        "module" => match get_registry_tool(name) {
-            Some(hit) => println!("{}", format_registry_hit(&hit)),
-            None => bail!("no registry record named '{name}' (nf-core, commercial, or bio.tools)"),
-        },
-        "skill" => match get_skill(name) {
-            Some(s) => {
-                println!("[{}] {} — {}", s.domain, s.name, s.description);
-                if !s.primary_tool.is_empty() {
-                    println!("primary_tool: {}", s.primary_tool);
-                }
-                if !s.preview.is_empty() {
-                    println!("\n{}", s.preview);
-                }
+        }
+        KnowledgeRecord::Module(hit) => println!("{}", format_registry_hit(&hit)),
+        KnowledgeRecord::Skill(s) => {
+            println!("[{}] {} — {}", s.domain, s.name, s.description);
+            if !s.primary_tool.is_empty() {
+                println!("primary_tool: {}", s.primary_tool);
             }
-            None => bail!(
-                "no skill named '{name}' (names carry a bio- prefix; see `oxo-flow knowledge search '{name}'`)"
-            ),
-        },
-        "doc" => match get_doc(name) {
-            Some(d) => println!("{}", format_doc(d)),
-            None => bail!("no skill doc for '{name}' (see `oxo-flow knowledge list docs`)"),
-        },
-        _ => bail!("unknown kind '{kind}' (expected 'tool', 'module', 'skill', or 'doc')"),
+            if !s.preview.is_empty() {
+                println!("\n{}", s.preview);
+            }
+        }
+        KnowledgeRecord::Doc(d) => println!("{}", format_doc(d)),
     }
     Ok(())
 }
 
 fn list_text(what: &str) -> Result<()> {
-    match what {
-        "docs" => println!("{}", list_docs()),
-        "domains" => {
+    match resolve_index(what)? {
+        KnowledgeIndex::Docs => println!("{}", list_docs()),
+        KnowledgeIndex::Domains => {
             let domains = list_domains();
             println!(
                 "{} skill domains ({} embedded skills):",
@@ -310,7 +320,6 @@ fn list_text(what: &str) -> Result<()> {
                 println!("- {name}: {n} skills");
             }
         }
-        _ => bail!("unknown index '{what}' (expected 'docs' or 'domains')"),
     }
     Ok(())
 }

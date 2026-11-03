@@ -532,15 +532,11 @@ pub async fn generate_workflow(
             if let Ok(mut s) = sessions.lock() {
                 s.push(o.session.clone());
             }
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             (o.content.unwrap(), false)
         }
         Ok(o) => {
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             archive_session(&o.session);
             anyhow::bail!(
                 "pipeline generation did not produce a valid workflow: {}",
@@ -551,9 +547,7 @@ pub async fn generate_workflow(
             // Round-cap or provider failure: the orchestrator archived the
             // failed session (with usage). Deliver the generated TOML from
             // the transcript rather than losing the paid-for artifact.
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             let text = text_buf.lock().map(|b| b.clone()).unwrap_or_default();
             let toml = pipeline_gen::extract_toml(&text)
                 .ok_or_else(|| anyhow::anyhow!("AI generation failed: {e}"))?;
@@ -727,6 +721,18 @@ fn archive_session(session: &AiSession) {
             "  ✓".green(),
             session.id
         );
+    }
+}
+
+/// Archive every accumulated team session. `sessions.lock().unwrap()` is
+/// poison-tolerant by construction here: a panicking agent thread must not
+/// take the archive path down with it (the locked vec is still readable),
+/// so a broken lock degrades to skipping those sessions instead of panicking.
+fn archive_sessions(sessions: &std::sync::Mutex<Vec<AiSession>>) {
+    if let Ok(queued) = sessions.lock() {
+        for session in queued.iter() {
+            archive_session(session);
+        }
     }
 }
 

@@ -11,6 +11,7 @@ mod samples;
 mod tests;
 
 pub(crate) use known_keys::TOP_LEVEL_KEYS;
+pub use known_keys::edit_distance;
 pub use model::*;
 pub(crate) use model::{
     expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,

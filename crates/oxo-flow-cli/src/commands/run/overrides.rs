@@ -561,8 +561,9 @@ pub(crate) fn apply_cli_override_phase(
     Ok(())
 }
 
-/// Nearest declared config key within a two-edit typo of `key` (the same
-/// heuristic `oxo-flow-core`'s unknown-key check applies).
+/// Nearest declared config key within a two-edit typo of `key` — the same
+/// heuristic `oxo-flow-core`'s unknown-key check applies, via the core's
+/// exported `edit_distance` (shared, never retyped).
 pub(crate) fn closest_declared_key<'a>(
     key: &str,
     declared: &'a HashSet<String>,
@@ -572,33 +573,13 @@ pub(crate) fn closest_declared_key<'a>(
         .iter()
         .map(|candidate| {
             (
-                edit_distance(&lowered, &candidate.to_ascii_lowercase(), 2),
+                oxo_flow_core::config::edit_distance(&lowered, &candidate.to_ascii_lowercase(), 2),
                 candidate,
             )
         })
         .filter(|(distance, _)| *distance <= 2)
         .min_by_key(|(distance, candidate)| (*distance, candidate.as_str()))
         .map(|(_, candidate)| candidate.as_str())
-}
-
-/// Levenshtein edit distance, capped so unrelated pairs exit early.
-pub(crate) fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    if a.len().abs_diff(b.len()) > cap {
-        return cap + 1;
-    }
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 /// Nearest rule names to a typo'd `--rule` value (issue #862): a typo of an
@@ -615,7 +596,7 @@ pub(crate) fn nearest_rule_names(name: &str, candidates: &[&str], limit: usize) 
             if cand.starts_with(&lowered) || lowered.starts_with(&cand) {
                 Some((0, *candidate))
             } else {
-                let d = edit_distance(&lowered, &cand, 3);
+                let d = oxo_flow_core::config::edit_distance(&lowered, &cand, 3);
                 (d <= 3).then_some((d, *candidate))
             }
         })

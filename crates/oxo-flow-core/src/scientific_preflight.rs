@@ -143,21 +143,6 @@ fn has_normal_flag(shell: &str) -> bool {
     })
 }
 
-/// Fan-out trigger vocabulary mirrored from `expand.rs`: the fixed pair
-/// wildcards plus the group wildcards. Pair metadata keys are appended per
-/// workflow, mirroring how `expand_wildcards` builds its own list.
-const PAIR_WILDCARDS: &[&str] = &[
-    "experiment",
-    "control",
-    "tumor",
-    "normal",
-    "pair_id",
-    "experiment_type",
-    "tumor_type",
-];
-
-const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
-
 /// Placeholder-reference finder: `{name}` / `{values.name}` / `{meta.col}`
 /// style references in a text field, used to tell which side of a rule
 /// (fan-out trigger vs declared output) carries the sample identity.
@@ -223,15 +208,8 @@ fn bypasses_group_pair_fanout(rule: &Rule) -> bool {
 ///   referenced from `expand_inputs`) is unkeyed still race — the unkeyed
 ///   dimension's instances all bake the same concrete path.
 fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
-    // Pair metadata keys are part of the fan-out vocabulary.
-    let mut pair_wildcards: Vec<&str> = PAIR_WILDCARDS.to_vec();
-    for pair in &config.pairs {
-        for key in pair.metadata.keys() {
-            if !pair_wildcards.contains(&key.as_str()) {
-                pair_wildcards.push(key.as_str());
-            }
-        }
-    }
+    let pair_wildcards: Vec<String> = config.pair_fanout_wildcards();
+    let group_wildcards: Vec<String> = config.group_fanout_wildcards();
 
     // Fresh wildcards declared by output_pattern producers — the deferral
     // registry expand.rs builds before scanning consumers.
@@ -292,7 +270,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             });
         let triggers_group = !config.sample_groups.is_empty()
             && all_text.iter().any(|t| {
-                GROUP_WILDCARDS
+                group_wildcards
                     .iter()
                     .any(|w| t.contains(&format!("{{{w}}}")))
             });
@@ -330,7 +308,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         if triggers_pair
             && !output_tokens
                 .iter()
-                .any(|t| t.starts_with("meta.") || pair_wildcards.contains(&t.as_str()))
+                .any(|t| t.starts_with("meta.") || pair_wildcards.contains(t))
         {
             unrepresented.push(
                 "the pair domain — no pair wildcard ({pair_id}, …) keys the \
@@ -341,7 +319,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         if triggers_group
             && !output_tokens
                 .iter()
-                .any(|t| t.starts_with("meta.") || GROUP_WILDCARDS.contains(&t.as_str()))
+                .any(|t| t.starts_with("meta.") || group_wildcards.contains(t))
         {
             unrepresented.push(
                 "the sample domain — no {sample}/{group} wildcard keys the \

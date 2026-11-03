@@ -110,6 +110,10 @@ impl SchedulerState {
                 .collect();
 
             if !pending.is_empty() {
+                // Sorted before take(5): `statuses` iterates in HashMap order,
+                // and the deadlock hint must list the same names every run.
+                let mut pending = pending;
+                pending.sort();
                 let rule_list: Vec<String> = pending.iter().take(5).cloned().collect();
                 let suffix = if pending.len() > 5 {
                     format!(" (and {} more)", pending.len() - 5)

@@ -404,8 +404,11 @@ impl std::fmt::Display for UnknownKey {
 }
 
 /// Levenshtein edit distance between two keys, capped so unrelated pairs exit
-/// early.
-fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
+/// early. Exported because the CLI's did-you-mean diagnostics (`--KEY VALUE`
+/// overrides, `--rule` typos) must share the exact heuristic with the core
+/// unknown-key check — hand-copied distance helpers drift from their origin
+/// (engineering invariant: don't mirror semantics, share them).
+pub fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     if a.len().abs_diff(b.len()) > cap {

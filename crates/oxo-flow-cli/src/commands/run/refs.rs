@@ -82,10 +82,19 @@ fn persist_ref_state(ref_checkpoint: &std::path::Path, ref_state: &HashMap<Strin
     if let Some(parent) = ref_checkpoint.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(
-        ref_checkpoint,
-        serde_json::to_string(ref_state).unwrap_or_default(),
-    );
+    // Ordered keys: this file is an auditable artifact (users diff/resume
+    // from it), so HashMap iteration order must not scramble it between runs.
+    let ordered: std::collections::BTreeMap<&String, &RefRecord> = ref_state.iter().collect();
+    let body = match serde_json::to_string(&ordered) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!("reference checkpoint serialization failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(ref_checkpoint, body) {
+        tracing::warn!("reference checkpoint write failed: {e}");
+    }
 }
 
 /// Free disk space in KiB on the filesystem holding `path`, read from

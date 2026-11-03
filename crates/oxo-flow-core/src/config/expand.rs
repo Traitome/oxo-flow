@@ -319,8 +319,12 @@ impl WorkflowConfig {
         // (#530) — fixed aliases plus every pair metadata key.
         let pair_wildcards = self.pair_fanout_wildcards();
 
-        // Wildcards that trigger group expansion
-        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
+        // Wildcards that trigger group expansion: the same shared vocabulary
+        // as pairs (#530) — `wildcard_combinations_from_groups` binds
+        // "group"/"sample" AND every group metadata key into every combo, so
+        // trigger detection must use the identical vocabulary or a rule
+        // referencing a bare `{<metadata_key>}` never expands.
+        let group_wildcards = self.group_fanout_wildcards();
 
         // The known `{meta.<column>}` vocabulary (issue #227 item 2): the
         // union of columns any metadata row defines. Used for the
@@ -355,7 +359,7 @@ impl WorkflowConfig {
             );
             for w in wildcards {
                 if pair_wildcards.iter().any(|pw| pw == w.as_str())
-                    || GROUP_WILDCARDS.contains(&w.as_str())
+                    || group_wildcards.iter().any(|gw| gw == w.as_str())
                     || self.values.iter().any(|v| v.name == w)
                     || w.starts_with("meta.")
                     || w.starts_with("config.")
@@ -519,7 +523,7 @@ impl WorkflowConfig {
             }
 
             let mentions_group = trigger_text.iter().any(|t| {
-                GROUP_WILDCARDS.iter().any(|w| {
+                group_wildcards.iter().any(|w| {
                     t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
                 })
             });

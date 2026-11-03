@@ -351,6 +351,27 @@ oxo-flow run pipeline.oxoflow gene_bed=
 oxo-flow run pipeline.oxoflow --gene_bed ""
 ```
 
+!!! note "Did-you-mean hints on mistyped overrides and rules"
+
+    Typos in `--KEY VALUE` overrides and `--rule` targets are diagnosed,
+    not just rejected. An override key that is not declared in `[config]`
+    and never referenced as `{config.KEY}` suggests the closest declared
+    key by edit distance:
+
+    ```console
+    oxo-flow run pipeline.oxoflow --samplename S1
+    Warning: override 'samplename' is not a declared [config] key and the
+      workflow never references {config.samplename} — did you mean
+      'sample_name'? It changes nothing.
+    ```
+
+    The same heuristic powers `--rule` suggestions (`oxo-flow debug
+    workflow.oxoflow --rule <typo>` lists the nearest rule names) and the
+    engine's rule-not-found errors, which list the available rules
+    (sorted, capped at ten) when a `when`/`input` reference misses. The
+    hint logic lives once in the core (`edit_distance`) — the CLI and the
+    engine always agree on what "closest" means.
+
 !!! note "Empty values select the derive-if-empty branch"
 
     An **empty** value is accepted and overrides the config key with the

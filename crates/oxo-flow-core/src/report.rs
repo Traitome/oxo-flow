@@ -811,7 +811,13 @@ pub fn expression_summary_section(records: &[ExpressionRecord], top_n: usize) ->
         .into_iter()
         .map(|(g, (sum, samples))| (g, sum / samples.len().max(1) as f64))
         .collect();
-    genes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Tiebreak equal TPMs by gene name (mirrors the :687 sort) — otherwise
+    // HashMap iteration order decides which genes make the cut at top_n.
+    genes.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     genes.truncate(top_n);
 
     let headers = vec!["Rank", "Gene", "Mean TPM"]

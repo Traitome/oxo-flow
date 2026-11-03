@@ -2266,7 +2266,11 @@ pub fn lint_format(
             )
             .expect("valid secret-key regex")
         });
-        for key in config.config.keys() {
+        // Sorted: `config` is a HashMap and the diagnostic order must not
+        // wobble between runs (consumer list outputs are diffed).
+        let mut config_keys: Vec<&String> = config.config.keys().collect();
+        config_keys.sort();
+        for key in config_keys {
             let declared_sensitive = config.config_meta.get(key).is_some_and(|def| def.sensitive);
             if declared_sensitive || !SECRET_KEY_RE.is_match(key) {
                 continue;
