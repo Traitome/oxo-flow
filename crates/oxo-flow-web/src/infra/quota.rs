@@ -214,10 +214,10 @@ pub(crate) fn release(run_id: &str) -> Option<Reservation> {
 
 /// Release a run's reservation and feed it straight into the tracker.
 ///
-/// Every terminal path needs exactly this pair — calling [`release`] and
+/// Every terminal path needs exactly this pair — calling `release` and
 /// [`QuotaTracker::record_complete`] separately invites the leak class where
 /// one half runs without the other. Callers that only want the reservation
-/// values (none today) use [`release`] directly.
+/// values (none today) use `release` directly.
 pub fn release_and_complete(run_id: &str) {
     if let Some((user_id, threads, memory_mb)) = release(run_id) {
         global_quota_tracker().record_complete(&user_id, threads, memory_mb);
