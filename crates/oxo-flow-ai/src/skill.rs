@@ -186,12 +186,15 @@ pub fn parse_skill_md(content: &str) -> Option<SkillManifest> {
     // value (e.g. `description: A --- B`) is content, not the closing
     // fence — splitting on the first substring truncates the header.
     let rest = content.strip_prefix("---\n")?;
-    let fence_start = rest
-        .find("\n---\n")
-        .map(|i| i + 1) // keep the newline on the opening side
-        .or_else(|| (rest == "---").then_some(0))?;
-    let frontmatter = &rest[..fence_start];
-    let markdown = &rest[fence_start + 4..];
+    // Closing fence must be a whole line: a `---` inside a frontmatter
+    // value is content, not the terminator. The degenerate `---\n---`
+    // (empty header, no trailing newline) has no body either — treat both
+    // sides as empty rather than slicing past the end.
+    let (frontmatter, markdown) = match rest.find("\n---\n") {
+        Some(i) => (&rest[..i + 1], &rest[i + 5..]),
+        None if rest == "---" => ("", ""),
+        None => return None,
+    };
 
     let mut name = None;
     let mut description = None;
@@ -374,6 +377,16 @@ prompt_additions = [
         assert!(parse_skill_md("---\ndescription: d\n---\nbody").is_none());
         assert!(parse_skill_md("no frontmatter here").is_none());
         assert!(parse_skill_md("---\nname: x\ndescription: d\n---\n").is_none());
+    }
+
+    #[test]
+    fn parse_skill_md_degenerate_fences_rejected_without_panic() {
+        // An empty frontmatter (closing fence hard on the opening one's
+        // heels) has no required fields — must reject, never slice out of
+        // bounds.
+        assert!(parse_skill_md("---\n---").is_none());
+        assert!(parse_skill_md("---\n---\n").is_none());
+        assert!(parse_skill_md("---\n---\nbody").is_none());
     }
 
     #[test]
