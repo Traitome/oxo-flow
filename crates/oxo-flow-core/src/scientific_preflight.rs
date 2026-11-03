@@ -681,7 +681,7 @@ fn check_alignment_rules(
         });
     }
 
-    // SCI-SAMTOOLS-SORT-MEM-OVERFLOW
+    // SCI-SORT-THREADS-MEM-PRODUCT (historically SCI-SAMTOOLS-SORT-MEM-OVERFLOW)
     if shell_lower.contains("samtools sort") {
         let tokens: Vec<&str> = shell.split_whitespace().collect();
         let mut threads: u64 = rule.resources.threads as u64;
