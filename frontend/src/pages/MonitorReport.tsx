@@ -593,8 +593,11 @@ export default function MonitorReport() {
                 if (!window.confirm(t('monitor.resumeCheckpointConfirm'))) return;
                 try {
                   const res = await api.resumeCheckpoint(selId);
+                  setActionError(null);
                   navigate(`/runs/${res.run_id}`);
-                } catch { /* ignore */ }
+                } catch (err: unknown) {
+                  setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+                }
               }}>
               <StepForward size={14} />
             </button>
@@ -605,7 +608,11 @@ export default function MonitorReport() {
                 if (!window.confirm(t('monitor.cleanWorkdirConfirm'))) return;
                 try {
                   await api.cleanRun(selId);
-                } catch { /* ignore */ }
+                  setActionError(null);
+                  void refreshRuns();
+                } catch (err: unknown) {
+                  setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+                }
               }}>
               <Trash2 size={14} />
             </button>
