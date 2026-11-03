@@ -54,6 +54,11 @@ class HardwareBenchmarkResult:
     seeds: Optional[List[int]] = None
 
 
+def speedup(base: float, cand: float) -> float:
+    """Speedup of `cand` relative to `base` (wall time ratio), guarded at 0."""
+    return base / cand if cand > 0 else 1.0
+
+
 def detect_system_topology() -> Dict[str, Any]:
     """Detects physical CPU sockets, NUMA nodes, and memory architecture."""
     os_name = platform.system()
@@ -367,7 +372,7 @@ def generate_markdown_report(
 
     base_time = results[0].wall_time_hours
     for r in results:
-        speedup = f"{base_time / r.wall_time_hours:.2f}x" if r.wall_time_hours > 0 else "1.00x"
+        speedup_txt = f"{speedup(base_time, r.wall_time_hours):.2f}x"
         wall_ci = (
             f"[{r.wall_time_ci_hours[0]:.2f}, {r.wall_time_ci_hours[1]:.2f}]"
             if r.wall_time_ci_hours
@@ -381,7 +386,7 @@ def generate_markdown_report(
         )
         md.append(
             f"| **{r.config_name}** | {r.n_runs} | {r.wall_time_hours:.2f} | {wall_ci} | "
-            f"**{r.samples_per_hour:.2f}** | {throughput_ci} | **{speedup}** | "
+            f"**{r.samples_per_hour:.2f}** | {throughput_ci} | **{speedup_txt}** | "
             f"{r.l3_cache_miss_rate_pct:.1f}% | {r.remote_numa_access_pct:.1f}% | "
             f"{r.io_wait_time_pct:.1f}% | {r.energy_kwh:.1f} |"
         )
@@ -451,12 +456,12 @@ def main() -> None:
     print("=" * 80)
 
     for r in results:
-        # Same zero-division guard as the markdown table above (:362): a
+        # Same zero-division guard as the markdown table above: a
         # sub-timer-resolution measurement can report 0 wall hours.
-        speedup = results[0].wall_time_hours / r.wall_time_hours if r.wall_time_hours > 0 else 1.0
+        speedup_val = speedup(results[0].wall_time_hours, r.wall_time_hours)
         print(
             f"{r.config_name:<40} | Time: {r.wall_time_hours:6.1f}h | "
-            f"Throughput: {r.samples_per_hour:6.2f} smp/h | Speedup: {speedup:4.2f}x | "
+            f"Throughput: {r.samples_per_hour:6.2f} smp/h | Speedup: {speedup_val:4.2f}x | "
             f"I/O Wait: {r.io_wait_time_pct:4.1f}%"
         )
     print("=" * 80)

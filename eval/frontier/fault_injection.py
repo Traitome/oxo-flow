@@ -39,13 +39,15 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
 
 
 @dataclass
@@ -309,19 +311,6 @@ shell = "bash -c 'echo No space left on device >&2; exit 1'"
 ]
 
 
-def find_oxo_flow_binary() -> str:
-    """Locates the compiled oxo-flow binary in debug or release target directories."""
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    for profile in ("debug", "release"):
-        candidate = repo_root / "target" / profile / "oxo-flow"
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    found = shutil.which("oxo-flow")
-    if found:
-        return found
-    raise FileNotFoundError("oxo-flow binary not found. Run 'cargo build' first.")
-
-
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -500,7 +489,7 @@ def main() -> None:
     parser.add_argument("--out-json", default=None, help="Path to export JSON benchmark results")
     args = parser.parse_args()
 
-    binary = str(Path(args.binary).resolve()) if args.binary else find_oxo_flow_binary()
+    binary = str(Path(args.binary).resolve()) if args.binary else common.find_engine_binary()
     print("=" * 80)
     print("oxo-flow Fault Detection & Repair-Stage Benchmark")
     print(f"Target Binary: {binary}")

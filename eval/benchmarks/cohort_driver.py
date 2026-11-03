@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Large-scale cohort benchmark & dynamic re-entry orchestration driver for oxo-flow.
+"""Cohort DAG-expansion latency benchmark driver for oxo-flow.
 
-Generates reproducible multi-tiered genomic cohorts (N=10 to N=10,000 samples)
-and orchestrates pipeline execution across simulated cluster and local topologies.
+Generates reproducible synthetic cohorts (N=10 to N=10,000 samples), renders a
+static three-rule `.oxoflow` workflow (align_bwa -> qc_check -> aggregate_cohort)
+fanning out over a [[values]] list, and measures how long `oxo-flow dry-run
+--json` takes to expand and plan the DAG at each cohort size.
 
-Features:
-1. Synthesizes realistic paired-end FASTQ / CRAM cohort samplesheets with clinical metadata.
-2. Models dynamic re-entry cascades: simulates secondary QC coverage gates where
-   a subset of samples (~5-10%) trigger automated re-sequencing and re-analysis rounds.
-3. Quantifies DAG expansion latency, lock contention, and amortized scheduling overhead.
+What is actually measured:
+1. `dry-run --json` wall-clock latency per cohort size (no pipeline execution).
+2. The length of the emitted `plan` array (no node count is inferred).
+3. Derived throughput in expanded plan nodes per second.
+
+Not measured: engine execution, environment resolution, or any re-sequencing /
+re-entry behavior — the rendered workflow is static.
 
 Usage:
   python3 eval/benchmarks/cohort_driver.py [--samples 100] [--out-dir cohorts/] [--run-dry]
@@ -29,6 +33,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
 
 
 class BenchmarkError(RuntimeError):
@@ -80,7 +87,7 @@ def export_samplesheet(cohort: List[CohortSample], output_path: Path) -> None:
 
 
 def render_cohort_workflow(num_samples: int, cohort: List[CohortSample]) -> str:
-    """Renders a complete .oxoflow workflow handling the cohort with dynamic re-entry."""
+    """Renders a static three-rule .oxoflow workflow fanning out over the cohort."""
     sample_ids = [s.sample_id for s in cohort]
     formatted_samples = ", ".join(f'"{sid}"' for sid in sample_ids)
 
@@ -183,28 +190,15 @@ def benchmark_cohort_expansion(binary: str, num_samples: int, work_dir: Path) ->
     }
 
 
-def find_oxo_flow_binary() -> str:
-    """Finds oxo-flow binary in workspace target."""
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    for profile in ("release", "debug"):
-        p = repo_root / "target" / profile / "oxo-flow"
-        if p.exists() and os.access(p, os.X_OK):
-            return str(p)
-    found = shutil.which("oxo-flow")
-    if found:
-        return found
-    raise FileNotFoundError("oxo-flow binary not found. Build target first.")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Cohort benchmark & dynamic re-entry driver")
+    parser = argparse.ArgumentParser(description="Cohort DAG-expansion latency benchmark driver")
     parser.add_argument("--samples", type=int, default=100, help="Target cohort size")
     parser.add_argument("--scale-sweep", action="store_true", help="Perform scaling sweep across cohort sizes")
     parser.add_argument("--out-json", default=None, help="Export path for JSON report")
     parser.add_argument("--out-md", default=None, help="Export path for Markdown report")
     args = parser.parse_args()
 
-    binary = find_oxo_flow_binary()
+    binary = common.find_engine_binary()
     sweep_sizes = [10, 50, 100, 250, 500, 1000] if args.scale_sweep else [args.samples]
 
     print("=" * 80)
@@ -213,8 +207,7 @@ def main() -> None:
     print(f"Sweep Cohorts: {sweep_sizes}")
     print("=" * 80)
 
-    work_base = Path(tempfile.gettempdir()) / "oxoflow_cohort_bench"
-    work_base.mkdir(parents=True, exist_ok=True)
+    work_base = Path(tempfile.mkdtemp(prefix="oxoflow_cohort_"))
 
     results = []
     try:
@@ -236,6 +229,8 @@ def main() -> None:
     except BenchmarkError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
+    finally:
+        shutil.rmtree(work_base, ignore_errors=True)
 
     print("=" * 80)
 

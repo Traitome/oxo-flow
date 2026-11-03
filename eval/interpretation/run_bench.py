@@ -34,6 +34,9 @@ HERE = Path(__file__).resolve().parent
 SEEDS_DIR = HERE / "seeds"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
+
 
 def clean(text: str) -> str:
     return ANSI.sub("", text)
@@ -72,17 +75,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=300, help="per-command timeout in seconds")
     args = ap.parse_args()
 
-    binary = Path(
-        args.binary
-        or next(
-            p
-            for p in [
-                HERE.parent.parent / "target" / "release" / "oxo-flow",
-                HERE.parent.parent / "target" / "debug" / "oxo-flow",
-            ]
-            if p.exists()
-        )
-    ).resolve()
+    try:
+        binary = Path(args.binary or common.find_engine_binary()).resolve()
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     provider_ready = bool(os.environ.get("OXO_FLOW_AI_PROVIDER")) or (
         Path.home() / ".oxo-flow" / "ai_config.json"

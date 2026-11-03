@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -54,6 +55,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
 
 # USD per 1M tokens. Defaults mirror the repo's own cost constant
 # (crates/oxo-flow-ai/src/types.rs: deepseek-v4-pro 0.28 in / 1.10 out,
@@ -117,19 +121,11 @@ def load_credentials() -> dict[str, str]:
 
 
 def find_binary() -> str:
-    for cand in (REPO / "target/debug/oxo-flow", "oxo-flow"):
-        p = Path(cand)
-        if p.is_file() or which(cand):
-            return str(p)
-    sys.exit("oxo-flow binary not found (build with: cargo build -p oxo-flow-cli)")
-
-
-def which(name: str) -> str | None:
-    for d in os.environ.get("PATH", "").split(os.pathsep):
-        p = Path(d) / name
-        if p.is_file() and os.access(p, os.X_OK):
-            return str(p)
-    return None
+    """Shared discovery (common.find_engine_binary); kept as an alias for rejudge.py."""
+    try:
+        return common.find_engine_binary()
+    except FileNotFoundError as exc:
+        sys.exit(str(exc))
 
 
 def extract_toml(text: str) -> str | None:
@@ -351,7 +347,7 @@ def main() -> None:
 
     creds = load_credentials()
     binary = args.binary or find_binary()
-    if not (Path(binary).is_file() or which(binary)):
+    if not (Path(binary).is_file() or shutil.which(binary)):
         sys.exit(f"--binary {binary} does not exist")
     default_model = creds["ANTHROPIC_MODEL"]
     models = [m for m in args.models.split(",") if m] or [default_model]
