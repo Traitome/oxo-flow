@@ -82,6 +82,9 @@ impl Orchestrator {
         let exploration_nudge_threshold = (self.max_rounds / 2).max(2);
         // One-time Ollama tool-registry warning flag (issue #948 P3-3).
         let mut warned_ollama_tools = false;
+        // Audit F5: at most one sleep-and-retry of the provider call on a
+        // 429 with a sane Retry-After, for the whole generation.
+        let mut rate_limit_retry_used = false;
 
         loop {
             rounds += 1;
@@ -138,21 +141,55 @@ impl Orchestrator {
                 .await
             {
                 Ok(response) => response,
-                Err(error) => {
-                    // A provider failure aborts the whole generation, but
-                    // the rounds before it were real paid work — archive
-                    // them like the round-cap exit; a bare `?` here dropped
-                    // the transcript and reported 0-token runs for
-                    // generations that had completed many tool rounds.
-                    archive_failed_generation(
-                        session,
-                        &messages,
-                        tool_call_records,
-                        modifications,
-                        format!("provider error: {error}"),
-                    );
-                    return Err(error);
-                }
+                Err(error) => match retry_after_rate_limit(&error) {
+                    // Audit F5: an HTTP 429 that carries a reasonable
+                    // Retry-After deserves one patient wait-and-retry of the
+                    // SAME call instead of aborting a run that burned paid
+                    // rounds on it. At most one such wait per generation —
+                    // a second consecutive 429 (or a >120 s wait, or none
+                    // declared) still aborts and archives.
+                    Some(secs) if !rate_limit_retry_used => {
+                        rate_limit_retry_used = true;
+                        tracing::warn!(
+                            wait_secs = secs,
+                            "provider rate limited us (429); waiting {secs}s and \
+                             retrying this call once"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                        match self
+                            .provider
+                            .chat_with_tools_overflow_safe(&messages, &tool_defs)
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(retry_error) => {
+                                archive_failed_generation(
+                                    session,
+                                    &messages,
+                                    tool_call_records,
+                                    modifications,
+                                    format!("provider error after rate-limit retry: {retry_error}"),
+                                );
+                                return Err(retry_error);
+                            }
+                        }
+                    }
+                    _ => {
+                        // A provider failure aborts the whole generation, but
+                        // the rounds before it were real paid work — archive
+                        // them like the round-cap exit; a bare `?` here dropped
+                        // the transcript and reported 0-token runs for
+                        // generations that had completed many tool rounds.
+                        archive_failed_generation(
+                            session,
+                            &messages,
+                            tool_call_records,
+                            modifications,
+                            format!("provider error: {error}"),
+                        );
+                        return Err(error);
+                    }
+                },
             };
 
             session.add_usage(&response.usage);
@@ -175,6 +212,38 @@ impl Orchestrator {
                 }
                 for tc in tool_calls {
                     let start = std::time::Instant::now();
+
+                    // Fail-closed argument gate (audit F4 / AI-07): the
+                    // model's `arguments` string must be valid JSON before
+                    // any tool runs. A truncated payload used to be repaired
+                    // to `{}` and executed with arguments the model never
+                    // wrote; now the failure rides the normal tool-result
+                    // channel with a re-emit instruction.
+                    if let Err(parse_error) =
+                        serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                    {
+                        let message = format!(
+                            "Error: tool '{}' arguments are not valid JSON: {parse_error} \
+                             — re-emit this tool call with valid JSON arguments",
+                            tc.name
+                        );
+                        if let Some(sink) = &mut sink {
+                            sink(AgentEvent::ToolResult {
+                                name: tc.name.clone(),
+                                summary: message.clone(),
+                            });
+                        }
+                        messages.push(Message::tool(&tc.id, &tc.name, &message));
+                        tool_call_records.push(ToolCallRecord {
+                            timestamp: Utc::now(),
+                            tool_name: tc.name.clone(),
+                            arguments: tc.arguments.clone(),
+                            result_preview: message,
+                            success: false,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                        });
+                        continue;
+                    }
 
                     // Human-approval gate: non-read-only tools (e.g. MCP
                     // tools without a readOnlyHint) execute only when an
@@ -541,6 +610,24 @@ fn log_session_usage(session: &crate::session::AiSession) {
 /// generated TOML from that transcript, which an empty shell made
 /// impossible. One helper for every abort inside the round loop: round
 /// cap, cancellation, provider error.
+/// Maximum Retry-After the orchestrator is willing to sleep out (audit F5).
+/// Anything longer — or a 429 without a parseable header — aborts the run
+/// like any other provider failure; the caller's own backoff/retry policy
+/// applies instead of the agent blocking for minutes.
+const RATE_LIMIT_MAX_WAIT_SECS: u64 = 120;
+
+/// If `error` is a rate limit carrying a wait we are willing to sleep out,
+/// return the wait in whole seconds.
+fn retry_after_rate_limit(error: &AiError) -> Option<u64> {
+    match error {
+        AiError::RateLimited {
+            retry_after: Some(secs),
+            ..
+        } if *secs <= RATE_LIMIT_MAX_WAIT_SECS && *secs > 0 => Some(*secs),
+        _ => None,
+    }
+}
+
 fn archive_failed_generation(
     session: AiSession,
     messages: &[Message],
@@ -1382,6 +1469,215 @@ mod tests {
             backend.observed_calls().await.len(),
             2,
             "a provider error must not be silently retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limited_with_retry_after_sleeps_once_and_retries() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // Audit F5: round 1 hits a 429 with Retry-After: 1 — the one-shot
+        // sleep-retry must replay the SAME call and continue the run; the
+        // generation then succeeds. (1 s is the smallest whole-second wait
+        // the wire can carry; tests tolerate the pause.)
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::error("rate_limited:1"),
+            ScriptedTurn::content("ACCEPTED"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+
+        let outcome = orch.execute(&PickyAgent, &test_context()).await.unwrap();
+
+        assert!(outcome.success);
+        let calls = backend.observed_calls().await;
+        assert_eq!(
+            calls.len(),
+            2,
+            "the 429'd call must be retried exactly once"
+        );
+        assert_eq!(
+            calls[0].len(),
+            calls[1].len(),
+            "the retry must resend the SAME messages"
+        );
+        for (first, retry) in calls[0].iter().zip(calls[1].iter()) {
+            assert_eq!(first.role, retry.role);
+            assert_eq!(first.content, retry.content);
+            match (&first.tool_calls, &retry.tool_calls) {
+                (None, None) => {}
+                (Some(a), Some(b)) => {
+                    assert_eq!(a.len(), b.len());
+                    for (ca, cb) in a.iter().zip(b.iter()) {
+                        assert_eq!(ca.id, cb.id);
+                        assert_eq!(ca.name, cb.name);
+                        assert_eq!(ca.arguments, cb.arguments);
+                    }
+                }
+                _ => panic!("tool_calls presence must match between retry and original"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn second_consecutive_rate_limit_aborts_without_second_wait() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // A 429 after the one allowed sleep-retry must abort like any
+        // provider error — no second wait, transcript archived.
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::error("rate_limited:1"),
+            ScriptedTurn::error("rate_limited:1"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+
+        let result = orch.execute(&PickyAgent, &test_context()).await;
+
+        assert!(
+            matches!(result, Err(AiError::RateLimited { .. })),
+            "the second 429 must surface as-is"
+        );
+        assert_eq!(
+            backend.observed_calls().await.len(),
+            2,
+            "one sleep-retry maximum — no further attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_retry_after_is_not_slept_out() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // Retry-After: 600 (> RATE_LIMIT_MAX_WAIT_SECS) must abort
+        // immediately — the agent must not park for minutes.
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::error("rate_limited:600"),
+            ScriptedTurn::content("ACCEPTED"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+
+        let result = orch.execute(&PickyAgent, &test_context()).await;
+
+        assert!(matches!(result, Err(AiError::RateLimited { .. })));
+        assert_eq!(
+            backend.observed_calls().await.len(),
+            1,
+            "an oversized Retry-After must not trigger the retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_arguments_fail_closed_with_a_reemit_tool_result() {
+        // Audit F4 / AI-07: a model that emits truncated (or otherwise
+        // invalid) JSON arguments used to have them "repaired" to `{}` and
+        // the tool EXECUTED with arguments it never wrote. Now the
+        // orchestrator rejects the call before the registry, and the parse
+        // failure rides the normal tool-result channel with a re-emit
+        // instruction so the model can correct itself.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+        use crate::types::ToolCall;
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc-bad".into(),
+                    name: "read_only_tool".into(),
+                    // Truncated JSON — the DeepSeek failure shape.
+                    arguments: "{\"tool\": \"STA".into(),
+                }]),
+                error: None,
+                delay_ms: 0,
+                finish_reason: None,
+            },
+            tool_turn("tc-good"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 5);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success, "the model recovers after re-emitting");
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3, "one provider call per round");
+
+        // The malformed call never executed: round 2's transcript must carry
+        // a tool-role result with the parse error + re-emit instruction, and
+        // NO record of a successful execution with fabricated "{}".
+        let gate_results: Vec<&crate::types::Message> = calls[1]
+            .iter()
+            .filter(|m| {
+                m.role == crate::types::MessageRole::Tool
+                    && m.content.contains("arguments are not valid JSON")
+                    && m.content.contains("re-emit")
+            })
+            .collect();
+        assert_eq!(
+            gate_results.len(),
+            1,
+            "exactly one fail-closed tool result for the malformed call: {:?}",
+            calls[1]
+        );
+        assert!(
+            !calls[1]
+                .iter()
+                .any(|m| { m.role == crate::types::MessageRole::Tool && m.content == "done" }),
+            "the tool must not have executed with repaired {{}} arguments: {:?}",
+            calls[1]
+        );
+
+        // The re-emitted valid call (round 2) ran normally — its result is
+        // the last tool message and starts with "done".
+        assert!(
+            calls[2].iter().any(|m| {
+                m.role == crate::types::MessageRole::Tool && m.content.starts_with("done")
+            }),
+            "the valid re-emitted call must execute: {:?}",
+            calls[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_tool_arguments_field_fails_closed_too() {
+        // Audit F4 test (b): a missing `arguments` field must not become an
+        // executable `{}` — the parser yields an empty payload and the gate
+        // rejects it exactly like malformed JSON.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+        use crate::types::ToolCall;
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc-missing".into(),
+                    name: "read_only_tool".into(),
+                    arguments: String::new(),
+                }]),
+                error: None,
+                delay_ms: 0,
+                finish_reason: None,
+            },
+            tool_turn("tc-good"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 5);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert!(
+            calls[1].iter().any(|m| {
+                m.role == crate::types::MessageRole::Tool
+                    && m.content.contains("arguments are not valid JSON")
+            }),
+            "an empty payload must fail the JSON gate like any malformed one: {:?}",
+            calls[1]
+        );
+        assert!(
+            !calls[1]
+                .iter()
+                .any(|m| { m.role == crate::types::MessageRole::Tool && m.content == "done" }),
+            "no tool execution may happen for a missing arguments field"
         );
     }
 

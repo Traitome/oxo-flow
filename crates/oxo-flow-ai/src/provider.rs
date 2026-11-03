@@ -12,7 +12,6 @@ use crate::error::AiError;
 use crate::types::{
     AiResponse, Message, MessageRole, ToolCall, ToolDef, Usage, tool_calls_to_openai,
 };
-use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 // ── Provider kind ──────────────────────────────────────────────────────────
@@ -27,16 +26,18 @@ pub enum ProviderKind {
 }
 
 impl std::str::FromStr for ProviderKind {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self> {
+    type Err = AiError;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "claude" => Ok(Self::Claude),
             "openai" | "open-ai" => Ok(Self::OpenAi),
             "deepseek" => Ok(Self::DeepSeek),
             "ollama" => Ok(Self::Ollama),
-            _ => Err(anyhow!(
-                "Unknown AI provider '{s}'. Use 'claude', 'openai', 'deepseek', or 'ollama'"
-            )),
+            _ => Err(AiError::Config {
+                message: format!(
+                    "Unknown AI provider '{s}'. Use 'claude', 'openai', 'deepseek', or 'ollama'"
+                ),
+            }),
         }
     }
 }
@@ -388,23 +389,6 @@ impl AiProvider {
     /// [`AiError::ContextOverflow`] the transcript is compressed
     /// ([`compress_transcript`]) and the request retried ONCE. A second
     /// overflow surfaces a readable error instead of wasting quota.
-    /// Stream a completion token-by-token (openai-compatible providers;
-    /// other backends return the whole response as one `Done` chunk).
-    pub async fn chat_stream(&self, system: &str, user: &str) -> Result<ChatStream, AiError> {
-        match self {
-            AiProvider::OpenAi(b) | AiProvider::DeepSeek(b) => b.chat_stream(system, user).await,
-            other => {
-                let text = other.chat(system, user).await?;
-                Ok(Box::pin(futures::stream::iter(vec![Ok(
-                    ChatStreamChunk::Done {
-                        content: text,
-                        usage: None,
-                    },
-                )])))
-            }
-        }
-    }
-
     pub async fn chat_with_tools_overflow_safe(
         &self,
         messages: &[Message],
@@ -511,13 +495,13 @@ fn mask_secret(text: &str, secret: &str) -> String {
 ///
 /// Only the delay-seconds form is read; the HTTP-date form is left as
 /// `None` rather than guessed (the caller's retry policy is seconds-based).
-fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<String> {
+fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-        .map(String::from)
+        .and_then(|v| v.parse::<u64>().ok())
 }
 
 /// Classify a non-success HTTP status + error body into an [`AiError`].
@@ -536,7 +520,7 @@ pub fn classify_http_error_with_retry_after(
     provider: &str,
     status: u16,
     body: &str,
-    retry_after: Option<String>,
+    retry_after: Option<u64>,
 ) -> AiError {
     let body_lower = body.to_lowercase();
     if status == 429 {
@@ -627,22 +611,6 @@ fn cache_read_tokens_from_usage(usage: &serde_json::Value) -> Option<u64> {
     usage["prompt_cache_hit_tokens"]
         .as_u64()
         .or(usage["prompt_tokens_details"]["cached_tokens"].as_u64())
-}
-
-/// Validate a tool call's raw `arguments` string, repairing broken JSON to
-/// `{}`: models like DeepSeek have been observed to truncate long argument
-/// strings. The repair is warned about — silently rewriting a model's
-/// arguments would hide the failure from the caller.
-fn repair_tool_arguments(raw: &str, tool: &str) -> String {
-    if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
-        raw.to_string()
-    } else {
-        tracing::warn!(
-            tool,
-            "tool call arguments are not valid JSON — repairing to {{}}"
-        );
-        "{}".to_string()
-    }
 }
 
 // ── Claude backend ─────────────────────────────────────────────────────────
@@ -801,8 +769,13 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
                 blocks.push(serde_json::json!({"type": "text", "text": m.content}));
             }
             for tc in tool_calls {
+                // Wire echo of the model's own tool_use request (audit F4 /
+                // AI-07): Anthropic requires `input` to be a JSON object, so
+                // a malformed argument string falls back to `{}` here. This
+                // is protocol echo only — execution is blocked upstream by
+                // the orchestrator's JSON-validity gate before any tool runs.
                 let input: serde_json::Value =
-                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
                 blocks.push(serde_json::json!({
                     "type": "tool_use",
                     "id": tc.id,
@@ -894,6 +867,45 @@ fn parse_context_tokens(value: Option<&str>) -> Option<u32> {
     value
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|n| *n > 0)
+}
+
+// ── Claude-only knob warning (audit F7) ────────────────────────────────────
+
+/// `OXO_FLOW_AI_MAX_TOKENS` / `OXO_FLOW_AI_CONTEXT_TOKENS` are Anthropic
+/// Messages-API knobs: only the Claude backend reads them. When they are
+/// set while an OpenAI-compatible or Ollama backend is constructed, they
+/// silently do nothing there — warn once per backend type so a user who
+/// calibrated the knobs for a Claude endpoint knows they do nothing on the
+/// backend actually in use. The knobs are deliberately NOT forwarded: the
+/// OpenAI `max_tokens`/`max_completion_tokens` field has provider-specific
+/// semantics, and inventing a mapping is out of scope.
+fn warn_claude_only_knobs_once(backend: &'static str) {
+    static WARN_MAX_TOKENS: std::sync::Once = std::sync::Once::new();
+    static WARN_CONTEXT_TOKENS: std::sync::Once = std::sync::Once::new();
+    if let Ok(value) = std::env::var("OXO_FLOW_AI_MAX_TOKENS")
+        && !value.trim().is_empty()
+    {
+        WARN_MAX_TOKENS.call_once(|| {
+            tracing::warn!(
+                provider = backend,
+                env = "OXO_FLOW_AI_MAX_TOKENS",
+                "OXO_FLOW_AI_MAX_TOKENS only applies to the Claude/Anthropic backend; \
+                 it is ignored on this backend and no max_tokens field is sent"
+            );
+        });
+    }
+    if let Ok(value) = std::env::var("OXO_FLOW_AI_CONTEXT_TOKENS")
+        && !value.trim().is_empty()
+    {
+        WARN_CONTEXT_TOKENS.call_once(|| {
+            tracing::warn!(
+                provider = backend,
+                env = "OXO_FLOW_AI_CONTEXT_TOKENS",
+                "OXO_FLOW_AI_CONTEXT_TOKENS only applies to the Claude backend's \
+                 context-window clamping; it is ignored on this backend"
+            );
+        });
+    }
 }
 
 /// Upper bound on how badly the chars→tokens estimate can undershoot a
@@ -1059,6 +1071,9 @@ impl OpenAiBackend {
         api_url: Option<String>,
         label: &str,
     ) -> Self {
+        // Audit F7: the max-token knobs are Claude-only; say so once when a
+        // user carries them over to an openai-compatible endpoint.
+        warn_claude_only_knobs_once("openai-compatible");
         Self {
             client: provider_http_client(),
             api_key,
@@ -1221,8 +1236,10 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
 ///
 /// Structurally broken calls (missing `function`, `name`, or `id`) are an
 /// error — silently dropping them hides a model failure from the caller.
-/// Broken *arguments* JSON is repaired to `{}`: models like DeepSeek have
-/// been observed to truncate long argument strings.
+/// Broken *arguments* JSON passes through raw (audit F4 / AI-07): the
+/// orchestrator's JSON-validity gate rejects it with a tool-result message
+/// before any tool runs. "Repairing" truncations to `{}` used to execute
+/// tools with arguments the model never wrote.
 fn parse_tool_calls_strict(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, AiError> {
     arr.iter()
         .map(|tc| {
@@ -1244,15 +1261,18 @@ fn parse_tool_calls_strict(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, A
                     tool: name.into(),
                     message: "tool call missing id".into(),
                 })?;
-            let raw_arguments = func
+            // Missing `arguments` field yields an empty string (never `{}`):
+            // an empty payload also fails the orchestrator's JSON gate, so a
+            // call whose arguments the model never sent cannot execute with
+            // fabricated arguments.
+            let arguments = func
                 .get("arguments")
                 .and_then(|v| v.as_str())
-                .unwrap_or("{}");
-            let arguments = repair_tool_arguments(raw_arguments, name);
+                .unwrap_or_default();
             Ok(ToolCall {
                 id: id.to_string(),
                 name: name.to_string(),
-                arguments,
+                arguments: arguments.to_string(),
             })
         })
         .collect()
@@ -1272,6 +1292,8 @@ pub struct OllamaBackend {
 
 impl OllamaBackend {
     pub fn new(model: Option<String>, api_url: Option<String>) -> Self {
+        // Audit F7: the max-token knobs are Claude-only; say so once.
+        warn_claude_only_knobs_once("ollama");
         Self {
             client: provider_http_client(),
             model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
@@ -1380,7 +1402,9 @@ fn parse_ollama_response(json: &serde_json::Value) -> Result<AiResponse, AiError
 ///
 /// Mirrors the strictness of the OpenAI parser: a structurally broken call
 /// (missing `function`/name) is an error instead of being silently dropped.
-/// Broken *arguments* are repaired to `{}` like every other backend.
+/// Broken *arguments* pass through raw (audit F4 / AI-07) — the
+/// orchestrator's JSON-validity gate rejects them before any tool runs;
+/// nothing is repaired to `{}`.
 fn parse_ollama_tool_calls(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, AiError> {
     arr.iter()
         .enumerate()
@@ -1393,9 +1417,11 @@ fn parse_ollama_tool_calls(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, A
                 })?;
             let arguments = match &tc["function"]["arguments"] {
                 // Newer Ollama emits a JSON object; older versions a string.
-                serde_json::Value::String(s) => repair_tool_arguments(s, name),
-                serde_json::Value::Null => "{}".to_string(),
-                other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+                // Either way the model's payload is kept verbatim — the
+                // orchestrator gate rejects it when it is not valid JSON.
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => serde_json::to_string(other).unwrap_or_default(),
             };
             Ok(ToolCall {
                 id: format!("ollama-call-{i}"),
@@ -1420,7 +1446,10 @@ fn build_ollama_body(
                 "content": m.content,
             });
             // Echo the assistant's tool-call request back so Ollama can
-            // correlate the following tool result with its request.
+            // correlate the following tool result with its request. The
+            // arguments echo is wire-format only (Ollama expects an object)
+            // — a malformed string falls back to `{}`; execution is blocked
+            // upstream by the orchestrator's JSON-validity gate (audit F4).
             if let Some(calls) = &m.tool_calls {
                 msg["tool_calls"] = serde_json::json!(calls.iter().map(|tc| {
                     serde_json::json!({
@@ -1459,226 +1488,6 @@ fn build_ollama_body(
     }
 
     body
-}
-
-// ── Streaming (openai-compatible SSE) ──────────────────────────────────────
-
-/// One parsed SSE event from an openai-compatible streaming response.
-enum SseEvent {
-    /// A content delta (text fragment).
-    Delta(String),
-    /// The stream terminator.
-    Done,
-    /// Parsed but carries nothing actionable (e.g. a role-only frame).
-    Other,
-}
-
-/// Parse a raw SSE body (server-sent `data:` lines separated by blank lines)
-/// into deltas. `[DONE]` and unparseable lines are skipped — the stream's
-/// terminal state is signaled by the caller when the HTTP body ends.
-fn parse_openai_sse(body: &str) -> Vec<SseEvent> {
-    let mut events = Vec::new();
-    for block in body.split(
-        "
-
-",
-    ) {
-        for line in block.lines() {
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() || data == "[DONE]" {
-                if data == "[DONE]" {
-                    events.push(SseEvent::Done);
-                }
-                continue;
-            }
-            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
-                continue;
-            };
-            let Some(delta) = json["choices"][0]["delta"]["content"].as_str() else {
-                continue;
-            };
-            if delta.is_empty() {
-                events.push(SseEvent::Other);
-            } else {
-                events.push(SseEvent::Delta(delta.to_string()));
-            }
-        }
-    }
-    events
-}
-
-/// Append a raw SSE chunk to `buffer` and return every frame it completes.
-///
-/// Carriage returns are discarded on the way in so CRLF-terminated streams
-/// (proxies that re-frame SSE with `\r\n`) split on the same blank-line
-/// boundary as LF-terminated ones — including when a `\r\n` pair straddles
-/// two chunks, because the `\r` is dropped wherever it lands. A raw CR can
-/// only be a line terminator here: any CR inside event data is escaped
-/// inside the JSON payload.
-/// Byte-level SSE frame splitter for network streams:
-/// accumulate RAW bytes and convert only COMPLETE frames (`\n\n`-terminated)
-/// to UTF-8. Converting per network chunk instead (the old
-/// `from_utf8_lossy`-then-buffer shape) destroyed any multi-byte character
-/// that straddled a read boundary — streamed CJK corrupted at every split
-/// point (audit #647). `\r` is filtered at byte level: 0x0D never appears
-/// inside a multi-byte UTF-8 sequence, so this exactly mirrors
-/// `push_sse_chunk`'s char filter (CRLF-reframed SSE still splits).
-fn push_sse_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
-    buffer.extend(bytes.iter().copied().filter(|b| *b != b'\r'));
-    let mut frames = Vec::new();
-    while let Some(pos) = buffer.windows(2).position(|w| w == b"\n\n") {
-        frames.push(String::from_utf8_lossy(&buffer[..pos]).into_owned());
-        buffer.drain(..pos + 2);
-    }
-    frames
-}
-
-/// Token usage carried by a streamed frame, when the endpoint sends one
-/// (requested via `stream_options.include_usage`). DeepSeek's streamed
-/// usage frames carry the same native cache counters as non-streaming
-/// (`prompt_cache_hit_tokens`), folded in here identically.
-fn usage_from_frame(frame: &str) -> Option<Usage> {
-    let line = frame.lines().find(|l| l.contains("\"usage\""))?;
-    let json: serde_json::Value =
-        serde_json::from_str(line.trim().strip_prefix("data:").unwrap_or("").trim()).ok()?;
-    Some(Usage {
-        prompt_tokens: json["usage"]["prompt_tokens"].as_u64()?,
-        completion_tokens: json["usage"]["completion_tokens"].as_u64()?,
-        cache_read_tokens: cache_read_tokens_from_usage(&json["usage"]).unwrap_or(0),
-        ..Usage::default()
-    })
-}
-
-/// A chunk of a streamed chat completion.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ChatStreamChunk {
-    /// A token delta — append to the running transcript.
-    Text(String),
-    /// The stream finished; `content` is the complete accumulated text.
-    Done {
-        content: String,
-        usage: Option<Usage>,
-    },
-}
-
-/// Boxed stream of completion chunks.
-pub type ChatStream =
-    std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamChunk, AiError>> + Send>>;
-
-impl OpenAiBackend {
-    /// Stream a completion via the openai-compatible SSE protocol
-    /// (`stream: true`). Emits `Text` deltas then a final `Done` chunk.
-    pub async fn chat_stream(&self, system: &str, user: &str) -> Result<ChatStream, AiError> {
-        let messages = vec![
-            Message {
-                role: MessageRole::System,
-                content: system.to_string(),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            Message {
-                role: MessageRole::User,
-                content: user.to_string(),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-        ];
-        let mut body = self.build_body(&messages, &[]);
-        body["stream"] = serde_json::json!(true);
-        // Ask the endpoint to close the stream with a usage frame: without
-        // it a streamed call reports no token counts at all, so the caller's
-        // cost and session accounting sees zeros. The openai-compatible
-        // endpoints this backend serves (OpenAI, DeepSeek) support it.
-        body["stream_options"] = serde_json::json!({"include_usage": true});
-
-        // Streaming keeps the raw response: the body is consumed
-        // incrementally below, so only the send half is replayable.
-        let (status, headers, resp) = send_with_retry(
-            self.client
-                .post(&self.api_url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("content-type", "application/json")
-                .json(&body),
-            &self.label,
-            Some(&self.api_key),
-            TRANSPORT_BACKOFFS,
-            |resp| async move { Ok::<_, reqwest::Error>(resp) },
-        )
-        .await?;
-        let retry_after = retry_after_header(&headers);
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let err_msg = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|j| j["error"]["message"].as_str().map(String::from))
-                .unwrap_or(text);
-            return Err(classify_http_error_with_retry_after(
-                &self.label,
-                status.as_u16(),
-                &mask_secret(&err_msg, &self.api_key),
-                retry_after,
-            ));
-        }
-
-        let stream = resp.bytes_stream();
-        let label = self.label.clone();
-        let stream = async_stream::stream! {
-            // RAW bytes, not a String: frame boundaries are the only safe
-            // UTF-8 conversion points (audit #647).
-            let mut buffer: Vec<u8> = Vec::new();
-            let mut content = String::new();
-            let mut usage: Option<Usage> = None;
-            for await chunk in stream {
-                let bytes = match chunk {
-                    Ok(b) => b,
-                    Err(e) => {
-                        yield Err(AiError::Provider {
-                            provider: label.clone(),
-                            message: format!("stream read failed: {e}"),
-                        });
-                        return;
-                    }
-                };
-                // SSE frames end with a blank line; `push_sse_bytes` keeps
-                // any trailing partial frame (raw bytes) for the next read.
-                for frame in push_sse_bytes(&mut buffer, &bytes) {
-                    if let Some(u) = usage_from_frame(&frame) {
-                        usage = Some(u);
-                    }
-                    for event in parse_openai_sse(&frame) {
-                        if let SseEvent::Delta(d) = event {
-                            content.push_str(&d);
-                            yield Ok(ChatStreamChunk::Text(d));
-                        }
-                    }
-                }
-            }
-            // Flush any remaining partial frame. The stream is over, so
-            // from_utf8_lossy here only affects a genuinely truncated
-            // multi-byte character — there is no next chunk to complete it.
-            let tail = String::from_utf8_lossy(&buffer);
-            if !tail.trim().is_empty() {
-                if let Some(u) = usage_from_frame(&tail) {
-                    usage = Some(u);
-                }
-                for event in parse_openai_sse(&tail) {
-                    if let SseEvent::Delta(d) = event {
-                        content.push_str(&d);
-                        yield Ok(ChatStreamChunk::Text(d));
-                    }
-                }
-            }
-            yield Ok(ChatStreamChunk::Done { content, usage });
-        };
-        Ok(Box::pin(stream))
-    }
 }
 
 // ── Factory functions ──────────────────────────────────────────────────────
@@ -2838,7 +2647,15 @@ mod tests {
             "ollama".parse::<ProviderKind>().unwrap(),
             ProviderKind::Ollama
         );
-        assert!("invalid".parse::<ProviderKind>().is_err());
+        // F6: the error type is AiError::Config (thiserror), not anyhow —
+        // callers type-match instead of string-matching a DoubleError.
+        match "invalid".parse::<ProviderKind>() {
+            Err(AiError::Config { message }) => {
+                assert!(message.contains("invalid"), "{message}");
+                assert!(message.contains("Use 'claude'"), "{message}");
+            }
+            other => panic!("expected AiError::Config, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3397,10 +3214,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_openai_response_repairs_truncated_tool_arguments() {
+    fn parse_openai_response_keeps_truncated_tool_arguments_raw() {
         // DeepSeek has been observed to truncate long tool-call arguments;
-        // the broken JSON must be repaired to "{}" rather than silently
-        // dropped (issue #73).
+        // the broken JSON passes through RAW (audit F4 / AI-07): the parser
+        // must not repair it to "{}" — that used to let the call execute
+        // with arguments the model never wrote. The orchestrator's
+        // JSON-validity gate rejects it with a tool-result message instead.
         let json = serde_json::json!({
             "choices": [{
                 "message": {
@@ -3421,14 +3240,15 @@ mod tests {
         let response = parse_openai_response(&json, "openai").unwrap();
         let calls = response
             .tool_calls
-            .expect("repaired call must not be dropped");
+            .expect("malformed call must not be dropped");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "lookup_tool");
-        assert_eq!(calls[0].arguments, "{}");
+        assert_eq!(calls[0].arguments, "{\"tool\": \"STA");
+        assert_ne!(calls[0].arguments, "{}");
     }
 
     #[test]
-    fn parse_openai_response_keeps_valid_calls_beside_repaired_ones() {
+    fn parse_openai_response_keeps_valid_calls_beside_malformed_ones() {
         let json = serde_json::json!({
             "choices": [{
                 "message": {
@@ -3454,12 +3274,41 @@ mod tests {
         let calls = response.tool_calls.unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].arguments, r#"{"tool": "STAR"}"#);
-        assert_eq!(calls[1].arguments, "{}");
+        // Malformed JSON passes through raw — never repaired to "{}"
+        // (audit F4 / AI-07); the orchestrator gate rejects it.
+        assert_eq!(calls[1].arguments, "{\"query\": \"truncated");
+        assert_ne!(calls[1].arguments, "{}");
     }
 
     #[test]
-    fn parse_openai_response_errors_on_unrepairable_tool_call() {
-        // A tool call without an id/name cannot be repaired — the caller
+    fn parse_openai_response_missing_arguments_field_is_empty_not_object() {
+        // A missing `arguments` field must NOT materialize as executable
+        // "{}" (audit F4 / AI-07) — the model never wrote arguments, so the
+        // empty string fails the orchestrator's JSON gate instead.
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup_tool"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let response = parse_openai_response(&json, "openai").unwrap();
+        let calls = response.tool_calls.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments, "");
+        assert_ne!(calls[0].arguments, "{}");
+    }
+
+    #[test]
+    fn parse_openai_response_errors_on_structurally_broken_tool_call() {
+        // A tool call without an id/name cannot be represented — the caller
         // must see the error instead of a silently empty response.
         let json = serde_json::json!({
             "choices": [{
@@ -3923,29 +3772,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_sse_chunks_extracts_deltas_and_done() {
-        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"p\"}}]}\n\ndata: [DONE]\n\n";
-        let chunks = parse_openai_sse(body);
-        assert_eq!(chunks.len(), 3);
-        assert!(matches!(&chunks[0], SseEvent::Delta(s) if s == "fast"));
-        assert!(matches!(&chunks[1], SseEvent::Delta(s) if s == "p"));
-        assert!(matches!(&chunks[2], SseEvent::Done));
-    }
-
-    #[test]
-    fn parse_sse_chunks_skips_usage_and_garbage_lines() {
-        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"total_tokens\":7}}\n\ndata: {\"garbage\": true}\n\nnot-a-data-line\n\ndata: [DONE]\n\n";
-        let chunks = parse_openai_sse(body);
-        assert!(
-            chunks
-                .iter()
-                .any(|c| matches!(c, SseEvent::Delta(s) if s == "x"))
-        );
-        assert!(chunks.iter().any(|c| matches!(c, SseEvent::Done)));
-        assert_eq!(chunks.len(), 2);
-    }
-
-    #[test]
     fn compress_transcript_drops_unpaired_tool_results() {
         // A cut that lands mid tool group would keep tool_result blocks
         // whose declaring assistant turn was dropped — Anthropic rejects
@@ -4113,16 +3939,14 @@ mod tests {
     fn rate_limited_carries_retry_after_header() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "30".parse().unwrap());
-        assert_eq!(retry_after_header(&headers).as_deref(), Some("30"));
+        assert_eq!(retry_after_header(&headers), Some(30));
         match classify_http_error_with_retry_after(
             "openai",
             429,
             "slow down",
             retry_after_header(&headers),
         ) {
-            AiError::RateLimited { retry_after, .. } => {
-                assert_eq!(retry_after.as_deref(), Some("30"))
-            }
+            AiError::RateLimited { retry_after, .. } => assert_eq!(retry_after, Some(30)),
             other => panic!("expected RateLimited, got {other:?}"),
         }
 
@@ -4176,80 +4000,6 @@ mod tests {
             msgs[2]
         );
         assert_eq!(msgs[3]["reasoning_content"], "step by step");
-    }
-
-    #[test]
-    fn sse_frames_split_on_crlf_and_split_crlf_pairs() {
-        // A proxy that re-frames SSE with CRLF must still stream
-        // incrementally: the frame boundary is a blank line in either
-        // convention.
-        let mut buffer: Vec<u8> = Vec::new();
-        let frames = push_sse_bytes(
-            &mut buffer,
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\r\n\r\n",
-        );
-        assert_eq!(frames.len(), 1);
-        assert!(frames[0].contains("fast"));
-        assert!(buffer.is_empty(), "no partial frame may remain");
-
-        // The \r\n pair straddles two reads — the \r must not block the split.
-        let mut buffer: Vec<u8> = Vec::new();
-        assert!(push_sse_bytes(&mut buffer, b"data: {\"a\":1}\r").is_empty());
-        let frames = push_sse_bytes(&mut buffer, b"\n\r\ndata: {\"b\":2}\n\n");
-        assert_eq!(frames.len(), 2, "got {frames:#?}");
-        assert!(frames[0].contains("\"a\""));
-        assert!(frames[1].contains("\"b\""));
-    }
-
-    #[test]
-    fn sse_bytes_survive_multibyte_split_across_reads() {
-        // A multi-byte character split across network reads must survive
-        // intact: conversion happens per COMPLETE frame only (audit #647).
-        let mut buffer: Vec<u8> = Vec::new();
-        let bytes = "data: {\"d\":\"测序\"}\n\n".as_bytes();
-        let split_at = bytes.len() - 4; // inside the last CJK character
-        assert!(push_sse_bytes(&mut buffer, &bytes[..split_at]).is_empty());
-        let frames = push_sse_bytes(&mut buffer, &bytes[split_at..]);
-        assert_eq!(frames.len(), 1, "{frames:?}");
-        assert!(
-            frames[0].contains("测序"),
-            "the CJK characters must round-trip: {:?}",
-            frames[0]
-        );
-    }
-
-    #[test]
-    fn usage_from_frame_reads_streamed_usage() {
-        // `stream_options.include_usage` makes the endpoint close the stream
-        // with a usage-only frame; without reading it a streamed call
-        // reports zero tokens.
-        let frame =
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}";
-        assert_eq!(
-            usage_from_frame(frame),
-            Some(Usage {
-                prompt_tokens: 12,
-                completion_tokens: 7,
-                ..Usage::default()
-            })
-        );
-        // DeepSeek streams the native cache counters in the same frame.
-        let deepseek_frame = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\
-             \"completion_tokens\":7,\"prompt_cache_hit_tokens\":800,\
-             \"prompt_cache_miss_tokens\":200}}";
-        assert_eq!(
-            usage_from_frame(deepseek_frame),
-            Some(Usage {
-                prompt_tokens: 1000,
-                completion_tokens: 7,
-                cache_read_tokens: 800,
-                ..Usage::default()
-            })
-        );
-        assert!(
-            usage_from_frame("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}").is_none()
-        );
-        assert!(usage_from_frame("data: {\"usage\":null}").is_none());
     }
 
     #[test]

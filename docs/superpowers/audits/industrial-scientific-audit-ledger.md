@@ -567,11 +567,11 @@ Required exit evidence:
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Planned / blocked | RB-13. |
 | AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Planned / blocked | RB-13. |
 | AI-06 | P1 | CLI and web admission evaluate different graphs when includes or overrides change the workflow. | Implemented but unproven | Direct TOML BioTypes now share the core gate; include/override admission parity is still absent. RB-04 defines the exit seam. |
-| AI-07 | P2 | Malformed tool arguments are converted to `{}` and remain executable. | Planned / blocked | RB-13. |
+| AI-07 | P2 | Malformed tool arguments are converted to `{}` and remain executable. | Implemented and verified for model-emitted arguments | Provider parsers pass model argument strings through raw (never repaired to `{}`), the orchestrator's JSON-validity gate rejects them with a fail-closed tool-result message before the registry, and `ToolRegistry::execute` re-checks. Wire-format echoes (Anthropic `tool_use.input`, Ollama `arguments`) keep a protocol-valid `{}` fallback but are never executed. MCP-side argument handling is unchanged. |
 | AI-08 | P2 | `[ai] auto_fix` is documented but has no runtime consumer. | Planned / blocked | RB-14; user docs now warn that it is not a safety control. |
 | AI-09 | P2 | Enabled AI can silently become unavailable during analysis and recovery. | Planned / blocked | RB-14. |
 | AI-10 | P2 | AI template generation overwrites existing destinations non-atomically. | Planned / blocked | RB-14. |
-| AI-11 | P2 | README and provider guide overstated autonomous safety. | Fixed in this audit wave | User-facing claims now describe repair as experimental and malformed arguments as fail-open. |
+| AI-11 | P2 | README and provider guide overstated autonomous safety. | Fixed in this audit wave | User-facing claims now describe repair as experimental; malformed arguments are fail-closed end to end (see AI-07). |
 | AI-12 | P3 | Oversized-file guidance refers to an unavailable shell channel. | Planned / blocked | Direct the model to a bounded supported alternative and add a standard-registry test. Evidence: `crates/oxo-flow-ai/src/tools/builtin.rs:177`. |
 
 The independent read-only review did not execute a live provider, MCP server, scheduler, cloud

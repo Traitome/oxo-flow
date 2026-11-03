@@ -35,7 +35,7 @@ pub fn invalidate_provider_for(user_id: &str) {
 
 fn parse_provider_kind(kind: &str) -> Result<ProviderKind, String> {
     kind.parse()
-        .map_err(|error: anyhow::Error| error.to_string())
+        .map_err(|error: oxo_flow_ai::error::AiError| error.to_string())
 }
 
 /// Validate durable AI configuration before it is written. The settings API

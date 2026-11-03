@@ -123,6 +123,22 @@ impl ToolRegistry {
         self.tools.insert(name, Arc::from(tool));
     }
 
+    /// Iterate the registered tools (in registry/BTreeMap order).
+    pub fn iter(&self) -> impl Iterator<Item = Arc<dyn Tool>> + '_ {
+        self.tools.values().cloned()
+    }
+
+    /// Move every tool from `other` into this registry (BTreeMap order).
+    ///
+    /// The single-source knowledge registry ([`builtin::knowledge_tool_registry`])
+    /// is merged this way by the CLI runtime and the web chat; their extras
+    /// register on top afterwards.
+    pub fn merge(&mut self, other: ToolRegistry) {
+        for (name, tool) in other.tools {
+            self.tools.insert(name, tool);
+        }
+    }
+
     /// Get all tool definitions for passing to the AI model.
     ///
     /// Names are normalized here too: providers validate every tool name
@@ -146,6 +162,11 @@ impl ToolRegistry {
             .map(|t| t.as_ref())
     }
 
+    /// Names of every registered tool, in registry (BTreeMap) order.
+    pub fn names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
+
     /// Whether a tool is read-only (safe to auto-execute).
     /// Unknown tools are treated as NOT read-only — deny by default.
     pub fn is_read_only(&self, name: &str) -> bool {
@@ -156,6 +177,13 @@ impl ToolRegistry {
     }
 
     /// Execute a tool by name with JSON-encoded arguments.
+    ///
+    /// Fails closed on malformed arguments (audit F4 / AI-07): the model's
+    /// argument string must be valid JSON before any tool runs — a truncated
+    /// or non-JSON payload used to be "repaired" to `{}` and executed with
+    /// arguments the model never wrote. The error text carries the parse
+    /// error and a re-emit instruction, and rides the normal tool-result
+    /// channel so the model can correct the call.
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String, AiError> {
         let tool =
             self.tools
@@ -163,6 +191,15 @@ impl ToolRegistry {
                 .ok_or_else(|| AiError::ToolNotFound {
                     tool: name.to_string(),
                 })?;
+        if let Err(error) = serde_json::from_str::<serde_json::Value>(arguments) {
+            return Err(AiError::ToolError {
+                tool: name.to_string(),
+                message: format!(
+                    "arguments are not valid JSON ({error}); received: {arguments} — \
+                     re-emit this tool call with valid JSON arguments"
+                ),
+            });
+        }
         tool.execute(arguments).await
     }
 

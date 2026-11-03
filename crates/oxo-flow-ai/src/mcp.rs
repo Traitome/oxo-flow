@@ -486,12 +486,25 @@ impl McpHttpClient {
     /// redirect hops call none of it. One helper so the two sites cannot
     /// drift.
     fn attach_session_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(sid) = self.session_id.lock().unwrap().clone() {
+        // Audit F6: a poisoned mutex (a prior holder panicked mid-update)
+        // must not turn every later MCP call into a panic — recover the
+        // data and continue; the guarded values are plain strings.
+        if let Some(sid) = self
+            .session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             req = req.header("mcp-session-id", sid);
         }
         // Post-initialize requests announce the negotiated version
         // (#948 P3-7a) so version-strict servers can validate it.
-        if let Some(pv) = self.protocol_version.lock().unwrap().clone() {
+        if let Some(pv) = self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             req = req.header("MCP-Protocol-Version", pv);
         }
         // Bearer auth (#948 P3-7d): token resolved from the environment at
@@ -587,7 +600,7 @@ impl McpHttpClient {
             if same_origin
                 && let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str())
             {
-                *self.session_id.lock().unwrap() = Some(v.to_string());
+                *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.to_string());
             }
             let text = response.text().await.map_err(|e| AiError::Transport {
                 message: format!("MCP response read failed: {e}"),
@@ -787,7 +800,10 @@ impl McpClient for McpHttpClient {
             version = %server_version,
             "MCP protocol version negotiated"
         );
-        *self.protocol_version.lock().unwrap() = Some(server_version);
+        *self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(server_version);
         // Spec: once initialize returns an mcp-session-id, every
         // subsequent request — the initialized notification included —
         // must carry it. This is a fire-and-forget notification (no id,

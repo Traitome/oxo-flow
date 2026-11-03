@@ -6,9 +6,6 @@
 //! user's explicit Accept click, never a model action.
 
 use oxo_flow_ai::tools::ToolRegistry;
-use oxo_flow_ai::tools::builtin::{
-    FetchUrlTool, LookupDocTool, LookupPipelineTool, LookupSkillTool, LookupTool,
-};
 
 use oxo_flow_ai::error::AiError;
 use oxo_flow_ai::tools::{Tool, ToolDef};
@@ -166,11 +163,9 @@ pub fn build_chat_tool_registry(
     is_admin: bool,
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    registry.register(Box::new(LookupTool::new()));
-    registry.register(Box::new(LookupSkillTool::new()));
-    registry.register(Box::new(LookupPipelineTool::new()));
-    registry.register(Box::new(LookupDocTool::new()));
-    registry.register(Box::new(FetchUrlTool::new()));
+    // Knowledge tools come from the single canonical registry
+    // (oxo-flow-ai); web-chat extras (run diagnosis) sit on top.
+    registry.merge(oxo_flow_ai::tools::builtin::knowledge_tool_registry());
     if let Some(run_id) = run_id {
         registry.register(Box::new(RunStatusTool {
             run_id: run_id.to_string(),
@@ -184,4 +179,25 @@ pub fn build_chat_tool_registry(
         }));
     }
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drift guard: the web chat registry must contain at least the
+    /// canonical embedded-knowledge tool set from oxo-flow-ai (single
+    /// source of truth). Run-diagnosis extras come on top.
+    #[test]
+    fn chat_registry_covers_knowledge_tools() {
+        let base = oxo_flow_ai::tools::builtin::knowledge_tool_registry();
+        let chat = build_chat_tool_registry(Some("r1"), "u", false);
+        for name in base.names() {
+            assert!(
+                chat.get(&name).is_some(),
+                "chat tool registry lost knowledge tool '{name}' — re-sync with \
+                 oxo_flow_ai::tools::builtin::knowledge_tool_registry"
+            );
+        }
+    }
 }

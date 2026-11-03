@@ -101,6 +101,25 @@ pub fn default_max_retries() -> u32 {
     10
 }
 
+/// Fields parsed identically by every `[ai]` scope level (audit F8):
+/// `max_retries` (integer, falling back to the shipped round-budget
+/// default) and `auto_fix` (string enum, falling back to its default).
+/// `enabled` is intentionally NOT shared — the workflow and rule scopes
+/// disagree on its default (false vs true), and each constructor owns that.
+fn parse_common_ai_fields(ai_table: &toml::Table) -> (u32, AutoFixMode) {
+    let max_retries = ai_table
+        .get("max_retries")
+        .and_then(|v| v.as_integer())
+        .map(|n| n as u32)
+        .unwrap_or_else(default_max_retries);
+    let auto_fix = ai_table
+        .get("auto_fix")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default();
+    (max_retries, auto_fix)
+}
+
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
@@ -217,6 +236,7 @@ impl AiConfig {
     /// Create a config parsed from a workflow `[ai]` TOML section.
     pub fn from_workflow_toml(table: &toml::Table) -> Option<Self> {
         let ai_table = table.get("ai")?.as_table()?;
+        let (max_retries, auto_fix) = parse_common_ai_fields(ai_table);
         let enabled = ai_table
             .get("enabled")
             .and_then(|v| v.as_bool())
@@ -230,16 +250,6 @@ impl AiConfig {
             .get("model")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let max_retries = ai_table
-            .get("max_retries")
-            .and_then(|v| v.as_integer())
-            .map(|n| n as u32)
-            .unwrap_or(default_max_retries());
-        let auto_fix = ai_table
-            .get("auto_fix")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_default();
         let temperature = ai_table
             .get("temperature")
             .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)));
@@ -284,20 +294,11 @@ impl AiConfig {
     /// Create a config parsed from a rule-level `[rules.ai]` TOML section.
     pub fn from_rule_table(rule_table: &toml::Table) -> Option<Self> {
         let ai_table = rule_table.get("ai")?.as_table()?;
+        let (max_retries, auto_fix) = parse_common_ai_fields(ai_table);
         let enabled = ai_table
             .get("enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
-        let max_retries = ai_table
-            .get("max_retries")
-            .and_then(|v| v.as_integer())
-            .map(|n| n as u32)
-            .unwrap_or_else(default_max_retries);
-        let auto_fix = ai_table
-            .get("auto_fix")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_default();
 
         Some(Self {
             enabled,

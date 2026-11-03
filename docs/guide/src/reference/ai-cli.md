@@ -234,13 +234,17 @@ explicit disable:
 
 ## Provider failure handling
 
-The provider layer classifies common model failures, but it does not yet provide a fail-closed
-tool-execution boundary:
+The provider layer classifies common model failures; tool-argument handling
+is fail-closed end to end:
 
-- **Malformed tool-call arguments are a known fail-open path**: if a model
-  truncates a tool call's arguments JSON, the current OpenAI-compatible and
-  Ollama parsers repair it to `{}` and the call may still execute. Do not rely
-  on approval screens alone for destructive MCP tools until this is corrected.
+- **Malformed tool-call arguments fail closed**: if a model truncates or
+  mangles a tool call's arguments JSON, the parser passes the payload
+  through raw and the orchestrator rejects the call before any tool runs —
+  the model receives a tool-result message carrying the parse error and a
+  re-emit instruction. Arguments are never "repaired" to `{}` behind the
+  caller's back. Wire-format echoes (Anthropic `tool_use.input`, Ollama
+  `arguments`) keep a protocol-valid object fallback, but such a call can no
+  longer execute.
 - **Context overflows are classified and recovered**: HTTP 400/413 responses
   with context-window markers map to `ContextOverflow`; the transcript is
   compressed (system + recent turns kept, middle turns replaced by a marker)
@@ -625,6 +629,6 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | Prototype / workflow-scoped policy is not fully enforced |
 | Phase 5 | MCP/Skill ecosystem | Prototype / security trust-boundary work remains |
 | Phase 6 | Workflow explanation (`ai explain`) | Implemented but unproven |
-| Phase 7 | Provider failure handling | Implemented but unproven; malformed tool arguments remain fail-open |
+| Phase 7 | Provider failure handling | Implemented but unproven; malformed tool arguments are fail-closed (AI-07) |
 
 See the full design spec at `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` (repository root, not included in the published docs) for architecture details.

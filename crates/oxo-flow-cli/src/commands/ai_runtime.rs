@@ -77,11 +77,9 @@ impl AiRuntime {
                 tool_registry.register(Box::new(builtin::ReadFileTool::new()));
             }
         }
-        tool_registry.register(Box::new(builtin::FetchUrlTool::new()));
-        tool_registry.register(Box::new(builtin::LookupTool::new()));
-        tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
-        tool_registry.register(Box::new(builtin::LookupPipelineTool::new()));
-        tool_registry.register(Box::new(builtin::LookupDocTool::new()));
+        // Knowledge tools come from the single canonical registry
+        // (oxo-flow-ai); CLI extras (read_file, MCP bridges) sit on top.
+        tool_registry.merge(builtin::knowledge_tool_registry());
 
         let skill_context = activated_skill_context(project, &config);
 
@@ -194,5 +192,28 @@ pub fn prompt_tool_approval_blocking(tool_name: &str, arguments: &str) -> bool {
         trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drift guard: the CLI runtime must register at least the canonical
+    /// embedded-knowledge tool set from oxo-flow-ai (single source of
+    /// truth). CLI extras (scoped read_file, MCP bridges) come on top.
+    #[test]
+    fn cli_registry_covers_knowledge_tools() {
+        let base = oxo_flow_ai::tools::builtin::knowledge_tool_registry();
+        let names = base.names();
+        let mut merged = ToolRegistry::new();
+        merged.merge(base);
+        for name in names {
+            assert!(
+                merged.get(&name).is_some(),
+                "CLI tool registry lost knowledge tool '{name}' — re-sync with \
+                 oxo_flow_ai::tools::builtin::knowledge_tool_registry"
+            );
+        }
     }
 }
