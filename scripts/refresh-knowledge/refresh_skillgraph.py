@@ -16,8 +16,8 @@ Outputs:
     The richer MCP data is reduced to this schema on purpose — the Rust
     loader (knowledge/pipeline_graph.rs) is left untouched.
   - skillgraph_docs.jsonl — {"i", "doc"} with each skill's full SKILL.md
-    documentation (the "# Full Documentation" section of get_skill) for a
-    later doc layer. Not embedded yet.
+    documentation (the "# Full Documentation" section of get_skill), served
+    by lookup_doc via the embedded skillgraph_docs.rs.
   - knowledge_meta.json — "skillgraph" section with graph stats.
 
 Idempotent: re-running replaces the outputs atomically.

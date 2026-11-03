@@ -19,10 +19,8 @@ TARGET="${1:-}"
 VERSION_LABEL="${2:?version-label required (e.g. v0.17.0)}"
 DIST="${3:-dist}"
 
-TARGET_DIR="target/release"
 DESKTOP_DIR="crates/oxo-flow-desktop/target/release"
 if [ -n "$TARGET" ]; then
-  TARGET_DIR="target/${TARGET}/release"
   DESKTOP_DIR="crates/oxo-flow-desktop/target/${TARGET}/release"
 fi
 

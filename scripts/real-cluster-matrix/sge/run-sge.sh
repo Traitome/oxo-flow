@@ -50,18 +50,8 @@ run_case() {  # $1 workflow file, $2 profile, $3 run dir, $4 log, $5 snap
   return "$RC"
 }
 
-seed_data() {
-  mkdir -p /work/runs/input /work/runs/data
-  echo "simulated reads for the chain matrix" > /work/runs/input/reads.txt
-  for i in 01 02 03 04 05 06 07 08 09 10; do
-    printf "sample-%s simulated reads\n" "$i" > "/work/runs/data/s$i.fq"
-  done
-}
-
 echo "== oxo-flow version ==" | tee "$EV/summary.txt"
 "$OXO" --version 2>&1 | tee -a "$EV/summary.txt"
-
-seed_data
 
 echo "== chain matrix =="
 run_case "$WF/wf-chain.oxoflow" sge /work/runs/chain "$EV/chain-run.log" "$EV/qstat-f-chain.txt"

@@ -2163,11 +2163,9 @@ jobs:
       # #555: scripts/deploy-smoke.sh existed but was wired into NO gate —
       # scenario 1 (source build serves API + SPA) is exactly what a wrong
       # Dockerfile COPY would break. The script spawns its own servers in
-      # temp dirs; both binaries are already in target/debug (build the
-      # CLI too — the e2e webServer only needed the web one).
-      - name: Build the CLI binary (deploy-smoke needs it)
-        run: cargo build -p oxo-flow-cli
-
+      # temp dirs; both binaries are already in target/debug (the e2e
+      # webServer only needed the web one, the CLI build above covers
+      # deploy-smoke's spawn).
       - name: Deploy smoke suite
         run: bash scripts/deploy-smoke.sh
 

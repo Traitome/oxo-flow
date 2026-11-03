@@ -34,7 +34,6 @@ resolve_bin() { # $1=binary name, $2=repo-relative path
 }
 BIN="${OXO_BIN:-$(resolve_bin oxo-flow target/debug/oxo-flow)}"
 WEB="${OXO_WEB:-$(resolve_bin oxo-flow-web target/debug/oxo-flow-web)}"
-FRONTEND="${OXO_FRONTEND_DIR:-$REPO_ROOT/crates/oxo-flow-web/static}"
 APP_BUNDLE="${OXO_APP:-}"
 WORK="$(mktemp -d /tmp/oxo-deploy-smoke.XXXXXX)"
 PASS=0; FAIL=0

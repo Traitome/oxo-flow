@@ -1,6 +1,7 @@
 #!/bin/bash
 # Initialize a Son of Grid Engine master inside a container (image has SoGE
-# built from source under $SGE_ROOT via distinst -local -all).
+# built from source under $SGE_ROOT via
+# distinst -local -noexit -bin -- common utiltree utilbin).
 #
 # Classic flatfile spooling — spooling_params = "<common>;<spool>", the exact
 # format spool_classic_create_context() of 8.1.9 parses. All scheduler state
