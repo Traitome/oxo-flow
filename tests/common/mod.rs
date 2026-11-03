@@ -142,7 +142,12 @@ pub async fn wait_ready(base: &str, log_path: &std::path::Path) {
             "server did not become ready at {base}\n{}",
             std::fs::read_to_string(log_path).unwrap_or_else(|_| "(no server log)".into())
         );
-        if client.get(format!("{base}/api/health")).send().await.is_ok() {
+        if client
+            .get(format!("{base}/api/health"))
+            .send()
+            .await
+            .is_ok()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

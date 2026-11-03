@@ -8,7 +8,9 @@
 
 mod common;
 use common::free_port;
-use common::{api_get, api_post, log_tail, spawn_web_server, spawn_web_server_with_args, wait_ready};
+use common::{
+    api_get, api_post, log_tail, spawn_web_server, spawn_web_server_with_args, wait_ready,
+};
 
 use reqwest::Client;
 use serde_json::{Value, json};
