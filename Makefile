@@ -77,7 +77,7 @@ eval-tests:
 ## declared DAG edges absent from the reference's engine graph. Needs a
 ## built engine binary for the DAG check (cargo build --workspace).
 eval-lint:
-	python3 eval/scripts/check_gold.py
+	python3 eval/scripts/check_gold.py --no-fetch-community
 
 ## Cryptographic evidence audit for the eval gold set (issue #172): verifies
 ## 100% hash integrity in eval/review/evidence.jsonl and expert reviewer sign-off.

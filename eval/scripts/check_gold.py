@@ -23,6 +23,7 @@ Hard checks
                  gallery references are read in place; community references
                  (`oxo-flow-community/...`) are fetched from
                  raw.githubusercontent.com (disable with --no-fetch-community;
+                 set OXO_GITHUB_MIRROR to route fetches through a mirror;
                  fetch failures are warnings, not hard failures)
 
 Warnings
@@ -199,20 +200,14 @@ def reference_graph(path, oxo_flow_bin):
     return nodes, edges, None
 
 
-_DIRECT_FAILED = False
-
 def _fetch(url, dest):
-    global _DIRECT_FAILED
+    """Fetch order: explicit $OXO_GITHUB_MIRROR first, then direct GitHub."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     mirror_prefix = os.environ.get("OXO_GITHUB_MIRROR", "")
     candidates = []
     if mirror_prefix and url.startswith("https://"):
         candidates.append(f"{mirror_prefix.rstrip('/')}/{url}")
-    elif _DIRECT_FAILED and "raw.githubusercontent.com" in url:
-        candidates.append(f"https://ghfast.top/{url}")
     candidates.append(url)
-    if not mirror_prefix and "raw.githubusercontent.com" in url and f"https://ghfast.top/{url}" not in candidates:
-        candidates.append(f"https://ghfast.top/{url}")
 
     last_exc = None
     for target in candidates:
@@ -224,8 +219,6 @@ def _fetch(url, dest):
                 fh.write(data)
             return
         except Exception as exc:
-            if target == url and "raw.githubusercontent.com" in url:
-                _DIRECT_FAILED = True
             last_exc = exc
     if last_exc:
         raise last_exc
