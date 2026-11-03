@@ -213,7 +213,6 @@ Deterministic, evidence-backed rules covering genomics, transcriptomics, epigeno
 - `SCI-BWA-MEM-NO-RG`: `bwa mem` alignment lacks read group specification (`-R`); missing `@RG` headers prevent downstream GATK/Picard processing.
 - `SCI-BOWTIE2-NO-RG`: `bowtie2` alignment lacks read group specification (`--rg-id` / `--rg`).
 - `SCI-MINIMAP2-PRESET`: `minimap2` invoked without technology preset (`-x`); default parameters degrade alignment accuracy on PacBio, ONT, or short reads.
-- `SCI-SAMTOOLS-SORT-MEM-OVERFLOW`: `samtools sort -m` per-thread memory multiplied by thread count exceeds rule allocated memory; leads to kernel OOM kills.
 - `SCI-SAMTOOLS-INDEX-UNSORTED`: `samtools index` applied to SAM or unsorted BAM; requires coordinate-sorted BAM/CRAM.
 - `SCI-MARKDUPLICATES-REMOVE-DUPS`: Picard/GATK `MarkDuplicates` configured with `REMOVE_DUPLICATES=true`; permanently discards reads needed for discordant pair and split-read CNV/SV analyses.
 - `SCI-HISAT2-NO-SPLICE-SITES`: `hisat2` RNA-seq alignment executed without `--known-splicesite-infile`; reduces junction discovery sensitivity across annotated exons.
@@ -257,7 +256,7 @@ Deterministic, evidence-backed rules covering genomics, transcriptomics, epigeno
 #### 6. Workflow Concurrency, Hardware & Dataflow
 
 - `SCI-AGG-RACE`: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other.
-- `SCI-SORT-THREADS-MEM-PRODUCT`: Thread count multiplied by per-thread memory buffer exceeds rule resource budget.
+- `SCI-SORT-THREADS-MEM-PRODUCT`: `samtools sort -m` per-thread memory multiplied by thread count exceeds the rule resource budget; leads to kernel OOM kills.
 - `SCI-TMPDIR-NOT-SCRATCH`: Heavy I/O tools write intermediate files to system `/tmp` instead of engine-managed scratch space (`${TMPDIR}`).
 - `SCI-PIPE-FAIL-DISABLED`: Multi-stage shell pipelines (`cmd1 | cmd2 | cmd3`) lack `set -o pipefail`; upstream tool crashes are silently masked.
 - `SCI-ZERO-BYTE-COMPLETION`: Rule masks failures by creating empty binary outputs (`|| touch {output}`), causing downstream tools to crash on corrupt streams.

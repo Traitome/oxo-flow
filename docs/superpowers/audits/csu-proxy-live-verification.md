@@ -10,7 +10,8 @@ Endpoint: http://biotree.top:38123/csuapi/ (key held in ~/.oxo-flow/ai-env.sh, n
 - Proxy is new-api/one-api derived; per-key rate limit ~1 req/20s (HTTP 429 between).
 - Anthropic-mode GLM response when max_tokens=64: stop_reason=max_tokens with
   EMPTY text block — reasoning consumed the entire budget, exactly the failure
-  mode OXO_FLOW_AI_MAX_TOKENS=16384 was calibrated for (provider.rs:866).
+  mode OXO_FLOW_AI_MAX_TOKENS=16384 was calibrated for (the `context_tokens_from_env`
+  clamp stack in `crates/oxo-flow-ai/src/provider.rs`).
 
 ## Reproduced the field incident verbatim
 `POST /v1/chat/completions` GLM, prompt 200k CJK chars + max_tokens=32000 →
@@ -36,7 +37,8 @@ Verdict: clamp works as designed (test `clamp_reproduces_the_field_incident`
 asserts the exact 99073/32000/131072 → 1024 case). For this proxy the right
 operator setting is OXO_FLOW_AI_CONTEXT_TOKENS=131072. CJK-dense worst cases
 still rely on the overflow→compress-retry path; that path was verified live
-last session (AiError::ContextOverflow classification at provider.rs:566).
+last session (the `AiError::ContextOverflow` classification in
+`crates/oxo-flow-ai/src/provider.rs`).
 
 ## Live results (all HTTP 200)
 - GLM chat completions: content OK, reasoning carried in `reasoning` field,

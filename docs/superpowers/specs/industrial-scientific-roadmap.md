@@ -355,7 +355,7 @@ Decoupled Persistence             Visual Design System              Repair Conti
   - Harden the existing bounded header readers in `oxo-flow-core` for local and remote range-fetched BAM/CRAM/VCF/FASTQ inputs, including malformed data, stale indices, truncation, and interrupted range requests.
 - **Wave 2.3: Generalized Hybrid Re-Entry & Expanded `SCI-*` Preflight**
   - Stress-test the existing named `[[values]]` re-entry path (`crates/oxo-flow-core/src/reentry.rs`) for replay determinism, collision handling, and failure recovery.
-  - Expand `crates/oxo-flow-core/src/scientific_preflight.rs` from 5 checks to 50+ literature-backed checks across genomics, bulk/single-cell transcriptomics, epigenomics, and metagenomics, with full documentation in `docs/guide/src/`.
+  - Validate and harden the 51 literature-backed `SCI-*` checks already implemented in `crates/oxo-flow-core/src/scientific_preflight.rs` (this branch expanded the original 5-check baseline) across genomics, bulk/single-cell transcriptomics, epigenomics, and metagenomics, with full documentation in `docs/guide/src/`.
 - **Wave 2.4: Metropolis Design System & Metro-DAG Studio**
   - Formalize design tokens, typography, and biological color hierarchies shared across Web, Desktop, Terminal TUI, and VS Code.
   - Overhaul the React Flow canvas into a high-performance Metro transit renderer with dynamic station collapsing and telemetry-driven transit-line pulsing.

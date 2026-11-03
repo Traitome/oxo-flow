@@ -198,14 +198,16 @@ implementation that has already diverged from DAG subtyping.
 
 Evidence:
 
-- `crates/oxo-flow-core/src/types/checker.rs:266`: a typed consumer skips an
-  untyped producer.
+- `crates/oxo-flow-core/src/types/checker.rs:299-303`: a typed consumer skips
+  an untyped producer.
 - `crates/oxo-flow-core/src/types/checker.rs:140`: reference builds are
   compared only when both sides declare metadata.
-- `crates/oxo-flow-core/src/types/checker.rs:53`: `is_subtype_of` omits
-  declared attributes.
-- `crates/oxo-flow-core/src/types/inspect.rs:65`: duplicate compatibility
-  logic already differs from the DAG checker.
+- `crates/oxo-flow-core/src/types/checker.rs`: `is_subtype_of` now enforces
+  the TYPE-007 declared-attribute contract (checker.rs:229-239, added since
+  this entry was written); the remaining compatibility divergence is the
+  duplicate header-introspection implementation at
+  `crates/oxo-flow-core/src/types/inspect.rs:65` (`satisfies_spec` vs the
+  DAG checker).
 - `crates/oxo-flow-web/src/domains/execution/handlers.rs`: the web gate can
   be fail-closed at routing level while ultimately invoking this permissive
   checker for admitted workflows.

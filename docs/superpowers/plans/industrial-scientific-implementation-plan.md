@@ -221,9 +221,9 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Add `RunNodeRow` and `CursorPage<T>` to `crates/oxo-flow-web/src/infra/db/models.rs` and extend `StorageBackend` in `mod.rs`.
-- [ ] **Step 2**: Implement the extended trait methods in `sqlite.rs` and `postgres.rs` (using `INSERT ... ON CONFLICT DO UPDATE` for idempotent node state transitions and Postgres advisory locks for concurrent run-status updates).
-- [ ] **Step 3**: Replace all direct `crate::infra::db::sqlite::try_pool()` queries in `domains/execution/handlers.rs` and `executor.rs` with calls through the global `StorageBackend` instance.
+- [x] **Step 1**: Add `RunNodeRow` and `CursorPage<T>` to `crates/oxo-flow-web/src/infra/db/models.rs` and extend `StorageBackend` in `mod.rs`. — **done**: both types exist (`models.rs:365`, `models.rs:64`).
+- [x] **Step 2**: Implement the extended trait methods in `sqlite.rs` and `postgres.rs` (using `INSERT ... ON CONFLICT DO UPDATE` for idempotent node state transitions and Postgres advisory locks for concurrent run-status updates). — **done** (sqlite.rs:954/981/1036, postgres.rs:700/727/781).
+- [x] **Step 3**: Replace all direct `crate::infra::db::sqlite::try_pool()` queries in `domains/execution/handlers.rs` and `executor.rs` with calls through the global `StorageBackend` instance. — **done**: handlers take `&dyn StorageBackend`; no `try_pool` references remain in the execution domain.
 - [ ] **Step 4**: Rename `require_sqlite_for_runs`, `runs_gate_verdict`, and `RUNS_REQUIRE_SQLITE` only after tests prove the backend-agnostic contract; update AGENTS.md and user-guide references in lockstep.
 - [ ] **Step 5**: Verify with `cargo test --test web_integration --test web_oauth_and_pg_contract`.
 - [ ] **Step 6**: Add live PostgreSQL concurrency, crash-recovery, and multi-instance tests.
@@ -284,8 +284,8 @@ pub trait StorageBackend: Send + Sync {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Add `read_range` to `StorageBackend` in `crates/oxo-flow-core/src/storage/mod.rs` and implement HTTP `Range: bytes=offset-(offset+len-1)` requests in `s3.rs` and `gcs.rs` (and `Seek` + `Read::take` in `local.rs`).
-- [ ] **Step 2**: Add `StagingMode` (`Eager`, `StreamFifo`, `PassThrough`) to rule/workflow storage configuration and update `stage_remote_io` in `crates/oxo-flow-core/src/executor/staging.rs`.
+- [x] **Step 1**: Add `read_range` to `StorageBackend` in `crates/oxo-flow-core/src/storage/mod.rs` and implement HTTP `Range: bytes=offset-(offset+len-1)` requests in `s3.rs` and `gcs.rs` (and `Seek` + `Read::take` in `local.rs`). — **done**: `read_range` at `storage/mod.rs:461` with S3 Range, GCS, and local `Seek` implementations.
+- [x] **Step 2**: Add `StagingMode` (`Eager`, `StreamFifo`, `Passthrough`) to rule/workflow storage configuration and update `stage_remote_io` in `crates/oxo-flow-core/src/executor/staging.rs`. — **done** (`storage/mod.rs:120-129`; docs spell the alias `pass_through`, `workflow-format.md`).
 - [ ] **Step 3**: Write unit and fault-injection tests verifying that a truncated stream or mid-stream network error fails the rule cleanly and invalidates partial outputs via `output_invalidation.rs`.
 
 ---
@@ -327,7 +327,7 @@ pub struct StorageTierLadder {
 **Implementation Checklist**:
 
 - [ ] **Step 1**: Implement `HardwareTopology::discover()` using Linux sysfs / macOS sysctl to identify NUMA nodes, socket layouts, and memory locality.
-- [ ] **Step 2**: Update `process.rs` to optionally set CPU affinity mask and memory policy (`numa_run_on_node` / `numa_set_membind`) for rules flagged `high_memory = true` or `numa_pin = true`.
+- [ ] **Step 2**: Update `process.rs` to optionally set CPU affinity mask and memory policy (`numa_run_on_node` / `numa_set_membind`) for rules with NUMA intent — the existing `numa_pin = true` / `numa_node = N` resource keys (`crates/oxo-flow-core/src/rule.rs`, gated at `executor/process.rs` on `numa_pin || numa_node`; there is no `high_memory` rule flag).
 - [ ] **Step 3**: Integrate `StorageTierLadder` with `disk_pressure_level`: if Tier 1 NVMe scratch reaches `Hold`, the executor dynamically redirects secondary scratch to Tier 2 shared scratch rather than aborting.
 - [ ] **Step 4**: Pre-register the primary performance metric, then measure single-socket fallback and multi-socket behavior with repeated runs and confidence intervals. Do not describe a projected 25% gain as observed.
 
@@ -433,8 +433,8 @@ pub struct BioTypeSpec {
 **Implementation Checklist**:
 
 - [ ] **Step 1**: Extend `ReentryRecord` and `Manifest` in `crates/oxo-flow-core/src/reentry.rs` with `values: BTreeMap<String, Vec<String>>` so a `checkpoint = true` rule can dynamically populate any declared `[[values]]` axis (e.g., `contig`, `cluster_id`, `chunk`) while preserving `MAX_REENTRY_ROUNDS` and deterministic resume replay.
-- [ ] **Step 2**: Expand `crates/oxo-flow-core/src/scientific_preflight.rs` to cover 50+ curated checks across:
-  - **Germline & Somatic Variant Calling**: `SCI-VQSR-COHORT`, `SCI-BQSR-NO-KNOWN-SITES`, `SCI-MUTECT2-TUMOR-ONLY`, `SCI-MUTECT2-NO-PON`, `SCI-GVCF-MISSING-ERC`, `SCI-STRELKA-UNINDEXED-BED`.
+- [ ] **Step 2**: Validate and harden the 51 checks already implemented in `crates/oxo-flow-core/src/scientific_preflight.rs` (51 unique `SCI-*` codes on this branch), closing any remaining gaps across:
+  - **Germline & Somatic Variant Calling**: `SCI-VQSR-COHORT`, `SCI-BQSR-NO-KNOWN-SITES`, `SCI-MUTECT2-TUMOR-ONLY`, `SCI-MUTECT2-NO-PON`, `SCI-HAPLOTYPECALLER-GVCF-ERC`, `SCI-STRELKA-NO-MANTA`, `SCI-STRELKA-TARGETS-UNCOMPRESSED` — all implemented; audit for false positives/negatives and edge cases rather than re-adding.
   - **Bulk & Single-Cell RNA-seq**: `SCI-FEATURECOUNTS-STRAND`, `SCI-STAR-SJDB-OVERHANG`, `SCI-SALMON-LIBTYPE`, `SCI-DESEQ2-MIN-REPLICATES`, `SCI-CELLRANGER-INTRONS`.
   - **Epigenomics & Metagenomics**: `SCI-MACS2-GENOME-SIZE`, `SCI-BISMARK-NON-DIRECTIONAL`, `SCI-KRAKEN2-CONFIDENCE`.
   - **DAG Concurrency & Dataflow**: `SCI-AGG-RACE`, `SCI-SORT-THREADS-MEM-PRODUCT`.
@@ -451,7 +451,7 @@ pub struct BioTypeSpec {
 
 **Files**:
 
-- Modify: `crates/oxo-flow-web/src/theme/tokens.rs`
+- Create: `crates/oxo-flow-web/src/theme/tokens.rs` (does not exist yet — the web crate has no `theme/` module today; Metropolis tokens currently live in `frontend/src/styles/theme.css` custom properties)
 - Modify: `frontend/src/components/WorkflowCanvas.tsx`
 - Modify: `frontend/src/components/MetroCanvas.tsx`
 - Modify: `frontend/src/styles/theme.css`
