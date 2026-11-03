@@ -960,9 +960,11 @@ export default function MonitorReport() {
                     className="btn-sm"
                     style={{ padding: '2px 8px', fontSize: '0.75rem' }}
                     onClick={() => {
-                      if (selId) {
-                        api.retryRun(selId).catch(console.error);
-                      }
+                      // Route through handleRetry so the RetryPlan is honored
+                      // (new_run_id navigation) and failures surface in the
+                      // shared actionError banner — a fire-and-forget call
+                      // would leave the user staring at a silent no-op.
+                      if (selId) void handleRetry();
                     }}
                   >
                     Apply &amp; Retry
@@ -978,8 +980,9 @@ export default function MonitorReport() {
                   setExplainState((prev) => ({ ...prev, [fn.rule]: { loading: true } }));
                   try {
                     // Run-scoped explain (issue #82 P1-10): deterministic
-                    // grounding + LLM prose, optionally in Chinese.
-                    const result = selId ? await api.aiExplain(selId, 'zh') : null;
+                    // grounding + LLM prose, following the UI language
+                    // instead of assuming Chinese.
+                    const result = selId ? await api.aiExplain(selId, lang) : null;
                     const text = result
                       ? `${result.summary}${result.fix_suggestion ? `\n→ ${result.fix_suggestion.action}` : ''}`
                       : t('monitor.aiExplainUnavailable');

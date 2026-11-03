@@ -8,7 +8,7 @@ use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, err};
+use crate::domains::workflow::handlers::{ApiError, db_err, err};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -464,14 +464,7 @@ pub async fn put_webhook_config(
                 signature_scheme,
             )
             .await
-            .map_err(|e| {
-                tracing::error!("DB error saving webhook config: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+            .map_err(|e| db_err(format!("DB error saving webhook config: {e}")))?;
     }
 
     Ok(Json(serde_json::json!({

@@ -6,7 +6,7 @@ use axum::{Extension, Json, http::StatusCode};
 
 use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err, get_backend, now_iso};
+use crate::domains::workflow::handlers::{ApiError, db_err, err, get_backend, now_iso};
 use crate::infra::db::models;
 
 use super::service;
@@ -38,14 +38,10 @@ fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<Api
 /// GET /api/clusters — list configured cluster connections.
 pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
     let backend = get_backend()?;
-    let rows = backend.list_clusters().await.map_err(|e| {
-        tracing::error!("DB error listing clusters: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let rows = backend
+        .list_clusters()
+        .await
+        .map_err(|e| db_err(format!("DB error listing clusters: {e}")))?;
     Ok(Json(rows.into_iter().map(cluster_from_row).collect()))
 }
 
@@ -80,14 +76,10 @@ pub async fn upsert_cluster(
         enabled: req.enabled,
         created_at: now,
     };
-    backend.save_cluster(&row).await.map_err(|e| {
-        tracing::error!("DB error upserting cluster {}: {e}", req.id);
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_cluster(&row)
+        .await
+        .map_err(|e| db_err(format!("DB error upserting cluster {}: {e}", req.id)))?;
     Ok(Json(cluster_from_row(row)))
 }
 
@@ -108,14 +100,10 @@ pub async fn delete_cluster(
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;
     let backend = get_backend()?;
-    let deleted = backend.delete_cluster(&id).await.map_err(|e| {
-        tracing::error!("DB error deleting cluster {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let deleted = backend
+        .delete_cluster(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error deleting cluster {id}: {e}")))?;
     if !deleted {
         return Err(err(
             StatusCode::NOT_FOUND,
@@ -149,14 +137,7 @@ pub async fn probe_cluster(
     let row = backend
         .get_cluster(&id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching cluster {id} for probe: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error fetching cluster {id} for probe: {e}")))?
         .ok_or_else(|| {
             err(
                 StatusCode::NOT_FOUND,

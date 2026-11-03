@@ -19,8 +19,10 @@ pub(crate) fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -
     user.is_admin() || row.user_id == user.id || row.visibility == "workspace"
 }
 
-/// Pipeline write permission: owner or admin only.
-fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+/// Pipeline write permission: owner or admin only. `pub(crate)` because
+/// share/fork endpoints in other domains gate on the same rule — retyping
+/// it inline let the fork endpoint drift from this definition.
+pub(crate) fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
     user.is_admin() || row.user_id == user.id
 }
 
@@ -68,6 +70,20 @@ pub fn err(status: StatusCode, code: &str, msg: String) -> (StatusCode, Json<Api
             detail: None,
             suggestion: None,
         }),
+    )
+}
+
+/// One owner for the shared "storage failure → 500 DB_ERROR" mapping: log
+/// the context (what the handler was doing + the backend error), answer the
+/// generic structured response, and never let either half drift per call
+/// site. Callers pass a `format!`-built context so each log line keeps its
+/// own interpolation.
+pub fn db_err(context: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
+    tracing::error!("{context}");
+    err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "DB_ERROR",
+        "Internal database error".into(),
     )
 }
 
@@ -332,14 +348,10 @@ pub async fn diff_pipelines(
         }
         if let Some(pid) = id {
             let backend = get_backend()?;
-            let row = backend.get_pipeline(pid).await.map_err(|e| {
-                tracing::error!("DB error loading pipeline {pid}: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".to_string(),
-                )
-            })?;
+            let row = backend
+                .get_pipeline(pid)
+                .await
+                .map_err(|e| db_err(format!("DB error loading pipeline {pid}: {e}")))?;
             // A diff of another user's private pipeline leaks its TOML —
             // apply the same read scope as every other pipeline endpoint.
             let Some(row) = row.filter(|r| can_read_pipeline(&user, r)) else {
@@ -386,14 +398,10 @@ pub async fn export_pipeline(
         req.toml_content
     } else if let Some(id) = req.pipeline_id.as_deref() {
         let backend = get_backend()?;
-        let row = backend.get_pipeline(id).await.map_err(|e| {
-            tracing::error!("DB error loading pipeline {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?;
+        let row = backend
+            .get_pipeline(id)
+            .await
+            .map_err(|e| db_err(format!("DB error loading pipeline {id}: {e}")))?;
         match row.filter(|r| can_read_pipeline(&user, r)) {
             Some(row) => row.toml_content,
             None => {
@@ -440,14 +448,7 @@ pub async fn search_pipelines(
     let pipeline_rows = backend
         .search_pipelines(&req.query, Some(&user.id), user.is_admin(), 50)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error searching pipelines: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error searching pipelines: {e}")))?;
 
     let pipelines: Vec<Pipeline> = pipeline_rows
         .into_iter()
@@ -471,14 +472,7 @@ pub async fn search_pipelines(
     let template_rows: Vec<models::TemplateRow> = backend
         .list_templates()
         .await
-        .map_err(|e| {
-            tracing::error!("DB error searching templates: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error searching templates: {e}")))?
         .into_iter()
         .filter(|r| {
             r.name.to_lowercase().contains(&query_lower)
@@ -574,14 +568,10 @@ pub async fn save_pipeline(
         updated_at: now.clone(),
     };
     let backend = get_backend()?;
-    backend.save_pipeline(&pipeline_row).await.map_err(|e| {
-        tracing::error!("DB error creating pipeline: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_pipeline(&pipeline_row)
+        .await
+        .map_err(|e| db_err(format!("DB error creating pipeline: {e}")))?;
 
     // The initial save is revision 1 of the pipeline's history.
     record_revision(&id, &user_id, &version, toml_content).await;
@@ -622,14 +612,7 @@ pub async fn list_pipelines(
     let rows = backend
         .list_pipelines_visible(&user.id, user.is_admin(), 100)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error listing pipelines: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error listing pipelines: {e}")))?;
 
     let list: Vec<Pipeline> = rows
         .into_iter()
@@ -667,14 +650,10 @@ pub async fn get_pipeline(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let row = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let row = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id}: {e}")))?;
 
     // Enforce read permission; foreign private pipelines 404 (existence
     // must not leak — issue #82 P0-4).
@@ -727,14 +706,10 @@ pub async fn update_pipeline(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let existing = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id} for update: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let existing = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id} for update: {e}")))?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -822,14 +797,7 @@ pub async fn update_pipeline(
     backend
         .save_pipeline(&updated_pipeline)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error updating pipeline {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error updating pipeline {id}: {e}")))?;
 
     Ok(Json(Pipeline {
         id,
@@ -862,14 +830,10 @@ pub async fn delete_pipeline(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let existing = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id} for deletion: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let existing = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id} for deletion: {e}")))?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -888,14 +852,10 @@ pub async fn delete_pipeline(
         ));
     }
 
-    backend.delete_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error deleting pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .delete_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error deleting pipeline {id}: {e}")))?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }
@@ -938,14 +898,10 @@ impl From<models::TemplateRow> for Template {
 pub async fn list_templates() -> ApiResult<Vec<Template>> {
     let backend = get_backend()?;
 
-    let rows = backend.list_templates().await.map_err(|e| {
-        tracing::error!("DB error listing templates: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let rows = backend
+        .list_templates()
+        .await
+        .map_err(|e| db_err(format!("DB error listing templates: {e}")))?;
 
     let list: Vec<Template> = rows.into_iter().map(Template::from).collect();
 
@@ -968,14 +924,10 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
 pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     let backend = get_backend()?;
 
-    let row = backend.get_template(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching template {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let row = backend
+        .get_template(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching template {id}: {e}")))?;
 
     match row {
         Some(r) => Ok(Json(Template::from(r))),
@@ -1101,14 +1053,10 @@ pub async fn save_template(
         created_at: now.clone(),
         updated_at: now.clone(),
     };
-    backend.save_template(&template_row).await.map_err(|e| {
-        tracing::error!("DB error saving template: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_template(&template_row)
+        .await
+        .map_err(|e| db_err(format!("DB error saving template: {e}")))?;
 
     Ok(Json(Template {
         id,
@@ -1142,14 +1090,10 @@ pub async fn delete_template(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let existing = backend.get_template(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching template {id} for deletion: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let existing = backend
+        .get_template(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching template {id} for deletion: {e}")))?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -1174,14 +1118,10 @@ pub async fn delete_template(
         ));
     }
 
-    backend.delete_template(&id).await.map_err(|e| {
-        tracing::error!("DB error deleting template {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .delete_template(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error deleting template {id}: {e}")))?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }
@@ -1505,14 +1445,10 @@ pub async fn list_revisions(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let pipeline = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id}: {e}")))?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1531,14 +1467,7 @@ pub async fn list_revisions(
     let rows = backend
         .list_pipeline_revisions(&id, 50)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error listing revisions: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error listing revisions: {e}")))?;
 
     let revisions: Vec<serde_json::Value> = rows
         .into_iter()
@@ -1571,14 +1500,10 @@ pub async fn get_revision(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let pipeline = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id}: {e}")))?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1597,14 +1522,7 @@ pub async fn get_revision(
     let row = backend
         .get_pipeline_revision(&id, &rev)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching revision: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error fetching revision: {e}")))?;
     let r = row.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1643,14 +1561,10 @@ pub async fn rollback_pipeline(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    let pipeline = backend.get_pipeline(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let pipeline = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id}: {e}")))?;
     let pipeline = pipeline.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1679,14 +1593,7 @@ pub async fn rollback_pipeline(
     let rev_row = backend
         .get_pipeline_revision(&id, revision_id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching revision: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".to_string(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error fetching revision: {e}")))?;
     let toml_content = rev_row.map(|r| r.toml_content).ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -1727,14 +1634,10 @@ pub async fn rollback_pipeline(
         created_at: pipeline.created_at.clone(),
         updated_at: now.clone(),
     };
-    backend.save_pipeline(&updated).await.map_err(|e| {
-        tracing::error!("DB error rolling back pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_pipeline(&updated)
+        .await
+        .map_err(|e| db_err(format!("DB error rolling back pipeline {id}: {e}")))?;
 
     Ok(Json(Pipeline {
         id,

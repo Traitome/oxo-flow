@@ -7,7 +7,9 @@ use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_backend, now_iso};
+use crate::domains::workflow::handlers::{
+    ApiError, can_read_pipeline, can_write_pipeline, db_err, err, get_backend, now_iso,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -36,12 +38,9 @@ pub async fn fork_pipeline(
         .get_pipeline(&id)
         .await
         .map_err(|e| {
-            tracing::error!("DB error fetching source pipeline {id} for fork: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
+            db_err(format!(
+                "DB error fetching source pipeline {id} for fork: {e}"
+            ))
         })?
         .ok_or_else(|| {
             err(
@@ -52,8 +51,10 @@ pub async fn fork_pipeline(
         })?;
 
     // Read permission applies to forking too: owners, admins, and
-    // workspace-visible pipelines may be forked.
-    if !(user.is_admin() || source.user_id == user.id || source.visibility == "workspace") {
+    // workspace-visible pipelines may be forked. Shared helper — never
+    // retype the admin/owner/visibility rule inline (fork used to have its
+    // own copy; the share endpoint still has its own and it drifts).
+    if !can_read_pipeline(&user, &source) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -79,14 +80,10 @@ pub async fn fork_pipeline(
         updated_at: now.clone(),
     };
 
-    backend.save_pipeline(&new_pipeline).await.map_err(|e| {
-        tracing::error!("DB error creating forked pipeline: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_pipeline(&new_pipeline)
+        .await
+        .map_err(|e| db_err(format!("DB error creating forked pipeline: {e}")))?;
 
     // Log the fork action
     if let Err(error) = backend
@@ -126,14 +123,7 @@ pub async fn share_pipeline(
     let pipeline = backend
         .get_pipeline(&id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching pipeline {id} to share: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id} to share: {e}")))?
         .ok_or_else(|| {
             err(
                 StatusCode::NOT_FOUND,
@@ -142,7 +132,7 @@ pub async fn share_pipeline(
             )
         })?;
 
-    if !(user.is_admin() || pipeline.user_id == user.id) {
+    if !can_write_pipeline(&user, &pipeline) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -199,12 +189,9 @@ pub async fn share_pipeline(
     };
 
     backend.create_share(&share).await.map_err(|e| {
-        tracing::error!("DB error creating share link for pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
+        db_err(format!(
+            "DB error creating share link for pipeline {id}: {e}"
+        ))
     })?;
 
     Ok(Json(ShareResponse {
@@ -253,14 +240,7 @@ pub async fn import_pipeline(
     let share = backend
         .get_share_by_token(&token)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up share by token: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error looking up share by token: {e}")))?
         .ok_or_else(|| {
             err(
                 StatusCode::NOT_FOUND,
@@ -285,14 +265,7 @@ pub async fn import_pipeline(
     let pipeline = backend
         .get_pipeline(&share.pipeline_id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching source pipeline for import: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error fetching source pipeline for import: {e}")))?
         .ok_or_else(|| {
             err(
                 StatusCode::NOT_FOUND,
@@ -321,14 +294,7 @@ pub async fn import_pipeline(
     backend
         .save_pipeline(&imported_pipeline)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error creating imported pipeline: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error creating imported pipeline: {e}")))?;
 
     Ok(Json(ImportResponse {
         pipeline_id: import_id,
@@ -355,14 +321,7 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
     let share = backend
         .get_share_by_token(&token)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up share by token: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
+        .map_err(|e| db_err(format!("DB error looking up share by token: {e}")))?
         .ok_or_else(|| {
             err(
                 StatusCode::NOT_FOUND,
@@ -386,12 +345,9 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
         .get_pipeline(&share.pipeline_id)
         .await
         .map_err(|e| {
-            tracing::error!("DB error fetching source pipeline for share landing: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
+            db_err(format!(
+                "DB error fetching source pipeline for share landing: {e}"
+            ))
         })?
         .ok_or_else(|| {
             err(

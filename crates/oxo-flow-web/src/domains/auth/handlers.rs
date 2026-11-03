@@ -10,7 +10,7 @@ use super::service;
 use super::types::*;
 use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err, now_iso};
+use crate::domains::workflow::handlers::{ApiError, db_err, err, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -78,14 +78,10 @@ async fn validate_token_with_backend(
         ));
     }
 
-    let session = backend.get_session(token).await.map_err(|e| {
-        tracing::error!("DB error looking up session token: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let session = backend
+        .get_session(token)
+        .await
+        .map_err(|e| db_err(format!("DB error looking up session token: {e}")))?;
 
     let session = session.ok_or_else(|| {
         err(
@@ -108,14 +104,7 @@ async fn validate_token_with_backend(
     let user = backend
         .get_user_by_id(&session.user_id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up user role: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error looking up user role: {e}")))?;
 
     let user = user.ok_or_else(|| {
         err(
@@ -271,14 +260,10 @@ pub async fn login(
     let (session_user_id, result) = match service::authenticate(&req.username, &req.password) {
         Ok(response) => {
             if result_is_admin_identity(&response) {
-                let row = backend.get_user_by_username("admin").await.map_err(|e| {
-                    tracing::error!("DB error resolving admin identity: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".into(),
-                    )
-                })?;
+                let row = backend
+                    .get_user_by_username("admin")
+                    .await
+                    .map_err(|e| db_err(format!("DB error resolving admin identity: {e}")))?;
                 let row = row.ok_or_else(|| {
                     err(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -296,14 +281,12 @@ pub async fn login(
                     .ensure_env_user(&response.username, &response.role)
                     .await
                     .map_err(|e| {
-                        tracing::error!(
-                            "DB error resolving env identity '{}': {e}",
-                            response.username
-                        );
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "DB_ERROR",
-                            "Internal database error".into(),
+                        db_err(
+                            format!(
+                                "DB error resolving env identity '{}': {e}",
+                                response.username
+                            )
+                            .as_str(),
                         )
                     })?;
                 let (id, role) = row.ok_or_else(|| {
@@ -322,14 +305,7 @@ pub async fn login(
             let user = backend
                 .get_user_by_username(&req.username)
                 .await
-                .map_err(|e| {
-                    tracing::error!("DB error looking up user '{}': {e}", req.username);
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".into(),
-                    )
-                })?;
+                .map_err(|e| db_err(format!("DB error looking up user '{}': {e}", req.username)))?;
             match user {
                 Some(u)
                     if u.password_hash
@@ -486,14 +462,10 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
         )
     })?;
 
-    let rows = backend.list_users().await.map_err(|e| {
-        tracing::error!("DB error listing users: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let rows = backend
+        .list_users()
+        .await
+        .map_err(|e| db_err(format!("DB error listing users: {e}")))?;
 
     let users: Vec<UserResponse> = rows
         .into_iter()
@@ -601,14 +573,10 @@ pub async fn delete_user(
         )
     })?;
 
-    let existing = backend.get_user_by_id(&id).await.map_err(|e| {
-        tracing::error!("DB error fetching user {id} for deletion: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let existing = backend
+        .get_user_by_id(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching user {id} for deletion: {e}")))?;
 
     if existing.is_none() {
         return Err(err(
@@ -618,14 +586,10 @@ pub async fn delete_user(
         ));
     }
 
-    backend.delete_user(&id).await.map_err(|e| {
-        tracing::error!("DB error deleting user {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .delete_user(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error deleting user {id}: {e}")))?;
 
     // Live credentials (#520: sessions and API keys) are cascaded directly
     // within StorageBackend::delete_user across all supported engines.
@@ -919,14 +883,10 @@ pub async fn create_api_key(
         last_used_at: None,
         revoked: 0,
     };
-    backend.create_api_key(&key_row).await.map_err(|e| {
-        tracing::error!("DB error creating API key: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .create_api_key(&key_row)
+        .await
+        .map_err(|e| db_err(format!("DB error creating API key: {e}")))?;
 
     Ok(Json(serde_json::json!({
         "id": id,
@@ -957,14 +917,10 @@ pub async fn list_api_keys(
             "Internal database error".to_string(),
         )
     })?;
-    let rows = backend.list_api_keys(&user.id).await.map_err(|e| {
-        tracing::error!("DB error listing API keys: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let rows = backend
+        .list_api_keys(&user.id)
+        .await
+        .map_err(|e| db_err(format!("DB error listing API keys: {e}")))?;
     Ok(Json(
         rows.into_iter()
             .map(|k| {
@@ -1001,14 +957,10 @@ pub async fn revoke_api_key(
             "Internal database error".to_string(),
         )
     })?;
-    let revoked = backend.revoke_api_key(&id, &user.id).await.map_err(|e| {
-        tracing::error!("DB error revoking API key: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),
-        )
-    })?;
+    let revoked = backend
+        .revoke_api_key(&id, &user.id)
+        .await
+        .map_err(|e| db_err(format!("DB error revoking API key: {e}")))?;
     if !revoked {
         return Err(err(
             StatusCode::NOT_FOUND,

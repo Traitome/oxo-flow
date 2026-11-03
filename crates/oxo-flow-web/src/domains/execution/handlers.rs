@@ -15,7 +15,9 @@ use crate::extract::ApiQuery;
 use super::checkpoint_status;
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, can_read_pipeline, err, get_backend, now_iso};
+use crate::domains::workflow::handlers::{
+    ApiError, can_read_pipeline, db_err, err, get_backend, now_iso,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -29,14 +31,10 @@ pub(crate) async fn load_owned_run(
     user: &CurrentUser,
     id: &str,
 ) -> Result<models::RunRow, (StatusCode, Json<ApiError>)> {
-    let run = backend.get_run(id).await.map_err(|e| {
-        tracing::error!("DB error fetching run {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let run = backend
+        .get_run(id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching run {id}: {e}")))?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -526,14 +524,10 @@ pub async fn create_run(
                 // private pipeline by id exposes its name/DAG/products
                 // through the run's own status endpoints. Foreign and
                 // unknown ids both answer PIPELINE_NOT_FOUND (no oracle).
-                let row = backend.get_pipeline(pid).await.map_err(|e| {
-                    tracing::error!("DB error checking pipeline {pid}: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".into(),
-                    )
-                })?;
+                let row = backend
+                    .get_pipeline(pid)
+                    .await
+                    .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
                 if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
                     return Err(err(
                         StatusCode::NOT_FOUND,
@@ -666,14 +660,7 @@ pub async fn create_run(
             let cluster_row: Option<models::ClusterRow> = backend
                 .get_cluster(cid)
                 .await
-                .map_err(|e| {
-                    tracing::error!("DB error loading cluster {cid}: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".to_string(),
-                    )
-                })?
+                .map_err(|e| db_err(format!("DB error loading cluster {cid}: {e}")))?
                 .filter(|c| c.enabled);
             let cluster_row = cluster_row.ok_or_else(|| {
                 err(
@@ -785,14 +772,10 @@ pub async fn list_runs(
         cursor: params.cursor.clone(),
         limit,
     };
-    let page = backend.list_runs_cursor(&filters).await.map_err(|e| {
-        tracing::error!("DB error listing runs: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let page = backend
+        .list_runs_cursor(&filters)
+        .await
+        .map_err(|e| db_err(format!("DB error listing runs: {e}")))?;
 
     let items: Vec<serde_json::Value> = page
         .items
@@ -1521,14 +1504,7 @@ pub async fn cancel_run(
     backend
         .record_run_terminal(&id, "cancelled", "cancelled", &now)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error cancelling run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error cancelling run {id}: {e}")))?;
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
@@ -1702,14 +1678,7 @@ pub async fn pause_run(
     backend
         .update_run_status(&id, "paused", &format!("paused: {reason}"))
         .await
-        .map_err(|e| {
-            tracing::error!("DB error pausing run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error pausing run {id}: {e}")))?;
 
     crate::broadcast_event_for(
         "run_paused",
@@ -1791,14 +1760,7 @@ pub async fn resume_run(
     backend
         .update_run_status(&id, "running", "executing")
         .await
-        .map_err(|e| {
-            tracing::error!("DB error resuming run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error resuming run {id}: {e}")))?;
 
     crate::broadcast_event_for(
         "run_resumed",
