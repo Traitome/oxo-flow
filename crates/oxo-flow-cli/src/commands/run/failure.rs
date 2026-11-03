@@ -220,7 +220,8 @@ pub(crate) async fn handle_run_failure_abort(
         }
     }
 
-    // Deterministic diagnostics & 1-key remediation
+    // Deterministic diagnostics & repair hint
+    let mut has_repair_plan = false;
     {
         let failures_guard = ctx.failures.lock().await;
         let failure = failures_guard
@@ -247,12 +248,7 @@ pub(crate) async fn handle_run_failure_abort(
                 for s in &d.suggestions {
                     narrate_console_line(format_args!("     {} {}", "💡 Suggestion:".cyan(), s));
                 }
-                if d.repair_action.is_some() {
-                    narrate_console_line(format_args!(
-                        "     {} Remediation: [R] Auto-scale & resume  [D] Debug with AI  [A] Abort",
-                        "⚡".bold()
-                    ));
-                }
+                has_repair_plan = d.repair_action.is_some();
             }
         }
     }
@@ -260,6 +256,17 @@ pub(crate) async fn handle_run_failure_abort(
     // AI error recovery
     let should_recover =
         ctx.ai_recover || crate::commands::ai_template::should_use_ai(Some(ctx.workflow), false);
+    // The engine produced a bounded deterministic repair plan, but no
+    // interactive key handlers exist — the old "[R] Auto-scale & resume"
+    // menu promised keys that were never wired (false affordance). Point
+    // at the real automated path instead, and only when the AI recovery
+    // block below won't run and report on its own.
+    if has_repair_plan && !should_recover {
+        narrate_console_line(format_args!(
+            "     {} Repair plan available — rerun or resume with `--ai-recover` for automated recovery",
+            "⚡".bold()
+        ));
+    }
     if should_recover {
         let failures_guard = ctx.failures.lock().await;
         // Diagnose the rule that actually aborted the run — a
