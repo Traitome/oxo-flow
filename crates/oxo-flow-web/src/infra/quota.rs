@@ -203,7 +203,10 @@ pub fn reserve(run_id: &str, user_id: &str, threads: u32, memory_mb: u64) {
 
 /// Release a run's reservation and return it (user, threads, memory) for
 /// the tracker's record_complete call.
-pub fn release(run_id: &str) -> Option<Reservation> {
+///
+/// Building block for [`release_and_complete`]; production callers should
+/// never split the pair.
+pub(crate) fn release(run_id: &str) -> Option<Reservation> {
     RUN_RESERVATIONS
         .lock()
         .ok()
