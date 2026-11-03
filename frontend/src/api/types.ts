@@ -141,6 +141,16 @@ export interface ShareLanding {
   recent_run?: { status: string; finished_at?: string } | null;
 }
 
+/** Live contract of `GET /api/runs/{id}/status` (Rust `RunStatusResponse`,
+ *  still served — server.rs). Pinned by tests/frontend_types_drift.rs:
+ *  no page calls it today, but the drift gate is the consumer — remove
+ *  only together with its pin. */
+export interface RunStatus {
+  status: string; phase: string;
+  nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
+  timeline: Array<{ timestamp: string; event: string; node: string | null; message: string | null }>;
+  resources: { cpu_pct: number; memory_mb: number; disk_mb: number };
+}
 export interface DagStatus {
   nodes: Array<{ id: string; label: string; status: string; color: string; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
   edges: Array<{ source: string; target: string }>;
