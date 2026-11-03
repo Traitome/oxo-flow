@@ -900,7 +900,12 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
                 let event = if let Some(rest) = line.strip_prefix("Running: ") {
                     Some(("rule_started", rest.trim().to_string()))
                 } else if let Some(rest) = line.strip_prefix('✓') {
-                    Some(("rule_completed", rest.trim().to_string()))
+                    // The CLI prints `✓ {rule} ({:.1}s)` — the duration
+                    // suffix must not reach the event's rule name, which
+                    // rule_started/rule_failed carry clean.
+                    let name = rest.trim();
+                    let name = name.split_once(" (").map_or(name, |(r, _)| r);
+                    Some(("rule_completed", name.to_string()))
                 } else if line.starts_with('⊝') {
                     Some((
                         "rule_skipped",

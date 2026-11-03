@@ -104,8 +104,17 @@ impl AiRuntime {
                 );
                 continue;
             };
-            match oxo_flow_ai::mcp::McpHttpClient::new(url) {
-                Ok(client) => {
+            // McpHttpClient::new screens the endpoint with a blocking
+            // getaddrinfo hop — run it on the blocking pool so skill
+            // loading never stalls an async worker on DNS (#268-family
+            // discipline; the redirect loop already screens asynchronously).
+            let screen_url = url.clone();
+            match tokio::task::spawn_blocking(move || {
+                oxo_flow_ai::mcp::McpHttpClient::new(&screen_url)
+            })
+            .await
+            {
+                Ok(Ok(client)) => {
                     match oxo_flow_ai::mcp::McpToolBridge::discover(std::sync::Arc::new(client))
                         .await
                     {
@@ -126,6 +135,9 @@ impl AiRuntime {
                             skill.name
                         ),
                     }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("skill '{}': MCP endpoint {url} rejected: {e}", skill.name)
                 }
                 Err(e) => tracing::warn!("skill '{}': {e}", skill.name),
             }

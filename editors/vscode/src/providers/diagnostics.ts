@@ -68,15 +68,14 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     };
     log(`[diagnostics] ${executable} validate ${doc.uri.fsPath}${includeLint ? " + lint" : ""}`);
 
+    const onSpawn = (kill: () => void) => {
+      if (this.generations.get(uriKey) === generation) this.killCurrent.set(uriKey, kill);
+    };
+
     const [validateRes, lintRes] = await Promise.allSettled([
-      runCli(executable, validateArgs(doc.uri.fsPath), {
-        cwd,
-        onSpawn: (kill) => {
-          if (this.generations.get(uriKey) === generation) this.killCurrent.set(uriKey, kill);
-        },
-      }),
+      runCli(executable, validateArgs(doc.uri.fsPath), { cwd, onSpawn }),
       includeLint
-        ? runCli(executable, lintArgs(doc.uri.fsPath), { cwd })
+        ? runCli(executable, lintArgs(doc.uri.fsPath), { cwd, onSpawn })
         : Promise.resolve(null),
     ]);
 
@@ -137,8 +136,14 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     const uriKey = doc.uri.toString();
     if (trigger === "change" && mode !== "type") return;
     if (trigger === "save" && mode === "type") return; // already ran while typing
-    if (trigger === "open" || trigger === "config" || mode === "save") {
-      // save/open/config run immediately; "type" mode runs debounced below.
+    if (
+      trigger === "open" ||
+      trigger === "config" ||
+      mode === "save" ||
+      (trigger === "change" && mode === "type")
+    ) {
+      // open/config/save run immediately; a change in "type" mode runs
+      // debounced below.
       if (mode === "type" && trigger === "change") {
         const prev = this.timers.get(uriKey);
         if (prev) clearTimeout(prev);

@@ -61,6 +61,9 @@ pub trait McpClient: Send + Sync {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDef {
     pub name: String,
+    /// Optional per the MCP spec (only name/inputSchema are required); a
+    /// server that omits it must not take its whole tools/list down.
+    #[serde(default)]
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,

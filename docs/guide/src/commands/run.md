@@ -455,7 +455,7 @@ to a scheduler instead of executing locally:
 ```toml
 # profiles/slurm.toml
 [cluster]
-backend       = "slurm"      # slurm | pbs | sge | lsf — required
+backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch
 partition     = "compute"
 account       = "lab01"
 walltime      = "24h"        # a rule's own time_limit wins

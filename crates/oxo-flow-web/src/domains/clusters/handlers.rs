@@ -15,9 +15,9 @@ use super::types::{ClusterInfo, ClusterProbeResult, ClusterUpsertRequest};
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
 /// Cluster connections hold SSH credentials shared by the whole platform.
-/// Managing them (upsert/delete) is admin-only outside personal mode
-/// (issue #82 P0-5); listing and probing stay available to any
-/// authenticated user so they can pick a cluster for their runs.
+/// Managing and probing them (upsert/delete/probe) is admin-only outside
+/// personal mode (issues #82 P0-5, #517); listing stays available to any
+/// authenticated user so they can see what a run could target.
 fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
     current_user::require_role_outside_personal(
         user,

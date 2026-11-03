@@ -286,6 +286,26 @@ pub fn submit_command(backend: &ClusterBackend) -> &'static str {
     }
 }
 
+/// The manual submit command for a directory of rendered scripts, in the
+/// form each backend actually accepts. The standalone `cluster submit`
+/// hints print this instead of hand-rolled strings that had drifted from
+/// the invocations `ClusterExecutor::submit` really issues (the cloud
+/// backends take manifest files, not script arguments).
+pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
+    match backend {
+        ClusterBackend::Slurm => format!("sbatch --parsable {dir}/*.sh"),
+        ClusterBackend::Pbs | ClusterBackend::Sge => format!("qsub {dir}/*.sh"),
+        ClusterBackend::Lsf => format!("bsub {dir}/*.sh"),
+        ClusterBackend::Kubernetes => format!("kubectl create -f {dir}/*.sh"),
+        ClusterBackend::AwsBatch => format!(
+            "for f in {dir}/*.sh; do aws batch submit-job --cli-input-json \"file://$f\"; done"
+        ),
+        ClusterBackend::GcpBatch => format!(
+            "for f in {dir}/*.sh; do gcloud batch jobs submit \"oxoflow-$(basename \"$f\" .sh)-$(date +%s)\" --config \"file://$f\"; done"
+        ),
+    }
+}
+
 /// Returns the shell command used to query job status on the given backend.
 pub fn status_command(backend: &ClusterBackend) -> &'static str {
     match backend {

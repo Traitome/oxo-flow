@@ -40,7 +40,6 @@ import {
   relativeWorkflow,
   resolveFolder,
   type OxoflowTaskDefinition,
-  type TaskKind,
 } from "./providers/taskProvider";
 
 const DOCS_URL = "https://traitome.github.io/oxo-flow/";
@@ -818,7 +817,3 @@ async function pickCommand(): Promise<void> {
   const pick = await vscode.window.showQuickPick(COMMAND_PICKS, { placeHolder: "oxo-flow command" });
   if (pick) await vscode.commands.executeCommand(pick.command);
 }
-
-// TaskKind re-export guard: keeps the union honest if a kind is added to the
-// task provider but not wired here.
-export type _WiredTaskKinds = TaskKind;

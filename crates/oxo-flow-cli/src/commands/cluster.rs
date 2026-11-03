@@ -589,9 +589,11 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 );
                 eprintln!("  Submit with: bash {}", submit_path.display());
                 eprintln!(
-                    "  Or manually: {} {}/*.sh",
-                    oxo_flow_core::cluster::submit_command(&cluster_backend),
-                    output.display()
+                    "  Or manually: {}",
+                    oxo_flow_core::cluster::submit_invocation_hint(
+                        &cluster_backend,
+                        &output.display().to_string()
+                    )
                 );
             } else {
                 eprintln!(
@@ -603,15 +605,19 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 if dry_run {
                     eprintln!("  DRY-RUN: review the scripts, then submit with:");
                     eprintln!(
-                        "    {} {}/*.sh",
-                        oxo_flow_core::cluster::submit_command(&cluster_backend),
-                        output.display()
+                        "    {}",
+                        oxo_flow_core::cluster::submit_invocation_hint(
+                            &cluster_backend,
+                            &output.display().to_string()
+                        )
                     );
                 } else {
                     eprintln!(
-                        "  Submit with: {} {}/*.sh",
-                        oxo_flow_core::cluster::submit_command(&cluster_backend),
-                        output.display()
+                        "  Submit with: {}",
+                        oxo_flow_core::cluster::submit_invocation_hint(
+                            &cluster_backend,
+                            &output.display().to_string()
+                        )
                     );
                 }
             }

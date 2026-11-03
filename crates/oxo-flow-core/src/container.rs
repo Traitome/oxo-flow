@@ -131,8 +131,18 @@ fn write_env_setup(
         dockerfile.push_str("    && rm Miniforge3-Linux-x86_64.sh\n");
         dockerfile.push_str("ENV PATH=/opt/conda/bin:$PATH\n\n");
 
+        // Envs are content-keyed (conda_env_name_from_spec), so rules
+        // sharing one YAML derive the SAME name — a second `conda env
+        // create -n <name>` would abort the whole build with "prefix
+        // already exists". Dedupe by derived name; the first rule's
+        // comment documents the owner.
+        let mut emitted_envs = std::collections::BTreeSet::new();
         for rule in &workflow.rules {
             if let Some(ref conda_env) = rule.environment.conda {
+                let env_name = runtime_conda_env_name(&rule.name, conda_env);
+                if !emitted_envs.insert(env_name.clone()) {
+                    continue;
+                }
                 dockerfile.push_str(&format!("# Conda environment for rule: {}\n", rule.name));
                 if is_package_specifier(conda_env) {
                     // Package specifier like "bioconda::fastp=0.23.4" —
@@ -144,7 +154,6 @@ fn write_env_setup(
                     // inline specs) — the plain rule name made the
                     // pre-built env unreachable at run time and every rule
                     // re-created its env from the network.
-                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     dockerfile.push_str(&format!(
                         "RUN conda create -n {env_name} -y -c conda-forge {conda_env}\n\n"
                     ));
@@ -155,7 +164,6 @@ fn write_env_setup(
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| conda_env.clone());
-                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     dockerfile.push_str(&format!(
                         "RUN conda env create -f /workflow/envs/{env_filename} -n {env_name}\n\n"
                     ));
@@ -589,13 +597,19 @@ pub fn generate_singularity_def(
         def.push_str("    bash Miniforge3-Linux-x86_64.sh -b -p /opt/conda\n");
         def.push_str("    rm Miniforge3-Linux-x86_64.sh\n");
 
+        // Same content-key dedupe as the Dockerfile generator: shared
+        // YAMLs derive one name and a second create aborts %post.
+        let mut emitted_envs = std::collections::BTreeSet::new();
         for rule in &workflow.rules {
             if let Some(ref conda_env) = rule.environment.conda {
+                let env_name = runtime_conda_env_name(&rule.name, conda_env);
+                if !emitted_envs.insert(env_name.clone()) {
+                    continue;
+                }
                 if is_package_specifier(conda_env) {
                     // Package specifier — install directly.
                     // #535: same runtime-name derivation as the Dockerfile
                     // branch.
-                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     def.push_str(&format!(
                         "    /opt/conda/bin/conda create -n {env_name} -y -c conda-forge {conda_env}\n"
                     ));
@@ -605,7 +619,6 @@ pub fn generate_singularity_def(
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| conda_env.clone());
-                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     def.push_str(&format!(
                         "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {env_name}\n"
                     ));

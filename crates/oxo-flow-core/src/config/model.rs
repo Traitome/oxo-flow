@@ -16,10 +16,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 /// [`crate::wildcard::expand_values_namespace`].
 pub(crate) static VALUES_NS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{values\.(\w+)\}").expect("valid values-namespace regex"));
@@ -972,6 +968,65 @@ impl std::fmt::Display for ReferenceDatabase {
 ///
 /// Pairs can be gated with a `when` condition (the same expression
 /// language as rule `when`, evaluated against `config.*` and
+/// Shared loader for the three tabular sidecar files (`ExperimentControlPair`,
+/// `SampleGroup`, `SampleMetadata`): stat-first regular-file gate (issue #714,
+/// pattern from #695/#706 — a FIFO's metadata length is 0, so the size gate
+/// alone would pass and the read below would block forever), a 50 MB ceiling
+/// against accidental binary input, and the file read. One implementation so
+/// the gates can never drift apart again (they already did once).
+fn read_tabular_file(path: &Path, label: &str) -> Result<String> {
+    let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
+        path: path.to_path_buf(),
+        message: format!("failed to read metadata for {} file: {}", label, e),
+    })?;
+
+    if !metadata.is_file() {
+        return Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("{} file is not a regular file", label),
+        });
+    }
+
+    // 50MB limit to prevent OOM on accidental binary file input
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!(
+                "{} file is too large ({} bytes). Maximum allowed size is 50MB.",
+                label,
+                metadata.len()
+            ),
+        });
+    }
+
+    std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
+        path: path.to_path_buf(),
+        message: format!("failed to read {} file: {}", label, e),
+    })
+}
+
+/// Shared extension dispatch for the tabular sidecar loaders; the per-type
+/// error labels keep pointing at the file kind the user actually wrote.
+fn dispatch_tabular_format<T>(
+    path: &Path,
+    content: &str,
+    label: &str,
+    json: fn(&str, &Path) -> Result<Vec<T>>,
+    csv: fn(&str, &Path) -> Result<Vec<T>>,
+    tsv: fn(&str, &Path) -> Result<Vec<T>>,
+) -> Result<Vec<T>> {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match extension {
+        "json" => json(content, path),
+        "csv" => csv(content, path),
+        "tsv" | "txt" | "" => tsv(content, path),
+        _ => Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("unsupported {} file format: {}", label, extension),
+        }),
+    }
+}
+
 /// `file_exists(...)`): a pair whose condition is false is excluded from
 /// wildcard fan-out — it declares no rule instances. This lets one static
 /// `[[pairs]]` table serve profile-switched sample sets:
@@ -1052,48 +1107,15 @@ impl ExperimentControlPair {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for pairs file: {}", e),
-        })?;
-
-        // Stat-first regular-file gate (issue #714, pattern from #695/#706):
-        // a FIFO's metadata length is 0, so the size gate alone would pass and
-        // the open below would block forever.
-        if !metadata.is_file() {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: "pairs file is not a regular file".to_string(),
-            });
-        }
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "pairs file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read pairs file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported pairs file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "pairs")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "pairs",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     /// Discover pairs from a wildcard pattern by scanning the filesystem.
@@ -1488,38 +1510,15 @@ impl SampleGroup {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for sample_groups file: {}", e),
-        })?;
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "sample_groups file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read sample_groups file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported sample_groups file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "sample_groups")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "sample_groups",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
@@ -1688,38 +1687,15 @@ impl SampleMetadata {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for metadata_file: {}", e),
-        })?;
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "metadata file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata_file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported metadata file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "metadata")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "metadata",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {

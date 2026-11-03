@@ -84,6 +84,13 @@ pub fn check_relative_path(raw: &str) -> Result<(), String> {
     if raw == "." || raw.starts_with("./") && raw[2..].trim_matches('/').is_empty() {
         return Err(format!("path '{raw}' does not name a file"));
     }
+    // NUL is never a legal filename byte: `Path` components carry it
+    // through untouched, so without this gate the rejection would only
+    // surface as a confusing InvalidInput at the syscall (audit finding —
+    // the old sandbox sanitizer stripped it, the canonicalizer did not).
+    if raw.contains('\0') {
+        return Err(format!("path '{raw}' contains a NUL byte"));
+    }
     Ok(())
 }
 

@@ -262,17 +262,21 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             .chain(rule.expand_inputs.iter().map(|e| e.pattern.as_str()))
             .collect();
 
+        // Same double spelling as expand.rs's trigger test: `when =
+        // "wildcard.control != ''"` carries no `{control}` braces, so the
+        // bare match alone missed #531's `wildcard.<key>` form and the
+        // race detector stayed silent on rules the engine DOES fan out.
         let triggers_pair = !config.pairs.is_empty()
             && all_text.iter().any(|t| {
-                pair_wildcards
-                    .iter()
-                    .any(|w| t.contains(&format!("{{{w}}}")))
+                pair_wildcards.iter().any(|w| {
+                    t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
+                })
             });
         let triggers_group = !config.sample_groups.is_empty()
             && all_text.iter().any(|t| {
-                group_wildcards
-                    .iter()
-                    .any(|w| t.contains(&format!("{{{w}}}")))
+                group_wildcards.iter().any(|w| {
+                    t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
+                })
             });
         let triggers_values = config.values.iter().any(|v| {
             expand_texts.iter().any(|t| {

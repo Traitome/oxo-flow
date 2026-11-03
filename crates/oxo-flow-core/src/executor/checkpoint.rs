@@ -799,6 +799,11 @@ impl CheckpointState {
         // workflow's view of the shared workdir (issue #935) — same reasoning
         // as `input_manifests` above.
         self.protected_tree_baselines.clear();
+        // The "deleted by design" ledger of a foreign workflow must not
+        // survive either: `provenance verify` would otherwise report the
+        // other workflow's cleaned intermediates against this one's
+        // provenance view.
+        self.cleaned_checksums.clear();
     }
 
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).

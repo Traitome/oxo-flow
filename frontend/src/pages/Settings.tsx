@@ -353,7 +353,7 @@ export default function Settings() {
               </div>
             </>
           ) : (
-            <span style={{ color: 'var(--color-text-secondary)' }}>Quota system enabled for team mode.</span>
+            <span style={{ color: 'var(--color-text-secondary)' }}>{t('settings.quota.disabled')}</span>
           )}
         </div>
       </Section>

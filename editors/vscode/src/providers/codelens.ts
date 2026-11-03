@@ -17,7 +17,9 @@ export class OxoflowCodeLensProvider implements vscode.CodeLensProvider {
         new vscode.CodeLens(header, {
           title: "▶ Run this rule",
           command: "oxo-flow.runTargets",
-          arguments: [[info.name], info.name],
+          // Single argument (the targets array) — the command handler reads
+          // args[0] only.
+          arguments: [[info.name]],
         }),
         new vscode.CodeLens(header, {
           title: "▶ Run to here",

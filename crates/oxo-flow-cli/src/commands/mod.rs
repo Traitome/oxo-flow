@@ -180,23 +180,27 @@ pub fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<V
         ));
     }
 
-    // Expand globs in arguments
-    let expanded: Vec<String> = items
-        .iter()
-        .flat_map(|item| {
-            if item.contains('*') || item.contains('?') || item.contains('[') {
-                glob::glob(item)
-                    .ok()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| p.ok())
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect::<Vec<_>>()
-            } else {
-                vec![item.clone()]
+    // Expand globs in arguments. A malformed pattern and a pattern that
+    // matches nothing are both hard errors — the old `.ok()` + empty-set
+    // behavior let `batch "echo {item}" "*.zzz"` exit 0 after doing
+    // nothing, breaking the #540 contract that any failure is visible
+    // through the exit code.
+    let mut expanded: Vec<String> = Vec::new();
+    for item in items {
+        if item.contains('*') || item.contains('?') || item.contains('[') {
+            let paths = glob::glob(item)
+                .map_err(|e| anyhow::anyhow!("invalid glob pattern '{item}': {e}"))?
+                .filter_map(|p| p.ok())
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                anyhow::bail!("glob pattern '{item}' matched no files");
             }
-        })
-        .collect();
+            expanded.extend(paths);
+        } else {
+            expanded.push(item.clone());
+        }
+    }
 
     Ok(expanded)
 }

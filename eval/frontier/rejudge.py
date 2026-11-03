@@ -8,6 +8,11 @@ Use after engine changes to re-score the same generations, or to repair
 runs whose gate step missed a nested artifact.
 
     python3 rejudge.py results/ab-16384 [--binary /path/to/oxo-flow]
+
+Scope note: only the per-run result.json files are patched. The
+campaign-level results.json/report.md keep their stale verdicts — rebuild
+the report afterwards with
+`python3 run_eval.py --report-only <results_dir>/results.json`.
 """
 
 from __future__ import annotations
@@ -52,14 +57,19 @@ def main() -> None:
         result["generated"] = True
         result["gates"] = gates
         result["all_gates_pass"] = all(g["pass"] for g in gates.values())
+        # The artifact is unchanged (same generation, re-judged), so the
+        # fidelity verdict carries over; success must be recomputed or a
+        # stale gates-only verdict survives the re-judge.
+        result["success"] = result["all_gates_pass"] and bool(result.get("fidelity_pass", False))
         result["workflow_file"] = str(wf)
         result_file.write_text(json.dumps(result, indent=2))
-        verdict = "PASS" if result["all_gates_pass"] else "FAIL"
+        verdict = "PASS" if result["success"] else "FAIL"
         detail = " ".join(f"{g}={'ok' if v['pass'] else v['exit']}"
                           for g, v in gates.items())
         print(f"  {run_dir.name}: {verdict} ({detail})")
 
-    print("done — re-run the report aggregation in run_eval.py or read result.json files")
+    print("done — rebuild the campaign report with: "
+          "python3 run_eval.py --report-only <results_dir>/results.json")
 
 
 if __name__ == "__main__":

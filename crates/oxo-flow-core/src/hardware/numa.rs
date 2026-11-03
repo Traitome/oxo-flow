@@ -63,6 +63,12 @@ impl HardwareTopology {
                 let path = entry.path();
                 let cpus = read_cpulist(&path.join("cpulist")).unwrap_or_default();
                 let mem_mb = read_node_meminfo(&path.join("meminfo")).unwrap_or(0);
+                if mem_mb == 0 {
+                    // A zeroed node steers `select_node_for_job` toward it
+                    // (0 looks least loaded) and under-reports the host —
+                    // say so instead of silently degrading placement.
+                    tracing::warn!("NUMA node {id}: meminfo unreadable; reporting 0 MB memory");
+                }
                 total_memory_mb += mem_mb;
                 nodes.push(NumaNode {
                     id,
@@ -80,6 +86,9 @@ impl HardwareTopology {
         Some(Self {
             numa_nodes: nodes,
             total_memory_mb,
+            // Coarse L3 default: per-node cache layout needs `lscpu`-grade
+            // parsing that sysfs does not expose directly. Scheduling only
+            // uses it for advisory text, not placement.
             cache_l3_mb: 32,
         })
     }

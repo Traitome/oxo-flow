@@ -22,6 +22,8 @@ import type { DagJson, DagJsonNode, DagJsonEdge } from '../api/types';
 
 import {
   inferModality,
+  METRO_COMPACT_ZOOM,
+  metroZoomBand,
   MODALITY_COLORS,
   type BioModality,
   type MetroGranularity,
@@ -37,12 +39,15 @@ interface MetroStationData extends Record<string, unknown> {
   isInterchange?: boolean;
   stationCount?: number;
   zoomLevel: number;
+  /** Raw aggregation key of a grouped station — the display label carries a
+   *  ` (n)` count suffix that no rule id resolves to. */
+  groupKey?: string;
   onEdit?: (name: string) => void;
 }
 
 function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>) {
   const d = data as MetroStationData;
-  const isCompact = d.zoomLevel < 0.55;
+  const isCompact = d.zoomLevel < METRO_COMPACT_ZOOM;
   const colors = MODALITY_COLORS[d.modality];
 
   const haloStyle = useMemo(() => {
@@ -63,7 +68,7 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
           ...haloStyle,
         }}
         title={d.label}
-        onDoubleClick={() => d.onEdit?.(d.label)}
+        onDoubleClick={() => d.onEdit?.(d.groupKey ?? d.label)}
       >
         <Handle type="target" position={Position.Left} className="rf-handle" style={{ background: colors.primary }} />
         <div className="rf-metro-compact-glyph" style={{ background: colors.primary }} />
@@ -83,7 +88,7 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
         borderLeft: `4px solid ${colors.primary}`,
         ...haloStyle,
       }}
-      onDoubleClick={() => d.onEdit?.(d.label)}
+      onDoubleClick={() => d.onEdit?.(d.groupKey ?? d.label)}
     >
       <Handle type="target" position={Position.Left} className="rf-handle" style={{ background: colors.primary }} />
       <div className="rf-metro-header">
@@ -119,10 +124,8 @@ const nodeTypes = {
 export interface MetroCanvasProps {
   dag: DagJson | null;
   editable?: boolean;
-  scopeKey?: string;
   onEditRule?: (name: string) => void;
   onConnectRules?: (from: string, to: string) => void;
-  onRemoveRules?: (names: string[]) => void;
   statuses?: Record<string, string>;
   selectedRule?: string | null;
   onSelectRule?: (name: string | null) => void;
@@ -139,6 +142,11 @@ export function MetroCanvas({
 }: MetroCanvasProps) {
   const [granularity, setGranularity] = useState<MetroGranularity>('rule');
   const [currentZoom, setCurrentZoom] = useState(1);
+  // The compact/detailed station switch is the only zoom-sensitive visual:
+  // quantize the continuous onMove zoom into that band, or every wheel tick
+  // re-enters the layout memo below — an O(V·E) Sugiyama run plus a node
+  // position reset — mid-gesture.
+  const zoomBand = metroZoomBand(currentZoom);
 
   // Compute layout using Sugiyama with horizontal transit line corridors
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
@@ -259,7 +267,10 @@ export function MetroCanvas({
           transform: Boolean(rule.transform),
           isInterchange,
           stationCount,
-          zoomLevel: currentZoom,
+          // The zoom band is applied by the shallow remap below, keeping this
+          // memo independent of viewport motion.
+          zoomLevel: 0,
+          groupKey: members ? n.id : undefined,
           onEdit: onEditRule,
         },
       };
@@ -281,15 +292,22 @@ export function MetroCanvas({
     });
 
     return { nodes, edges };
-  }, [dag, selectedRule, statuses, currentZoom, onEditRule, granularity]);
+  }, [dag, selectedRule, statuses, onEditRule, granularity]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  // Apply the zoom band as a data-only shallow remap: crossing a band
+  // re-renders the station glyphs without recomputing (or resetting) layout.
+  const zoomedNodes = useMemo(
+    () => initialNodes.map((n) => ({ ...n, data: { ...n.data, zoomLevel: zoomBand } })),
+    [initialNodes, zoomBand],
+  );
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(zoomedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   useEffect(() => {
-    setNodes(initialNodes);
+    setNodes(zoomedNodes);
     setEdges(initialEdges);
-  }, [initialNodes, initialEdges, setNodes, setEdges]);
+  }, [zoomedNodes, initialEdges, setNodes, setEdges]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -337,7 +355,7 @@ export function MetroCanvas({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onNodeClick={(_evt, node) => onSelectRule?.(node.data.label)}
+        onNodeClick={(_evt, node) => onSelectRule?.(node.data.groupKey ?? node.data.label)}
         onPaneClick={() => onSelectRule?.(null)}
         onMove={(_evt, viewport) => setCurrentZoom(viewport.zoom)}
         fitView

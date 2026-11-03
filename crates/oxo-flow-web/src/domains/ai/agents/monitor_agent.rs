@@ -224,9 +224,7 @@ pub fn analyze_run_status(
 /// back to the classic exit-code signatures (OOM 137/9, segfault 139) when
 /// no tail survived, and to the generic message when neither matches.
 /// Returns `(prediction, suggestion, auto_fixable, level, pattern_id)`.
-fn classify_failure(
-    node: &NodeExecutionStatus,
-) -> (String, String, bool, AlertLevel, &'static str) {
+fn classify_failure(node: &NodeExecutionStatus) -> (String, String, bool, AlertLevel, String) {
     let tail = [node.stderr_tail.as_deref(), node.stdout_tail.as_deref()]
         .into_iter()
         .flatten()
@@ -244,22 +242,23 @@ fn classify_failure(
             .error_pattern
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let pattern_id: &'static str = match pattern.as_str() {
-            "oom_killed" => "oom_killed",
-            "segfault" => "segfault",
-            "command_not_found" => "command_not_found",
-            "timeout" => "timeout",
-            "disk_full" => "disk_full",
-            "permission_denied" => "permission_denied",
-            "network_error" => "network_error",
-            "conda_env_fail" => "conda_env_fail",
-            "shell_syntax" => "shell_syntax",
+        let pattern_id: String = match pattern.as_str() {
+            "oom_killed" => "oom_killed".to_string(),
+            "segfault" => "segfault".to_string(),
+            "command_not_found" => "command_not_found".to_string(),
+            "timeout" => "timeout".to_string(),
+            "disk_full" => "disk_full".to_string(),
+            "permission_denied" => "permission_denied".to_string(),
+            "network_error" => "network_error".to_string(),
+            "conda_env_fail" => "conda_env_fail".to_string(),
+            "shell_syntax" => "shell_syntax".to_string(),
             // The engine's full table is the identity, not just the 9 most
             // common signatures — an unmapped id is used verbatim so
             // alert ids stay specific and dedup consumers can tell causes
-            // apart (issue #908 review). Runtime ids are bounded by the
-            // static pattern table, so the &'static leak is fixed at size.
-            other => Box::leak(other.to_string().into_boxed_str()),
+            // apart (issue #908 review). Owned, not leaked: a future
+            // dynamic pattern id must not turn the polling endpoint into
+            // an unbounded leak.
+            other => other.to_string(),
         };
         let level = match result.category {
             // Resource exhaustion escalates the run regardless of whether the
@@ -305,14 +304,14 @@ fn classify_failure(
             "Increase memory allocation and retry from checkpoint.".into(),
             true,
             AlertLevel::Critical,
-            "oom_killed",
+            "oom_killed".to_string(),
         ),
         Some(139) => (
             format!("Rule '{}' segfaulted (exit 139)", node.rule),
             "Possible memory corruption -- reduce threads or check input data integrity.".into(),
             false,
             AlertLevel::Critical,
-            "segfault",
+            "segfault".to_string(),
         ),
         _ => (
             format!(
@@ -323,7 +322,7 @@ fn classify_failure(
             "Review logs and adjust parameters.".into(),
             false,
             AlertLevel::Alert,
-            "exit_code",
+            "exit_code".to_string(),
         ),
     }
 }

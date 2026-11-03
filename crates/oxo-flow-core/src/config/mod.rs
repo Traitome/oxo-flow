@@ -537,27 +537,6 @@ impl WorkflowConfig {
             }
         })
     }
-
-    /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.
-    ///
-    /// The checksum is computed from a deterministic hash of the config,
-    /// ensuring consistent results regardless of field ordering.
-    pub fn checksum(&self) -> String {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = std::hash::DefaultHasher::new();
-        self.workflow.name.hash(&mut hasher);
-        self.workflow.version.hash(&mut hasher);
-        self.rules.len().hash(&mut hasher);
-        for rule in &self.rules {
-            rule.name.hash(&mut hasher);
-            rule.input.hash(&mut hasher);
-            rule.output.hash(&mut hasher);
-            rule.shell.hash(&mut hasher);
-            rule.script.hash(&mut hasher);
-        }
-        format!("{:016x}", hasher.finish())
-    }
 }
 
 /// `true` when `a` is strictly less than `b` under major.minor.patch

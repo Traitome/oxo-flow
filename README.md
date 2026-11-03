@@ -191,7 +191,7 @@ oxo-flow report my-pipeline.oxoflow -f html -o report.html
 
 ## Cluster / HPC
 
-oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/PBS Pro, SGE/UGE, and LSF. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
+oxo-flow supports job submission to HPC and cloud batch schedulers including SLURM, PBS/PBS Pro, SGE/UGE, LSF, Kubernetes, AWS Batch, and GCP Batch. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
 
 ```bash
 # Submit a workflow to a SLURM cluster
@@ -205,7 +205,7 @@ oxo-flow cluster status
 oxo-flow cluster cancel --backend slurm <job-id>
 ```
 
-**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
+**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
 
 Workflows can also carry reusable config supplements (e.g. per-cluster thread
 and memory defaults) in `profiles/<NAME>.toml` next to the workflow:
@@ -351,9 +351,8 @@ oxo-flow serve
 # Mode 2: Team server — multi-user (env-var passwords + optional ORCID/GitHub OAuth2)
 oxo-flow serve --mode team --host 0.0.0.0
 
-# Mode 3: HPC submit panel — the scheduler (SLURM/PBS/SGE/LSF/k8s/AWS Batch/
-#   GCP Batch) is probed at startup when the server itself runs on a cluster
-#   login node
+# Mode 3: HPC submit panel — the scheduler (SLURM/PBS/SGE/LSF) is probed at
+#   startup when the server itself runs on a cluster login node
 oxo-flow serve --mode hpc
 ```
 

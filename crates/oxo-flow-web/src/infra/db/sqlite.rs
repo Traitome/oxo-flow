@@ -851,8 +851,13 @@ impl StorageBackend for SqliteBackend {
                 .await
                 .map_err(|e| e.to_string())?;
         } else if status == "running" {
-            // Set started_at when run begins
-            sqlx::query("UPDATE runs SET status = ?, phase = ?, started_at = ? WHERE id = ?")
+            // Set started_at when the run begins. A resume after pause
+            // re-enters this branch — COALESCE keeps the original start
+            // time so duration math reflects the whole run, not the last
+            // segment.
+            sqlx::query(
+                "UPDATE runs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?) WHERE id = ?",
+            )
                 .bind(status)
                 .bind(phase)
                 .bind(&now)

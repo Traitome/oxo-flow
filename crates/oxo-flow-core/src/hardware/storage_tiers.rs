@@ -86,58 +86,58 @@ impl StorageTierLadder {
         required_mb: u64,
         allow_ram: bool,
     ) -> Option<(StorageTier, PathBuf)> {
-        if allow_ram && let Some(ref ram_path) = self.tier0_ram_scratch {
-            match probe_available_mb(ram_path) {
-                Some(avail) if avail >= required_mb => {
-                    return Some((StorageTier::Tier0Ram, ram_path.clone()));
-                }
-                Some(_) => {} // Insufficient capacity — fall through.
-                None => {
-                    tracing::warn!(
-                        "storage-tier: cannot probe capacity of '{}'; \
-                         skipping Tier0Ram for {} MB scratch",
-                        ram_path.display(),
-                        required_mb,
-                    );
-                }
-            }
+        if allow_ram
+            && let Some((tier, path)) = self.try_tier(
+                StorageTier::Tier0Ram,
+                self.tier0_ram_scratch.as_ref(),
+                required_mb,
+            )
+        {
+            return Some((tier, path));
         }
-
-        if let Some(ref nvme_path) = self.tier1_nvme_scratch {
-            match probe_available_mb(nvme_path) {
-                Some(avail) if avail >= required_mb => {
-                    return Some((StorageTier::Tier1Nvme, nvme_path.clone()));
-                }
-                Some(_) => {}
-                None => {
-                    tracing::warn!(
-                        "storage-tier: cannot probe capacity of '{}'; \
-                         skipping Tier1Nvme for {} MB scratch",
-                        nvme_path.display(),
-                        required_mb,
-                    );
-                }
-            }
+        if let Some((tier, path)) = self.try_tier(
+            StorageTier::Tier1Nvme,
+            self.tier1_nvme_scratch.as_ref(),
+            required_mb,
+        ) {
+            return Some((tier, path));
         }
-
-        if let Some(ref shared_path) = self.tier2_shared_scratch {
-            match probe_available_mb(shared_path) {
-                Some(avail) if avail >= required_mb => {
-                    return Some((StorageTier::Tier2Shared, shared_path.clone()));
-                }
-                Some(_) => {}
-                None => {
-                    tracing::warn!(
-                        "storage-tier: cannot probe capacity of '{}'; \
-                         skipping Tier2Shared for {} MB scratch",
-                        shared_path.display(),
-                        required_mb,
-                    );
-                }
-            }
+        if let Some((tier, path)) = self.try_tier(
+            StorageTier::Tier2Shared,
+            self.tier2_shared_scratch.as_ref(),
+            required_mb,
+        ) {
+            return Some((tier, path));
         }
-
         None
+    }
+}
+
+impl StorageTierLadder {
+    /// Probe one tier rung. `None` on insufficient capacity or an
+    /// unprobeable path (warned once here so a fourth tier can never
+    /// forget the warning the first three carried).
+    fn try_tier(
+        &self,
+        tier: StorageTier,
+        path: Option<&std::path::PathBuf>,
+        required_mb: u64,
+    ) -> Option<(StorageTier, std::path::PathBuf)> {
+        let path = path?;
+        match probe_available_mb(path) {
+            Some(avail) if avail >= required_mb => Some((tier, path.clone())),
+            Some(_) => None, // Insufficient capacity — fall through.
+            None => {
+                tracing::warn!(
+                    "storage-tier: cannot probe capacity of '{}'; \
+                     skipping {} for {} MB scratch",
+                    tier.as_str(),
+                    path.display(),
+                    required_mb,
+                );
+                None
+            }
+        }
     }
 }
 

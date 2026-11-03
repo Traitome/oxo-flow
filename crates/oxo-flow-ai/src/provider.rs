@@ -11,6 +11,7 @@
 use crate::error::AiError;
 use crate::types::{
     AiResponse, Message, MessageRole, ToolCall, ToolDef, Usage, tool_calls_to_openai,
+    truncate_utf8_from_start,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,11 +65,22 @@ const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 /// connect timeout still fails fast on dead endpoints, so the longer wall
 /// only binds while a server is actively generating.
 fn provider_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    match reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(request_timeout_secs()))
         .build()
-        .unwrap_or_default()
+    {
+        Ok(client) => client,
+        // A default client carries NO timeout — the "a hung endpoint must
+        // not stall the agent loop forever" guarantee dies silently
+        // without this being on the record.
+        Err(e) => {
+            tracing::error!(
+                "failed to build the AI HTTP client with timeouts ({e});                  falling back to an UNBOUNDED default client"
+            );
+            reqwest::Client::default()
+        }
+    }
 }
 
 fn request_timeout_secs() -> u64 {
@@ -221,10 +233,17 @@ where
                 });
             }
             Err(StepFailure::HttpErrorBody(status, e)) => {
-                return Err(AiError::Provider {
-                    provider: provider.into(),
-                    message: mask(format!("HTTP {status} — {}", describe(e))),
-                });
+                // The body failed to decode (HTML gateway page, empty
+                // body), but the STATUS still carries provider semantics:
+                // a 429/401 must surface as RateLimited/Auth so the
+                // orchestrator's Retry-After behavior engages, instead of
+                // a generic parse failure that hides the real cause.
+                return Err(classify_http_error_with_retry_after(
+                    provider,
+                    status.as_u16(),
+                    &describe(e),
+                    None,
+                ));
             }
             Err(StepFailure::EmptyGatewayError(status)) if attempt >= backoffs.len() => {
                 return Err(AiError::RetryExhausted {
@@ -509,6 +528,21 @@ fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 /// Body matching is keyword-based: context-window markers map to
 /// [`AiError::ContextOverflow`] (retrying the same transcript is
 /// pointless), output-size markers to [`AiError::OutputLimit`].
+/// Best-effort error text out of a non-2xx JSON body: the standard
+/// `error.message` shape, then the bare-string / `message` / `detail`
+/// shapes third-party gateways (new-api/one-api class, FastAPI) actually
+/// answer with, then a truncated raw body — a non-standard gateway must
+/// never degrade the user's only clue to "unknown error".
+fn gateway_error_message(json: &serde_json::Value) -> String {
+    json["error"]["message"]
+        .as_str()
+        .or_else(|| json["error"].as_str())
+        .or_else(|| json["message"].as_str())
+        .or_else(|| json["detail"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate_utf8_from_start(&json.to_string(), 300).to_string())
+}
+
 pub fn classify_http_error(provider: &str, status: u16, body: &str) -> AiError {
     classify_http_error_with_retry_after(provider, status, body, None)
 }
@@ -703,7 +737,12 @@ impl ClaudeBackend {
         let (status, headers, json) = send_with_retry(
             self.client
                 .post(&self.api_url)
+                // Both credential headers: the official API reads
+                // x-api-key, while many Anthropic-compatible gateways
+                // (Bearer-only deployments) read Authorization — sending
+                // both is what Claude Code itself does.
                 .header("x-api-key", &self.api_key)
+                .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body),
@@ -716,11 +755,11 @@ impl ClaudeBackend {
         let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
-            let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
+            let err_msg = gateway_error_message(&json);
             return Err(classify_http_error_with_retry_after(
                 "claude",
                 status.as_u16(),
-                &mask_secret(err_msg, &self.api_key),
+                &mask_secret(&err_msg, &self.api_key),
                 retry_after,
             ));
         }
@@ -1085,6 +1124,27 @@ impl OpenAiBackend {
                     url
                 } else if url.contains("/v1") {
                     format!("{}/chat/completions", url.trim_end_matches('/'))
+                } else if url.rfind("/v").is_some_and(|i| {
+                    url[i + 2..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit())
+                }) {
+                    // A versioned base that is not /v1 (GLM's
+                    // /api/paas/v4, /v3, …) already carries its full
+                    // prefix — appending /v1 produced garbage URLs the
+                    // gateway answered 404 with no hint why. Callers can
+                    // still append the suffix by hand if their gateway
+                    // really hosts chat/completions under a v1 path
+                    // elsewhere.
+                    let final_url = format!("{}/chat/completions", url.trim_end_matches('/'));
+                    tracing::warn!(
+                        "openai-compatible API URL '{}' looks versioned but not /v1 — \
+                         using '{}' as-is",
+                        url,
+                        final_url
+                    );
+                    final_url
                 } else {
                     format!("{}/v1/chat/completions", url.trim_end_matches('/'))
                 }
@@ -1172,11 +1232,11 @@ impl OpenAiBackend {
         let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
-            let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
+            let err_msg = gateway_error_message(&json);
             return Err(classify_http_error_with_retry_after(
                 &self.label,
                 status.as_u16(),
-                &mask_secret(err_msg, &self.api_key),
+                &mask_secret(&err_msg, &self.api_key),
                 retry_after,
             ));
         }
@@ -1786,7 +1846,9 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
     // A credential only counts when it survives a trim: a whitespace-only
     // export is an unfinished setup, not a working backend, and letting it
     // win detection would bury a real credential for another provider.
-    let has_credential = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+    // Same trim-blank semantics as `usable_key` — call it so the two
+    // cannot drift (the inline closure used to be a hand-copied mirror).
+    let has_credential = |v: &Option<String>| usable_key(v).is_some();
     if has_credential(&env.anthropic_auth_token)
         || has_credential(&env.anthropic_api_key)
         || has_credential(&env.claude_api_key)
@@ -2360,14 +2422,13 @@ mod tests {
             1,
             "the 429 must not be replayed"
         );
+        // The status carries provider semantics even when the body is an
+        // undecodable HTML page — the surfaced error must be the
+        // RateLimited classification (engaging Retry-After handling), not
+        // a generic parse failure.
         match err {
-            AiError::Provider { message, .. } => {
-                assert!(
-                    message.contains("HTTP 429 Too Many Requests"),
-                    "the real status must surface, got: {message}"
-                );
-            }
-            other => panic!("expected Provider error, got {other:?}"),
+            AiError::RateLimited { .. } => {}
+            other => panic!("expected RateLimited, got {other:?}"),
         }
     }
 
@@ -2551,10 +2612,10 @@ mod tests {
             1,
             "the 401 must not be replayed"
         );
-        assert!(
-            matches!(err, AiError::Provider { ref message, .. } if message.contains("HTTP 401 Unauthorized")),
-            "got {err:?}"
-        );
+        // A 401 carries credential semantics even with an undecodable
+        // body — the Auth classification is what lets callers print a
+        // "check your key" hint instead of a parse failure.
+        assert!(matches!(err, AiError::Auth { .. }), "got {err:?}");
     }
 
     #[tokio::test]

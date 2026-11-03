@@ -2124,6 +2124,18 @@ impl EnvironmentResolver {
                 message: "singularity/apptainer is not installed or not in PATH".to_string(),
             });
         }
+        if env_spec.venv.is_some() && !self.venv.is_available() {
+            // Stock Debian/Ubuntu ships python3 WITHOUT python3-venv:
+            // advertising venv as available while every setup fails at
+            // pip bootstrap was the "lying probe" this availability check
+            // exists to kill (issue #315 review). Preflight must answer
+            // the same question the setup step will.
+            return Err(OxoFlowError::Environment {
+                kind: "venv".to_string(),
+                message: "python3 venv support is missing (install python3-venv / ensurepip)"
+                    .to_string(),
+            });
+        }
         Ok(())
     }
 }

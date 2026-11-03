@@ -80,6 +80,15 @@ export interface DagJson {
   nodes: DagJsonNode[];
   edges: DagJsonEdge[];
   parallel_groups?: Array<Array<string>>; critical_path?: Array<string>;
+  /** Aggregate shape metrics (Rust `DagMetrics` — always present on the response). */
+  metrics: {
+    node_count: number;
+    edge_count: number;
+    max_depth: number;
+    max_width: number;
+    critical_path_length: number;
+    parallel_group_count: number;
+  };
 }
 
 export interface KnowledgeTool {
@@ -272,17 +281,8 @@ export interface RunResponse {
     execution_order: string[];
   };
 }
-export interface RunDetail extends RunItem { workflow_name?: string; log_tail?: string; output_files?: string[]; }
 
 // ── v0.8 AI Companion Types ──
-
-// Data Perception
-export interface DataPerceptionReport {
-  data_level: number;
-  findings: Array<{ field: string; value: unknown; confidence: number; source: string; evidence: string }>;
-  warnings: string[];
-  suggestions: string[];
-}
 
 // DAG Edit
 export interface DagEditResponse {

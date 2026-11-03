@@ -126,10 +126,21 @@ async function getText(url: string, signal?: AbortSignal): Promise<string> {
   }
 }
 
+// Same auth/base-path/401 contract as request(), but for binary bodies the
+// caller consumes itself (blobs, Content-Disposition filenames).
+async function download(url: string, signal?: AbortSignal): Promise<Response> {
+  const res = await fetch(apiUrl(url), { headers: authHeaders(), signal });
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    redirectToLoginOn401();
+  }
+  if (!res.ok) throw await toApiError(res);
+  return res;
+}
+
 function get<T>(url: string, signal?: AbortSignal) { return request<T>(url, signal ? { signal } : undefined); }
-function post<T>(url: string, body: unknown) { return request<T>(url, { method: 'POST', body: JSON.stringify(body) }); }
-function put<T>(url: string, body: unknown) { return request<T>(url, { method: 'PUT', body: JSON.stringify(body) }); }
-function del<T>(url: string) { return request<T>(url, { method: 'DELETE' }); }
+function post<T>(url: string, body: unknown, signal?: AbortSignal) { return request<T>(url, { method: 'POST', body: JSON.stringify(body), signal }); }
+function put<T>(url: string, body: unknown, signal?: AbortSignal) { return request<T>(url, { method: 'PUT', body: JSON.stringify(body), signal }); }
+function del<T>(url: string, signal?: AbortSignal) { return request<T>(url, { method: 'DELETE', signal }); }
 
 export const api = {
   // ── Observability ──
@@ -266,8 +277,12 @@ export const api = {
   verifyRunProvenance: (id: string, signal?: AbortSignal) => get<ProvenanceVerifyResponse>(`/api/runs/${id}/provenance-verify`, signal),
   previewRunFile: (id: string, path: string, signal?: AbortSignal) =>
     get<FilePreviewResponse>(`/api/runs/${id}/files?path=${encodeURIComponent(path)}&preview=true`, signal),
-  getRunFileDownloadUrl: (id: string, path: string) =>
-    apiUrl(`/api/runs/${id}/files?path=${encodeURIComponent(path)}`),
+  // Binary artifact download with the session's auth/base-path handling —
+  // the bare <a href> links this replaced carried no Authorization header,
+  // so team/hpc mode answered 401 for every workdir download. Returns the
+  // raw Response so callers can read Content-Disposition for the filename.
+  downloadRunFile: (id: string, path: string, signal?: AbortSignal) =>
+    download(`/api/runs/${id}/files?path=${encodeURIComponent(path)}`, signal),
   aiStatus: (id: string, signal?: AbortSignal) => get<MonitorStatus>(`/api/runs/${id}/ai-status`, signal),
 
   // ── Report ──

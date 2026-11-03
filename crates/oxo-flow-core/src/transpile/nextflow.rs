@@ -152,9 +152,16 @@ pub fn parse_nextflow_processes(source: &str) -> Result<Vec<NextflowProcess>> {
         let mut in_string = false;
         let mut quote_char = ' ';
 
-        for (rel_idx, c) in chars {
+        let mut peek = chars.peekable();
+        while let Some((rel_idx, c)) = peek.next() {
             if in_string {
-                if c == quote_char {
+                if c == '\\' {
+                    // A backslash escapes the next character inside a
+                    // string (`echo "a\"b"`): without skipping it, a body
+                    // with an odd number of quote glyphs never closes and
+                    // the whole process was silently DROPPED.
+                    peek.next();
+                } else if c == quote_char {
                     in_string = false;
                 }
             } else if c == '"' || c == '\'' {
@@ -173,7 +180,17 @@ pub fn parse_nextflow_processes(source: &str) -> Result<Vec<NextflowProcess>> {
 
         let body_end = match body_end {
             Some(idx) => idx,
-            None => break,
+            // An unclosed body means malformed DSL or a scanner gap —
+            // silently dropping every remaining process made `import`
+            // report success for a fragment of the pipeline.
+            None => {
+                return Err(crate::error::OxoFlowError::Parse {
+                    path: std::path::PathBuf::from("<nextflow source>"),
+                    message: format!(
+                        "process '{process_name}' has no closing brace — cannot find the end of its body"
+                    ),
+                });
+            }
         };
 
         let body = &source[body_start..body_end];

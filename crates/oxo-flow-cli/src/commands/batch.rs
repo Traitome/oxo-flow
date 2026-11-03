@@ -321,6 +321,40 @@ fn format_shell_line(cmd: &str) -> Result<String> {
     Ok(format!("{rendered}\n"))
 }
 
+/// Map a `-e/--environment` spec (`conda: envs/x.yaml`, `docker: image`)
+/// onto the `[environment]` TABLE form `EnvironmentSpec` actually
+/// deserializes. The generator used to emit the string form verbatim, which
+/// `validate` rejected (`invalid type: string, expected struct
+/// EnvironmentSpec`) — every generated workflow was dead on arrival.
+/// Multi-token specs (`docker: --gpus all image`) and bare environment
+/// names have no faithful table form, so they are refused with a pointer
+/// at the manual edit instead of writing a broken file.
+fn environment_table(env: &str) -> Result<(&str, String)> {
+    let Some((kind, spec)) = env.split_once(':') else {
+        return Err(anyhow::anyhow!(
+            "bare environment name '{env}' cannot map to a workflow [environment] table — \
+             point at an env file instead (e.g. -e \"conda: envs/env.yaml\")"
+        ));
+    };
+    let kind = match kind.trim() {
+        "conda" | "mamba" | "pixi" | "docker" | "singularity" | "venv" => kind.trim(),
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported environment kind '{other}:' — expected conda/mamba/pixi/docker/singularity/venv"
+            ));
+        }
+    };
+    let spec = spec.trim();
+    if spec.is_empty() || spec.contains(char::is_whitespace) {
+        return Err(anyhow::anyhow!(
+            "environment spec '{env}' carries flags or extra tokens that have no [environment] \
+             table form — generate the workflow and add the flags by hand \
+             (e.g. environment = {{ docker = \"image\", gpus = \"all\" }})"
+        ));
+    }
+    Ok((kind, spec.to_string()))
+}
+
 pub fn generate_batch_workflow(
     template: &str,
     items: &[String],
@@ -331,6 +365,11 @@ pub fn generate_batch_workflow(
         .cloned()
         .unwrap_or_else(|| PathBuf::from("batch.oxoflow"));
 
+    let env_table = environment
+        .as_ref()
+        .map(|e| environment_table(e))
+        .transpose()?;
+
     let mut content = String::new();
     content.push_str("[workflow]\n");
     content.push_str("name = \"batch_workflow\"\n");
@@ -340,11 +379,26 @@ pub fn generate_batch_workflow(
         let cmd = expand_batch_template(template, item, i + 1);
         content.push_str("[[rules]]\n");
         content.push_str(&format!("name = \"batch_item_{}\"\n", i + 1));
-        if let Some(env) = environment {
-            content.push_str(&format!("environment = \"{}\"\n", env));
+        // Inline table form: a bare `[environment]` section header per
+        // [[rules]] element is rejected by the parser as a duplicate key,
+        // and the inline form keeps each rule self-contained. The value is
+        // a single token (environment_table refuses whitespace) rendered
+        // as an escaped TOML basic string.
+        if let Some((kind, spec)) = &env_table {
+            content.push_str(&format!(
+                "environment = {{ {} = \"{}\" }}\n",
+                kind,
+                escape_toml_string(spec)
+            ));
         }
         content.push_str(&format_shell_line(&cmd)?);
     }
+
+    // Validate with the real parser before writing — the same guard
+    // `oxo-flow import` applies to its transpiler output, so a generator
+    // regression can never again produce a file that fails `validate`.
+    oxo_flow_core::config::WorkflowConfig::parse(&content)
+        .with_context(|| "generated batch workflow failed oxo-flow parse validation")?;
 
     std::fs::write(&output_path, content)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
@@ -355,6 +409,12 @@ pub fn generate_batch_workflow(
         output_path.display()
     );
     Ok(())
+}
+
+/// Escape a value for a TOML basic string (the generated `environment`
+/// values are paths/image refs; quotes and backslashes are the real risks).
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]
@@ -398,5 +458,49 @@ mod tests {
         let _parsed: toml::Value = toml::from_str(&text)
             .unwrap_or_else(|e| panic!("generated file must be valid TOML: {e}\n{text}"));
         std::fs::remove_file(&out).ok();
+    }
+
+    #[test]
+    fn generated_workflow_environment_uses_table_form() {
+        // The string form (`environment = "conda: …"`) fails
+        // `EnvironmentSpec` deserialization — the generated file must carry
+        // the table form and parse with the real workflow parser.
+        let out = std::env::temp_dir().join(format!("batch-env-{}.toml", std::process::id()));
+        generate_batch_workflow(
+            "echo {}",
+            &["a.fastq".to_string(), "b.fastq".to_string()],
+            Some(&out),
+            Some(&"conda: envs/tools.yaml".to_string()),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        let parsed: toml::Value = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("generated file must be valid TOML: {e}\n{text}"));
+        for rule in parsed["rules"].as_array().expect("rules array") {
+            assert_eq!(
+                rule["environment"]["conda"],
+                toml::Value::String("envs/tools.yaml".to_string()),
+                "environment must be a table with the conda path\n{text}"
+            );
+        }
+        std::fs::remove_file(&out).ok();
+    }
+
+    #[test]
+    fn environment_specs_without_table_form_are_refused() {
+        // Multi-token docker specs and bare names cannot map onto
+        // EnvironmentSpec — refuse at generation time instead of writing a
+        // broken file.
+        let err = environment_table("docker: --gpus all image").unwrap_err();
+        assert!(err.to_string().contains("no [environment] table form"));
+        let err = environment_table("myenv").unwrap_err();
+        assert!(err.to_string().contains("conda: envs/env.yaml"));
+        let err = environment_table("python: x").unwrap_err();
+        assert!(err.to_string().contains("unsupported environment kind"));
+        // Single-token known kinds map cleanly.
+        assert_eq!(
+            environment_table("docker: biocontainers/bwa:0.7.17").unwrap(),
+            ("docker", "biocontainers/bwa:0.7.17".to_string())
+        );
     }
 }

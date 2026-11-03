@@ -17,9 +17,6 @@ pub enum AiError {
     #[error("AI response did not contain expected content")]
     EmptyResponse,
 
-    #[error("AI response did not contain valid TOML: {details}")]
-    InvalidToml { details: String },
-
     #[error("Tool '{tool}' execution failed: {message}")]
     ToolError { tool: String, message: String },
 
@@ -73,14 +70,6 @@ pub enum AiError {
     /// The provider rejected the requested output size.
     #[error("Output limit exceeded for {provider}: {message}")]
     OutputLimit { provider: String, message: String },
-}
-
-impl From<reqwest::Error> for AiError {
-    fn from(e: reqwest::Error) -> Self {
-        AiError::Network {
-            message: e.to_string(),
-        }
-    }
 }
 
 impl From<serde_json::Error> for AiError {

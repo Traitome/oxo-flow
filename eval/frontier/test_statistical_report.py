@@ -8,6 +8,7 @@ from statistical_report import (
     analyze_arms,
     generate_synthetic_benchmark_dataset,
     load_benchmark_results,
+    pass_at_k,
     render_markdown_report,
     validate_paired_dataset,
 )
@@ -74,6 +75,14 @@ class StatisticalReportTests(unittest.TestCase):
         dataset["arm_c"].append(dict(dataset["arm_c"][0]))
         with self.assertRaisesRegex(AnalysisError, "duplicate paired cell"):
             validate_paired_dataset(dataset)
+
+    def test_pass_at_k_empty_set_fails_closed(self):
+        # Regression: the `n - c < k` shortcut used to run before the domain
+        # guard, so an empty set estimated pass@1 as 1.0 instead of 0.0.
+        self.assertEqual(pass_at_k(0, 0, 1), 0.0)
+
+    def test_pass_at_k_k_exceeding_n_fails_closed(self):
+        self.assertEqual(pass_at_k(2, 2, 3), 0.0)
 
 
 if __name__ == "__main__":

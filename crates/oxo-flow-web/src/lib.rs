@@ -26,7 +26,6 @@ pub mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // License configuration (oxo-dual-licenser integration)
@@ -69,104 +68,6 @@ const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
 // ---------------------------------------------------------------------------
 // Rate limiting
 // ---------------------------------------------------------------------------
-
-/// Configuration for the in-memory rate limiter.
-#[derive(Debug, Clone)]
-pub struct RateLimiterConfig {
-    /// Maximum number of requests allowed within the window.
-    pub max_requests: u64,
-    /// Sliding window duration.
-    pub window: std::time::Duration,
-}
-
-impl Default for RateLimiterConfig {
-    fn default() -> Self {
-        Self {
-            max_requests: 100,
-            window: std::time::Duration::from_secs(60),
-        }
-    }
-}
-
-/// Simple in-memory rate limiter that tracks request timestamps per key (IP).
-#[derive(Debug, Clone)]
-pub struct RateLimiter {
-    config: RateLimiterConfig,
-    /// Maps a client key to a list of request timestamps within the current window.
-    entries: Arc<dashmap::DashMap<String, Vec<std::time::Instant>>>,
-}
-
-impl RateLimiter {
-    /// Create a new rate limiter with the given configuration.
-    pub fn new(config: RateLimiterConfig) -> Self {
-        Self {
-            config,
-            entries: Arc::new(dashmap::DashMap::new()),
-        }
-    }
-
-    /// Check whether a request from `key` is allowed.
-    ///
-    /// Returns `Ok(())` when the request is within the limit, or
-    /// `Err(remaining_secs)` with the number of seconds until the oldest
-    /// entry expires when the limit is exceeded.
-    pub fn check_rate_limit(&self, key: &str) -> Result<(), u64> {
-        let now = std::time::Instant::now();
-        let window_start = now - self.config.window;
-
-        let mut timestamps = self.entries.entry(key.to_owned()).or_default();
-
-        // Evict timestamps outside the sliding window.
-        timestamps.retain(|t| *t > window_start);
-
-        if timestamps.len() as u64 >= self.config.max_requests {
-            let retry_after = timestamps
-                .first()
-                .map(|t| {
-                    self.config
-                        .window
-                        .saturating_sub(now.duration_since(*t))
-                        .as_secs()
-                        + 1
-                })
-                .unwrap_or(1);
-            return Err(retry_after);
-        }
-
-        timestamps.push(now);
-        Ok(())
-    }
-}
-
-/// Response returned when the rate limit is exceeded.
-#[derive(Serialize, Deserialize)]
-pub struct RateLimitResponse {
-    pub error: String,
-    pub retry_after_secs: u64,
-}
-
-/// Login request body.
-#[derive(Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-/// Login response body.
-#[derive(Serialize, Deserialize)]
-pub struct LoginResponse {
-    pub token: String,
-    pub username: String,
-    pub role: String,
-}
-
-/// Response from `GET /api/auth/me`.
-#[derive(Serialize, Deserialize)]
-pub struct AuthMeResponse {
-    pub authenticated: bool,
-    pub username: Option<String>,
-    pub role: Option<String>,
-}
 
 /// License status response.
 #[derive(Serialize, Deserialize)]

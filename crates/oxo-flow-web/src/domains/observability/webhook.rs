@@ -55,35 +55,25 @@ impl Default for WebhookSettings {
 }
 
 pub async fn load_settings() -> Option<WebhookSettings> {
-    if let Some(backend) = crate::infra::db::global_backend()
-        && let Ok(Some(row)) = backend.get_webhook_config().await
-    {
-        let events: Vec<String> = serde_json::from_str(&row.events).unwrap_or_default();
-        return Some(WebhookSettings {
-            url: row.url,
-            secret: row.secret.map(|s| crate::infra::crypto::open(&s)),
-            enabled: row.enabled != 0,
-            events,
-            signature_scheme: row.signature_scheme,
-        });
-    }
-    let pool = crate::infra::db::sqlite::try_pool().ok()?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
-        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()?;
-    let events: Vec<String> = serde_json::from_str(&row.3).unwrap_or_default();
+    // The trait is the only read path — `global_backend()` itself falls back
+    // to the SQLite pool, so the raw-SQL twin that lived below this comment
+    // was unreachable duplicate semantics (the StorageBackend docs forbid
+    // adding raw-SQL paths beside it).
+    let backend = crate::infra::db::global_backend()?;
+    let row = backend
+        .get_webhook_config()
+        .await
+        .map_err(|e| tracing::warn!("webhook config read failed: {e}"))
+        .ok()??;
+    let events: Vec<String> = serde_json::from_str(&row.events).unwrap_or_default();
     Some(WebhookSettings {
-        url: row.0,
+        url: row.url,
         // `open` transparently passes legacy plaintext through (pre-sealing
         // rows, or deployments without OXO_FLOW_MASTER_KEY).
-        secret: row.1.map(|s| crate::infra::crypto::open(&s)),
-        enabled: row.2 != 0,
+        secret: row.secret.map(|s| crate::infra::crypto::open(&s)),
+        enabled: row.enabled != 0,
         events,
-        signature_scheme: row.4,
+        signature_scheme: row.signature_scheme,
     })
 }
 

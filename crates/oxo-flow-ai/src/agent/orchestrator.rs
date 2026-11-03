@@ -403,9 +403,22 @@ impl Orchestrator {
                             && let Some(ref wf_content) = ctx.workflow_content
                         {
                             // Archive the original workflow
-                            if let Ok(archive_path) =
-                                archive_before_modify(wf_path, wf_content, &session.id)
-                            {
+                            let archive_path =
+                                archive_before_modify(wf_path, wf_content, &session.id);
+                            if archive_path.is_err() {
+                                // The audit trail (before/after) is the
+                                // record that AI touched the user's
+                                // workflow — losing it silently would
+                                // break the review contract exactly where
+                                // it matters most. Loud warning; the
+                                // modification still ships.
+                                tracing::warn!(
+                                    "failed to archive {} before AI modification: {:?}",
+                                    wf_path.display(),
+                                    archive_path.as_ref().err()
+                                );
+                            }
+                            if let Ok(archive_path) = archive_path {
                                 // Record the modification
                                 modifications.push(Modification {
                                     timestamp: Utc::now(),
@@ -521,7 +534,10 @@ impl Orchestrator {
         let confidence = if rounds == 1 {
             0.90
         } else {
-            0.90 - (rounds as f64 * 0.05)
+            // Clamp to the documented 0.0–1.0 band: max_retries is
+            // user-configurable, and an unbounded decay goes negative
+            // past round 18.
+            (0.90 - (rounds as f64 * 0.05)).clamp(0.0, 1.0)
         };
 
         // Record messages in session (sanitized previews)

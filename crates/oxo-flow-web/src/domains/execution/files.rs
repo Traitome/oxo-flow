@@ -626,7 +626,13 @@ pub async fn get_run_file(
         .into_response();
     }
     if target.is_dir() {
-        match collect_zip_entries(&target) {
+        // collect_zip_entries walks the whole tree and CRC32s every file
+        // (up to MAX_ZIP_TOTAL_BYTES) — blocking IO that must not park the
+        // async worker (same #268 item 4 discipline as the 500-entry walk).
+        let zip_target = target.clone();
+        let zipped = tokio::task::spawn_blocking(move || collect_zip_entries(&zip_target)).await;
+        let zipped = zipped.unwrap_or_else(|e| Err(format!("zip task failed: {e}")));
+        match zipped {
             Ok(entries) => {
                 let dir_name = if q.path == "." {
                     workdir

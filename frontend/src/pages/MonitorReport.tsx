@@ -36,6 +36,12 @@ function trendColor(trend: string): string {
 // regex stays clear of the no-control-regex lint.
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
+// A request aborted on purpose (new selection / SSE refetch aborting an
+// in-flight load) is control flow, not a failure — never banner it.
+function isAbortError(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === 'AbortError';
+}
+
 // GET /api/runs/{id}/report returns ReportFile.path prefixed with the run's
 // workdir (e.g. "workspace/users/default/runs/<id>/results/summary.txt"),
 // whereas GET /api/runs/{id}/files?path=... resolves paths relative to the run
@@ -139,6 +145,8 @@ export default function MonitorReport() {
   const [provResult, setProvResult] = useState<ProvenanceVerifyResponse | null>(null);
   const [driftResult, setDriftResult] = useState<ProtectedDriftResponse | null>(null);
   const [filePreview, setFilePreview] = useState<FilePreviewResponse | null>(null);
+  // Path currently being downloaded (spinner + per-download disable).
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const { id: routeId } = useParams();
   const navigate = useNavigate();
@@ -177,7 +185,17 @@ export default function MonitorReport() {
     setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
     setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
     setPreview(prev.status === 'fulfilled' ? prev.value : null);
-  }, []);
+    // Rejections used to collapse into the same set(null) as an empty pane —
+    // an error was indistinguishable from "no data". Surface the first
+    // failure on the shared banner; aborted requests (SSE refetch racing an
+    // in-flight load) are not errors.
+    const failure = [status, report, dag, diag, prev].find(
+      (r) => r.status === 'rejected' && !isAbortError(r.reason),
+    );
+    if (failure) {
+      setActionError(describeApiError((failure as PromiseRejectedResult).reason, t('monitor.detailLoadFailed')));
+    }
+  }, [t]);
 
   const selectRun = useCallback(async (id: string) => {
     selectAbort.current?.abort();
@@ -345,9 +363,12 @@ export default function MonitorReport() {
 
     const interval = tab === 'monitor'
       ? setInterval(async () => {
+          // Same seq guard as fetchDetail: a slow poll for run A must not
+          // overwrite the state of a newer selection (issue #547 pattern).
+          const seq = selectSeq.current;
           try {
             const status = await api.aiStatus(selId);
-            setMonitorStatus(status);
+            if (seq === selectSeq.current) setMonitorStatus(status);
           } catch { /* ignore */ }
         }, 5000)
       : null;
@@ -370,7 +391,8 @@ export default function MonitorReport() {
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      // describeApiError keeps the backend's detail/suggestion hints visible.
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -382,7 +404,7 @@ export default function MonitorReport() {
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -395,7 +417,7 @@ export default function MonitorReport() {
       // reverted by the URL sync effect below.
       if (plan.new_run_id) navigate(`/runs/${plan.new_run_id}`);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -411,7 +433,7 @@ export default function MonitorReport() {
     } catch (err: unknown) {
       // A 409 (process already exited) or any other failure must be
       // visible — silence read as success.
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -463,6 +485,31 @@ export default function MonitorReport() {
     const a = document.createElement('a');
     a.href = url; a.download = `execution-${(selId ?? 'run').slice(0, 8)}.log`; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Workdir artifact download: fetch + Blob instead of a bare <a href> —
+  // the link carried no Authorization header, so team/hpc mode answered 401
+  // for every download. Filename comes from Content-Disposition when the
+  // server sends one, else the caller's fallback (file name / zip label).
+  const downloadRunArtifact = async (relPath: string, fallbackName: string) => {
+    if (!selId) return;
+    setDownloading(relPath);
+    try {
+      const res = await api.downloadRunFile(selId, relPath);
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') ?? '';
+      const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = m ? decodeURIComponent(m[1]) : fallbackName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setActionError(describeApiError(err, t('monitor.downloadFailed')));
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const renderLogs = () => (
@@ -596,7 +643,7 @@ export default function MonitorReport() {
                   setActionError(null);
                   navigate(`/runs/${res.run_id}`);
                 } catch (err: unknown) {
-                  setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+                  setActionError(describeApiError(err, t('common.unknownError')));
                 }
               }}>
               <StepForward size={14} />
@@ -611,7 +658,7 @@ export default function MonitorReport() {
                   setActionError(null);
                   void refreshRuns();
                 } catch (err: unknown) {
-                  setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+                  setActionError(describeApiError(err, t('common.unknownError')));
                 }
               }}>
               <Trash2 size={14} />
@@ -846,13 +893,14 @@ export default function MonitorReport() {
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: '6px' }}>
               <h4 style={{ fontSize: '0.85rem', margin: 0 }}>{t('monitor.outputFiles')}</h4>
               {selId && (
-                <a
-                  href={api.getRunFileDownloadUrl(selId, '.')}
+                <button
+                  type="button"
                   className="btn-sm"
-                  style={{ textDecoration: 'none' }}
+                  disabled={downloading !== null}
+                  onClick={() => void downloadRunArtifact('.', `${selId.slice(0, 8)}-results.zip`)}
                 >
-                  <Download size={13} /> {t('monitor.downloadZip')}
-                </a>
+                  {downloading === '.' ? <Loader2 size={13} className="spin" /> : <Download size={13} />} {t('monitor.downloadZip')}
+                </button>
               )}
             </div>
             <div style={{ maxHeight: '240px', overflow: 'auto', fontSize: '0.78rem' }}>
@@ -887,13 +935,14 @@ export default function MonitorReport() {
                                 <Eye size={12} /> {t('monitor.previewFile')}
                               </button>
                             )}
-                            <a
-                              href={api.getRunFileDownloadUrl(selId, relPath)}
+                            <button
+                              type="button"
                               className="btn-sm"
-                              style={{ textDecoration: 'none' }}
+                              disabled={downloading !== null}
+                              onClick={() => void downloadRunArtifact(relPath, f.name)}
                             >
-                              <Download size={12} /> {t('monitor.downloadFile')}
-                            </a>
+                              {downloading === relPath ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('monitor.downloadFile')}
+                            </button>
                           </div>
                         )}
                       </td>
@@ -1037,6 +1086,16 @@ export default function MonitorReport() {
         rule: {},
       })),
       edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+      // The status payload carries progress counters, not shape metrics; the
+      // canvas reads only nodes/edges — the rest stays at zero.
+      metrics: {
+        node_count: dagStatus.nodes.length,
+        edge_count: dagStatus.edges.length,
+        max_depth: 0,
+        max_width: 0,
+        critical_path_length: 0,
+        parallel_group_count: 0,
+      },
     };
   }, [dagStatus]);
   const statusById = useMemo(

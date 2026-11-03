@@ -16,7 +16,6 @@ pub struct SnakemakeRule {
     pub container: Option<String>,
     pub shell: String,
     pub temporary: bool,
-    pub protected: bool,
     pub temp_outputs: Vec<String>,
     pub protected_outputs: Vec<String>,
 }

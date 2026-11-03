@@ -342,6 +342,9 @@ export default function WorkflowCanvas({
 
   const handleDeleteKey = useCallback(
     (event: KeyboardEvent) => {
+      // Metro view keeps its own selection state; acting on the standard
+      // view's stale selected set here deleted nodes the user could not see.
+      if (viewMode !== 'standard') return;
       if (!editable || (event.key !== 'Delete' && event.key !== 'Backspace')) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
@@ -357,7 +360,7 @@ export default function WorkflowCanvas({
         if (selectedEdges.length > 0) onDisconnectRules?.(selectedEdges);
       }
     },
-    [editable, nodes, edges, onRemoveRules, onDisconnectRules],
+    [viewMode, editable, nodes, edges, onRemoveRules, onDisconnectRules],
   );
 
   useEffect(() => {
@@ -382,10 +385,8 @@ export default function WorkflowCanvas({
         <MetroCanvas
           dag={dag}
           editable={editable}
-          scopeKey={scopeKey}
           onEditRule={onEditRule}
           onConnectRules={onConnectRules}
-          onRemoveRules={onRemoveRules}
           statuses={statusById}
         />
         <div

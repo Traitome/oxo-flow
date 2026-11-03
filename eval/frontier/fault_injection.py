@@ -400,6 +400,23 @@ def assess_case(
     }
 
 
+def _run_capped(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    """subprocess.run under a 600 s cap (same ceiling as capture_workflow.py).
+
+    A hung engine check must not wedge the whole fault campaign: the timeout
+    is reported as a failed check (exit 124, the convention run_eval.py's
+    gates use) instead of surfacing as an uncaught exception.
+    """
+    try:
+        return subprocess.run(cmd, timeout=600, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        # POSIX run() re-raises without the partial streams, so they are
+        # usually None; handle captured str output defensively too.
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        return subprocess.CompletedProcess(cmd, returncode=124, stdout=stdout, stderr=stderr)
+
+
 def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
     """Evaluate each evidence stage independently for one controlled fault."""
     with tempfile.TemporaryDirectory(prefix="oxo_fault_") as tmpdir:
@@ -409,14 +426,14 @@ def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
         before_hash = _sha256(wf_path)
 
         # 1. Evaluate Static Pre-Execution Detection (lint --json & dry-run)
-        lint_res = subprocess.run(
+        lint_res = _run_capped(
             [binary, "lint", "--json", str(wf_path)],
             capture_output=True,
             text=True,
             cwd=tmp_path,
         )
 
-        dry_res = subprocess.run(
+        dry_res = _run_capped(
             [binary, "dry-run", str(wf_path)],
             capture_output=True,
             text=True,
@@ -429,7 +446,7 @@ def run_test_case(binary: str, case: FaultCase) -> Dict[str, Any]:
 
         if case.category == "infrastructure":
             # Run the workflow and pipe 'A\n' to abort any interactive prompt.
-            run_res = subprocess.run(
+            run_res = _run_capped(
                 [binary, "run", str(wf_path)],
                 input="A\n",
                 capture_output=True,

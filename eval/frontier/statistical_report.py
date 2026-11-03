@@ -8,7 +8,7 @@ fixture output is explicitly non-inferential.
 
 Metrics:
 1. pass@k estimation (unbiased combinatorial estimator, Chen et al. (HumanEval)).
-2. Empirical bootstrap 95% confidence intervals (BCa / percentile bootstrap).
+2. Empirical bootstrap 95% confidence intervals (percentile bootstrap).
 3. McNemar's paired test with continuity correction & two-tailed p-values.
 4. Token expenditure, cache hit ratios, and amortized computational costs.
 
@@ -42,11 +42,15 @@ def pass_at_k(n: int, c: int, k: int) -> float:
     """Computes unbiased pass@k estimator (Chen et al. (HumanEval)).
 
     pass@k = 1 - prod_{i=1}^k (n - c - i + 1) / (n - i + 1)
+
+    Degenerate inputs fail closed: an empty set (n <= 0) or k > n cannot
+    draw k samples, so the estimate is 0.0. That domain guard must run
+    before the `n - c < k` shortcut, or pass_at_k(0, 0, 1) would return 1.0.
     """
-    if n - c < k:
-        return 1.0
     if k > n or n <= 0:
         return 0.0
+    if n - c < k:
+        return 1.0
     product = 1.0
     for i in range(1, k + 1):
         product *= (n - c - i + 1) / (n - i + 1)

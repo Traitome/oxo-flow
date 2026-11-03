@@ -520,6 +520,13 @@ jobs:
       - name: Dependency policy check
         run: cargo deny check
 
+      # Mirrors `make aws-legacy-tripwire` (#658/#876): the legacy
+      # hyper-0.14 / rustls-0.21 / h2-0.3 stack must stay out of the
+      # s3-storage graph — the gate fails if it re-appears, so it cannot
+      # run only on maintainers' machines while CI stays green.
+      - name: AWS legacy-client tripwire
+        run: make aws-legacy-tripwire
+
       # Mirrors `make secrets`: gitleaks over the git history and the working
       # tree, with fixture allowlists from .gitleaks.toml (#557). gitleaks is
       # not in the taiki-e manifest, so install straight from the release

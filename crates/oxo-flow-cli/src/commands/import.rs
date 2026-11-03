@@ -35,6 +35,15 @@ pub fn handle_import(
 
     match output {
         Some(out_path) => {
+            // Same "generators never clobber" convention as init
+            // (--force) and `report --init-template`: silently overwriting
+            // a hand-edited pipeline destroys work with no undo.
+            if out_path.exists() {
+                anyhow::bail!(
+                    "refusing to overwrite existing '{}' — move it away or pass a different -o path",
+                    out_path.display()
+                );
+            }
             if let Some(parent) = out_path.parent()
                 && !parent.as_os_str().is_empty()
             {

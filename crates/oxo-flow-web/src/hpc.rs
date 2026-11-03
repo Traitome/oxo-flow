@@ -797,31 +797,6 @@ pub fn get_hpc_status() -> HpcStatus {
     }
 }
 
-/// Submit a job script to SLURM via sbatch.
-///
-/// Returns the job ID on success.
-pub fn submit_slurm_job(script_path: &str, job_name: &str, cpus: u32) -> Result<String, String> {
-    let output = Command::new("sbatch")
-        .args([
-            "--parsable",
-            "--job-name",
-            job_name,
-            "--cpus-per-task",
-            &cpus.to_string(),
-            script_path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run sbatch: {}", e))?;
-
-    if output.status.success() {
-        let job_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(job_id)
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("sbatch failed: {}", error))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

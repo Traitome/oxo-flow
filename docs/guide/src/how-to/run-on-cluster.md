@@ -164,10 +164,10 @@ plans, so a script maps back to a planned rule by name. The `sh -c '…' sh
 substituted when `apptainer` is absent.
 
 Note the workdir pinning at the top of each script (`--chdir` / `cd` /
-`-wd`): without it SLURM starts a job in the submission directory, PBS in
-`$HOME`, and SGE in a queue-configured directory, so a rule's relative
-output paths would silently land outside the run directory. The examples
-below show the pin for each backend.
+`-wd` / `-cwd`): without it SLURM starts a job in the submission
+directory, PBS in `$HOME`, and SGE in a queue-configured directory, so a
+rule's relative output paths would silently land outside the run
+directory. The examples below show the pin for each backend.
 
 ---
 
@@ -213,6 +213,7 @@ apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocont
 
 ```bash
 #!/bin/bash
+#BSUB -cwd /abs/path/to/workdir
 #BSUB -J align_batch_S1
 #BSUB -n 16
 #BSUB -R 'rusage[mem=33554432] span[hosts=1]'
@@ -230,9 +231,9 @@ apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocont
 The memory figure is explicit KB (`"32G"` = 32768 MB × 1024) because LSF's
 own default unit is KB; `span[hosts=1]` rides in the `-R` string so a
 multi-thread rule stays on one host. `-W 24:00` is the parsed form of the
-rule's `time_limit = "24h"` — LSF takes `[HH:]MM`. The workdir pin other
-backends need is implicit here: an LSF job starts in the directory the
-script was submitted from.
+rule's `time_limit = "24h"` — LSF takes `[HH:]MM`. The workdir pin is
+explicit here too: the generated script carries `#BSUB -cwd`, the same
+pinned-directory directive the other backends get.
 
 ---
 
@@ -482,19 +483,11 @@ built-in defaults are:
 | `max_array_size` | `1001` | The scheduler's array limit; larger scatter groups are chunked into several arrays |
 | `poll_interval` | `5s` | Delay between scheduler polls |
 
-Override them in the profile's `[cluster]` block:
-
-```toml
-[cluster]
-backend       = "slurm"   # required: slurm | pbs | sge | lsf
-partition     = "compute"
-account       = "lab01"
-walltime      = "24h"     # a rule's own time_limit wins
-max_submitted = 100
-max_array_size = 1001
-poll_interval = "30s"     # duration string
-extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim scheduler args
-```
+Override them in the profile's `[cluster]` block. The full annotated TOML
+example (every key, the driver default each omission falls back to, and
+where a rule's own `time_limit` wins) lives once in
+[Cluster submission](../commands/run.md#cluster-submission) — that copy is
+authoritative; this page only adds the driver-default semantics above.
 
 `extra_args` entries are emitted as scheduler directives **verbatim and
 unvalidated** — a typo reaches the scheduler as written (the same applies to

@@ -55,11 +55,34 @@ fn run_subcommand_flags() -> (
     (longs, shorts)
 }
 
-/// Run flags that `dry-run` also accepts as real command flags (issue
-/// #441: `--cache-dir` was added for run→dry-run transcription parity).
-/// When the swallowed-flag parser runs under `dry-run`, these names read
-/// as a misordered command flag, not "not supported".
-pub(crate) const DRY_RUN_SHARED_FLAGS: &[&str] = &["cache-dir"];
+/// Run flags that `dry-run` also accepts as real command flags — derived
+/// by intersecting the two clap subcommand definitions so the set cannot
+/// drift from main.rs (the hand-maintained copy had already fallen behind:
+/// it claimed `--profile`/`--samples` were run-only while dry-run accepts
+/// both). When the swallowed-flag parser runs under `dry-run`, these names
+/// read as a misordered command flag, not "not supported".
+pub(crate) fn dry_run_shared_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| {
+        use clap::CommandFactory;
+        let mut cmd = <crate::Cli as CommandFactory>::command();
+        cmd.build();
+        let longs_of = |name: &str| -> std::collections::BTreeSet<String> {
+            cmd.find_subcommand(name)
+                .map(|sub| {
+                    sub.get_arguments()
+                        .filter_map(|arg| arg.get_long())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let run = longs_of("run");
+        let dry = longs_of("dry-run");
+        run.intersection(&dry).cloned().collect()
+    })
+}
 
 /// Flags removed from `run`, mapped to their replacement.
 ///
@@ -293,7 +316,7 @@ pub(crate) fn parse_cli_overrides(
                 // Issue #441: dry-run shares some run flags for real
                 // (`--cache-dir`) — for those, a swallowed token is a
                 // misordered command flag, not an unsupported one.
-                let shared = command == "dry-run" && DRY_RUN_SHARED_FLAGS.contains(&flag_name);
+                let shared = command == "dry-run" && dry_run_shared_flags().contains(flag_name);
                 if shared {
                     format!(
                         "'{flag}' is a command flag, not a config override.\n  \
@@ -1043,5 +1066,28 @@ shell = "true"
         let msg = format!("{err}");
         assert!(msg.contains("unknown argument"), "{msg}");
         assert!(msg.contains("dry-run"), "{msg}");
+    }
+
+    #[test]
+    fn dry_run_shared_flags_match_the_clap_intersection() {
+        // The shared set is the Run∩DryRun clap intersection; pin the
+        // members the hand-maintained copy got wrong (`--profile`/
+        // `--samples` were reported "not supported" while dry-run accepts
+        // both) and one genuinely run-only flag.
+        let shared = dry_run_shared_flags();
+        for flag in [
+            "profile",
+            "samples",
+            "target",
+            "cache-dir",
+            "module",
+            "skip-ref-build",
+        ] {
+            assert!(shared.contains(flag), "--{flag} must be shared: {shared:?}");
+        }
+        assert!(
+            !shared.contains("allow-protected-drift"),
+            "run-only flags must stay out: {shared:?}"
+        );
     }
 }

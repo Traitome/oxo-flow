@@ -176,7 +176,11 @@ pub async fn validate_command(
                                 e
                             );
                         }
-                        std::process::exit(1);
+                        // Bail (not process::exit) — same contract as the
+                        // parse-failure path below: `test --json` composes
+                        // steps into ONE aggregate document, and an inner
+                        // exit bypassed emit_test_json entirely (audit #666).
+                        anyhow::bail!("workflow DAG construction failed");
                     }
                 }
             };

@@ -253,13 +253,6 @@ pub struct RunConfig {
     pub max_jobs: Option<usize>,
     pub dry_run: Option<bool>,
     pub keep_going: Option<bool>,
-    pub resource_budget: Option<ResourceBudget>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ResourceBudget {
-    pub max_memory: Option<String>,
-    pub max_threads: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

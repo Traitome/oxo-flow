@@ -31,10 +31,6 @@ pub struct OwnerCollision {
     pub path: String,
 }
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
     /// Reject user-declared sample groups named `auto-discovered` — the
     /// engine's own group for `sample_pattern` discovery results

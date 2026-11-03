@@ -27,7 +27,6 @@ function usePlaceholders(t: (key: string) => string): Record<ChatContextType, st
 interface ChatUIProps {
   context?: ChatContextType;
   onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
-  onDataReport?: (report: Record<string, unknown>) => void;
 }
 
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {

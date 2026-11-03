@@ -34,9 +34,6 @@ export default function Login() {
     try {
       const res = await api.login(username.trim(), password);
       localStorage.setItem('oxo_token', res.token);
-      // The username is the SSE stream's identity in personal-mode fallback
-      // (server-side filtering needs no client state in team mode).
-      localStorage.setItem('oxo_user_id', username.trim());
       // #907 T1: Layout stays mounted across this client-side navigate(), so
       // its mount-time authMe would leave the identity chip stale. Notify it.
       window.dispatchEvent(new Event('oxo:auth-changed'));

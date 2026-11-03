@@ -494,7 +494,6 @@ values = ["s1", "s2"]
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let err = create_run(toml, &config, None).expect_err("reserved name must fail");
         assert!(
@@ -540,7 +539,6 @@ inputs = { default = "bam_sorted_indexed" }
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let err = create_run(toml, &config, None)
             .expect_err("web admission must reject declared type violations");
@@ -674,7 +672,6 @@ output = ["hi.txt"]
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(resp.execution_plan.total_rules, 1);
@@ -709,7 +706,6 @@ output = ["qc.txt"]
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(
@@ -751,7 +747,6 @@ output = ["b.txt"]
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(resp.estimated_resources.max_memory_mb, 8192);
@@ -772,7 +767,6 @@ output = ["hi.txt"]
             max_jobs: Some(2),
             dry_run: None,
             keep_going: None,
-            resource_budget: None,
         };
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(resp.estimated_resources.max_memory_mb, 1024);

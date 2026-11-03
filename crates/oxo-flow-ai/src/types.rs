@@ -272,26 +272,6 @@ pub fn tool_calls_to_openai(tool_calls: &[ToolCall]) -> serde_json::Value {
     )
 }
 
-/// Parse tool calls from OpenAI-compatible API response.
-pub fn tool_calls_from_openai(json: &serde_json::Value) -> Option<Vec<ToolCall>> {
-    json.as_array().map(|arr| {
-        arr.iter()
-            .filter_map(|tc| {
-                let func = tc.get("function")?;
-                Some(ToolCall {
-                    id: tc.get("id")?.as_str()?.to_string(),
-                    name: func.get("name")?.as_str()?.to_string(),
-                    arguments: func
-                        .get("arguments")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("{}")
-                        .to_string(),
-                })
-            })
-            .collect()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,24 +297,6 @@ mod tests {
         let json = tool_calls_to_openai(&calls);
         assert_eq!(json[0]["id"], "call_1");
         assert_eq!(json[0]["function"]["name"], "read_file");
-    }
-
-    #[test]
-    fn tool_call_parsing() {
-        let json = serde_json::json!([
-            {
-                "id": "call_abc",
-                "type": "function",
-                "function": {
-                    "name": "lookup_tool",
-                    "arguments": "{\"tool\": \"STAR\"}"
-                }
-            }
-        ]);
-        let parsed = tool_calls_from_openai(&json).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].name, "lookup_tool");
-        assert_eq!(parsed[0].arguments, r#"{"tool": "STAR"}"#);
     }
 
     #[test]

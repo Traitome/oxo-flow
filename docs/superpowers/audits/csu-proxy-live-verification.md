@@ -1,6 +1,10 @@
 # CSU AI proxy — live verification of PR #997 AI provider stack (2026-11-03)
 
-Endpoint: http://biotree.top:38123/csuapi/ (key held in ~/.oxo-flow/ai-env.sh, never committed)
+> Endpoint privacy: the real proxy host and the API key live only in local
+> env (e.g. `~/.oxo-flow/ai-env.sh`) and are never committed — this file
+> refers to the endpoint through the `<internal-proxy>` placeholder.
+
+Endpoint: http://<internal-proxy>/csuapi/ (key held in ~/.oxo-flow/ai-env.sh, never committed)
 
 ## Endpoint surface discovery
 - `GET /v1/models` → OpenAI-compatible only. Models: `GLM`, `DeepSeek`, `Qwen`, `Embedding`, `Reranker`
@@ -51,7 +55,7 @@ last session (the `AiError::ContextOverflow` classification in
 
 ## Operator recipe for this proxy (recorded for docs)
 OXO_FLOW_AI_PROVIDER=claude
-ANTHROPIC_BASE_URL=http://biotree.top:38123/csuapi/v1/messages
+ANTHROPIC_BASE_URL=http://<internal-proxy>/csuapi/v1/messages
 ANTHROPIC_MODEL=GLM            (or DeepSeek/Qwen; capitalized)
 OXO_FLOW_AI_CONTEXT_TOKENS=131072
 OXO_FLOW_AI_MAX_TOKENS=16384   (default; thinking budget needs it)

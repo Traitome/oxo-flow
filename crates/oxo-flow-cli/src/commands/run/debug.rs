@@ -72,11 +72,6 @@ logical errors. Output format per rule:
         }
     }
 
-    // One placeholder map shared by every consumer below (AI analysis, DAG
-    // build, rule dump) — all expand from the same config, so they must see
-    // the same values.
-    let wildcard_values = config_placeholder_values(&config.config);
-
     let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values)
         .context("failed to build workflow DAG")?;
 

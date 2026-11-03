@@ -1,5 +1,16 @@
 export type MetroGranularity = 'rule' | 'process' | 'module';
 
+/** Zoom threshold under which metro stations render as compact glyphs. */
+export const METRO_COMPACT_ZOOM = 0.55;
+
+/** Band the metro canvas quantizes the continuous viewport zoom into before
+ *  it may influence node data — the compact/detailed switch is the only
+ *  zoom-sensitive visual, and a continuous value in the layout memo re-ran
+ *  Sugiyama (O(V·E)) and reset node positions on every wheel tick. */
+export function metroZoomBand(zoom: number): 0 | 1 {
+  return zoom < METRO_COMPACT_ZOOM ? 0 : 1;
+}
+
 export type BioModality =
   | 'genomics'
   | 'transcriptomics'

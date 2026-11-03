@@ -16,6 +16,10 @@
 //!   used in commands, `reference_dir`-derived tool indexes, and
 //!   `[[references]]` outputs. Data can arrive later (issue #63), so a
 //!   missing path is a warning.
+//! - **D005 (warning)** — biological source files are introspected against
+//!   their `[types]` declarations (`crate::types`), so a header that will
+//!   fail the engine's BioTypes contract (format, sort order, read-group
+//!   tags, compression) is named before the run starts.
 //!
 //! All relative paths resolve against `base_dir` — the directory the
 //! executor runs rules from (the workflow file's directory, or `--workdir`).

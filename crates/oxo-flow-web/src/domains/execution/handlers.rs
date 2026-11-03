@@ -378,27 +378,22 @@ pub async fn create_run(
             )
         }
     })?;
-    // Issue #213: dedicated budget for expensive run creation — separate
-    // from the global per-minute request limiter so health checks / reads
-    // cannot crowd it out (and vice versa).
-    if let Err(wait_secs) = run_rate_limit::check(
-        authenticated
-            .as_ref()
-            .map(|e| e.0.id.as_str())
-            .unwrap_or("anonymous"),
-    ) {
-        return Err(rate_limited_error(wait_secs));
-    }
-
     let user = current_user::resolve(authenticated.as_ref());
     require_run_mutator(&user)?;
     let toml = req.toml_content.as_str();
+    // Issue #213: dedicated budget for expensive run creation — separate
+    // from the global per-minute request limiter so health checks / reads
+    // cannot crowd it out (and vice versa). Checked through the same
+    // `check_spawn_budget` the retry/resume paths use: a hand-rolled copy
+    // here keyed every personal-mode call into an "anonymous" bucket while
+    // retry/resume keyed the user id, so the per-minute limits stacked.
+    let quota_usage = quota_usage_for(toml);
+    check_spawn_budget(&user.id, quota_usage)?;
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
         max_jobs: Some(max_jobs),
         dry_run: req.dry_run,
         keep_going: req.keep_going,
-        resource_budget: None,
     };
 
     // Optional remote execution: a configured SSH cluster connection makes
@@ -431,22 +426,8 @@ pub async fn create_run(
         ));
     }
 
-    // Quota enforcement (issue #82 P1-9): the tracker was fully
-    // implemented but never consulted — every run must pre-flight its
-    // resource reservation.
-    let quota_usage = quota_usage_for(toml);
-    let quota =
-        crate::infra::quota::global_quota_tracker().check(&user.id, quota_usage.0, quota_usage.1);
-    if !quota.allowed {
-        return Err(err(
-            StatusCode::TOO_MANY_REQUESTS,
-            "QUOTA_EXCEEDED",
-            format!(
-                "Quota exceeded: {} — see /api/quota for limits",
-                quota.violations.join("; ")
-            ),
-        ));
-    }
+    // Quota enforcement (issue #82 P1-9) rides the shared check_spawn_budget
+    // above; the hand-rolled copy that lived here is gone.
 
     // Validate BEFORE anything is persisted: `validate_config_overrides`
     // and the two pure include-key gates below answer 400s, and a 400 must
@@ -608,8 +589,35 @@ pub async fn create_run(
             created_at: now_iso(),
             workflow_name: Some(workflow_name),
         };
-        if let Err(e) = backend.create_run(&run).await {
-            tracing::error!("Failed to persist run {} to database: {e}", run.id);
+        // The guarded insert is the atomic workdir claim (same contract as
+        // retry/resume-checkpoint): a saved pipeline reuses its persistent
+        // workdir, so two concurrent "run again" clicks used to produce two
+        // `queued` rows and two CLIs on one checkpoint. The loser answers
+        // 409. An insert failure also stops the spawn here — swallowing it
+        // (the old behavior) launched a ghost run the list endpoints could
+        // never see or cancel.
+        let claim = backend.create_run_if_workdir_idle(&run).await;
+        match claim {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "RUN_NOT_TERMINAL",
+                    format!(
+                        "another run is already active in this workdir — wait for it to \
+                         finish (or cancel it) before starting pipeline run {}",
+                        run.id
+                    ),
+                ));
+            }
+            Err(e) => {
+                tracing::error!("DB error inserting run {}: {e}", run.id);
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                ));
+            }
         }
 
         // Stage the acting user's uploaded inputs into the run workspace

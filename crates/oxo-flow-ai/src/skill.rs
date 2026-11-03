@@ -166,13 +166,21 @@ fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
             continue;
         }
         let skill_md = path.join("SKILL.md");
-        let Ok(content) = std::fs::read_to_string(&skill_md) else {
-            continue;
+        let content = match std::fs::read_to_string(&skill_md) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("skipping unreadable skill file {}: {e}", skill_md.display());
+                continue;
+            }
         };
-        if let Some(manifest) = parse_skill_md(&content)
-            && manifest.validate().is_ok()
-        {
-            manifests.push(manifest);
+        match parse_skill_md(&content).filter(|m| m.validate().is_ok()) {
+            Some(manifest) => manifests.push(manifest),
+            // A skill the user dropped in that silently never loads is a
+            // support ticket generator — say why it was skipped.
+            None => tracing::warn!(
+                "skipping skill {}: malformed SKILL.md or failed validation",
+                skill_md.display()
+            ),
         }
     }
     manifests
@@ -185,7 +193,11 @@ pub fn parse_skill_md(content: &str) -> Option<SkillManifest> {
     // Fence split must be line-anchored: a `---` inside a frontmatter
     // value (e.g. `description: A --- B`) is content, not the closing
     // fence — splitting on the first substring truncates the header.
-    let rest = content.strip_prefix("---\n")?;
+    // Tolerate CRLF: a SKILL.md edited on Windows opens with "---\r\n",
+    // and a silent parse failure there meant the skill never loaded.
+    let rest = content
+        .strip_prefix("---\r\n")
+        .or_else(|| content.strip_prefix("---\n"))?;
     // Closing fence must be a whole line: a `---` inside a frontmatter
     // value is content, not the terminator. The degenerate `---\n---`
     // (empty header, no trailing newline) has no body either — treat both

@@ -3,12 +3,20 @@
 // that matter (name, command, inputs, outputs, threads, memory,
 // environment). Cards round-trip through the backend parser — the TOML
 // stays the single source of truth and the canvas stays in sync.
+//
+// Write-back splices instead of regenerating: cardsToToml takes the current
+// document as its base and replaces ONLY the rules sections, patching
+// name/version into the existing [workflow] header. Everything the card
+// model does not express ([engine], [ai], [config], depends_on, when,
+// script, resources.*, …) is carried over verbatim — an edit used to
+// rewrite the whole file and silently drop it.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import Glossary from './Glossary';
 import { useI18n } from '../context/I18n';
+import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
 
 interface RuleCard {
   name: string;
@@ -18,6 +26,12 @@ interface RuleCard {
   threads: string;
   memory: string;
   environment: string;
+  // Raw TOML this UI does not model, captured at import: the original rule's
+  // unmanaged statements (depends_on, when, script, tags, resources.* …)
+  // plus any `[rules.*]` sub-table sections attached to it. Emitted verbatim
+  // on write-back so a card edit keeps them.
+  originalBody: string[];
+  originalTails: string;
 }
 
 interface GuidedRuleBuilderProps {
@@ -33,7 +47,22 @@ const EMPTY_CARD: RuleCard = {
   threads: '',
   memory: '',
   environment: 'system',
+  originalBody: [],
+  originalTails: '',
 };
+
+// Keys the card fields fully own: regenerated from the model on every
+// write-back, so they must NOT also ride along from the original text (a
+// kept duplicate would conflict with the edited value).
+const CARD_MANAGED_KEYS = new Set(['name', 'input', 'output', 'threads', 'memory', 'environment', 'shell']);
+
+// Top-level key of a TOML statement, bare or quoted (dotted keys like
+// `resources.memory` come back whole). Returns '' when the text does not
+// look like a key = value statement (comments, continuations).
+function statementKey(stmt: string): string {
+  const m = stmt.match(/^[ \t]*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))[ \t]*=/);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? '') : '';
+}
 
 // Escape a value for interpolation into a TOML basic string: a raw quote
 // or backslash in a name/path used to emit UNPARSEABLE TOML, silently
@@ -43,8 +72,95 @@ function tomlEscape(value: string): string {
   return value.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: string): string {
-  const rules = cards
+// Extract, per [[rules]] entry in document order, the TOML the card model
+// does not own: statements whose key is not card-managed, plus any
+// `[rules.*]` sub-table section (TOML array-of-tables semantics: a
+// `[rules.resources]` header belongs to the most recent [[rules]] entry).
+function rulePreserved(toml: string): Array<{ statements: string[]; tails: string }> {
+  const sections = scanTomlTopLevelSections(toml);
+  const bodies: string[] = [];
+  const tails: string[] = [];
+  let current = -1;
+  for (const sec of sections) {
+    if (sec.isArrayTable && sec.name === 'rules') {
+      current = bodies.length;
+      bodies.push(toml.slice(sec.bodyStart, sec.end));
+      tails.push('');
+      continue;
+    }
+    if (current >= 0 && sec.name.startsWith('rules.')) {
+      tails[current] += toml.slice(sec.headerLineStart, sec.end);
+    }
+  }
+  return bodies.map((body, i) => ({
+    statements: splitSectionStatements(body)
+      .map((s) => s.trim())
+      .filter((s) => s !== '' && !CARD_MANAGED_KEYS.has(statementKey(s))),
+    tails: tails[i],
+  }));
+}
+
+// Render a card's preserved TOML. threads/memory exist in two spellings
+// (rule-level shorthand and resources.*) — when the card now carries a
+// value, the original spelling is dropped so exactly one definition is
+// emitted (rule.rs: the shorthand IS resources.threads/resources.memory);
+// when the card leaves the field blank, the original rides along untouched.
+function preservedToml(card: RuleCard): string {
+  const ownsThreads = card.threads.trim() !== '';
+  const ownsMemory = card.memory.trim() !== '';
+  const statements = card.originalBody.filter((s) => {
+    const key = statementKey(s);
+    if (ownsMemory && key === 'resources.memory') return false;
+    if (ownsThreads && key === 'resources.threads') return false;
+    return true;
+  });
+  let tails = card.originalTails;
+  if (tails && (ownsThreads || ownsMemory)) {
+    // Strip the same leaf keys from `[rules.*]` sub-table bodies.
+    tails = tails
+      .split('\n')
+      .filter((line) => {
+        const m = line.match(/^[ \t]*(threads|memory)[ \t]*=/);
+        if (!m) return true;
+        return m[1] === 'threads' ? !ownsThreads : !ownsMemory;
+      })
+      .join('\n');
+  }
+  return [...statements, tails].map((s) => s.trim()).filter(Boolean).join('\n');
+}
+
+// Patch name/version into the ORIGINAL [workflow] section span instead of
+// rebuilding it, so description and any other workflow keys survive.
+function patchWorkflowMeta(span: string, name: string, version: string): string {
+  const nl = span.indexOf('\n');
+  const header = nl === -1 ? span : span.slice(0, nl + 1);
+  const bodySrc = nl === -1 ? '' : span.slice(nl + 1);
+  const stmts = splitSectionStatements(bodySrc);
+  const nameLine = `name = "${tomlEscape(name)}"`;
+  const versionLine = `version = "${tomlEscape(version)}"`;
+  const nameIdx = stmts.findIndex((s) => statementKey(s) === 'name');
+  if (nameIdx !== -1) {
+    stmts[nameIdx] = nameLine;
+    const versionIdx = stmts.findIndex((s) => statementKey(s) === 'version');
+    if (versionIdx !== -1) stmts[versionIdx] = versionLine;
+    else stmts.splice(nameIdx + 1, 0, versionLine);
+  } else {
+    const versionIdx = stmts.findIndex((s) => statementKey(s) === 'version');
+    if (versionIdx !== -1) stmts[versionIdx] = versionLine;
+    else stmts.unshift(versionLine);
+    stmts.unshift(nameLine);
+  }
+  if (stmts.length === 0) return header;
+  let body = stmts.join('\n');
+  // Every original statement was newline-terminated; the trailing ''
+  // statement stands for the blank separator line before the next header.
+  if (bodySrc.endsWith('\n') && !body.endsWith('\n')) body += '\n';
+  if (stmts[stmts.length - 1] === '') body += '\n';
+  return header + body;
+}
+
+function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: string, originalToml: string): string {
+  const rulesBlock = cards
     .filter((c) => c.name.trim() !== '')
     .map((c) => {
       const lines: string[] = ['[[rules]]', `name = "${tomlEscape(c.name)}"`];
@@ -66,11 +182,50 @@ function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: s
       // backslashes before quotes so the shell round-trips verbatim.
       const shell = c.shell.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       lines.push(`shell = """${shell}"""`);
+      const preserved = preservedToml(c);
+      if (preserved) lines.push(preserved);
       return lines.join('\n');
     })
     .join('\n\n');
 
-  return `[workflow]\nname = "${tomlEscape(workflowName)}"\nversion = "${tomlEscape(workflowVersion)}"\n\n${rules}\n`;
+  const sections = scanTomlTopLevelSections(originalToml);
+  if (sections.length === 0) {
+    return `[workflow]\nname = "${tomlEscape(workflowName)}"\nversion = "${tomlEscape(workflowVersion)}"\n\n${rulesBlock}\n`;
+  }
+
+  const wf = sections.find((s) => !s.isArrayTable && s.name === 'workflow');
+  const wfSpan = wf ? patchWorkflowMeta(originalToml.slice(wf.headerLineStart, wf.end), workflowName, workflowVersion) : '';
+
+  const out: string[] = [];
+  // Root-level keys before the first section header stay verbatim.
+  out.push(originalToml.slice(0, sections[0].headerLineStart));
+  if (!wf) {
+    out.push(`[workflow]\nname = "${tomlEscape(workflowName)}"\nversion = "${tomlEscape(workflowVersion)}"\n\n`);
+  }
+  let rulesPlaced = false;
+  for (const sec of sections) {
+    if (sec === wf) {
+      out.push(wfSpan);
+      continue;
+    }
+    // [[rules]] entries and their `[rules.*]` sub-tables are rebuilt from
+    // the card model (sub-tables ride along inside each card's preserved
+    // TOML); every other section is emitted verbatim.
+    if (sec.isArrayTable && sec.name === 'rules') {
+      if (!rulesPlaced) {
+        out.push(rulesBlock ? `${rulesBlock}\n\n` : '');
+        rulesPlaced = true;
+      }
+      continue;
+    }
+    if (sec.name.startsWith('rules.')) continue;
+    out.push(originalToml.slice(sec.headerLineStart, sec.end));
+  }
+  if (!rulesPlaced && rulesBlock) {
+    // The original had no [[rules]] — append at the end of the document.
+    out.push(`\n${rulesBlock}\n`);
+  }
+  return out.join('').replace(/\n+$/, '\n');
 }
 
 export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderProps) {
@@ -87,6 +242,9 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
   useEffect(() => {
     if (toml === lastEmitted.current) return;
     let cancelled = false;
+    // Captured from the same document the parse below validates: the raw
+    // statements/sub-tables each card must carry through its next edit.
+    const preserved = rulePreserved(toml);
     api
       .parse(toml)
       .then((parsed) => {
@@ -107,7 +265,7 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
           }),
         );
         setCards(
-          parsed.rules.map((r) => ({
+          parsed.rules.map((r, i) => ({
             name: r.name,
             shell: r.shell ?? '',
             inputs: r.inputs,
@@ -115,6 +273,8 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
             threads: (r.threads ?? 0) > 0 ? String(r.threads) : '',
             memory: memoryByRule.get(r.name) ?? '',
             environment: r.environment || 'system',
+            originalBody: preserved[i]?.statements ?? [],
+            originalTails: preserved[i]?.tails ?? '',
           })),
         );
       })
@@ -125,15 +285,15 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
   const updateCards = useCallback(
     (next: RuleCard[]) => {
       setCards(next);
-      const generated = cardsToToml(next, workflowName, workflowVersion);
+      const generated = cardsToToml(next, workflowName, workflowVersion, toml);
       lastEmitted.current = generated;
       onChange(generated);
     },
-    [workflowName, workflowVersion, onChange],
+    [workflowName, workflowVersion, toml, onChange],
   );
 
   const emitMeta = (name: string, version: string) => {
-    const generated = cardsToToml(cards, name, version);
+    const generated = cardsToToml(cards, name, version, toml);
     lastEmitted.current = generated;
     onChange(generated);
   };

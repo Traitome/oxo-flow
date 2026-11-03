@@ -9,7 +9,7 @@ confidence intervals can be computed from run IDs and seeds.
 No output from the projection path may be described as empirical evidence.
 
 Usage:
-  python3 eval/benchmarks/hardware_scaling.py --allow-simulation [--cohort-size 1000]
+  python3 eval/benchmarks/hardware_scaling.py --allow-simulation [--cohort-size 10000]
   python3 eval/benchmarks/hardware_scaling.py --measurements-json measurements.json
 """
 
@@ -96,7 +96,7 @@ def detect_system_topology() -> Dict[str, Any]:
 
 
 def model_hardware_scaling_projection(
-    cohort_size: int = 1000,
+    cohort_size: int = 10000,
 ) -> List[HardwareBenchmarkResult]:
     """Project three regimes from fixed assumptions, not measured telemetry."""
     # Baseline: Default OS scheduler on monolithic NFS (incumbent Nextflow/Snakemake behavior)

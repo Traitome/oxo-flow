@@ -723,25 +723,35 @@ pub async fn oauth_callback(
     }
 
     let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
-    match crate::infra::db::global_backend() {
-        Some(backend) => {
-            if let Err(e) = backend
-                .create_session(&oauth_user_id, &result.token, &expires.to_rfc3339())
-                .await
-            {
-                tracing::error!(
-                    "Failed to persist OAuth session for user '{}': {e}",
-                    result.username
-                );
-            }
-        }
-        None => {
+    // Same contract as login: a session that cannot be persisted must not
+    // come back as 200 + a dead token — every subsequent request would 401
+    // with no hint the server was at fault. Answer 503 so the client knows
+    // the callback failed server-side.
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        tracing::error!(
+            "Failed to persist OAuth session for user '{}': database backend unavailable",
+            result.username
+        );
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+    backend
+        .create_session(&oauth_user_id, &result.token, &expires.to_rfc3339())
+        .await
+        .map_err(|e| {
             tracing::error!(
-                "Failed to persist OAuth session for user '{}': database backend unavailable",
+                "Failed to persist OAuth session for user '{}': {e}",
                 result.username
             );
-        }
-    }
+            err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     Ok(Json(result))
 }

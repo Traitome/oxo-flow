@@ -467,11 +467,20 @@ impl FetchUrlTool {
         Self {
             // Shared client for pin-free targets; DNS-resolved hops build a
             // short-lived pinned client per request instead (see `validated_get`).
-            // A builder failure here falls back to reqwest's DEFAULT client —
-            // unbounded, redirect-following — so the pin-free shared client is
-            // exactly as trustworthy as the default ever was; per-request
-            // pinned hops (the security-relevant path) still fail closed.
-            client: fetch_client(None).unwrap_or_default(),
+            // Fail closed: reqwest's DEFAULT client follows up to 10
+            // redirects automatically, which would bypass the per-request
+            // pinned-hop re-screening this tool exists to enforce (#642).
+            // A builder failure therefore disables the tool rather than
+            // silently downgrading to an unfiltered client.
+            client: fetch_client(None).unwrap_or_else(|e| {
+                tracing::error!(
+                    "failed to build the fetch HTTP client ({e}); URL fetch is disabled"
+                );
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .expect("a no-redirect client builds on every TLS backend")
+            }),
         }
     }
 }

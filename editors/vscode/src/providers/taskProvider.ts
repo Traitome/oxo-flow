@@ -73,7 +73,14 @@ export function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefin
 export function relativeWorkflow(folder: vscode.WorkspaceFolder, file: vscode.Uri): string {
   const folderPath = folder.uri.fsPath;
   const filePath = file.fsPath;
-  if (filePath.startsWith(folderPath)) {
+  // A bare prefix match treats sibling folders sharing a name prefix
+  // ("proj" vs "proj-archive") as inside the workspace — require a path
+  // separator after the folder (a trailing separator in folderPath counts).
+  const endsWithSep = folderPath.endsWith("/") || folderPath.endsWith("\\");
+  const inside = endsWithSep
+    ? filePath.startsWith(folderPath)
+    : filePath.startsWith(`${folderPath}/`) || filePath.startsWith(`${folderPath}\\`);
+  if (inside) {
     const rel = filePath.slice(folderPath.length).replace(/^[/\\]/, "");
     return rel.length > 0 ? rel : filePath;
   }

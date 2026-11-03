@@ -391,6 +391,36 @@ pub(crate) async fn run_on_cluster(
             "Warning:".bold().yellow()
         );
     }
+    // The remote wrapper accepts a fixed flag surface; these run flags are
+    // parsed by clap but silently ignored without this notice (tier-2 audit:
+    // `run --profile cluster --retry 3 -k` gave no hint).
+    for (flag, note) in [
+        (
+            "--retry",
+            "cluster drivers poll their own retry/backoff semantics",
+        ),
+        (
+            "--keep-going",
+            "the driver keeps dispatching independent jobs until the queue drains",
+        ),
+        (
+            "--timeout",
+            "per-job walltime is set through -w/--walltime instead",
+        ),
+        (
+            "--provenance",
+            "record output checksums on the local path, then submit",
+        ),
+        (
+            "--max-threads/--max-memory",
+            "per-rule [resources] and the [cluster] profile drive scheduler limits",
+        ),
+    ] {
+        eprintln!(
+            "  {} {flag} is not honored on the cluster path — {note}",
+            "Warning:".bold().yellow()
+        );
+    }
     let mut plan = ScheduledPlan::build(
         args.config,
         args.dag,

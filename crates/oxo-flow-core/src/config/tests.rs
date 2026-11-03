@@ -813,46 +813,6 @@ fn resolve_includes_sample_pattern_module_ignored() {
 }
 
 #[test]
-fn checksum_deterministic() {
-    let toml = r#"
-        [workflow]
-        name = "test"
-        version = "1.0.0"
-        [[rules]]
-        name = "step1"
-        shell = "echo hello"
-    "#;
-    let c1 = WorkflowConfig::parse(toml).unwrap();
-    let c2 = WorkflowConfig::parse(toml).unwrap();
-    assert_eq!(c1.checksum(), c2.checksum());
-}
-
-#[test]
-fn checksum_differs_for_different_configs() {
-    let c1 = WorkflowConfig::parse(
-        r#"
-        [workflow]
-        name = "test1"
-        [[rules]]
-        name = "step1"
-        shell = "echo hello"
-    "#,
-    )
-    .unwrap();
-    let c2 = WorkflowConfig::parse(
-        r#"
-        [workflow]
-        name = "test2"
-        [[rules]]
-        name = "step1"
-        shell = "echo hello"
-    "#,
-    )
-    .unwrap();
-    assert_ne!(c1.checksum(), c2.checksum());
-}
-
-#[test]
 fn parse_citation_info() {
     let toml_str = r#"
         [workflow]

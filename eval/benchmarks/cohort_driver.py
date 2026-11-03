@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cohort DAG-expansion latency benchmark driver for oxo-flow.
 
-Generates reproducible synthetic cohorts (N=10 to N=10,000 samples), renders a
+Generates reproducible synthetic cohorts (N=10 to N=1,000 samples), renders a
 static three-rule `.oxoflow` workflow (align_bwa -> qc_check -> aggregate_cohort)
 fanning out over a [[values]] list, and measures how long `oxo-flow dry-run
 --json` takes to expand and plan the DAG at each cohort size.

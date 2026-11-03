@@ -54,9 +54,18 @@ def materialize(workdir: Path, setup: dict) -> None:
 
 
 def run_cmd(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A hung seed must not discard the seeds already scored: record the
+        # timeout as a failed command (exit 124, the convention run_eval.py's
+        # gates use) and let the main loop keep going. The caller marks the
+        # row broken via its exit/analysis_exit checks.
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        return 124, clean(stdout), clean(stderr)
     return proc.returncode, clean(proc.stdout), clean(proc.stderr)
 
 

@@ -1,4 +1,4 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
@@ -141,10 +141,11 @@ frontend-build:
 frontend-dev:
 	cd frontend && npm run dev
 
-## Start both the API server and frontend dev server.
+## Start both the API server and frontend dev server (Ctrl-C stops both).
 dev: frontend-build
 	@echo "Starting oxo-flow-web on :3000 and frontend on :5173..."
-	@cd frontend && npm run dev & \
+	@trap 'kill 0' EXIT INT TERM; \
+	cd frontend && npm run dev & \
 	cd crates/oxo-flow-web && cargo run -- --port 3000
 
 ## List human contributors from git history (excludes bots and AI tools).
@@ -185,3 +186,12 @@ bundle-rpm: bundle-static
 
 bundle-appimage: bundle-static
 	cd crates/oxo-flow-cli && cargo bundle --release --format appimage
+
+## List available targets with their descriptions (kept at the bottom so the
+## default goal stays `ci`).
+help:
+	@awk 'BEGIN { desc = "" } \
+		/^## / { d = substr($$0, 4); desc = (desc == "" ? d : desc " " d); next } \
+		/^[a-zA-Z][a-zA-Z0-9_-]*:/ { \
+			if (desc != "") { name = $$1; sub(/:.*/, "", name); printf "  %-24s %s\n", name, desc } \
+			desc = "" }' $(firstword $(MAKEFILE_LIST))

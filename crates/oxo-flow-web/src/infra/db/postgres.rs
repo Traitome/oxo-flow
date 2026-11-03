@@ -598,7 +598,11 @@ impl StorageBackend for PostgresBackend {
                 .await
                 .map_err(|e| e.to_string())?;
         } else if status == "running" {
-            sqlx::query("UPDATE runs SET status = $1, phase = $2, started_at = $3 WHERE id = $4")
+            // COALESCE keeps the original start time across pause/resume
+            // (see the SQLite twin for the rationale).
+            sqlx::query(
+                "UPDATE runs SET status = $1, phase = $2, started_at = COALESCE(started_at, $3) WHERE id = $4",
+            )
                 .bind(status)
                 .bind(phase)
                 .bind(&now)

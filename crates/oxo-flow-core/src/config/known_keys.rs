@@ -93,6 +93,7 @@ const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
     "workflow.sample_groups_file",
     "workflow.sample_pattern",
     "workflow.version",
+    "types",
 ];
 
 /// Keys of the `[workflow]` table.

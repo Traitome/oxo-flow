@@ -83,7 +83,11 @@ impl QuotaTracker {
 
     /// Check whether a user can start a new run with the given resources.
     pub fn check(&self, user_id: &str, threads: u32, memory_mb: u64) -> QuotaCheckResult {
-        let config = self.config.read().unwrap().clone();
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let mut usage_map = self
             .usage
             .lock()
@@ -172,7 +176,10 @@ impl QuotaTracker {
 
     /// Get the configured limits.
     pub fn config(&self) -> QuotaConfig {
-        self.config.read().unwrap().clone()
+        self.config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
