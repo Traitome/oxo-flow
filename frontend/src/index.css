@@ -586,9 +586,6 @@ select.search-input{padding-right:1.75rem}
 .chat-status { display: flex; align-items: center; gap: 6px; padding: 6px 0; color: var(--color-text-secondary); font-size: 0.8rem; }
 .chat-content { font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .chat-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-.chat-agents { background: var(--color-bg-secondary); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 0.75rem; }
-.chat-agent-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
-.chat-agent-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .chat-input-row { padding: 12px 16px; border-top: 1px solid var(--color-border); display: flex; gap: 8px; align-items: flex-end; }
 .chat-send { width: var(--control-h); height: var(--control-h); padding: 0; flex-shrink: 0; }
 
