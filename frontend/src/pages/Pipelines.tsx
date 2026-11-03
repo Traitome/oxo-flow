@@ -274,9 +274,9 @@ export default function Pipelines() {
                               });
                               const tpl = await api.listTemplates();
                               setTemplates(tpl);
-                              setNotice({ text: `Saved "${full.name}" as reusable template` });
+                              setNotice({ text: t('pipelines.savedAsTemplate').replace('{{name}}', full.name) });
                             } catch (err: unknown) {
-                              setNotice({ text: describeApiError(err, 'Save template failed'), error: true });
+                              setNotice({ text: describeApiError(err, t('pipelines.saveTemplateFailed')), error: true });
                             }
                           }}
                         >
@@ -393,7 +393,7 @@ export default function Pipelines() {
                   const res = await api.diffPipelines({ pipeline_a_id: diffSource.id, pipeline_b_id: diffTargetId });
                   setDiffEntries(res.diffs);
                 } catch (err: unknown) {
-                  setError(describeApiError(err, 'Diff failed'));
+                  setError(describeApiError(err, t('pipelines.diffFailed')));
                 }
               }}
             >

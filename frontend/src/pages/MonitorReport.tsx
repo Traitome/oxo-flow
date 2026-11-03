@@ -630,7 +630,10 @@ export default function MonitorReport() {
                 critical: 'var(--color-error)',
               };
               const levelNames: Record<string, string> = {
-                info: 'Info', warn: 'Warning', alert: 'Alert', critical: 'Critical',
+                info: t('monitor.alerts.levelInfo'),
+                warn: t('monitor.alerts.levelWarn'),
+                alert: t('monitor.alerts.levelAlert'),
+                critical: t('monitor.alerts.levelCritical'),
               };
               return (
                 // Key on the alert's stable id, not the array index — the
@@ -667,7 +670,7 @@ export default function MonitorReport() {
                       >
                         <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <ChevronDown size={13} style={{ transition: 'transform 0.15s', transform: collapsed ? 'rotate(-90deg)' : 'none', flexShrink: 0 }} />
-                          {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
+                          {levelNames[alert.level] || alert.level}: {alert.rule_name || t('chat.system')}
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
                           {new Date(alert.timestamp).toLocaleTimeString(locale)}
@@ -688,7 +691,7 @@ export default function MonitorReport() {
                               now a real run, manual edit opens the snapshot in
                               the editor. */}
                           <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
-                            onClick={() => void handleRetry()}><Wrench size={13} /> Fix & Retry</button>
+                            onClick={() => void handleRetry()}><Wrench size={13} /> {t('monitor.alerts.fixRetry')}</button>
                           <button className="btn-sm" onClick={async () => {
                             if (!selId) return;
                             try {
@@ -696,9 +699,9 @@ export default function MonitorReport() {
                               session.setPipelineToml(run.pipeline_snapshot ?? '');
                               navigate('/editor');
                             } catch (err: unknown) {
-                              setActionError(describeApiError(err, 'Could not load pipeline for editing'));
+                              setActionError(describeApiError(err, t('monitor.alerts.manualEditFailed')));
                             }
-                          }}><FileText size={13} /> Manual Edit</button>
+                          }}><FileText size={13} /> {t('monitor.alerts.manualEdit')}</button>
                         </div>
                       )}
                     </div>
@@ -877,7 +880,7 @@ export default function MonitorReport() {
                                     const p = await api.previewRunFile(selId, relPath);
                                     setFilePreview(p);
                                   } catch (err: unknown) {
-                                    setActionError(describeApiError(err, 'Preview unavailable'));
+                                    setActionError(describeApiError(err, t('monitor.previewFailed')));
                                   }
                                 }}
                               >
@@ -948,7 +951,7 @@ export default function MonitorReport() {
                 <a
                   href={`vscode://traitome.oxo-flow/open?rule=${encodeURIComponent(fn.rule)}`}
                   style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--color-accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
-                  title="Open in VS Code"
+                  title={t('monitor.vscodeOpen')}
                 >
                   VS Code ↗
                 </a>
@@ -1093,7 +1096,7 @@ export default function MonitorReport() {
                   setProvResult(res);
                   setActionError(null);
                 } catch (err: unknown) {
-                  setActionError(describeApiError(err, 'Provenance verification failed'));
+                  setActionError(describeApiError(err, t('monitor.provFailed')));
                 }
               }}
             >
@@ -1101,24 +1104,24 @@ export default function MonitorReport() {
             </button>
           </div>
           <p className="muted">
-            Audits recorded SHA-256 output checksums in <code>.oxo-flow/checkpoint.json</code> against live workdir files.
+            {t('monitor.provHintPre')} <code>.oxo-flow/checkpoint.json</code> {t('monitor.provHintPost')}
           </p>
           {provResult && (
             <div>
               <div className="row" style={{ gap: 8, marginBottom: 8 }}>
                 <span className={`status-badge ${provResult.ok ? 'success' : 'failed'}`}>
-                  {provResult.ok ? 'VERIFIED OK' : 'DRIFT DETECTED'}
+                  {provResult.ok ? t('monitor.provOk') : t('monitor.provDrift')}
                 </span>
-                <span className="status-badge success">Matched: {provResult.matched}</span>
-                <span className={`status-badge ${provResult.mismatched > 0 ? 'failed' : 'skipped'}`}>Mismatched: {provResult.mismatched}</span>
-                <span className={`status-badge ${provResult.missing > 0 ? 'failed' : 'skipped'}`}>Missing: {provResult.missing}</span>
-                <span className="status-badge">Cleaned: {provResult.cleaned}</span>
+                <span className="status-badge success">{t('editor.data.matched')}: {provResult.matched}</span>
+                <span className={`status-badge ${provResult.mismatched > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.mismatched')}: {provResult.mismatched}</span>
+                <span className={`status-badge ${provResult.missing > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.missing')}: {provResult.missing}</span>
+                <span className="status-badge">{t('monitor.cleaned')}: {provResult.cleaned}</span>
               </div>
               {provResult.note && <div className="muted" style={{ marginBottom: 6 }}>{provResult.note}</div>}
               {provResult.entries.length > 0 && (
                 <div className="overflow-x" style={{ maxHeight: 200 }}>
                   <table className="data-table">
-                    <thead><tr><th>File</th><th>Status</th></tr></thead>
+                    <thead><tr><th>{t('monitor.file')}</th><th>{t('monitor.status')}</th></tr></thead>
                     <tbody>
                       {provResult.entries.map((e, i) => (
                         <tr key={i}>
@@ -1148,7 +1151,7 @@ export default function MonitorReport() {
                   setDriftResult(res);
                   setActionError(null);
                 } catch (err: unknown) {
-                  setActionError(describeApiError(err, 'Protected drift check failed'));
+                  setActionError(describeApiError(err, t('monitor.driftFailed')));
                 }
               }}
             >
@@ -1156,15 +1159,15 @@ export default function MonitorReport() {
             </button>
           </div>
           <p className="muted">
-            Read-only check of <code>[engine] protected_data_trees</code> against the run&apos;s baseline manifest.
+            {t('monitor.driftHintPre')} <code>[engine] protected_data_trees</code> {t('monitor.driftHintPost')}
           </p>
           {driftResult && (
             <div>
               <div className="row" style={{ gap: 8, marginBottom: 8 }}>
                 <span className={`status-badge ${driftResult.drifted_files.length === 0 ? 'success' : 'failed'}`}>
-                  Drifted files: {driftResult.drifted_files.length}
+                  {t('monitor.driftFilesCount').replace('{{count}}', String(driftResult.drifted_files.length))}
                 </span>
-                <span className="status-badge">New trees: {driftResult.new_trees}</span>
+                <span className="status-badge">{t('monitor.driftNewTrees').replace('{{count}}', String(driftResult.new_trees))}</span>
               </div>
               {driftResult.drifted_files.length > 0 && (
                 <pre className="log-view" style={{ maxHeight: 160 }}>
@@ -1341,7 +1344,7 @@ export default function MonitorReport() {
               <button className="btn-sm" onClick={() => setFilePreview(null)} aria-label={t('common.close')}><X size={14} /></button>
             </div>
             <pre className="log-view" style={{ maxHeight: 420 }}>{filePreview.content}</pre>
-            {filePreview.truncated && <div className="muted" style={{ marginTop: 6 }}>Preview truncated at 100 KB — download the file for full contents.</div>}
+            {filePreview.truncated && <div className="muted" style={{ marginTop: 6 }}>{t('monitor.previewTruncated')}</div>}
           </div>
         </div>
       )}

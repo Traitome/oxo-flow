@@ -1753,3 +1753,298 @@ impl StorageBackend for PostgresBackend {
         }
     }
 }
+
+// Live-PostgreSQL smoke tests (issue #207 evidence upgrade). Compiled only
+// with `--features postgres`, and skipped unless `OXO_PG_TEST_URL` points at
+// a scratch database — CI wires that env to a `services: postgres` container,
+// while a local `make ci` without the env var stays green because the tests
+// return early. They pin the schema bootstrap + core StorageBackend CRUD
+// against a real server; concurrency, crash-recovery, and multi-instance
+// behavior remain out of scope here.
+#[cfg(all(test, feature = "postgres"))]
+mod tests {
+    use super::*;
+    use crate::infra::db::models;
+    use uuid::Uuid;
+
+    /// Connect to the smoke-test database, or skip the test cleanly when
+    /// `OXO_PG_TEST_URL` is unset (local `make ci` has no PostgreSQL).
+    async fn connect() -> Option<PostgresBackend> {
+        let url = match std::env::var("OXO_PG_TEST_URL") {
+            Ok(u) if !u.trim().is_empty() => u.trim().to_string(),
+            _ => {
+                eprintln!("skipping live-PostgreSQL smoke: OXO_PG_TEST_URL is not set");
+                return None;
+            }
+        };
+        let backend = PostgresBackend::new(&url)
+            .await
+            .expect("connect to live PostgreSQL");
+        backend.init().await.expect("schema bootstrap");
+        Some(backend)
+    }
+
+    /// Usernames become workspace path components (validate_username), so
+    /// stay inside the allowed charset; the uuid suffix keeps re-runs against
+    /// a persistent database collision-free.
+    fn unique_username() -> String {
+        format!("smoke-u-{}", Uuid::new_v4().simple())
+    }
+
+    fn sample_run(user_id: &str) -> models::RunRow {
+        models::RunRow {
+            id: String::new(),
+            user_id: user_id.to_string(),
+            pipeline_id: None,
+            pipeline_snapshot: "snapshot-for-smoke".to_string(),
+            workflow_name: Some("smoke.oxoflow".to_string()),
+            status: "queued".to_string(),
+            phase: "parsing".to_string(),
+            dry_run: true,
+            pid: None,
+            workdir: Some("/tmp/smoke-run".to_string()),
+            config_overrides: Some(r#"["threads=4"]"#.to_string()),
+            started_at: None,
+            finished_at: None,
+            created_at: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_users_runs_and_nodes_smoke() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+
+        assert!(
+            backend.health().await.expect("health check"),
+            "health returns true against a live server"
+        );
+
+        let username = unique_username();
+        let user = backend
+            .create_user(&username, "user", None)
+            .await
+            .expect("create_user");
+        assert_eq!(user.username, username);
+        assert_eq!(user.role, "user");
+
+        let fetched = backend
+            .get_user_by_username(&username)
+            .await
+            .expect("get_user_by_username")
+            .expect("created user roundtrips");
+        assert_eq!(fetched.id, user.id);
+
+        let run = backend
+            .create_run(&sample_run(&user.id))
+            .await
+            .expect("create_run");
+        assert!(!run.id.is_empty(), "create_run fills an empty id");
+        assert!(!run.created_at.is_empty(), "create_run fills created_at");
+
+        let stored = backend
+            .get_run(&run.id)
+            .await
+            .expect("get_run")
+            .expect("run roundtrips");
+        assert!(stored.dry_run, "dry_run BOOLEAN roundtrips");
+        assert_eq!(
+            stored.config_overrides.as_deref(),
+            Some(r#"["threads=4"]"#),
+            "config_overrides TEXT roundtrips"
+        );
+
+        assert!(
+            backend
+                .mark_run_running(&run.id, "2026-01-01T00:00:00+00:00")
+                .await
+                .expect("mark_run_running"),
+            "queued → running transition claims the row"
+        );
+        assert!(
+            !backend
+                .mark_run_running(&run.id, "2026-01-01T00:00:01+00:00")
+                .await
+                .expect("second mark_run_running"),
+            "a running run is no longer claimable"
+        );
+
+        let filters = models::RunFilters {
+            user_id: Some(user.id.clone()),
+            status: Some("running".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let page = backend
+            .list_runs_cursor(&filters)
+            .await
+            .expect("list_runs_cursor");
+        assert!(page.total >= 1, "COUNT total propagates");
+        assert!(
+            page.items.iter().any(|r| r.id == run.id),
+            "filtered cursor listing contains the run"
+        );
+
+        backend
+            .upsert_run_node(&models::RunNodeRow {
+                run_id: run.id.clone(),
+                rule_name: "align".to_string(),
+                status: "running".to_string(),
+                exit_code: None,
+                started_at: Some("2026-01-01T00:00:00+00:00".to_string()),
+                finished_at: None,
+            })
+            .await
+            .expect("upsert_run_node insert");
+        backend
+            .upsert_run_node(&models::RunNodeRow {
+                run_id: run.id.clone(),
+                rule_name: "align".to_string(),
+                status: "completed".to_string(),
+                exit_code: Some(0),
+                started_at: None,
+                finished_at: Some("2026-01-01T00:05:00+00:00".to_string()),
+            })
+            .await
+            .expect("upsert_run_node update");
+
+        let nodes = backend
+            .list_run_nodes(&run.id)
+            .await
+            .expect("list_run_nodes");
+        assert_eq!(nodes.len(), 1, "ON CONFLICT upserts instead of duplicating");
+        assert_eq!(nodes[0].status, "completed");
+        assert_eq!(nodes[0].exit_code, Some(0));
+        assert_eq!(
+            nodes[0].started_at.as_deref(),
+            Some("2026-01-01T00:00:00+00:00"),
+            "COALESCE keeps the original started_at"
+        );
+        assert_eq!(
+            nodes[0].finished_at.as_deref(),
+            Some("2026-01-01T00:05:00+00:00")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_audit_webhook_chat_sessions_smoke() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+
+        // record_audit_log self-seeds a synthetic viewer row to satisfy the
+        // audit_logs.user_id FK (see the impl comment) — an arbitrary id must
+        // be accepted, not rejected.
+        backend
+            .record_audit_log(
+                &format!("smoke-audit-{}", Uuid::new_v4().simple()),
+                "test.action",
+                "test/target",
+                "ok",
+                Some(r#"{"k":"v"}"#),
+            )
+            .await
+            .expect("record_audit_log with synthetic user");
+
+        let cutoff = "2000-01-01T00:00:00+00:00";
+        let (logs, total) = backend
+            .list_audit_logs(cutoff, 100, 0)
+            .await
+            .expect("list_audit_logs");
+        assert!(total >= 1, "audit total counts the recorded row");
+        assert!(
+            logs.iter().any(|l| l.action == "test.action"),
+            "recorded audit row is listed"
+        );
+
+        backend
+            .save_webhook_config(
+                "https://hooks.example/1",
+                Some("secret-1"),
+                true,
+                "run.completed",
+                "hmac-sha256",
+            )
+            .await
+            .expect("save_webhook_config");
+        let hook = backend
+            .get_webhook_config()
+            .await
+            .expect("get_webhook_config")
+            .expect("webhook row exists after save");
+        assert_eq!(hook.url, "https://hooks.example/1");
+        assert_eq!(hook.secret.as_deref(), Some("secret-1"));
+        assert_eq!(hook.enabled, 1);
+        assert_eq!(hook.signature_scheme, "hmac-sha256");
+
+        // Save with secret=None must keep the existing secret (COALESCE).
+        backend
+            .save_webhook_config(
+                "https://hooks.example/2",
+                None,
+                false,
+                "run.failed",
+                "hmac-sha256",
+            )
+            .await
+            .expect("second save_webhook_config");
+        let hook = backend
+            .get_webhook_config()
+            .await
+            .expect("get_webhook_config after update")
+            .expect("webhook row still exists");
+        assert_eq!(hook.url, "https://hooks.example/2");
+        assert_eq!(hook.secret.as_deref(), Some("secret-1"), "secret preserved");
+        assert_eq!(hook.enabled, 0);
+
+        let session_id = format!("smoke-s-{}", Uuid::new_v4().simple());
+        let owner = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create chat owner");
+        assert!(
+            backend
+                .save_chat_user_message(&session_id, &owner.id, "Title", "hello")
+                .await
+                .expect("save_chat_user_message"),
+            "first message creates the session"
+        );
+        // A different user hitting the same session id must be refused by
+        // the ownership guard (rows_affected == 0 → Ok(false)).
+        let outsider = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create chat intruder");
+        assert!(
+            !backend
+                .save_chat_user_message(&session_id, &outsider.id, "Hijack", "no")
+                .await
+                .expect("cross-user save returns false"),
+            "ownership guard rejects a different user on an existing session"
+        );
+
+        // Expired session is swept; sessions table is exercised end-to-end.
+        backend
+            .create_session(
+                &owner.id,
+                "smoke-expired-token",
+                "2000-01-01T00:00:00+00:00",
+            )
+            .await
+            .expect("create_session");
+        let swept = backend
+            .cleanup_expired_sessions()
+            .await
+            .expect("cleanup_expired_sessions");
+        assert!(swept >= 1, "expired session swept (swept {swept})");
+        assert!(
+            backend
+                .get_session("smoke-expired-token")
+                .await
+                .expect("get_session")
+                .is_none(),
+            "swept session no longer resolves"
+        );
+    }
+}

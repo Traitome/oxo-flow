@@ -46,7 +46,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | Backend-routed code exists for SQLite and PostgreSQL; live parity is unproven. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
+| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, while concurrency/crash-recovery/multi-instance remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -164,8 +164,12 @@ Two constraints apply:
   image). On a build without the feature, a `postgres://` `DATABASE_URL`
   aborts startup with a clear error instead of silently falling back.
 - **Run execution**: the `StorageBackend` trait has PostgreSQL code paths for
-  run-record persistence, but production parity is not established. Validate
-  concurrency, crash recovery, and multi-instance behavior before relying on
+  run-record persistence. CI runs a live-PostgreSQL smoke test (a
+  `services: postgres` container) that verifies the schema bootstrap and the
+  core `StorageBackend` CRUD surface — users, runs, run nodes, audit logs,
+  webhook config, chat sessions — against a real server. That evidence does
+  NOT extend to production parity: concurrency, crash recovery, and
+  multi-instance behavior remain unvalidated, so test them before relying on
   PostgreSQL for execution metadata. The historical
   `503 RUNS_REQUIRE_SQLITE` name may remain until that evidence supports a
   backend-agnostic rename.

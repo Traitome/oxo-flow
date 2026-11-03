@@ -343,6 +343,23 @@ jobs:
     if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
     permissions:
       contents: read
+    # Issue #207: live-PostgreSQL evidence for the StorageBackend smoke tests.
+    # The published Docker image omits the postgres feature, so this only
+    # gates the code path — it is not a production-parity claim.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oxo
+          POSTGRES_PASSWORD: oxo-smoke
+          POSTGRES_DB: oxo_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oxo -d oxo_smoke"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -373,11 +390,14 @@ jobs:
       # errors) with zero CI coverage to catch it. s3-storage/gcs-storage are
       # the only real opt-ins now — check the core crate both without them
       # and with each enabled, so the storage backends can't rot either.
+      # Same lesson for the web crate's postgres feature (issue #207): it is
+      # invisible to the default workspace build and would rot uncompiled.
       - name: Feature-combination checks
         run: |
           cargo check -p oxo-flow-core --no-default-features
           cargo check -p oxo-flow-core --no-default-features --features s3-storage
           cargo check -p oxo-flow-core --no-default-features --features gcs-storage
+          cargo check -p oxo-flow-web --features postgres
 
       # Issue #557: doc builds were never gated, so broken intra-doc links and
       # the oxo_flow bin/lib filename collision rotted silently. -D warnings
@@ -441,6 +461,17 @@ jobs:
           fi
           exit 1
         env:
+          RUST_BACKTRACE: "1"
+
+      # Issue #207: schema bootstrap + core StorageBackend CRUD against a LIVE
+      # PostgreSQL (the services container above). The tests skip cleanly when
+      # OXO_PG_TEST_URL is unset, so this step is the only place they run.
+      # Scope note for the docs: this pins bootstrap + CRUD wiring, NOT
+      # concurrency, crash-recovery, or multi-instance parity.
+      - name: PostgreSQL storage smoke
+        run: cargo test -p oxo-flow-web --features postgres --lib infra::db::postgres
+        env:
+          OXO_PG_TEST_URL: postgres://oxo:oxo-smoke@localhost:5432/oxo_smoke
           RUST_BACKTRACE: "1"
 
       # Mirrors `make schema-drift`: the CLI-embedded schema must match the

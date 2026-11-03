@@ -425,13 +425,13 @@ export default function PipelineEditor() {
           if (cancelled) return;
           setToml(pl.toml_content);
           session.setRunResult({
-            message: `Opened saved pipeline "${pl.name}"`,
+            message: t('editor.load.opened').replace('{{name}}', pl.name),
             type: 'success',
           });
         })
         .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : 'Pipeline not found';
-          session.setRunResult({ message: `Pipeline load failed: ${msg}`, type: 'error' });
+          const msg = err instanceof Error ? err.message : t('editor.load.notFound');
+          session.setRunResult({ message: t('editor.load.failed').replace('{{error}}', msg), type: 'error' });
         });
       return () => {
         cancelled = true;
@@ -445,13 +445,13 @@ export default function PipelineEditor() {
         if (cancelled || !tpl.toml_content) return;
         setToml(tpl.toml_content);
         session.setRunResult({
-          message: `Loaded template "${tpl.name}" — edit it on the canvas, then dry-run`,
+          message: t('editor.template.loaded').replace('{{name}}', tpl.name),
           type: 'success',
         });
       })
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : 'Template not found';
-        session.setRunResult({ message: `Template load failed: ${msg}`, type: 'error' });
+        const msg = err instanceof Error ? err.message : t('editor.template.notFound');
+        session.setRunResult({ message: t('editor.template.failed').replace('{{error}}', msg), type: 'error' });
       });
     return () => {
       cancelled = true;
@@ -475,10 +475,10 @@ export default function PipelineEditor() {
       setDagJson(dag);
       setValidation(val);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
       setValidation({ valid: false, errors: [{ code: 'ERROR', message: msg, rule: null, suggestion: null }] });
     }
-  }, []);
+  }, [t]);
 
   // Debounced buildDag+validate runs in both view modes: guided mode gates
   // its Run/Dry-Run buttons on `validation`, which nothing else populates
@@ -511,7 +511,7 @@ export default function PipelineEditor() {
       session.setRunResult({
         runId: res.run_id,
         message: t('editor.runStarted')
-          .replace('{{kind}}', dryRun ? 'Dry-Run' : 'Run')
+          .replace('{{kind}}', dryRun ? t('editor.dryRunBtn') : t('editor.run'))
           .replace('{{id}}', res.run_id.slice(0, 8))
           .replace('{{rules}}', String(res.execution_plan.total_rules))
           .replace('{{secs}}', String(res.estimated_resources.estimated_duration_secs)),
@@ -542,12 +542,12 @@ export default function PipelineEditor() {
       setToml(res.toml_content);
       const errors = res.validation_errors ?? [];
       if (!res.success && errors.length > 0) {
-        session.setRunResult({ message: `Validation: ${errors.join('; ')}`, type: 'error' });
+        session.setRunResult({ message: t('editor.validationFailed').replace('{{errors}}', errors.join('; ')), type: 'error' });
       }
       return res.toml_content;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Edit failed';
-      session.setRunResult({ message: `Edit failed: ${msg}`, type: 'error' });
+      const msg = err instanceof Error && err.message ? err.message : t('common.unknownError');
+      session.setRunResult({ message: t('editor.editFailed').replace('{{error}}', msg), type: 'error' });
       return null;
     }
   };
@@ -631,7 +631,7 @@ export default function PipelineEditor() {
       if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Nothing to undo';
+      const msg = err instanceof Error && err.message ? err.message : t('editor.noUndo');
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -642,7 +642,7 @@ export default function PipelineEditor() {
       if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Nothing to redo';
+      const msg = err instanceof Error && err.message ? err.message : t('editor.noRedo');
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -689,9 +689,9 @@ export default function PipelineEditor() {
                 try {
                   const snap = await api.getRevision(savedPipelineId, r.id);
                   setToml(snap.toml_content);
-                  session.setRunResult({ message: `Loaded snapshot ${r.id.slice(0, 8)} into the editor — Save to keep it`, type: 'success' });
+                  session.setRunResult({ message: t('editor.history.snapshotLoaded').replace('{{id}}', r.id.slice(0, 8)), type: 'success' });
                 } catch (err: unknown) {
-                  session.setRunResult({ message: describeApiError(err, 'Snapshot load failed'), type: 'error' });
+                  session.setRunResult({ message: describeApiError(err, t('editor.history.loadFailed')), type: 'error' });
                 }
               }}>{t('editor.history.load')}</button>
               <button className="btn-sm" onClick={async () => {
@@ -700,9 +700,9 @@ export default function PipelineEditor() {
                   await api.rollbackPipeline(savedPipelineId, r.id);
                   setToml((await api.getPipeline(savedPipelineId)).toml_content);
                   api.listRevisions(savedPipelineId).then(setRevisions);
-                  session.setRunResult({ message: 'Rolled back — the current version was preserved as a revision', type: 'success' });
+                  session.setRunResult({ message: t('editor.history.rolledBack'), type: 'success' });
                 } catch (err: unknown) {
-                  session.setRunResult({ message: describeApiError(err, 'Rollback failed'), type: 'error' });
+                  session.setRunResult({ message: describeApiError(err, t('editor.history.rollbackFailed')), type: 'error' });
                 }
               }}>{t('editor.history.rollback')}</button>
             </div>
@@ -765,7 +765,7 @@ export default function PipelineEditor() {
       setToml(res.formatted);
       session.setRunResult({ message: t('editor.formatted'), type: 'success' });
     } catch (err: unknown) {
-      const msg = describeApiError(err, 'Format failed');
+      const msg = describeApiError(err, t('editor.formatFailed'));
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -780,12 +780,12 @@ export default function PipelineEditor() {
         setValidation({ valid: res.errors.length === 0, errors: issues });
         setShowErrors(true);
         session.setRunResult({
-          message: `Lint found ${issues.length} item(s) — inspect the diagnostics panel`,
+          message: t('editor.lintFound').replace('{{count}}', String(issues.length)),
           type: 'info',
         });
       }
     } catch (err: unknown) {
-      const msg = describeApiError(err, 'Lint failed');
+      const msg = describeApiError(err, t('editor.lintFailed'));
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -865,17 +865,17 @@ export default function PipelineEditor() {
               className="btn-sm"
               onClick={openRunDialogFromGuided}
               disabled={running || !validation?.valid}
-              title="Preview the execution plan without running anything"
+              title={t('editor.dryRunHint')}
             >
-              <CheckCircle size={14} /> Dry-Run
+              <CheckCircle size={14} /> {t('editor.dryRunBtn')}
             </button>
             <button
               className="btn-run"
               onClick={openRunDialogFromGuided}
               disabled={running || !validation?.valid}
-              title="Switch to Canvas mode and run this pipeline"
+              title={t('editor.runHint')}
             >
-              <Play size={16} /> Run
+              <Play size={16} /> {t('editor.run')}
             </button>
           </div>
           <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
@@ -887,7 +887,7 @@ export default function PipelineEditor() {
           this parent (toml/dagJson/validation), so switching back loses
           nothing. */}
       {viewMode === 'canvas' && (
-      <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
+      <Suspense fallback={<div className="empty-state">{t('common.loading')}</div>}>
       <div className={`editor-layout ${leftCollapsed ? 'editor-layout--left-collapsed' : ''} ${fullscreen ? 'editor-layout--fullscreen' : ''}`}>
         <div className={`left-rail ${leftCollapsed ? 'left-rail--collapsed' : ''}`}>
           <div className="left-rail-tabs" role="tablist">
@@ -1020,7 +1020,7 @@ export default function PipelineEditor() {
                   <span className="validation-error-code">{e.code}</span>
                   {e.line != null && (
                     <button className="btn-sm" style={{ fontSize: '0.7rem' }}
-                      title="Jump to this line in the editor"
+                      title={t('editor.errors.jump')}
                       onClick={() => setHighlightLine(e.line!)}>
                       {t('editor.errors.line').replace('{{line}}', String(e.line))}
                     </button>
@@ -1043,7 +1043,7 @@ export default function PipelineEditor() {
           <ErrorBoundary
             fallback={
               <div className="empty-state">
-                <p>The TOML editor crashed and was reset. Switch modes or reload to recover — your edits above are preserved in the pipeline state.</p>
+                <p>{t('editor.tomlCrashed')}</p>
               </div>
             }
           >
@@ -1061,7 +1061,7 @@ export default function PipelineEditor() {
           onClick={() => session.setRunResult(null)}
         >
           {session.state.lastRunResult.message}
-          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>click to dismiss</span>
+          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>{t('common.dismiss')}</span>
         </div>
       )}
 
@@ -1115,7 +1115,7 @@ export default function PipelineEditor() {
                         const res = await api.parseSamplesheet(sheetText);
                         setSheetParsed(res);
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Sample sheet parse failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.sheetParseFailed')), type: 'error' });
                       }
                     }}
                   >
@@ -1149,7 +1149,7 @@ export default function PipelineEditor() {
                   <div className="overflow-x" style={{ maxHeight: 180 }}>
                     <table className="data-table">
                       <thead>
-                        <tr><th>Sample</th><th>R1</th><th>R2</th></tr>
+                        <tr><th>{t('editor.data.colSample')}</th><th>{t('editor.data.colR1')}</th><th>{t('editor.data.colR2')}</th></tr>
                       </thead>
                       <tbody>
                         {sheetParsed.samples.map((s, idx) => (
@@ -1184,7 +1184,7 @@ export default function PipelineEditor() {
                         setUploadedFiles(list);
                         session.setRunResult({ message: t('editor.data.uploaded'), type: 'success' });
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Upload failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.uploadFailed')), type: 'error' });
                       }
                     }}
                   />
@@ -1194,7 +1194,7 @@ export default function PipelineEditor() {
                 ) : (
                   <div className="overflow-x" style={{ maxHeight: 200 }}>
                     <table className="data-table">
-                      <thead><tr><th>Path</th><th>Size</th></tr></thead>
+                      <thead><tr><th>{t('editor.data.colPath')}</th><th>{t('editor.data.colSize')}</th></tr></thead>
                       <tbody>
                         {uploadedFiles.map((f) => (
                           <tr key={f.path}>
@@ -1228,7 +1228,7 @@ export default function PipelineEditor() {
                         const r = await api.verifyData(verifyTree.trim(), verifyMd5);
                         setVerifyRes(r);
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Data verification failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.verifyFailed')), type: 'error' });
                       }
                     }}
                   >
