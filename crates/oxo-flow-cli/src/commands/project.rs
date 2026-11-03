@@ -299,6 +299,10 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
 /// test compares both lists and contents against that directory).
 const EMBEDDED_GALLERY_AUX: &[(&str, &str)] = &[
     (
+        "scripts/_gallery_common.py",
+        include_str!("../../templates/aux/scripts/_gallery_common.py"),
+    ),
+    (
         "scripts/report.py",
         include_str!("../../templates/aux/scripts/report.py"),
     ),
