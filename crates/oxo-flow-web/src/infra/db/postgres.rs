@@ -21,6 +21,12 @@ use super::{Paginated, Pagination, StorageBackend};
 /// Global PostgreSQL connection pool.
 static PG_POOL: std::sync::OnceLock<PgPool> = std::sync::OnceLock::new();
 
+/// Advisory-lock key serializing schema bootstrap across concurrent
+/// callers (parallel test binaries, multi-instance server startup).
+/// Any fixed value works as long as every caller of this module
+/// shares it.
+const PG_INIT_LOCK_KEY: i64 = 0x6F78_6F66; // 'oxof'
+
 /// Initialize the global PostgreSQL pool and run schema migrations.
 ///
 /// Can safely be called multiple times — subsequent calls are no-ops.
@@ -78,6 +84,24 @@ impl StorageBackend for PostgresBackend {
         // to prepare when it contains multiple commands. `raw_sql` uses the
         // simple protocol and is the supported path for this idempotent
         // schema bootstrap batch.
+        //
+        // Concurrent callers (parallel test binaries against one CI
+        // postgres, multi-instance server startup) serialize on a
+        // transaction-scoped advisory lock: `CREATE TABLE IF NOT EXISTS` is
+        // only check-then-create per session, so two sessions racing the
+        // same table can fail with `duplicate key value violates unique
+        // constraint "pg_type_typname_nsp_index"` (table creation inserts a
+        // composite row type into pg_type). The lock is released at commit.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("PG init begin: {e}"))?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(PG_INIT_LOCK_KEY)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG init lock: {e}"))?;
         sqlx::raw_sql(
             r#"
             CREATE TABLE IF NOT EXISTS users (
@@ -288,7 +312,7 @@ impl StorageBackend for PostgresBackend {
                 ON templates(name) WHERE is_system = 1;
             "#,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG init schema: {e}"))?;
 
@@ -297,7 +321,7 @@ impl StorageBackend for PostgresBackend {
         // SQLite-only (#207), but keeping the storage contract healthy lets
         // metadata tools and pre-execution checks work on legacy tables.
         sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS config_overrides TEXT")
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("PG migration config_overrides: {e}"))?;
 
@@ -306,7 +330,7 @@ impl StorageBackend for PostgresBackend {
         // terminal set is completed|failed|cancelled. Idempotent — safe to
         // run on every init.
         sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("PG migration legacy run status: {e}"))?;
 
@@ -318,13 +342,15 @@ impl StorageBackend for PostgresBackend {
              ALTER TABLE ai_provider_config ALTER COLUMN auto_retry_enabled TYPE BIGINT;
              ALTER TABLE ai_provider_config ALTER COLUMN max_correction_rounds TYPE BIGINT;",
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG migration AI config integer widths: {e}"))?;
 
-        // Seed admin user
+        // Seed admin user — inside the locked transaction so two concurrent
+        // inits cannot both observe COUNT(*) = 0 and race the UNIQUE
+        // username insert.
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -340,7 +366,7 @@ impl StorageBackend for PostgresBackend {
             .bind("password")
             .bind(Some("oxo-flow"))
             .bind(&now)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
         }
@@ -359,9 +385,13 @@ impl StorageBackend for PostgresBackend {
         .bind("local")
         .bind(Some("oxo-flow"))
         .bind(Self::now())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("PG init commit: {e}"))?;
 
         Ok(())
     }
