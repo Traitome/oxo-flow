@@ -88,7 +88,7 @@ cd frontend && npm run dev    # Vite dev server on :5173, proxies /api to :3000
 cargo run -p oxo-flow-web      # API server on :3000 (default; OXO_FLOW_PORT)
 
 # Build for production:
-cd frontend && npm run build   # Outputs to frontend/dist/
+cd frontend && npm run build   # Outputs to crates/oxo-flow-web/static/
 ```
 
 ### Web Module Structure

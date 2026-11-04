@@ -607,6 +607,9 @@ Content-Type: application/json
 The retry spawns a real run, so it pays the same #213 runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
 the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED` (#519).
+Like every `ApiResult` error, the 429 carries no `Retry-After` header
+(the typed tuple cannot carry headers) — the countdown lives in the
+error `message` instead (`retry in {wait_secs}s`).
 `from_rule` is **not supported**: the engine has no "re-run from rule X
 downstream" mode (`--target` selects the *upstream* closure), so the field is
 rejected with `400 UNSUPPORTED_FIELD` instead of being silently ignored.
