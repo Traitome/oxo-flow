@@ -90,6 +90,17 @@ Every downloaded bundle is verified against its `manifest.json` before being
 saved. If any file's SHA-256 checksum doesn't match the manifest, the download
 is rejected with a clear error message showing which file failed.
 
+### Size limit
+
+Bundles are buffered in memory before verification, so every source — GitHub
+releases, HTTP(S) URLs, and local files (`pull <file>.tar.zst`) — is capped at
+`OXO_FLOW_PULL_MAX_BYTES` bytes (default 1 GiB). A larger source is rejected
+before it is read; raise the variable for genuinely bigger bundles:
+
+```bash
+OXO_FLOW_PULL_MAX_BYTES=4294967296 oxo-flow pull ./big-bundle.tar.zst
+```
+
 ## See Also
 
 - [oxo-flow publish](publish.md) — create bundles
