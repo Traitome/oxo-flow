@@ -19,6 +19,7 @@ import { graphStratify, sugiyama } from 'd3-dag';
 import '@xyflow/react/dist/style.css';
 import { GitBranch, Layers, TrainTrack } from 'lucide-react';
 import type { DagJson, DagJsonNode, DagJsonEdge } from '../api/types';
+import { useI18n } from '../context/I18n';
 
 import {
   inferModality,
@@ -140,6 +141,7 @@ export function MetroCanvas({
   selectedRule,
   onSelectRule,
 }: MetroCanvasProps) {
+  const { t } = useI18n();
   const [granularity, setGranularity] = useState<MetroGranularity>('rule');
   const [currentZoom, setCurrentZoom] = useState(1);
   // The compact/detailed station switch is the only zoom-sensitive visual:
@@ -325,25 +327,25 @@ export function MetroCanvas({
             type="button"
             className={`rf-metro-btn ${granularity === 'rule' ? 'active' : ''}`}
             onClick={() => setGranularity('rule')}
-            title="Rule granularity"
+            title={t('canvas.granularityRuleTitle')}
           >
-            <TrainTrack size={14} /> Rule
+            <TrainTrack size={14} /> {t('canvas.granularityRule')}
           </button>
           <button
             type="button"
             className={`rf-metro-btn ${granularity === 'process' ? 'active' : ''}`}
             onClick={() => setGranularity('process')}
-            title="Process granularity"
+            title={t('canvas.granularityProcessTitle')}
           >
-            <Layers size={14} /> Process
+            <Layers size={14} /> {t('canvas.granularityProcess')}
           </button>
           <button
             type="button"
             className={`rf-metro-btn ${granularity === 'module' ? 'active' : ''}`}
             onClick={() => setGranularity('module')}
-            title="Module granularity"
+            title={t('canvas.granularityModuleTitle')}
           >
-            <GitBranch size={14} /> Module
+            <GitBranch size={14} /> {t('canvas.granularityModule')}
           </button>
         </div>
       </div>
