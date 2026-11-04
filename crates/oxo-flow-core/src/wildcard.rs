@@ -71,14 +71,13 @@ pub fn validate_wildcard_constraints_compiled(
     }
 }
 
-/// Validate wildcard values against regex constraints.
-///
-/// NOTE: This function compiles regexes on every call. Use `validate_wildcard_constraints_compiled`
-/// for better performance when validating multiple combinations.
-pub fn validate_wildcard_constraints(
-    values: &WildcardValues,
+/// Compile a constraints map into regexes, sharing the error shape with
+/// every consumer that surfaces invalid `[wildcard_constraints]` entries
+/// (plan-time fan-out, validate-time diagnostics). A single error is
+/// returned per call — the FIRST invalid entry in iteration order.
+pub fn compile_wildcard_constraint_map(
     constraints: &WildcardConstraints,
-) -> Result<()> {
+) -> Result<HashMap<String, Regex>> {
     let mut compiled = HashMap::new();
     for (name, pattern) in constraints {
         match Regex::new(pattern) {
@@ -96,6 +95,18 @@ pub fn validate_wildcard_constraints(
             }
         }
     }
+    Ok(compiled)
+}
+
+/// Validate wildcard values against regex constraints.
+///
+/// NOTE: This function compiles regexes on every call. Use `validate_wildcard_constraints_compiled`
+/// for better performance when validating multiple combinations.
+pub fn validate_wildcard_constraints(
+    values: &WildcardValues,
+    constraints: &WildcardConstraints,
+) -> Result<()> {
+    let compiled = compile_wildcard_constraint_map(constraints)?;
     validate_wildcard_constraints_compiled(values, &compiled)
 }
 

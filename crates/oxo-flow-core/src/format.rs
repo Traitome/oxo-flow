@@ -1114,6 +1114,29 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E020: `[wildcard_constraints]` entries must compile as regexes.
+    // The constraints are consumed only at expansion/projection time
+    // (`compiled_wildcard_constraints`), so an invalid pattern like
+    // `[z-a]+` used to pass validate/dry-run/lint and surfaced only at
+    // run time as a generic failure. Compilation routes through the SAME
+    // shared helper the engine uses (`compile_wildcard_constraint_map`),
+    // so the validate-time error text is byte-identical to the run-time
+    // one — reuse, never retype.
+    if let Err(e) = crate::wildcard::compile_wildcard_constraint_map(&config.wildcard_constraints) {
+        let crate::error::OxoFlowError::Wildcard { message, .. } = e else {
+            unreachable!("compile_wildcard_constraint_map only raises OxoFlowError::Wildcard")
+        };
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            rule: None,
+            code: "E020".to_string(),
+            suggestion: Some(
+                "fix the regex in [wildcard_constraints] — patterns must be valid Rust regex syntax (see https://docs.rs/regex); a constraint that fails to compile blocks every fan-out that reads the wildcard".to_string(),
+            ),
+        });
+    }
+
     let valid = !diagnostics.iter().any(|d| d.severity == Severity::Error);
 
     ValidationResult {
@@ -3087,6 +3110,70 @@ mod tests {
             "E016 must reject shell metacharacters in environment.docker"
         );
         assert!(result.errors().iter().any(|d| d.code == "E016"));
+    }
+
+    #[test]
+    fn validate_rejects_uncompilable_wildcard_constraint() {
+        // E020: an invalid regex in [wildcard_constraints] must fail
+        // validate. Parse ALREADY rejects such entries for TOML-loaded
+        // configs (`WorkflowConfig::validate`, the same gate since the
+        // constraint loop was introduced), so this test constructs the
+        // config programmatically — the path E020 exists for, mirroring
+        // the E004 defense-in-depth rationale for configs built by code
+        // rather than parsed from disk. `[z-a]+` is the canonical
+        // impossible range — the regex crate rejects it.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config
+            .wildcard_constraints
+            .insert("sample".to_string(), "[z-a]+".to_string());
+        let result = validate_format(&config);
+        assert!(!result.valid, "E020 must fail validation");
+        let errs = result.errors();
+        let err = errs
+            .iter()
+            .find(|d| d.code == "E020")
+            .expect("E020 diagnostic for uncompilable constraint");
+        assert!(
+            err.message
+                .contains("invalid regex constraint '[z-a]+' for wildcard 'sample'"),
+            "E020 message must carry the shared run-time error shape, got: {}",
+            err.message
+        );
+        assert!(err.rule.is_none(), "constraint errors are workflow-level");
+    }
+
+    #[test]
+    fn validate_accepts_valid_wildcard_constraints() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [wildcard_constraints]
+            sample = "[A-Z0-9]+"
+            read = "[12]"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.errors().iter().any(|d| d.code == "E020"),
+            "valid constraints must not trip E020"
+        );
     }
 
     #[test]

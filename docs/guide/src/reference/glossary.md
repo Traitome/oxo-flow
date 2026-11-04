@@ -342,6 +342,7 @@ below list every code the engine currently emits.
 | `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`). A hard parse error; the message names the offending keys and points at the workflow format reference |
 | `E018` | A `when` condition uses an unrecognized bare identifier (e.g. `params_mode == 1`) — the evaluator would treat it as true and the rule would silently run. Reference config keys as `config.key`, or use a quoted literal, a `{...}` placeholder, or a built-in function |
 | `E019` | A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). `validate` and `plan`/dry-run preflight it the same way they existence-check static inputs; `run` fails before executing anything |
+| `E020` | A `[wildcard_constraints]` entry is not a valid regex (e.g. the impossible range `[z-a]+`). Parse rejects such entries for TOML-loaded configs, so this diagnostic is defense-in-depth for programmatically constructed configs — it runs the SAME shared compilation helper the plan-time fan-out and runtime projection use, making the validate-time error byte-identical to the run-time one |
 
 ### Lint warnings (`lint`)
 

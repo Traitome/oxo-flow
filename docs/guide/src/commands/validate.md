@@ -138,6 +138,7 @@ expanded instance (`step1_lane_L1`) rather than the template rule.
 - Exits with code `0` on success, `1` on failure
 - Validates TOML parsing, rule semantics, and DAG construction
 - Missing input files are reported as warnings (not errors). A rule's declared pixi manifest, by contrast, is existence-checked and reported as error `E019` (a missing environment file blocks every rule that needs it at run time); `--as-include` skips input-existence checks, the pixi-manifest preflight, and DAG construction, but cycle detection still applies (cycles are semantic errors, not missing files)
+- `[wildcard_constraints]` entries are compiled with the same helper the expansion engine uses — an uncompilable pattern surfaces as error `E020` (defense-in-depth for programmatically constructed configs; TOML-parsed workflows already fail at parse time with a config error)
 - Relative paths resolve against the workflow file's directory — the same base rules run from — so warnings are accurate even when invoked from another directory. This includes the pixi-manifest preflight: `pixi = "envs/x.toml"` is checked at `<workflow dir>/envs/x.toml`, never against the invoking CWD
 - Environments and tools are not verified here — the pixi-manifest check only confirms the manifest file exists, not that the pixi binary is installed or that the environment solves. Use
   [`oxo-flow test --deep`](test.md#deep-checks-deep) (checks environment

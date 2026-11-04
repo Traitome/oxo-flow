@@ -209,6 +209,8 @@ read = "[12]"
 
 If a value discovered from the filesystem does not match its constraint, it is ignored.
 
+Constraint patterns must be valid Rust `regex` syntax. Parsing a workflow whose `[wildcard_constraints]` contain an uncompilable pattern (e.g. the impossible range `[z-a]+`) fails immediately with a config error; the `validate` diagnostic `E020` covers the same condition for programmatically constructed configs, reusing the engine's shared compilation helper so its error text is byte-identical to the run-time one.
+
 ### Safe Default Character Set
 
 Because wildcard values are substituted into shell command strings, wildcards **without** a declared constraint may only carry values matching `[A-Za-z0-9._/-]+` (letters, digits, dot, underscore, dash, path separator). Values outside this set fail validation before any shell runs. Direct command substitution (`$(` and backticks) is rejected unconditionally — including for constrained wildcards and under `OXO_FLOW_UNSAFE_WILDCARDS=1` (issue #276: the floor previously sat before the constraint/unsafe-mode skip, so a permissive constraint silently disabled it; it now runs on every non-`config.*` value, and the rendered command is additionally checked against each instance's own wildcard bindings so values baked in at expansion time are covered too).

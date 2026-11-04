@@ -1481,21 +1481,11 @@ impl WorkflowConfig {
     /// Compile every `[wildcard_constraints]` regex once. Shared by the
     /// plan-time fan-out and the runtime output_pattern-consumer
     /// projection, so the per-consumer loop never recompiles them
-    /// (#268 perf family).
+    /// (#268 perf family). Compilation itself routes through
+    /// `wildcard::compile_wildcard_constraint_map` — the same helper the
+    /// validate-time E020 diagnostic uses, so the two never drift.
     pub(crate) fn compiled_wildcard_constraints(&self) -> Result<HashMap<String, regex::Regex>> {
-        self.wildcard_constraints
-            .iter()
-            .map(|(name, pattern)| {
-                regex::Regex::new(pattern)
-                    .map(|re| (name.clone(), re))
-                    .map_err(|e| OxoFlowError::Wildcard {
-                        rule: String::new(),
-                        message: format!(
-                            "invalid regex constraint '{pattern}' for wildcard '{name}': {e}"
-                        ),
-                    })
-            })
-            .collect()
+        crate::wildcard::compile_wildcard_constraint_map(&self.wildcard_constraints)
     }
 
     /// Materialize one rule's `expand_inputs` patterns into concrete
