@@ -1653,6 +1653,13 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
 
     match output {
         Some(path) => {
+            if path.is_dir() {
+                anyhow::bail!(
+                    "output path {} is a directory — pass a file path (e.g. -o {}/Dockerfile)",
+                    path.display(),
+                    path.display()
+                );
+            }
             std::fs::write(&path, &content)?;
             eprintln!(
                 "{} Exported {} to {}",
