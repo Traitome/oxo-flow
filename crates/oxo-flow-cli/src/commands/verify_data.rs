@@ -352,7 +352,7 @@ pub fn verify_data_command(tree: PathBuf, from: PathBuf, json: bool) -> Result<(
                 entry.actual.as_deref().unwrap_or_default().dimmed()
             ),
             "missing" => eprintln!(
-                "  {} {} (listed in sidecar, file missing)",
+                "  {} {} (listed in sidecar, file missing — sidecar paths are tree-relative, so a parent-directory sidecar like `vtree/vfile` looks up `<TREE>/vtree/vfile`)",
                 "✗".red().bold(),
                 entry.file
             ),
