@@ -86,6 +86,45 @@ pub(crate) fn config_placeholder_values(
 ) -> HashMap<String, String> {
     oxo_flow_core::config_impact::config_placeholder_map(config)
 }
+
+/// One distinct scientific-preflight finding with its instance count —
+/// the (code, message, suggestion) grouping from the issue #441 pilot
+/// summary, extracted so run-mode surfacing reports the same shape
+/// without a second hand-copied grouping loop (reuse, never retype).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupedScientificWarning {
+    pub code: String,
+    /// Rule name of the FIRST instance (per-instance rule names differ in
+    /// the post-expansion config; the group is the shared finding text).
+    pub rule: String,
+    pub message: String,
+    pub instances: usize,
+}
+
+/// Group post-expansion preflight findings by content: identical
+/// (code, message, suggestion) across sample instances is ONE distinct
+/// finding with M instances. Preserves first-seen order.
+pub(crate) fn group_scientific_warnings(
+    warnings: &[oxo_flow_core::scientific_preflight::ScientificWarning],
+) -> Vec<GroupedScientificWarning> {
+    let mut distinct: Vec<GroupedScientificWarning> = Vec::new();
+    for w in warnings {
+        match distinct
+            .iter_mut()
+            .find(|g| g.code == w.code && g.message == w.message)
+        {
+            Some(g) => g.instances += 1,
+            None => distinct.push(GroupedScientificWarning {
+                code: w.code.clone(),
+                rule: w.rule.clone(),
+                message: w.message.clone(),
+                instances: 1,
+            }),
+        }
+    }
+    distinct
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Everything one `oxo-flow run` invocation needs, as named fields — the
 /// former 27-positional-parameter signature made every call site a
@@ -348,6 +387,43 @@ pub async fn run_command(
         log_file.as_deref(),
         &sensitive_values,
     )?;
+
+    // Scientific preflight (dry-run parity): the constraint analysis runs at
+    // dry-run and pilot-summary time; `run` itself stayed silent, so the
+    // first real signal a user got was the tool misbehaving inside the
+    // shell. Surface the same findings here — advisory only (warn, never
+    // abort), reported once against the POST-expansion config, so identical
+    // per-sample template findings are grouped into distinct instances
+    // (issue #441 grouping, shared helper with the pilot summary).
+    let scientific = oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&config);
+    if !scientific.is_empty() {
+        let distinct = group_scientific_warnings(&scientific);
+        diagnostic_narrate(
+            format_args!("\n{}", "Scientific preflight:".bold().yellow()),
+            Some(&run_log),
+        );
+        for g in &distinct {
+            diagnostic_narrate(
+                format_args!(
+                    "    ⚠ [{}] {} (×{}): {}",
+                    g.code, g.rule, g.instances, g.message
+                ),
+                Some(&run_log),
+            );
+        }
+        diagnostic_narrate(
+            format_args!(
+                "  {} ({} across sample rules) — see 'oxo-flow dry-run' for full suggestions",
+                oxo_flow_core::plural(
+                    distinct.len(),
+                    "distinct scientific preflight finding",
+                    "distinct scientific preflight findings"
+                ),
+                oxo_flow_core::plural(scientific.len(), "instance", "instances")
+            ),
+            Some(&run_log),
+        );
+    }
 
     // When-aware planning (#882/#883): rules whose template `when` evaluates
     // false under the effective config seed the pruned set. Targeted runs
@@ -1150,5 +1226,65 @@ shell = "true"
         )
         .unwrap();
         assert!(resolve_default_targets(&config, &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod scientific_preflight_tests {
+    use super::*;
+
+    fn warning(
+        code: &str,
+        rule: &str,
+        message: &str,
+    ) -> oxo_flow_core::scientific_preflight::ScientificWarning {
+        oxo_flow_core::scientific_preflight::ScientificWarning {
+            code: code.to_string(),
+            rule: rule.to_string(),
+            message: message.to_string(),
+            suggestion: "fix it".to_string(),
+        }
+    }
+
+    #[test]
+    fn identical_findings_across_sample_rules_collapse_to_one_group() {
+        // Post-expansion: the same template finding appears once per sample
+        // instance with a different rule name (issue #441).
+        let warnings = vec![
+            warning("SCI-TEST", "rule_S1", "same problem"),
+            warning("SCI-TEST", "rule_S2", "same problem"),
+            warning("SCI-TEST", "rule_S3", "same problem"),
+        ];
+        let groups = group_scientific_warnings(&warnings);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].code, "SCI-TEST");
+        assert_eq!(groups[0].rule, "rule_S1");
+        assert_eq!(groups[0].instances, 3);
+    }
+
+    #[test]
+    fn different_messages_or_codes_stay_distinct() {
+        let warnings = vec![
+            warning("SCI-A", "rule_S1", "problem one"),
+            warning("SCI-A", "rule_S2", "problem two"),
+            warning("SCI-B", "rule_S1", "problem one"),
+        ];
+        let groups = group_scientific_warnings(&warnings);
+        assert_eq!(groups.len(), 3);
+        assert!(groups.iter().all(|g| g.instances == 1));
+    }
+
+    #[test]
+    fn first_seen_order_is_preserved() {
+        let warnings = vec![
+            warning("SCI-B", "r1", "m1"),
+            warning("SCI-A", "r2", "m2"),
+            warning("SCI-B", "r3", "m1"),
+        ];
+        let groups = group_scientific_warnings(&warnings);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].code, "SCI-B");
+        assert_eq!(groups[0].instances, 2);
+        assert_eq!(groups[1].code, "SCI-A");
     }
 }
