@@ -1599,6 +1599,62 @@ pub fn lint_format(
             });
         }
 
+        // W035: Shell glob reads outside declared inputs. A glob in a
+        // command (`cat stats/*.count.txt`) is expanded by the shell at run
+        // time — the DAG builder never sees it, so a rule that declares no
+        // inputs gets no edges against the rules that create those files and
+        // can be scheduled before them (the command then fails with e.g.
+        // `cat: 'stats/*.count.txt': No such file or directory`). Glob
+        // inputs declared in `input` are different: the DAG builder
+        // compiles them and links every matching producer output.
+        if rule.input.is_empty()
+            && rule.expand_inputs.is_empty()
+            && rule.input_groups.is_empty()
+            && rule.input_function.is_none()
+            && executes
+            && !can_never_run
+        {
+            let mut glob_reads: std::collections::BTreeSet<String> = Default::default();
+            let cmd_texts = rule
+                .shell
+                .iter()
+                .chain(rule.script.iter())
+                .map(|text| crate::wildcard::strip_shell_comments(text));
+            for text in cmd_texts {
+                for line in text.lines() {
+                    let mut prev = "";
+                    for word in line.split_whitespace() {
+                        let token = word
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .trim_end_matches([';', ',', ')']);
+                        if token.contains('/')
+                            && !word.starts_with('-')
+                            && !prev.starts_with('-')
+                            && prev != "rm"
+                            && (token.contains('*') || token.contains('?') || token.contains('['))
+                        {
+                            glob_reads.insert(token.to_string());
+                        }
+                        prev = word;
+                    }
+                }
+            }
+            for token in glob_reads {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "command reads glob `{token}` but the rule declares no inputs — shell globs create no DAG dependency, so this rule may run before the files it reads exist"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W035".to_string(),
+                    suggestion: Some(
+                        "declare the glob in `input = [...]` (glob inputs are matched against producer outputs and create real DAG edges), or list the files via `expand_inputs` for gather steps"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -6148,6 +6204,167 @@ shell = "samtools faidx {{config.reference}}"
             !suggestion.contains("every consumer"),
             "the old suggestion ('add depends_on to every consumer') could not silence \
              the warning once dependents skip it: {suggestion}"
+        );
+    }
+
+    // ---- W035: Shell glob reads outside declared inputs ----
+
+    #[test]
+    fn lint_glob_reads_outside_declared_inputs_fires_w035() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w035: Vec<_> = diagnostics.iter().filter(|d| d.code == "W035").collect();
+        assert_eq!(
+            w035.len(),
+            1,
+            "one glob read must yield exactly one W035: {diagnostics:?}"
+        );
+        assert_eq!(w035[0].rule.as_deref(), Some("merge"));
+        assert!(
+            w035[0].message.contains("stats/*.count.txt"),
+            "the message must name the offending glob, got: {}",
+            w035[0].message
+        );
+        let suggestion = w035[0].suggestion.as_deref().unwrap_or_default();
+        assert!(
+            suggestion.contains("input = [") && suggestion.contains("expand_inputs"),
+            "the suggestion must offer glob inputs and expand_inputs, got: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_glob_inputs_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input = ["stats/*.count.txt"]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "a declared glob input creates real DAG edges — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_condition_is_false() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            when = "false"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "a rule with when = \"false\" can never execute — the glob is moot: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_expand_inputs_declared() {
+        // Inline table must stay on ONE line — TOML inline tables cannot
+        // span lines.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "merge"
+            expand_inputs = [{ pattern = "stats/{sample}.count.txt", variables = { sample = "config.samples_list" } }]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "expand_inputs is the documented fan-in fix for gather steps — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_for_cleanup_and_find_patterns() {
+        // Flag-argument patterns (`-name '*.tmp'`) and cleanup `rm` commands
+        // are not data reads — they must stay silent.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "cleanup"
+            output = ["done.txt"]
+            shell = "rm -rf build/* && find data -name '*.tmp' -delete && touch done.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "rm targets and find -name pattern arguments are not data reads: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_input_groups_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_groups = [{ pattern = "stats/{sample}.count.txt", group_by = "sample" }]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "input_groups declare where the files come from — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_input_function_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_function = "get_inputs"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "input_function fills the input list at run time — no warning: {diagnostics:?}"
         );
     }
 
