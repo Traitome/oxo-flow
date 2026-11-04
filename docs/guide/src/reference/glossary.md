@@ -343,6 +343,7 @@ below list every code the engine currently emits.
 | `E018` | A `when` condition uses an unrecognized bare identifier (e.g. `params_mode == 1`) — the evaluator would treat it as true and the rule would silently run. Reference config keys as `config.key`, or use a quoted literal, a `{...}` placeholder, or a built-in function |
 | `E019` | A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). `validate` and `plan`/dry-run preflight it the same way they existence-check static inputs; `run` fails before executing anything |
 | `E020` | A `[wildcard_constraints]` entry is not a valid regex (e.g. the impossible range `[z-a]+`). Parse rejects such entries for TOML-loaded configs, so this diagnostic is defense-in-depth for programmatically constructed configs — it runs the SAME shared compilation helper the plan-time fan-out and runtime projection use, making the validate-time error byte-identical to the run-time one |
+| `E021` | A rule's input/output pattern uses Snakemake-style inline wildcard constraint syntax (e.g. `{sample:[A-Z]+}`). The engine's wildcard grammar is `{name}` only — a `:`-carrying brace group is never parsed as a wildcard, so it stays literal brace text and the tool fails on a path that looks valid. Constraints belong in `[wildcard_constraints]` |
 
 ### Lint warnings (`lint`)
 

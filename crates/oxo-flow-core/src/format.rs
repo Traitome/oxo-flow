@@ -33,6 +33,16 @@ static IO_INDEXED_PLACEHOLDER_RE: LazyLock<Regex> =
 static IO_NAMED_PLACEHOLDER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(input|output)\.([^{}\s]+)\}").expect("valid io-named regex"));
 
+/// Matches Snakemake-style inline wildcard constraints (`{sample:[A-Z]+}`)
+/// in input/output patterns. The engine's wildcard grammar is
+/// `\{(\w+)\}` only — a `:`-carrying brace group is never parsed as a
+/// wildcard, so it stays literal brace text and the tool fails on a path
+/// that looks valid. Surfaces as diagnostic `E021` (defense-in-depth,
+/// mirroring E004/E020).
+static INLINE_WILDCARD_CONSTRAINT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{(\w+):[^}]+\}").expect("valid inline-wildcard-constraint regex")
+});
+
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -1135,6 +1145,49 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 "fix the regex in [wildcard_constraints] — patterns must be valid Rust regex syntax (see https://docs.rs/regex); a constraint that fails to compile blocks every fan-out that reads the wildcard".to_string(),
             ),
         });
+    }
+
+    // E021: input/output patterns must not carry Snakemake-style inline
+    // wildcard constraints (`{sample:[A-Z]+}`). The engine's wildcard
+    // grammar is `\{(\w+)\}` only, so a `:`-carrying group is never bound —
+    // it stays literal brace text and the tool fails on a path that looks
+    // valid. Constraints belong in `[wildcard_constraints]`.
+    for rule in &config.rules {
+        let mut offenders: Vec<&String> = Vec::new();
+        offenders.extend(
+            rule.input
+                .iter()
+                .filter(|p| INLINE_WILDCARD_CONSTRAINT_RE.is_match(p)),
+        );
+        offenders.extend(
+            rule.output
+                .iter()
+                .filter(|p| INLINE_WILDCARD_CONSTRAINT_RE.is_match(p)),
+        );
+        if let Some(pattern) = rule.output_pattern.as_ref()
+            && INLINE_WILDCARD_CONSTRAINT_RE.is_match(pattern)
+        {
+            offenders.push(pattern);
+        }
+        for pattern in offenders {
+            let wildcard = INLINE_WILDCARD_CONSTRAINT_RE
+                .captures(pattern)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str())
+                .unwrap_or("?");
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "rule '{}' uses inline wildcard constraint syntax in pattern '{}' — the engine's wildcard grammar is '{{name}}' only and '{}' will stay literal brace text instead of being expanded",
+                    rule.name, pattern, wildcard
+                ),
+                rule: Some(rule.name.clone()),
+                code: "E021".to_string(),
+                suggestion: Some(
+                    "move the constraint to the [wildcard_constraints] section as `name = \"regex\"` and keep the pattern as a plain '{name}' wildcard".to_string(),
+                ),
+            });
+        }
     }
 
     let valid = !diagnostics.iter().any(|d| d.severity == Severity::Error);
@@ -3229,6 +3282,63 @@ mod tests {
         assert!(
             !result.errors().iter().any(|d| d.code == "E020"),
             "valid constraints must not trip E020"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inline_wildcard_constraint_syntax() {
+        // E021: a Snakemake-style inline constraint `{sample:[A-Z]+}` in an
+        // input/output pattern is never parsed as a wildcard by the engine
+        // (grammar is `{name}` only), so it stays literal brace text and the
+        // tool fails on a path that looks valid. Validation must catch it up
+        // front and point at [wildcard_constraints].
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample:[A-Z]+}.txt"]
+            output = ["out/{sample:[A-Z]+}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid, "E021 must fail validation");
+        let err = result
+            .errors()
+            .iter()
+            .find(|d| d.code == "E021")
+            .cloned()
+            .expect("inline wildcard constraint must surface as E021");
+        assert!(
+            err.message.contains("'sample'"),
+            "E021 message must name the offending wildcard, got: {}",
+            err.message
+        );
+        assert_eq!(err.rule.as_deref(), Some("r1"), "E021 is rule-level");
+    }
+
+    #[test]
+    fn validate_accepts_plain_wildcards_without_inline_constraints() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [wildcard_constraints]
+            sample = "[A-Z0-9]+"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.errors().iter().any(|d| d.code == "E021"),
+            "plain {{name}} wildcards must not trip E021"
         );
     }
 
