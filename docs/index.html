@@ -104,6 +104,18 @@
       --hero-mesh-3: radial-gradient(ellipse 45% 35% at 16% 24%, rgba(245, 158, 11, 0.09), transparent 65%);
     }
 
+    /* Aurora animation tint tokens (kept in sync with each theme's accents) */
+    [data-theme="dark"] {
+      --aurora-1: rgba(16, 185, 129, 0.16);
+      --aurora-2: rgba(56, 189, 248, 0.13);
+      --aurora-3: rgba(245, 158, 11, 0.08);
+    }
+    [data-theme="light"] {
+      --aurora-1: rgba(5, 150, 105, 0.12);
+      --aurora-2: rgba(2, 132, 199, 0.10);
+      --aurora-3: rgba(217, 119, 6, 0.08);
+    }
+
     /* ==========================================================================
        2. RESET, TYPOGRAPHY & ATMOSPHERE
        ========================================================================== */
@@ -128,6 +140,32 @@
       overflow-x: hidden;
       position: relative;
       transition: background-color 0.25s ease, color 0.25s ease;
+    }
+
+    /* Drifting aurora backdrop: fixed, gradient-shifted radial meshes. The
+       @keyframes animate background-position inside a doubled 200% box, so
+       50% offsets land back on seamless loops. Paired with the scroll-driven
+       parallax on #bgAurora. */
+    #bgAurora {
+      position: fixed;
+      inset: -50%;
+      width: 200%;
+      height: 200%;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(38% 32% at 24% 28%, var(--aurora-1), transparent 70%),
+        radial-gradient(34% 30% at 74% 18%, var(--aurora-2), transparent 70%),
+        radial-gradient(30% 28% at 52% 72%, var(--aurora-3), transparent 70%),
+        radial-gradient(26% 24% at 84% 66%, var(--aurora-1), transparent 70%);
+      background-size: 200% 200%;
+      animation: auroraDrift 36s ease-in-out infinite alternate;
+      will-change: transform, background-position;
+    }
+    @keyframes auroraDrift {
+      0%   { background-position: 0% 0%; }
+      50%  { background-position: 55% 45%; }
+      100% { background-position: 100% 100%; }
     }
 
     /* Architectural coordinate grid backdrop */
@@ -187,6 +225,22 @@
     /* ==========================================================================
        3. TOP ANNOUNCEMENT BANNER & STICKY GITHUB-STYLE NAVBAR
        ========================================================================== */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(14px) saturate(1.35);
+      -webkit-backdrop-filter: blur(14px) saturate(1.35);
+      background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.25s ease, background 0.25s ease;
+    }
+    /* Scrolled state is toggled from JS once the hero leaves the viewport. */
+    .site-header.is-scrolled {
+      border-bottom-color: var(--border-muted);
+      background: color-mix(in srgb, var(--bg-canvas) 88%, transparent);
+      box-shadow: 0 10px 32px -20px rgba(0, 0, 0, 0.45);
+    }
     .top-banner {
       background: linear-gradient(90deg, rgba(16, 185, 129, 0.14), rgba(56, 189, 248, 0.14), rgba(245, 158, 11, 0.12));
       border-bottom: 1px solid var(--border-default);
@@ -218,10 +272,6 @@
       position: sticky;
       top: 0;
       z-index: 100;
-      background: var(--bg-glass);
-      backdrop-filter: blur(16px) saturate(160%);
-      -webkit-backdrop-filter: blur(16px) saturate(160%);
-      border-bottom: 1px solid var(--border-default);
     }
 
     .nav-inner {
@@ -577,6 +627,11 @@
       border-radius: 999px;
       background: var(--emerald-bright);
       box-shadow: 0 0 10px var(--emerald-bright);
+      animation: pulseDot 2.4s ease-in-out infinite;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.55; transform: scale(0.82); }
     }
 
     .hero h1 {
@@ -591,7 +646,14 @@
     .hero h1 .gradient-word {
       background: linear-gradient(110deg, var(--emerald-bright) 0%, var(--cyan) 52%, var(--copper-bright) 100%);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
+      background-size: 200% 100%;
+      animation: gradientShift 9s ease-in-out infinite alternate;
+    }
+    @keyframes gradientShift {
+      from { background-position: 0% 0; }
+      to   { background-position: 100% 0; }
     }
 
     .hero-subtitle {
@@ -791,11 +853,16 @@
 
     .stage-panel {
       display: none;
+      animation: stageFade 0.28s ease;
     }
     .stage-panel.active {
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
       min-height: 440px;
+    }
+    @keyframes stageFade {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
 
     .stage-code-pane {
@@ -1681,6 +1748,31 @@
     /* ==========================================================================
        13. RESPONSIVE BREAKPOINTS
        ========================================================================== */
+    /* ==========================================================================
+       13. MOTION POLISH — REVEAL ON SCROLL & ACCESSIBILITY
+       ========================================================================== */
+    .reveal {
+      opacity: 0;
+      transform: translateY(26px);
+      transition: opacity 0.65s ease, transform 0.65s cubic-bezier(0.22, 0.61, 0.36, 1);
+      transition-delay: var(--reveal-delay, 0s);
+    }
+    .reveal.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #bgAurora { animation: none; transform: none !important; }
+      .hero-eyebrow-pill .pulse-dot::after { animation: none; }
+      .hero h1 .gradient-word { animation: none; background-size: 100% 100%; }
+      .stage-panel { animation: none; }
+      .reveal { transition: none; opacity: 1; transform: none; }
+    }
+
+    /* ==========================================================================
+       14. RESPONSIVE BREAKPOINTS
+       ========================================================================== */
     @media (max-width: 1180px) {
       .telemetry-strip {
         grid-template-columns: repeat(3, 1fr);
@@ -1787,6 +1879,8 @@
   </style>
 </head>
 <body>
+  <!-- ─── DRIFTING AURORA BACKDROP (scroll-parallaxed via JS) ────────────── -->
+  <div id="bgAurora" aria-hidden="true"></div>
 
   <!-- ─── Top Announcement Banner ─────────────────────────────────────────── -->
   <div class="top-banner">
@@ -1947,7 +2041,7 @@
           </div>
 
           <!-- ─── INTERACTIVE 4-TAB PRODUCT SHOWCASE WINDOW ─────────────── -->
-          <div class="stage-window">
+          <div class="stage-window reveal">
             <div class="stage-topbar">
               <div class="window-dots" aria-hidden="true">
                 <span class="dot-r"></span>
@@ -2259,7 +2353,7 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
           </div>
 
           <!-- Telemetry / Proof Strip -->
-          <div class="telemetry-strip">
+          <div class="telemetry-strip reveal">
             <div class="telemetry-card">
               <div class="telemetry-num">100<span class="sym">%</span></div>
               <div class="telemetry-label"><span class="lang-en">Safe Rust across workspace crates (<code>#![forbid(unsafe_code)]</code>)</span><span class="lang-zh">全工作区安全 Rust (<code>#![forbid(unsafe_code)]</code>)</span></div>
@@ -2292,7 +2386,7 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
   </section>
 
   <!-- ─── SECTION 1: CORE KEY INNOVATIONS (BENTO GRID) ────────────────────── -->
-  <section class="rail-section" id="innovations">
+  <section class="rail-section reveal" id="innovations">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -2319,7 +2413,7 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
             </span>
           </p>
 
-          <div class="bento-grid">
+          <div class="bento-grid reveal">
             <!-- Card 1: DAG Engine & Operators -->
             <article class="bento-card span-7">
               <div>
@@ -2492,7 +2586,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── SECTION 2: ARCHITECTURAL COMPARISON MATRIX ──────────────────────── -->
-  <section class="rail-section" id="compare">
+  <section class="rail-section reveal" id="compare">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -2597,7 +2691,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── SECTION 3: 31 CLI SUBCOMMANDS & 9 WEB API DOMAINS EXPLORER ─────── -->
-  <section class="rail-section" id="cli-api">
+  <section class="rail-section reveal" id="cli-api">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -2634,7 +2728,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           </div>
 
           <!-- All 31 CLI Subcommands Grid -->
-          <div class="cli-grid" id="cliGrid">
+          <div class="cli-grid reveal" id="cliGrid">
             <a class="cli-card" data-cat="exec" href="latest/commands/run/"><div class="cli-card-top"><span class="cli-cmd-name">run</span><span class="cli-cat-badge">exec</span></div><div class="cli-desc">Execute DAG workflows in parallel with resource scheduling, disk guard &amp; --provenance.</div></a>
             <a class="cli-card" data-cat="exec" href="latest/commands/resume/"><div class="cli-card-top"><span class="cli-cmd-name">resume</span><span class="cli-cat-badge">exec</span></div><div class="cli-desc">Resume interrupted workflows from checkpoint.json skipping completed rules.</div></a>
             <a class="cli-card" data-cat="exec" href="latest/commands/dry-run/"><div class="cli-card-top"><span class="cli-cmd-name">dry-run</span><span class="cli-cat-badge">exec</span></div><div class="cli-desc">Preview execution plan (alias: plan), resource estimates, and AI safety audit.</div></a>
@@ -2700,7 +2794,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── SECTION 4: 16 CURATED WORKFLOW GALLERY & COMMUNITY HUB ──────────── -->
-  <section class="rail-section" id="gallery">
+  <section class="rail-section reveal" id="gallery">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -2745,7 +2839,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           </div>
 
           <!-- All 16 Gallery Workflows Grid -->
-          <div class="gallery-grid">
+          <div class="gallery-grid reveal">
             <div class="gallery-card">
               <div><div class="gallery-card-head"><span class="gallery-num">01 · Foundations</span><span class="gallery-stars">★☆☆☆☆</span></div><h4>Hello World</h4><p>Minimal single-rule pipeline structure, input/output declaration, and shell execution.</p></div>
               <div class="gallery-card-foot"><a href="latest/gallery/hello-world/">Read Guide →</a><a class="src-link" href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/01_hello_world.oxoflow">.oxoflow ↗</a></div>
@@ -2817,7 +2911,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── SECTION 5: IMPORTANT LINKS ATLAS & ROLE-BASED COMPASS ───────────── -->
-  <section class="rail-section" id="atlas">
+  <section class="rail-section reveal" id="atlas">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -2879,7 +2973,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           </div>
 
           <!-- 6-Column Complete Important Links Directory -->
-          <div class="atlas-grid">
+          <div class="atlas-grid reveal">
             <!-- Column 1: Tutorials & Onboarding -->
             <div class="atlas-col">
               <div class="atlas-col-title">
@@ -3000,7 +3094,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── SECTION 6: CITATIONS, LICENSING & CONTRIBUTORS ─────────────────── -->
-  <section class="rail-section" id="citing">
+  <section class="rail-section reveal" id="citing">
     <div class="container">
       <div class="rail-layout">
         <div class="rail-track">
@@ -3052,7 +3146,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
           </div>
 
           <!-- Split Licensing Overview & Contributors -->
-          <div class="bento-grid">
+          <div class="bento-grid reveal">
             <div class="bento-card span-7">
               <div>
                 <div class="bento-tag">
@@ -3127,7 +3221,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   </section>
 
   <!-- ─── FOOTER ──────────────────────────────────────────────────────────── -->
-  <footer class="site-footer">
+  <footer class="site-footer reveal">
     <div class="container">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:2rem;">
         <div style="max-width:420px;">
@@ -3197,6 +3291,64 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
   <!-- ─── INTERACTIVITY SCRIPT ────────────────────────────────────────────── -->
   <script>
     (function () {
+      // 0. Atmosphere: scroll state — sticky header hairline + aurora parallax.
+      //    transform and background-position composite on the same element, so
+      //    the JS owns the parallax translate and the CSS keyframe owns the
+      //    gradient drift. Guarded by prefers-reduced-motion.
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const siteHeader = document.querySelector(".site-header");
+      const bgAurora = document.getElementById("bgAurora");
+      let ticking = false;
+      function onScroll() {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(function () {
+          ticking = false;
+          const y = window.scrollY || 0;
+          if (siteHeader) siteHeader.classList.toggle("is-scrolled", y > 24);
+          if (bgAurora && !reducedMotion) {
+            bgAurora.style.transform = "translate3d(0," + (y * 0.14).toFixed(1) + "px, 0)";
+          }
+        });
+      }
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      // 0b. Reveal-on-scroll: stagger grid cards slightly by their DOM order.
+      if ("IntersectionObserver" in window) {
+        const revealObserver = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("is-visible");
+              revealObserver.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.12, rootMargin: "0px 0px -40px 0px" });
+        const revealEls = document.querySelectorAll(".reveal");
+        revealEls.forEach(function (el) {
+          const parentGrid = el.closest(".bento-grid, .cli-grid, .gallery-grid, .atlas-grid");
+          if (parentGrid) {
+            const idx = Array.prototype.indexOf.call(parentGrid.children, el);
+            if (idx > 0) el.style.setProperty("--reveal-delay", (Math.min(idx, 6) * 0.06).toFixed(2) + "s");
+          }
+          revealObserver.observe(el);
+        });
+        // Anything already below the fold never "intersects" — pre-trigger
+        // those so printing / deep jumps / full-height captures never see
+        // blank sections.
+        requestAnimationFrame(function () {
+          const vh = window.innerHeight || 800;
+          revealEls.forEach(function (el) {
+            if (el.getBoundingClientRect().top > vh + 80) {
+              el.classList.add("is-visible");
+              revealObserver.unobserve(el);
+            }
+          });
+        });
+      } else {
+        document.querySelectorAll(".reveal").forEach(function (el) { el.classList.add("is-visible"); });
+      }
+
       // 1. Theme Toggle (Dark / Daylight)
       const htmlEl = document.documentElement;
       const themeBtn = document.getElementById("themeToggle");
