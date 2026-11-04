@@ -1119,7 +1119,7 @@ pub enum ClusterAction {
             help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
+        #[arg(value_name = "JOB_IDS", required = true, help = "One or more job IDs")]
         job_ids: Vec<String>,
     },
     /// Fetch logs for a submitted cluster job.

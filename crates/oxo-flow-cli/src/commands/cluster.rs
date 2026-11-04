@@ -752,36 +752,32 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 backend.as_deref(),
             )?);
 
-            if job_ids.is_empty() {
-                eprintln!(
-                    "{} No job IDs provided. Usage: oxo-flow cluster cancel <JOB_ID>...",
-                    "Warning:".bold().yellow()
-                );
-            } else {
-                eprintln!(
-                    "{} Canceling {}...",
-                    "Cluster:".bold().cyan(),
-                    oxo_flow_core::plural(job_ids.len(), "job", "jobs")
-                );
+            // job_ids is clap-enforced as required, so the empty case never
+            // reaches here — usage errors surface at argument parsing with
+            // exit code 2, matching `cluster logs` (missing JOB_ID).
+            eprintln!(
+                "{} Canceling {}...",
+                "Cluster:".bold().cyan(),
+                oxo_flow_core::plural(job_ids.len(), "job", "jobs")
+            );
 
-                match std::process::Command::new(cancel_cmd)
-                    .args(&job_ids)
-                    .status()
-                {
-                    Ok(status) => {
-                        if status.success() {
-                            eprintln!("{} Successfully canceled jobs.", "✓".green());
-                        } else {
-                            anyhow::bail!(
-                                "Command failed with exit code: {}",
-                                status.code().unwrap_or(-1)
-                            );
-                        }
+            match std::process::Command::new(cancel_cmd)
+                .args(&job_ids)
+                .status()
+            {
+                Ok(status) => {
+                    if status.success() {
+                        eprintln!("{} Successfully canceled jobs.", "✓".green());
+                    } else {
+                        anyhow::bail!(
+                            "Command failed with exit code: {}",
+                            status.code().unwrap_or(-1)
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("  Is {} installed on this system?", cancel_cmd);
-                        anyhow::bail!("Failed to execute cancel command: {}", e);
-                    }
+                }
+                Err(e) => {
+                    eprintln!("  Is {} installed on this system?", cancel_cmd);
+                    anyhow::bail!("Failed to execute cancel command: {}", e);
                 }
             }
         }

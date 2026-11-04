@@ -3191,11 +3191,16 @@ fn cli_cluster_status() {
 
 #[test]
 fn cli_cluster_cancel_no_ids() {
+    // job_ids is clap-enforced as required, so omitting it is a usage
+    // error (exit code 2), matching `cluster logs` with a missing JOB_ID.
     oxo_flow_cmd()
         .args(["cluster", "cancel", "-b", "slurm"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("No job IDs"));
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "required arguments were not provided",
+        ));
 }
 
 // ─── Status subcommand ───────────────────────────────────────────────────────
