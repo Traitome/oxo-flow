@@ -253,10 +253,14 @@ pub fn parse_verdict(review: &str) -> Option<Verdict> {
     // approve", "won't approve", "should not be approved", …) means the
     // review is discarded, never guessed as approve. The old allowlist of
     // specific negations kept missing real-world phrasings (#544 patched
-    // one; this closes the class).
-    let negated = ["not", "cannot", "can't", "won't", "n't", "never", "neither"]
-        .iter()
-        .any(|tok| verdict_text.contains(tok));
+    // one; this closes the class). Token match on word boundaries so
+    // prose like "noteworthy" is not a negation.
+    let negated = verdict_text
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .any(|w| {
+            w == "not" || w == "cannot" || w == "never" || w == "neither" || w.ends_with("n't")
+        });
     let says_approve = verdict_text.contains("approve") && !negated;
     if asks_changes {
         // Findings = the rest of the response, minus the verdict line.

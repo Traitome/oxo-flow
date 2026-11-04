@@ -65,9 +65,3 @@ regexes = [
   '''sk-1234567890abcdef''',
 ]
 
-[[allowlists]]
-description = "security.rs fixture from a past refactor: OPENAI_API_KEY placeholder"
-paths = ['''oxo-flow-core/src/executor/security\.rs$''']
-regexes = [
-  '''sk-1234567890abcdef1234567890abcdef''',
-]

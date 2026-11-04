@@ -1766,13 +1766,19 @@ async fn main() -> Result<()> {
                 }
                 Some("test") => {
                     if explain_args {
-                        anyhow::bail!("'ai test' takes no workflow/--step/--json arguments");
+                        anyhow::bail!(
+                            "'ai test' takes no workflow/--step arguments (a global --json \
+                             before the subcommand is accepted but has no document here)"
+                        );
                     }
                     ai_test_command().await?
                 }
                 Some("setup") => {
                     if explain_args {
-                        anyhow::bail!("'ai setup' takes no workflow/--step/--json arguments");
+                        anyhow::bail!(
+                            "'ai setup' takes no workflow/--step arguments (a global --json \
+                             before the subcommand is accepted but has no document here)"
+                        );
                     }
                     ai_setup_command().await?
                 }

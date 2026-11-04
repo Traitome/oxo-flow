@@ -81,11 +81,6 @@ pub use config::{
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
 pub use executor::{CheckpointState, ExecutionEvent, JobStatus};
-// Re-export result types
-pub use result::{
-    FastQcExtractor, GenericTextExtractor, MultiQcExtractor, OutputRecord, ResultExtractor,
-    ResultExtractorRegistry, scan_run_outputs,
-};
 pub use rule::Rule;
 pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};

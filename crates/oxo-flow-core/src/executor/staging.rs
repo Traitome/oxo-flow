@@ -213,9 +213,10 @@ pub async fn stage_remote_io(
                         tokio::fs::create_dir_all(parent).await?;
                     }
                     let _ = tokio::fs::remove_file(&local).await;
-                    let status = std::process::Command::new("mkfifo")
+                    let status = tokio::process::Command::new("mkfifo")
                         .arg(&local)
                         .status()
+                        .await
                         .map_err(|e| OxoFlowError::Config {
                             message: format!(
                                 "failed to invoke mkfifo for {}: {e}",

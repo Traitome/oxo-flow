@@ -398,9 +398,9 @@ export default function WorkflowCanvas({
             className="rf-metro-btn"
             style={{ background: 'var(--color-primary, #4F7DF9)', color: '#ffffff' }}
             onClick={() => setViewMode('standard')}
-            title="Switch to Standard DAG View"
+            title={t('canvas.dagViewTitle')}
           >
-            <LayoutGrid size={14} /> DAG View
+            <LayoutGrid size={14} /> {t('canvas.dagView')}
           </button>
         </div>
       </div>
@@ -448,9 +448,9 @@ export default function WorkflowCanvas({
           type="button"
           className="rf-metro-btn"
           onClick={() => setViewMode('metro')}
-          title="Switch to Metro Transit Map View"
+          title={t('canvas.metroViewTitle')}
         >
-          <TrainTrack size={14} /> Metro View
+          <TrainTrack size={14} /> {t('canvas.metroView')}
         </button>
         {context === 'editor' && (
           <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>

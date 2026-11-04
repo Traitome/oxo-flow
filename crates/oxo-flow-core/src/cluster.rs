@@ -4,10 +4,8 @@
 //!
 //! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.
 
-use crate::environment::EnvironmentResolver;
 use crate::error::Result;
 use crate::rule::Rule;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -78,46 +76,6 @@ pub struct ClusterJobConfig {
     pub extra_args: Vec<String>,
 }
 
-/// Status of a job submitted to a cluster scheduler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClusterJobStatus {
-    /// Job is queued and waiting to start.
-    Pending,
-    /// Job is currently executing.
-    Running,
-    /// Job finished successfully.
-    Completed,
-    /// Job finished with an error.
-    Failed,
-    /// Status could not be determined.
-    Unknown,
-}
-
-impl fmt::Display for ClusterJobStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::Running => write!(f, "running"),
-            Self::Completed => write!(f, "completed"),
-            Self::Failed => write!(f, "failed"),
-            Self::Unknown => write!(f, "unknown"),
-        }
-    }
-}
-
-/// A job that has been submitted to a cluster scheduler.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterJob {
-    /// Scheduler-assigned job identifier.
-    pub job_id: String,
-    /// Name of the rule this job executes.
-    pub rule_name: String,
-    /// Current status of the job.
-    pub status: ClusterJobStatus,
-    /// Time the job was submitted.
-    pub submit_time: Option<DateTime<Utc>>,
-}
-
 /// Generate a scheduler submit script for the given backend.
 ///
 /// The returned string is a complete shell script including the `#!/bin/bash`
@@ -144,31 +102,6 @@ pub fn generate_submit_script(
             crate::backend::gcp_batch::generate_gcp_batch_job_spec(rule, shell_cmd, cluster_config)
         }
     }
-}
-
-/// Generate a scheduler submit script with environment wrapping.
-///
-/// This is the recommended way to generate cluster scripts as it properly
-/// wraps the shell command through the environment resolver (conda, docker,
-/// singularity, pixi, venv) before generating the submit script.
-pub fn generate_submit_script_with_env(
-    backend: &ClusterBackend,
-    rule: &Rule,
-    shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-    env_resolver: &EnvironmentResolver,
-) -> std::result::Result<String, String> {
-    // Wrap command through environment resolver
-    let wrapped_cmd = env_resolver
-        .wrap_command(
-            shell_cmd,
-            &rule.environment,
-            Some(&rule.resources),
-            std::path::Path::new("."),
-        )
-        .map_err(|e| e.to_string())?;
-
-    generate_submit_script(backend, rule, &wrapped_cmd, cluster_config).map_err(|e| e.to_string())
 }
 
 /// Generate an ARRAY submit script for a group of same-rule instances
@@ -300,22 +233,12 @@ pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
         ClusterBackend::AwsBatch => format!(
             "for f in {dir}/*.sh; do aws batch submit-job --cli-input-json \"file://$f\"; done"
         ),
+        // The manual form mirrors the executor's minted id: sanitized
+        // basename clamped to the 41-char name budget inside GCP's
+        // 63-char job-id cap.
         ClusterBackend::GcpBatch => format!(
-            "for f in {dir}/*.sh; do gcloud batch jobs submit \"oxoflow-$(basename \"$f\" .sh)-$(date +%s)\" --config \"file://$f\"; done"
+            "for f in {dir}/*.sh; do n=$(basename \"$f\" .sh | tr '[:upper:]_' '[:lower:]-') | sed 's/[^a-z0-9-]//g' | cut -c1-41; gcloud batch jobs submit \"oxoflow-$n-$(date +%s)\" --config \"file://$f\"; done"
         ),
-    }
-}
-
-/// Returns the shell command used to query job status on the given backend.
-pub fn status_command(backend: &ClusterBackend) -> &'static str {
-    match backend {
-        ClusterBackend::Slurm => "squeue -j",
-        ClusterBackend::Pbs => "qstat",
-        ClusterBackend::Sge => "qstat",
-        ClusterBackend::Lsf => "bjobs",
-        ClusterBackend::Kubernetes => "kubectl get jobs",
-        ClusterBackend::AwsBatch => "aws batch describe-jobs",
-        ClusterBackend::GcpBatch => "gcloud batch jobs describe",
     }
 }
 
@@ -902,15 +825,6 @@ mod tests {
         assert!(ClusterBackend::from_str("unknown").is_err());
     }
 
-    #[test]
-    fn job_status_display() {
-        assert_eq!(ClusterJobStatus::Pending.to_string(), "pending");
-        assert_eq!(ClusterJobStatus::Running.to_string(), "running");
-        assert_eq!(ClusterJobStatus::Completed.to_string(), "completed");
-        assert_eq!(ClusterJobStatus::Failed.to_string(), "failed");
-        assert_eq!(ClusterJobStatus::Unknown.to_string(), "unknown");
-    }
-
     // -- Submit / status commands -------------------------------------------
 
     #[test]
@@ -919,14 +833,6 @@ mod tests {
         assert_eq!(submit_command(&ClusterBackend::Pbs), "qsub");
         assert_eq!(submit_command(&ClusterBackend::Sge), "qsub");
         assert_eq!(submit_command(&ClusterBackend::Lsf), "bsub");
-    }
-
-    #[test]
-    fn status_commands() {
-        assert_eq!(status_command(&ClusterBackend::Slurm), "squeue -j");
-        assert_eq!(status_command(&ClusterBackend::Pbs), "qstat");
-        assert_eq!(status_command(&ClusterBackend::Sge), "qstat");
-        assert_eq!(status_command(&ClusterBackend::Lsf), "bjobs");
     }
 
     // -- Script generation --------------------------------------------------
@@ -1208,18 +1114,6 @@ mod tests {
 
         assert!(script.contains("#SBATCH --gres=gpu:1"));
         assert!(script.contains("#SBATCH --exclusive"));
-    }
-
-    #[test]
-    fn cluster_job_construction() {
-        let job = ClusterJob {
-            job_id: "12345".to_string(),
-            rule_name: "bwa_align".to_string(),
-            status: ClusterJobStatus::Running,
-            submit_time: Some(Utc::now()),
-        };
-        assert_eq!(job.job_id, "12345");
-        assert_eq!(job.status, ClusterJobStatus::Running);
     }
 
     // -- GPU directive tests ------------------------------------------------
@@ -1626,101 +1520,6 @@ mod tests {
         assert_eq!(format_walltime_for_scheduler("12h"), "12:00:00"); // Less than 24h
         // Unparseable → verbatim, never a silent 1-hour default (#715/#737).
         assert_eq!(format_walltime_for_scheduler("24 hours"), "24 hours");
-    }
-
-    // -- Module loading tests ------------------------------------------------
-
-    #[test]
-    fn slurm_module_loading() {
-        let rule = Rule {
-            name: "gatk_job".to_string(),
-            input: vec![].into(),
-            output: vec![].into(),
-            shell: Some("gatk HaplotypeCaller".to_string()),
-            script: None,
-            threads: Some(4),
-            memory: Some("8G".to_string()),
-            resources: Resources::default(),
-            environment: EnvironmentSpec {
-                modules: vec!["java/11".to_string(), "gatk/4.2".to_string()],
-                ..EnvironmentSpec::default()
-            },
-            log: None,
-            benchmark: None,
-            params: HashMap::new(),
-            priority: 0,
-            target: false,
-            group: None,
-            description: None,
-            ..Default::default()
-        };
-        let config = make_config();
-        let env_resolver = crate::environment::EnvironmentResolver::new();
-        let script = generate_submit_script_with_env(
-            &ClusterBackend::Slurm,
-            &rule,
-            "gatk HaplotypeCaller",
-            &config,
-            &env_resolver,
-        )
-        .unwrap();
-
-        // Module loading is now handled by EnvironmentResolver.wrap_command()
-        // Modules are loaded in a single line: "module load java/11 gatk/4.2"
-        assert!(
-            script.contains("module load java/11 gatk/4.2"),
-            "Expected 'module load java/11 gatk/4.2' in script, got:\n{}",
-            script
-        );
-    }
-
-    #[test]
-    fn pbs_module_loading() {
-        let rule = Rule {
-            name: "bwa_job".to_string(),
-            input: vec![].into(),
-            output: vec![].into(),
-            shell: Some("bwa mem ref.fa reads.fq".to_string()),
-            script: None,
-            threads: Some(8),
-            memory: Some("16G".to_string()),
-            resources: Resources::default(),
-            environment: EnvironmentSpec {
-                modules: vec!["bwa/0.7.17".to_string()],
-                ..EnvironmentSpec::default()
-            },
-            log: None,
-            benchmark: None,
-            params: HashMap::new(),
-            priority: 0,
-            target: false,
-            group: None,
-            description: None,
-            ..Default::default()
-        };
-        let config = ClusterJobConfig {
-            backend: ClusterBackend::Pbs,
-            queue: Some("batch".to_string()),
-            account: None,
-            walltime: None,
-            extra_args: vec![],
-        };
-        let env_resolver = crate::environment::EnvironmentResolver::new();
-        let script = generate_submit_script_with_env(
-            &ClusterBackend::Pbs,
-            &rule,
-            "bwa mem ref.fa reads.fq",
-            &config,
-            &env_resolver,
-        )
-        .unwrap();
-
-        // Module loading is now handled by EnvironmentResolver.wrap_command()
-        assert!(
-            script.contains("module load bwa/0.7.17"),
-            "Expected 'module load bwa/0.7.17' in script, got:\n{}",
-            script
-        );
     }
 
     // -- Logs directory tests ------------------------------------------------

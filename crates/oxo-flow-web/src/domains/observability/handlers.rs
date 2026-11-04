@@ -208,10 +208,12 @@ pub async fn get_audit_logs(
 
     let (entries, total) = if let Some(backend) = crate::infra::db::global_backend() {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        // Propagate, never swallow: a storage failure here would otherwise
+        // masquerade as "no audit activity" on a compliance surface.
         let (rows, total) = backend
             .list_audit_logs(&cutoff, per_page, offset)
             .await
-            .unwrap_or_default();
+            .map_err(|e| db_err(format!("DB error listing audit logs: {e}")))?;
 
         let entries = rows
             .into_iter()

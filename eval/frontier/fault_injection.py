@@ -39,6 +39,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -324,6 +325,19 @@ def _lint_diagnostics(stdout: str) -> List[Dict[str, Any]]:
     return diagnostics if isinstance(diagnostics, list) else []
 
 
+def _code_in_text(code: str, text: str) -> bool:
+    """Case-insensitive, word-boundary search for a diagnostic code.
+
+    The previous checks were inconsistent: a case-sensitive bare substring
+    missed lowercase engine output for "OOM"/"timeout" (false negatives)
+    while lowercase "disk" matched inside rule names like `spill_to_disk`
+    (false positives). \\b keeps hyphenated codes ("TYPE-002") matchable and
+    accepts hyphen-separated tokens ("disk pressure") but refuses embedded
+    hits ("oom" in "bloom", "disk" in "spill_to_disk").
+    """
+    return re.search(rf"\b{re.escape(code)}\b", text, re.IGNORECASE) is not None
+
+
 def assess_case(
     case: FaultCase,
     lint_stdout: str,
@@ -341,7 +355,7 @@ def assess_case(
         if diagnostic.get("code") == case.expected_diagnostic_code
     ]
     combined_static = lint_stdout + "\n" + dry_output
-    static_detected = bool(matching) or case.expected_diagnostic_code in combined_static
+    static_detected = bool(matching) or _code_in_text(case.expected_diagnostic_code, combined_static)
 
     attribution = any(
         diagnostic.get("rule") == case.target_rule for diagnostic in matching
@@ -349,7 +363,7 @@ def assess_case(
     if case.category == "infrastructure":
         lower_run = run_output.lower()
         attribution = (
-            case.expected_diagnostic_code.lower() in lower_run
+            _code_in_text(case.expected_diagnostic_code, run_output)
             or "root cause:" in lower_run
         ) and case.target_rule.lower() in lower_run
 

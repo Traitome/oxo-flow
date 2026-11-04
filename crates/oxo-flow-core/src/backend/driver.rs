@@ -559,20 +559,26 @@ impl BackendDriver {
                                     }
                                 }));
                             }
-                            cancel_on_error!(
-                                std::fs::write(
-                                    &index_path,
-                                    serde_json::to_string_pretty(&array_index).unwrap_or_default(),
-                                )
-                                .map_err(|e| {
+                            let index_json = cancel_on_error!(
+                                serde_json::to_string_pretty(&array_index).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot serialize {}: {e}",
+                                            index_path.display()
+                                        ),
+                                    }
+                                })
+                            );
+                            cancel_on_error!(std::fs::write(&index_path, index_json).map_err(
+                                |e| {
                                     OxoFlowError::Config {
                                         message: format!(
                                             "cannot write {}: {e}",
                                             index_path.display()
                                         ),
                                     }
-                                })
-                            );
+                                }
+                            ));
                             for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
                                 let element_id = self.backend.array_element_id(&base_id, i + 1);
                                 // Per-INSTANCE dirs keep the run directory

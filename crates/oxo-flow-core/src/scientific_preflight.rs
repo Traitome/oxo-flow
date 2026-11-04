@@ -84,15 +84,12 @@ fn is_leading_noise(word: &str) -> bool {
 /// passing its output *directory* `.../featurecounts` to a python helper
 /// fired the strand warning, while the real featureCounts rule was
 /// correctly flagged as silent.
-/// Join bash line continuations so a multi-line command stays one
-/// segment, then neutralize `$(...)` openers as segment boundaries, and
-/// split into command segments — shared by every featureCounts probe so
-/// the normalization rules never drift apart.
-/// Run `probe` against every command segment of a shell snippet, scoped to
-/// featureCounts invocations. Join bash line continuations so a multi-line
-/// command stays one segment, then neutralize `$(...)` openers as segment
-/// boundaries — shared by every featureCounts probe so the normalization
-/// rules never drift apart.
+///
+/// Runs `probe` against every command segment of a shell snippet, scoped
+/// to featureCounts invocations. Join bash line continuations so a
+/// multi-line command stays one segment, then neutralize `$(...)` openers
+/// as segment boundaries — shared by every featureCounts probe so the
+/// normalization rules never drift apart.
 fn any_featurecounts_segment(shell: &str, probe: impl Fn(&str) -> bool) -> bool {
     let normalized = shell
         .replace("\\\r\n", " ")

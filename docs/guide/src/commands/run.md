@@ -468,7 +468,9 @@ reference = "/data/ref/hg38.fa"
 ```
 
 Keys the profile omits fall back to the driver defaults: `max_submitted`
-50, `max_array_size` 1001, `poll_interval` 5s. `extra_args` entries are
+50, `max_array_size` 1001, `poll_interval` 5s — the authoritative
+[`DriverConfig` table](../reference/execution-backends.md#backenddriver)
+carries the complete knob list. `extra_args` entries are
 emitted as scheduler directives verbatim and are not validated — a typo
 reaches the scheduler as written.
 

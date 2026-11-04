@@ -1595,12 +1595,16 @@ impl ResourcePool {
         for (group_name, &required) in &rule.resources.groups {
             let available = self.groups.get(group_name).copied().unwrap_or(0);
             if available < required {
-                let holders: Vec<&str> = self
+                let mut holders: Vec<&str> = self
                     .active
                     .iter()
                     .filter(|(_, r)| r.groups.get(group_name).copied().unwrap_or(0) > 0)
                     .map(|(name, _)| name.as_str())
                     .collect();
+                // HashMap order would render a different holder list every
+                // run — sort like `running_rules()` does (running_rules sorts;
+                // the old test even pinned the NONdeterminism in).
+                holders.sort_unstable();
                 let holder_note = if holders.is_empty() {
                     "(none active)".to_string()
                 } else {
@@ -1642,13 +1646,15 @@ impl ResourcePool {
             .iter()
             .map(|(n, r)| (n.as_str(), r.threads))
             .collect();
-        by_threads.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        // Deterministic tie order: equal holders otherwise render in
+        // HashMap iteration order.
+        by_threads.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let mut by_memory: Vec<(&str, u64)> = self
             .active
             .iter()
             .map(|(n, r)| (n.as_str(), r.memory_mb))
             .collect();
-        by_memory.sort_by_key(|(_, m)| std::cmp::Reverse(*m));
+        by_memory.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let top_threads: Vec<String> = by_threads
             .iter()
             .take(3)

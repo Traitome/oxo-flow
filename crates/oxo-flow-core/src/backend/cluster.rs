@@ -72,6 +72,15 @@ fn parse_with_regex(pattern: &str, text: &str) -> Result<String> {
         .ok_or_else(|| unparseable("job id", text, ""))
 }
 
+/// Mint a GCP Batch job id from a rule/job directory name. GCP caps ids
+/// at 63 chars (`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`): "oxoflow-" (8) +
+/// "-" (1) + millis (13) leaves 41 for the name — clamp the sanitized
+/// dir or long rule names fail gcloud's id validation on every submit.
+fn mint_gcp_job_id(dir: &str, millis: i64) -> String {
+    let name = super::gcp_batch::sanitize_gcp_batch_name(dir);
+    format!("oxoflow-{}-{}", &name[..name.len().min(41)], millis)
+}
+
 fn unparseable(what: &str, stdout: &str, stderr: &str) -> OxoFlowError {
     OxoFlowError::Config {
         message: format!("cannot parse {what} from '{stdout}' / '{stderr}'"),
@@ -178,16 +187,39 @@ pub fn parse_status_line(
             ))
         }
         ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch => {
-            let (id, state) = line.split_once('|')?;
+            // Two real shapes: pipe rows from the jsonpath/query formats
+            // this module asks for, and tab rows from gcloud's
+            // `--format=value(name,state)`. `split_once` handles the pipe;
+            // whitespace rows read id-first (gcloud prints name then
+            // state).
+            let (id, state) = match line.split_once('|') {
+                Some(pair) => pair,
+                None => {
+                    let mut fields = line.split_whitespace();
+                    let id = fields.next()?;
+                    (id, fields.next()?)
+                }
+            };
             let status = match state.trim().to_uppercase().as_str() {
                 "PENDING" | "SUBMITTED" | "RUNNABLE" | "QUEUED" => BackendJobStatus::Pending,
                 "RUNNING" | "STARTING" => BackendJobStatus::Running,
-                "COMPLETED" | "SUCCEEDED" => BackendJobStatus::Completed,
+                "COMPLETE" | "COMPLETED" | "SUCCEEDED" => BackendJobStatus::Completed,
                 "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
                 "CANCELLED" => BackendJobStatus::Cancelled,
                 _ => BackendJobStatus::Unknown,
             };
-            Some((id.trim().to_string(), status))
+            let mut id = id.trim();
+            // gcloud's --format=value(name,…) prints the FULLY QUALIFIED
+            // resource name (projects/p/locations/l/jobs/<id>) on both
+            // describe and list — users (and this module's own submit path)
+            // always speak the bare id, so slice the last segment or a
+            // by-id `cluster status` query never matches.
+            if matches!(backend, ClusterBackend::GcpBatch)
+                && let Some(pos) = id.rfind("/jobs/")
+            {
+                id = &id[pos + "/jobs/".len()..];
+            }
+            Some((id.to_string(), status))
         }
     }
 }
@@ -242,7 +274,17 @@ pub fn status_invocations(
             .map(|id| {
                 (
                     "kubectl",
-                    vec!["get".to_string(), "job".to_string(), id.clone()],
+                    vec![
+                        "get".to_string(),
+                        "job".to_string(),
+                        id.clone(),
+                        // `name|conditions` rows — the same pipe shape the
+                        // shared parser reads. A job with no conditions
+                        // yet yields `name|` (Unknown), which `cluster
+                        // status` reports verbatim.
+                        "-o".to_string(),
+                        "jsonpath={.metadata.name}|{.status.conditions[*].type}".to_string(),
+                    ],
                 )
             })
             .collect(),
@@ -253,6 +295,12 @@ pub fn status_invocations(
                 "describe-jobs".to_string(),
                 "--jobs".to_string(),
                 job_ids.join(" "),
+                // The driver poller reads the same `id|STATE` rows — one
+                // query shape, one parser.
+                "--query".to_string(),
+                "jobs[].join(|,[jobId,status])".to_string(),
+                "--output".to_string(),
+                "text".to_string(),
             ],
         )],
         ClusterBackend::GcpBatch => job_ids
@@ -265,6 +313,9 @@ pub fn status_invocations(
                         "jobs".to_string(),
                         "describe".to_string(),
                         id.clone(),
+                        // `name<TAB>state` — the tab shape the shared
+                        // parser reads alongside the pipe form.
+                        "--format=value(name,status.state)".to_string(),
                     ],
                 )
             })
@@ -295,15 +346,38 @@ pub fn my_jobs_invocations(backend: &ClusterBackend) -> Vec<(&'static str, Vec<S
         ClusterBackend::Pbs => vec![("qstat", vec!["-u".to_string(), user])],
         ClusterBackend::Sge => vec![("qstat", Vec::new())],
         ClusterBackend::Lsf => vec![("bjobs", Vec::new())],
-        ClusterBackend::Kubernetes => {
-            vec![("kubectl", vec!["get".to_string(), "jobs".to_string()])]
-        }
-        ClusterBackend::AwsBatch => {
-            vec![("aws", vec!["batch".to_string(), "list-jobs".to_string()])]
-        }
+        ClusterBackend::Kubernetes => vec![(
+            "kubectl",
+            vec![
+                "get".to_string(),
+                "jobs".to_string(),
+                "-o".to_string(),
+                "jsonpath={range .items[*]}{.metadata.name}|{.status.conditions[*].type}{\"\n\"}{end}"
+                    .to_string(),
+            ],
+        )],
+        ClusterBackend::AwsBatch => vec![(
+            "aws",
+            vec![
+                "batch".to_string(),
+                "list-jobs".to_string(),
+                // list-jobs requires a queue; sites configure it via the
+                // AWS CLI defaults. The query keeps the parse shape the
+                // same as describe-jobs.
+                "--query".to_string(),
+                "jobSummaryList[].join(|,[jobId,status])".to_string(),
+                "--output".to_string(),
+                "text".to_string(),
+            ],
+        )],
         ClusterBackend::GcpBatch => vec![(
             "gcloud",
-            vec!["batch".to_string(), "jobs".to_string(), "list".to_string()],
+            vec![
+                "batch".to_string(),
+                "jobs".to_string(),
+                "list".to_string(),
+                "--format=value(name,status.state)".to_string(),
+            ],
         )],
     }
 }
@@ -319,12 +393,20 @@ pub fn parse_job_listing(
     backend: &ClusterBackend,
     stdout: &str,
 ) -> Vec<(String, BackendJobStatus)> {
+    let is_hpc = !matches!(
+        backend,
+        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch
+    );
     stdout
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .filter_map(|line| parse_status_line(backend, line))
-        .filter(|(id, _)| id.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        // The numeric-first guard drops HPC table headers ("Job id  Name
+        // ..."). Cloud rows come from jsonpath/query formats with no
+        // headers, and their ids are alphanumeric — the guard filtered out
+        // every cloud listing, so it only applies to HPC backends.
+        .filter(|(id, _)| !is_hpc || id.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .collect()
 }
 
@@ -782,21 +864,17 @@ impl super::ExecutorBackend for ClusterExecutor {
                 // GCP Batch takes the job id positionally and the Job
                 // resource via --config. The manifest carries no id, so one
                 // is minted from the job directory (the sanitized rule
-                // name) plus the submission second for uniqueness across
-                // concurrent runs. `--location` rides the --queue cluster
-                // option, mirroring how AWS Batch reads it as the job
-                // queue; a missing location fails fast with gcloud's own
-                // remediation message.
+                // name) plus the submission millisecond for uniqueness
+                // across concurrent runs. `--location` rides the --queue
+                // cluster option, mirroring how AWS Batch reads it as the
+                // job queue; a missing location fails fast with gcloud's
+                // own remediation message.
                 let dir = script_path
                     .parent()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                     .unwrap_or("job");
-                let job_id = format!(
-                    "oxoflow-{}-{}",
-                    super::gcp_batch::sanitize_gcp_batch_name(dir),
-                    Utc::now().timestamp()
-                );
+                let job_id = mint_gcp_job_id(dir, Utc::now().timestamp_millis());
                 let mut args = vec![
                     "batch".to_string(),
                     "jobs".to_string(),
@@ -2353,6 +2431,88 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
                 .unwrap()
                 .1,
             BackendJobStatus::Pending
+        );
+    }
+
+    #[test]
+    fn parse_status_line_reads_k8s_jsonpath_and_gcp_tab_rows() {
+        // `kubectl get job -o jsonpath={.metadata.name}|{...type}` emits
+        // pipe rows with a condition word, and gcloud's
+        // --format=value(name,state) emits tab rows — both must route
+        // through the shared parser.
+        let (id, st) =
+            parse_status_line(&ClusterBackend::Kubernetes, "oxoflow-align|Complete").unwrap();
+        assert_eq!(id, "oxoflow-align");
+        assert_eq!(st, BackendJobStatus::Completed);
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Kubernetes, "oxoflow-align|Failed")
+                .unwrap()
+                .1,
+            BackendJobStatus::Failed
+        );
+        // No conditions yet: empty state parses as Unknown, not garbage.
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Kubernetes, "oxoflow-align|")
+                .unwrap()
+                .1,
+            BackendJobStatus::Unknown
+        );
+        let (id, st) =
+            parse_status_line(&ClusterBackend::GcpBatch, "oxoflow-x-1\tSUCCEEDED").unwrap();
+        assert_eq!(id, "oxoflow-x-1");
+        assert_eq!(st, BackendJobStatus::Completed);
+    }
+
+    #[test]
+    fn minted_gcp_job_ids_respect_the_63_char_cap() {
+        let id = mint_gcp_job_id(
+            "a-very-long-rule-directory-name-exceeding-gcp-limit-xyz",
+            1_700_000_000_000,
+        );
+        assert!(id.len() <= 63, "id too long: {} ({})", id, id.len());
+        assert!(id.starts_with("oxoflow-"));
+        assert!(id.ends_with("-1700000000000"));
+        // Short names pass through whole.
+        let short = mint_gcp_job_id("align", 1);
+        assert_eq!(short, "oxoflow-align-1");
+    }
+
+    #[test]
+    fn gcp_fully_qualified_names_normalize_to_bare_ids() {
+        // `gcloud --format=value(name,…)` prints
+        // projects/p/locations/l/jobs/<id>; the bare id is what users (and
+        // the submit path) speak, and a by-id status query must match.
+        let (id, st) = parse_status_line(
+            &ClusterBackend::GcpBatch,
+            "projects/p/locations/us-central1/jobs/oxoflow-x-1\tSUCCEEDED",
+        )
+        .unwrap();
+        assert_eq!(id, "oxoflow-x-1");
+        assert_eq!(st, BackendJobStatus::Completed);
+        // Bare ids pass through untouched.
+        let (id2, _) = parse_status_line(&ClusterBackend::GcpBatch, "oxoflow-x-1|RUNNING").unwrap();
+        assert_eq!(id2, "oxoflow-x-1");
+    }
+
+    #[test]
+    fn cloud_job_listings_are_not_filtered_by_the_hpc_header_guard() {
+        // The numeric-first guard exists to drop HPC table headers; cloud
+        // ids are alphanumeric and were ALL filtered out before it was
+        // backend-gated.
+        let rows = parse_job_listing(
+            &ClusterBackend::AwsBatch,
+            "job-abc-123|SUCCEEDED\njob-def-456|RUNNING\n",
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "job-abc-123");
+        assert_eq!(rows[0].1, BackendJobStatus::Completed);
+        // HPC keeps its header guard.
+        assert!(
+            parse_job_listing(
+                &ClusterBackend::Pbs,
+                "Job id  Name  User  Time Use  S  Queue\n"
+            )
+            .is_empty()
         );
     }
 

@@ -340,12 +340,11 @@ internally is not a valid mem_spec. The `rusage` is what actually places
 the job on a host with room; multi-threaded rules also carry
 `span[hosts=1]` inside the same `-R` string.
 
-Environment wrapping is applied automatically: conda rules are wrapped in
-`conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'`, docker rules in
-`docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '<bash shim>' sh '...'`, singularity/apptainer rules in
-`<apptainer|singularity> exec --bind <workdir>:<workdir> ... <image> sh -c '<bash shim>' sh '...'`, and rules
-without an environment run the command directly. The shim re-execs the
-command under `bash` when the image ships it — see
+Environment wrapping is applied automatically — conda, docker, and
+singularity/apptainer rules (plus pixi, venv, and module environments) each
+get their resolver's wrapper, and rules without an environment run the
+command directly. The exact per-backend wrapping forms, the bash shim, and
+the read-only mount rules are specified once in
 [Environment Wrapping](../how-to/run-on-cluster.md#environment-wrapping).
 
 ### Dependency-Aware Submit Script

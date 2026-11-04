@@ -212,7 +212,7 @@ impl WorkflowConfig {
             self.rule_templates = self.rules.clone();
         }
         use crate::wildcard::{
-            expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
+            expand_pattern, validate_wildcard_constraints_compiled,
             wildcard_combinations_from_groups, wildcard_combinations_from_pairs,
         };
 
@@ -812,24 +812,15 @@ impl WorkflowConfig {
                             ) {
                                 // Instance skipped (#882) — record its
                                 // would-be outputs for expand_inputs
-                                // filtering (mirrors the pair branch).
-                                let skipped = rule
-                                    .output
-                                    .iter()
-                                    .map(|p| {
-                                        if has_wildcards(p)
-                                            || crate::wildcard::contains_values_namespace(p)
-                                        {
-                                            crate::wildcard::expand_values_namespace(
-                                                &expand_pattern(p, &merged)
-                                                    .unwrap_or_else(|_| p.clone()),
-                                                &merged,
-                                            )
-                                        } else {
-                                            p.clone()
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
+                                // filtering (mirrors the pair branch, via
+                                // the same shared helper).
+                                let expanded_out =
+                                    super::model::expand_rule_patterns(&rule.output, &merged);
+                                let skipped: Vec<String> = match expanded_out {
+                                    crate::rule::FilePatterns::List(v) => v,
+                                    crate::rule::FilePatterns::Map(m) => m.into_values().collect(),
+                                    crate::rule::FilePatterns::Dir { path, .. } => vec![path],
+                                };
                                 self.when_skipped_outputs.extend(skipped);
                                 continue;
                             }
@@ -864,60 +855,18 @@ impl WorkflowConfig {
                                 Some(Self::bake_meta_when(&baked, &self.metadata, &merged));
                         }
 
-                        expanded.input = rule
-                            .input
-                            .iter()
-                            .map(|p| {
-                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
-                                {
-                                    crate::wildcard::expand_values_namespace(
-                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
-                                        &merged,
-                                    )
-                                } else {
-                                    p.clone()
-                                }
-                            })
-                            .collect();
-                        expanded.output = rule
-                            .output
-                            .iter()
-                            .map(|p| {
-                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
-                                {
-                                    crate::wildcard::expand_values_namespace(
-                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
-                                        &merged,
-                                    )
-                                } else {
-                                    p.clone()
-                                }
-                            })
-                            .collect();
+                        // The shared expansion helpers (same functions the
+                        // pair/values branches call) — this block used to be
+                        // a third hand-copied mirror of the exact same
+                        // has_wildcards → expand_pattern →
+                        // expand_values_namespace dance.
+                        expanded.input = super::model::expand_rule_patterns(&rule.input, &merged);
+                        expanded.output = super::model::expand_rule_patterns(&rule.output, &merged);
                         if let Some(ref shell) = rule.shell {
-                            expanded.shell = if has_wildcards(shell)
-                                || crate::wildcard::contains_values_namespace(shell)
-                            {
-                                Some(crate::wildcard::expand_values_namespace(
-                                    &expand_pattern(shell, &merged)
-                                        .unwrap_or_else(|_| shell.clone()),
-                                    &merged,
-                                ))
-                            } else {
-                                Some(shell.clone())
-                            };
+                            expanded.shell = Some(super::model::expand_rule_shell(shell, &merged));
                         }
                         if let Some(ref log) = rule.log {
-                            expanded.log = if has_wildcards(log)
-                                || crate::wildcard::contains_values_namespace(log)
-                            {
-                                Some(crate::wildcard::expand_values_namespace(
-                                    &expand_pattern(log, &merged).unwrap_or_else(|_| log.clone()),
-                                    &merged,
-                                ))
-                            } else {
-                                Some(log.clone())
-                            };
+                            expanded.log = Some(super::model::expand_rule_shell(log, &merged));
                         }
                         // output_pattern (issue #227 item 5): bake the bound
                         // wildcards per instance (see the pair branch).

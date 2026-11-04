@@ -137,6 +137,9 @@ export default function MonitorReport() {
   const detailRef = useRef<HTMLDivElement>(null);
   const [qaInput, setQaInput] = useState('');
   const [qaAnswer, setQaAnswer] = useState<string | null>(null);
+  // Ask round-trips through the AI surface — keep the button in a visible
+  // loading state so a slow answer cannot look like a dead click.
+  const [asking, setAsking] = useState(false);
   // #907 P3-16: alert cards default to a one-line summary (level + rule +
   // time) so a burst of alerts doesn't bury the monitor; expand on click.
   // The Recent Events table under a finished run starts collapsed too.
@@ -439,11 +442,14 @@ export default function MonitorReport() {
 
   const handleAsk = async () => {
     if (!qaInput.trim() || !selId) return;
+    setAsking(true);
     try {
       const answer = await api.askReport(selId, qaInput);
       setQaAnswer(answer);
     } catch {
       setQaAnswer(t('monitor.askError'));
+    } finally {
+      setAsking(false);
     }
   };
 
@@ -970,8 +976,8 @@ export default function MonitorReport() {
               className="search-input"
               style={{ flex: 1, minWidth: 0 }}
             />
-            <button onClick={handleAsk} className="btn-run" disabled={!qaInput.trim()}>
-              <Bot size={14} /> {t('monitor.ask')}
+            <button onClick={() => void handleAsk()} className="btn-run" disabled={!qaInput.trim() || asking}>
+              {asking ? <Loader2 size={14} className="spin" /> : <Bot size={14} />} {t('monitor.ask')}
             </button>
           </div>
           {qaAnswer && (
@@ -1002,7 +1008,7 @@ export default function MonitorReport() {
                   style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--color-accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
                   title={t('monitor.vscodeOpen')}
                 >
-                  VS Code ↗
+                  {t('monitor.vscodeLink')}
                 </a>
               </div>
               <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
@@ -1014,7 +1020,7 @@ export default function MonitorReport() {
               {fn.auto_fixable && fn.fix_action && (
                 <div style={{ marginTop: '6px', padding: '6px 8px', background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--color-text)' }}>
-                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>⚡ 1-Click Fix:</span>
+                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>{t('monitor.oneClickFix')}</span>
                     {fn.fix_action.description}
                   </div>
                   <button
@@ -1028,7 +1034,7 @@ export default function MonitorReport() {
                       if (selId) void handleRetry();
                     }}
                   >
-                    Apply &amp; Retry
+                    {t('monitor.applyRetry')}
                   </button>
                 </div>
               )}
@@ -1360,10 +1366,10 @@ export default function MonitorReport() {
         <div className="dash-card" ref={detailRef}>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <div>
-              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 8)}...</h3>
+              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>{t('monitor.runTitle').replace('{{id}}', selId.slice(0, 8))}</h3>
               <div className="muted">
-                Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
-                · Phase: {selectedRun?.phase || '-'}
+                {t('monitor.statusLabel')} <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
+                · {t('monitor.phaseLabel')} {selectedRun?.phase || '-'}
               </div>
             </div>
             <div

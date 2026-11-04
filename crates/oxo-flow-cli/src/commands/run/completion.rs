@@ -241,6 +241,11 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                         } else if !ctx.workdir_actual.join(output).exists() {
                             missing_outputs.push(format!("  {}: {}", rule_name, output));
                         } else {
+                            // Reachable only for outputs whose resolved form
+                            // differs from the workdir-relative form (e.g. a
+                            // literal `{...}` template that never expanded but
+                            // exists verbatim) — count it as present rather
+                            // than double-report a file that is there.
                             verified += 1;
                         }
                     }

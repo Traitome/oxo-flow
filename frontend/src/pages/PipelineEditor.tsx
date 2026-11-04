@@ -603,7 +603,7 @@ export default function PipelineEditor() {
     if (current && !current.valid) {
       setShowErrors(true);
       session.setRunResult({
-        message: `Not saved: ${current.errors.length} validation error(s) — see the panel below`,
+        message: t('editor.notSaved').replace('{{n}}', String(current.errors.length)),
         type: 'error',
       });
       return;

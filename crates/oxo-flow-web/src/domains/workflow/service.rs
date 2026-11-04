@@ -41,64 +41,6 @@ pub fn parse_pipeline(
     let dag =
         WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
             .map_err(|e| format!("DAG build: {e}"))?;
-    let parallel_groups = dag.parallel_groups().unwrap_or_default();
-    let core_metrics = dag
-        .metrics()
-        .ok()
-        .unwrap_or(oxo_flow_core::dag::DagMetrics {
-            node_count: 0,
-            edge_count: 0,
-            max_depth: 0,
-            max_width: 0,
-            critical_path_length: 0,
-            parallel_group_count: 0,
-        });
-    let critical_path = dag.critical_path().unwrap_or_default();
-
-    let nodes: Vec<DagJsonNode> = config
-        .rules
-        .iter()
-        .map(|r| {
-            let env_str = r.environment.kind();
-            let color = if env_str == "conda" {
-                "#3B82F6"
-            } else if env_str == "docker" {
-                "#8B5CF6"
-            } else if env_str == "singularity" {
-                "#EC4899"
-            } else {
-                "#6B7280"
-            };
-            DagJsonNode {
-                id: r.name.clone(),
-                label: r.name.clone(),
-                color: color.to_string(),
-                environment: env_str.to_string(),
-                rule: serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
-            }
-        })
-        .collect();
-
-    let edges: Vec<DagJsonEdge> = config
-        .rules
-        .iter()
-        .flat_map(|r| {
-            dag.dependencies(&r.name)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|dep| DagJsonEdge {
-                    from: dep.clone(),
-                    to: r.name.clone(),
-                    kind: if r.depends_on.contains(&dep) {
-                        "declared"
-                    } else {
-                        "file"
-                    }
-                    .to_string(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
 
     let stats = oxo_flow_core::format::workflow_stats(&config);
 
@@ -107,20 +49,7 @@ pub fn parse_pipeline(
         name: config.workflow.name.clone(),
         version: config.workflow.version.clone(),
         rules,
-        dag: DagJsonResponse {
-            nodes,
-            edges,
-            parallel_groups,
-            critical_path,
-            metrics: DagMetrics {
-                node_count: core_metrics.node_count,
-                edge_count: core_metrics.edge_count,
-                max_depth: core_metrics.max_depth,
-                max_width: core_metrics.max_width,
-                critical_path_length: core_metrics.critical_path_length,
-                parallel_group_count: core_metrics.parallel_group_count,
-            },
-        },
+        dag: dag_json(&config, &dag),
         stats: WorkflowStatsResponse {
             rule_count: stats.rule_count,
             shell_rules: stats.shell_rules,
@@ -430,15 +359,10 @@ pub fn diff_workflows(toml_a: &str, toml_b: &str) -> Result<DiffResponse, String
 // DAG
 // ---------------------------------------------------------------------------
 
-/// Build a DAG representation suitable for frontend visualisation.
-pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
-    let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
-    // Config expansion (issue #707) so visualised edges include
-    // {config.*}-routed producer/consumer pairs.
-    let dag =
-        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
-            .map_err(|e| format!("DAG: {e}"))?;
-
+/// One owner for the DAG-visualisation JSON assembly (nodes/edges/colors/
+/// metrics) shared by `parse_pipeline` and `build_dag` — the hand-copied
+/// duplicates are what let the two surfaces drift (reuse, never retype).
+fn dag_json(config: &WorkflowConfig, dag: &WorkflowDag) -> DagJsonResponse {
     let nodes: Vec<DagJsonNode> = config
         .rules
         .iter()
@@ -484,8 +408,7 @@ pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
         })
         .collect();
 
-    let groups = dag.parallel_groups().unwrap_or_default();
-    let m = dag
+    let core_metrics = dag
         .metrics()
         .ok()
         .unwrap_or(oxo_flow_core::dag::DagMetrics {
@@ -496,22 +419,32 @@ pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
             critical_path_length: 0,
             parallel_group_count: 0,
         });
-    let cp = dag.critical_path().unwrap_or_default();
 
-    Ok(DagJsonResponse {
+    DagJsonResponse {
         nodes,
         edges,
-        parallel_groups: groups,
-        critical_path: cp,
+        parallel_groups: dag.parallel_groups().unwrap_or_default(),
+        critical_path: dag.critical_path().unwrap_or_default(),
         metrics: DagMetrics {
-            node_count: m.node_count,
-            edge_count: m.edge_count,
-            max_depth: m.max_depth,
-            max_width: m.max_width,
-            critical_path_length: m.critical_path_length,
-            parallel_group_count: m.parallel_group_count,
+            node_count: core_metrics.node_count,
+            edge_count: core_metrics.edge_count,
+            max_depth: core_metrics.max_depth,
+            max_width: core_metrics.max_width,
+            critical_path_length: core_metrics.critical_path_length,
+            parallel_group_count: core_metrics.parallel_group_count,
         },
-    })
+    }
+}
+
+/// Build a DAG representation suitable for frontend visualisation.
+pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
+    let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
+    // Config expansion (issue #707) so visualised edges include
+    // {config.*}-routed producer/consumer pairs.
+    let dag =
+        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+            .map_err(|e| format!("DAG: {e}"))?;
+    Ok(dag_json(&config, &dag))
 }
 
 // ---------------------------------------------------------------------------

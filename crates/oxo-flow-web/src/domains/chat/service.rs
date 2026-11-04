@@ -181,24 +181,12 @@ pub async fn process_chat(
 }
 
 /// Infer the user's intent from their message.
-pub fn infer_intent(message: &str) -> String {
-    let lower = message.to_lowercase();
-    if lower.contains("rna-seq") || lower.contains("rnaseq") || lower.contains("transcriptome") {
-        "RNA-seq analysis".into()
-    } else if lower.contains("variant") || lower.contains("wgs") || lower.contains("germline") {
-        "Variant calling".into()
-    } else if lower.contains("chip-seq") || lower.contains("chipseq") {
-        "ChIP-seq analysis".into()
-    } else if lower.contains("single-cell") || lower.contains("scrna") || lower.contains("10x") {
-        "Single-cell RNA-seq".into()
-    } else if lower.contains("qc") || lower.contains("quality") || lower.contains("fastqc") {
-        "Quality control".into()
-    } else if lower.contains("alignment") || lower.contains("align") || lower.contains("star") {
-        "Read alignment".into()
-    } else {
-        "Bioinformatics analysis".into()
-    }
-}
+///
+/// One owner for the keyword → intent mapping: the AI domain's orchestrator
+/// holds the canonical (superset) classifier, and chat re-exports it so the
+/// two surfaces cannot drift (reuse, never retype). Dependency direction is
+/// chat → ai, matching the orchestration flow.
+pub use crate::domains::ai::agents::orchestrator::infer_intent;
 
 /// Resolve the caller's workspace scope and analyze their data paths;
 /// a workspace error degrades to "no data report" (best-effort surface).

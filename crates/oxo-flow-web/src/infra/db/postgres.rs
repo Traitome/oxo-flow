@@ -255,6 +255,31 @@ impl StorageBackend for PostgresBackend {
             );
             CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
 
+            -- Indexes (parity with the SQLite init in sqlite.rs — keep the
+            -- index list in sync there when adding one here).
+            CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON pipelines(user_id);
+            CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+            CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
+            CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+
+            -- One-time repair for databases created before seeding was
+            -- name-guarded (same repair as the SQLite init, in PG dialect:
+            -- no `rowid`, so dedup by `ctid` — keep the oldest physical row
+            -- per name). Must run BEFORE the partial unique index below.
+            DELETE FROM templates a
+             USING templates b
+             WHERE a.is_system = 1
+               AND b.is_system = 1
+               AND a.name = b.name
+               AND a.ctid > b.ctid;
+
             -- Parity with the SQLite schema: system-template seeding is
             -- name-guarded, so "one row per template name" is a schema
             -- invariant on every backend (partial unique index on system
@@ -275,6 +300,15 @@ impl StorageBackend for PostgresBackend {
             .execute(&self.pool)
             .await
             .map_err(|e| format!("PG migration config_overrides: {e}"))?;
+
+        // Vocabulary migration (parity with the SQLite init): legacy
+        // executors wrote `success` for completed runs; the canonical
+        // terminal set is completed|failed|cancelled. Idempotent — safe to
+        // run on every init.
+        sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("PG migration legacy run status: {e}"))?;
 
         // AI config flags are part of the public model as i64 (matching
         // SQLite); PostgreSQL INT4 columns cannot decode into that type.
@@ -310,6 +344,24 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| e.to_string())?;
         }
+
+        // Seed the `default` pseudo-user (parity with the SQLite init):
+        // personal-mode runs carry `user_id = 'default'` and runs.user_id is
+        // a foreign key, so the row must exist. `ON CONFLICT DO NOTHING`
+        // without a target is the PG equivalent of SQLite's INSERT OR
+        // IGNORE — any unique violation skips the insert.
+        sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+        )
+        .bind("default")
+        .bind("default")
+        .bind("user")
+        .bind("local")
+        .bind(Some("oxo-flow"))
+        .bind(Self::now())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         Ok(())
     }
@@ -1708,6 +1760,10 @@ impl StorageBackend for PostgresBackend {
         limit: u32,
     ) -> Result<Vec<models::PipelineRow>, String> {
         let pattern = format!("%{}%", query);
+        // ILIKE here (not LIKE, as in the SQLite backend) is a deliberate
+        // dialect choice: SQLite's LIKE is case-insensitive for ASCII but
+        // PostgreSQL's is case-sensitive — ILIKE keeps the search behavior
+        // equivalent across backends. Do not "normalize" one to the other.
         if is_admin {
             sqlx::query_as(
                 "SELECT * FROM pipelines WHERE name ILIKE $1 OR toml_content ILIKE $2 ORDER BY updated_at DESC LIMIT $3",

@@ -365,14 +365,14 @@ pub fn preview_run_plan(
     let will_run_seeds: HashSet<String> = order
         .iter()
         .filter(|name| {
-            !clone.completed_rules.contains(*name)
-                || (!tombstone_keep.contains(*name)
-                    && !config
-                        .get_rule(name)
-                        .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
-                    && config
-                        .get_rule(name)
-                        .is_some_and(|rule| !rule_outputs_exist(rule, workdir, wildcard_values)))
+            will_run_seed(
+                name,
+                &clone.completed_rules,
+                &tombstone_keep,
+                config,
+                wildcard_values,
+                workdir,
+            )
         })
         .cloned()
         .collect();
@@ -554,6 +554,31 @@ fn dag_path_exists(from: &str, to: &str, dag: &WorkflowDag) -> Option<usize> {
         }
     }
     None
+}
+
+/// The "will execute" seed predicate shared by run's lazy cascade-up and
+/// the dry-run preview's tombstone cascade: a rule re-executes when it
+/// never completed, or when it completed but is not a kept tombstone, is
+/// not when-gated off, and its outputs are gone. One implementation — the
+/// hand mirror in run/mod.rs was the next mirror to drift.
+pub(crate) fn will_run_seed(
+    name: &str,
+    completed_rules: &std::collections::BTreeSet<String>,
+    tombstone_keep: &std::collections::HashSet<String>,
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+    workdir: &Path,
+) -> bool {
+    if !completed_rules.contains(name) {
+        return true;
+    }
+    !tombstone_keep.contains(name)
+        && !config
+            .get_rule(name)
+            .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
+        && config
+            .get_rule(name)
+            .is_some_and(|rule| !rule_outputs_exist(rule, workdir, wildcard_values))
 }
 
 /// Whether every declared output of the rule exists (the same check `run`

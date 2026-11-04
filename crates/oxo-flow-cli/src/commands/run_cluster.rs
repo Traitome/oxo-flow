@@ -200,7 +200,14 @@ fn reject_checkpoint_reentry(plan: &ScheduledPlan, to_run: &HashSet<String>) -> 
 /// `ls`; `latest` is a convenience for `cd`, not something the code reads.
 fn create_run_dir(workdir: &Path) -> Result<PathBuf> {
     let runs_root = workdir.join(".oxo-flow").join("runs");
-    let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    // Sub-second suffix: two cluster runs inside the same second used to
+    // create_dir_all into ONE directory and share checkpoints/logs.
+    let now = chrono::Utc::now();
+    let stamp = format!(
+        "{}-{:03}",
+        now.format("%Y-%m-%dT%H-%M-%S"),
+        now.timestamp_subsec_millis()
+    );
     let run_dir = runs_root.join(&stamp);
     std::fs::create_dir_all(&run_dir)
         .with_context(|| format!("failed to create run directory {}", run_dir.display()))?;
@@ -388,36 +395,6 @@ pub(crate) async fn run_on_cluster(
         eprintln!(
             "  {} --ai-recover is not supported on the cluster path — failed jobs are \
              recorded for resume/--resume-failed instead of AI-repaired",
-            "Warning:".bold().yellow()
-        );
-    }
-    // The remote wrapper accepts a fixed flag surface; these run flags are
-    // parsed by clap but silently ignored without this notice (tier-2 audit:
-    // `run --profile cluster --retry 3 -k` gave no hint).
-    for (flag, note) in [
-        (
-            "--retry",
-            "cluster drivers poll their own retry/backoff semantics",
-        ),
-        (
-            "--keep-going",
-            "the driver keeps dispatching independent jobs until the queue drains",
-        ),
-        (
-            "--timeout",
-            "per-job walltime is set through -w/--walltime instead",
-        ),
-        (
-            "--provenance",
-            "record output checksums on the local path, then submit",
-        ),
-        (
-            "--max-threads/--max-memory",
-            "per-rule [resources] and the [cluster] profile drive scheduler limits",
-        ),
-    ] {
-        eprintln!(
-            "  {} {flag} is not honored on the cluster path — {note}",
             "Warning:".bold().yellow()
         );
     }

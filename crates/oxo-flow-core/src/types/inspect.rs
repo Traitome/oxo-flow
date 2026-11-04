@@ -200,7 +200,17 @@ fn is_bgzf_extra(extra: &[u8]) -> bool {
 }
 
 /// Detect whether raw bytes begin with a standard GZIP or BGZF header.
-fn detect_gzip_or_bgzf(bytes: &[u8]) -> Option<CompressionKind> {
+fn detect_compression_kind(bytes: &[u8]) -> Option<CompressionKind> {
+    // Zstd frame magic (0x28 B5 2F FD) — recognized so the caller can
+    // honestly refuse instead of parsing compressed bytes as text.
+    if bytes.len() >= 4
+        && bytes[0] == 0x28
+        && bytes[1] == 0xB5
+        && bytes[2] == 0x2F
+        && bytes[3] == 0xFD
+    {
+        return Some(CompressionKind::Zstd);
+    }
     if bytes.len() < 10 || bytes[0] != 0x1f || bytes[1] != 0x8b || bytes[2] != 0x08 {
         return None;
     }
@@ -224,7 +234,17 @@ pub fn introspect_bytes(bytes: &[u8]) -> Result<IntrospectedBioType, IntrospectE
     }
 
     // Step 1: Detect compression stream
-    let compression = detect_gzip_or_bgzf(bytes).unwrap_or(CompressionKind::None);
+    let compression = detect_compression_kind(bytes).unwrap_or(CompressionKind::None);
+    if compression == CompressionKind::Zstd {
+        // The inner format is not introspectable without a zstd decoder,
+        // and guessing produced two wrong diagnostics (generic format +
+        // missing compression) where ONE honest one belongs.
+        return Err(IntrospectError::Unrecognized(
+            "zstd-compressed payload — header introspection is unsupported; \
+             decompress it (zstd -d) if a [types] assertion must run"
+                .to_string(),
+        ));
+    }
 
     // Step 2: Decompress initial payload if compressed
     let payload = match compression {
@@ -572,10 +592,24 @@ fn parse_vcf_header_text(header: &str) -> IntrospectedBioType {
     let reference_build = explicit_build.or_else(|| infer_reference_build(&contigs));
     let contig_names = contigs.into_iter().map(|(n, _)| n).collect();
 
+    // VCF has no standard sorting header, but some producers emit
+    // `##sorting=<value>` — honor a declaration, stay silent otherwise.
+    let sort_order = header
+        .lines()
+        .find_map(|l| l.strip_prefix("##sorting="))
+        .map(|v| match v.trim().to_ascii_lowercase().as_str() {
+            "queryname" => SortOrder::Queryname,
+            "unsorted" => SortOrder::Unsorted,
+            _ => SortOrder::Coordinate,
+        });
+
     IntrospectedBioType {
         format: BioFormat::Vcf,
         compression: CompressionKind::None,
-        sort_order: Some(SortOrder::Coordinate),
+        // Unknown unless the header says so: a fabricated Coordinate
+        // assertion fed TYPE-002 messages with a claim the file never
+        // made.
+        sort_order,
         reference_build,
         read_groups: Vec::new(),
         contigs: contig_names,
@@ -606,11 +640,17 @@ fn infer_reference_build(contigs: &[(String, Option<u64>)]) -> Option<String> {
 /// Introspect a local file on disk using a bounded initial read.
 pub fn introspect_file(path: &Path) -> Result<IntrospectedBioType, IntrospectError> {
     let mut file = File::open(path).map_err(|e| IntrospectError::Io(e.to_string()))?;
-    let mut buffer = vec![0u8; HEADER_INSPECT_BUDGET];
-    let n = file
-        .read(&mut buffer)
-        .map_err(|e| IntrospectError::Io(e.to_string()))?;
-    buffer.truncate(n);
+    let mut buffer = Vec::with_capacity(HEADER_INSPECT_BUDGET);
+    // Read to the budget, not once: `read` may short-read on network or
+    // otherwise odd filesystems and hand back a truncated header.
+    let mut chunk = [0u8; 8192];
+    while buffer.len() < HEADER_INSPECT_BUDGET {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Err(e) => return Err(IntrospectError::Io(e.to_string())),
+        }
+    }
     introspect_bytes(&buffer)
 }
 

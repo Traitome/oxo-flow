@@ -1713,24 +1713,17 @@ impl Default for EnvironmentResolver {
 impl EnvironmentResolver {
     /// Create a new environment resolver.
     pub fn new() -> Self {
-        Self {
-            mamba: MambaBackend::new(),
-            conda: CondaBackend,
-            docker: DockerBackend,
-            singularity: SingularityBackend::new(),
-            venv: VenvBackend,
-            pixi: PixiBackend,
-            modules: ModulesBackend,
-            system: SystemBackend,
-            cache: Arc::new(Mutex::new(EnvironmentCache::new())),
-            setup_locks: std::sync::Mutex::new(HashMap::new()),
-            setup_origins: std::sync::Mutex::new(HashMap::new()),
-            setup_started: std::sync::Mutex::new(HashMap::new()),
-        }
+        Self::with_cache_impl(EnvironmentCache::new())
     }
 
     /// Create a new environment resolver with persistent cache directory.
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
+        Self::with_cache_impl(EnvironmentCache::with_cache_dir(cache_dir))
+    }
+
+    /// One constructor body: the eight backends and three lock fields are
+    /// identical for every resolver; only the cache differs.
+    fn with_cache_impl(cache: EnvironmentCache) -> Self {
         Self {
             mamba: MambaBackend::new(),
             conda: CondaBackend,
@@ -1740,7 +1733,7 @@ impl EnvironmentResolver {
             pixi: PixiBackend,
             modules: ModulesBackend,
             system: SystemBackend,
-            cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
+            cache: Arc::new(Mutex::new(cache)),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
             setup_origins: std::sync::Mutex::new(HashMap::new()),
             setup_started: std::sync::Mutex::new(HashMap::new()),

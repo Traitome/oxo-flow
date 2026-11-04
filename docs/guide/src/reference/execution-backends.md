@@ -87,7 +87,9 @@ dry-run preview uses). The driver:
   dynamically discovered instances execute in the same run (see
   [Checkpoint re-entry](#checkpoint-re-entry) below).
 
-`DriverConfig` supplies the knobs, with these defaults:
+`DriverConfig` supplies the knobs, with these defaults (this table is the
+single source for driver defaults — other pages link here instead of
+restating it):
 
 | Field | Default | Meaning |
 |---|---|---|

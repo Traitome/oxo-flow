@@ -116,11 +116,21 @@ function preservedToml(card: RuleCard): string {
   });
   let tails = card.originalTails;
   if (tails && (ownsThreads || ownsMemory)) {
-    // Strip the same leaf keys from `[rules.*]` sub-table bodies.
+    // Strip the same leaf keys from `[rules.*]` sub-table bodies. Lines
+    // inside a multi-line string (`script = """…"""`) are shell text and
+    // must not match — track `"""` parity (a line with an odd number of
+    // `"""` toggles string state; TOML multi-line strings are the only
+    // construct in a rule body that spans lines).
+    let inMultiline = false;
     tails = tails
       .split('\n')
       .filter((line) => {
-        const m = line.match(/^[ \t]*(threads|memory)[ \t]*=/);
+        if ((line.match(/"""/g)?.length ?? 0) % 2 === 1) {
+          inMultiline = !inMultiline;
+          return true;
+        }
+        if (inMultiline) return true;
+        const m = line.match(/^(threads|memory)[ \t]*=/);
         if (!m) return true;
         return m[1] === 'threads' ? !ownsThreads : !ownsMemory;
       })

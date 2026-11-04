@@ -153,8 +153,16 @@ pub fn parse_item_lines(content: &str) -> Vec<String> {
 
 /// Collect items from arguments, file, or stdin.
 pub fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<Vec<String>> {
-    // Priority: file > stdin > arguments
+    // Priority: file > stdin > arguments. `-f` wins silently before —
+    // positional items given alongside it vanished without a trace.
     if let Some(path) = file {
+        if !items.is_empty() {
+            tracing::warn!(
+                "{} positional item(s) ignored — -f {} takes priority",
+                items.len(),
+                path.display()
+            );
+        }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read items from {}", path.display()))?;
         return Ok(parse_item_lines(&content));
@@ -257,7 +265,14 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or(spec.trim());
-                format!("conda run --no-banner -n {} {}", env_name, cmd)
+                // Quote the env name like the docker/singularity branches
+                // quote their tokens: a spec path with a space must not
+                // split `-n my env` into two words.
+                format!(
+                    "conda run --no-banner -n {} {}",
+                    shell_quote_word(env_name),
+                    cmd
+                )
             }
             "docker" | "singularity" => {
                 // Each whitespace-separated token of the spec is passed as one
@@ -281,7 +296,11 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
         }
     } else {
         // Assume conda environment name
-        format!("conda run --no-banner -n {} {}", env_spec.trim(), cmd)
+        format!(
+            "conda run --no-banner -n {} {}",
+            shell_quote_word(env_spec.trim()),
+            cmd
+        )
     }
 }
 
@@ -365,8 +384,11 @@ mod tests {
     }
 
     #[test]
-    fn conda_wrapper_unchanged() {
+    fn conda_wrapper_quotes_env_name() {
         let wrapped = wrap_batch_command("python x.py", "conda: envs/tools.yaml");
-        assert_eq!(wrapped, "conda run --no-banner -n tools python x.py");
+        assert_eq!(wrapped, "conda run --no-banner -n 'tools' python x.py");
+        // A spec path with a space must not split the -n argument.
+        let spaced = wrap_batch_command("python x.py", "conda: my env.yaml");
+        assert_eq!(spaced, "conda run --no-banner -n 'my env' python x.py");
     }
 }

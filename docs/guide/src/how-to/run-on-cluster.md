@@ -228,9 +228,10 @@ mkdir -p logs
 apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
-The memory figure is explicit KB (`"32G"` = 32768 MB × 1024) because LSF's
-own default unit is KB; `span[hosts=1]` rides in the `-R` string so a
-multi-thread rule stays on one host. `-W 24:00` is the parsed form of the
+The memory figure is explicit KB, and `span[hosts=1]` rides in the `-R`
+string — why both are emitted that way is explained once in the
+[cluster command's LSF script section](../commands/cluster.md#lsf-script).
+`-W 24:00` is the parsed form of the
 rule's `time_limit = "24h"` — LSF takes `[HH:]MM`. The workdir pin is
 explicit here too: the generated script carries `#BSUB -cwd`, the same
 pinned-directory directive the other backends get.
@@ -239,7 +240,10 @@ pinned-directory directive the other backends get.
 
 ## Environment Wrapping
 
-When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:
+When generating cluster scripts, oxo-flow automatically wraps commands
+through the environment resolver (rules without an environment run the
+command directly). This table is the single source for the per-backend
+wrapping forms — other pages link here instead of restating them:
 
 | Backend | Wrapping |
 |---|---|
@@ -475,19 +479,14 @@ never swallows a bad name.
 ## Driver Defaults and the `[cluster]` Profile Block
 
 `run --profile` submits and tracks jobs through the backend driver, whose
-built-in defaults are:
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `max_submitted` | `50` | Jobs in flight at once (pending + running); submissions top up to this cap as slots free |
-| `max_array_size` | `1001` | The scheduler's array limit; larger scatter groups are chunked into several arrays |
-| `poll_interval` | `5s` | Delay between scheduler polls |
-
-Override them in the profile's `[cluster]` block. The full annotated TOML
-example (every key, the driver default each omission falls back to, and
-where a rule's own `time_limit` wins) lives once in
+built-in defaults (`max_submitted` 50, `max_array_size` 1001,
+`poll_interval` 5s) are specified once in the
+[`DriverConfig` table](../reference/execution-backends.md#backenddriver);
+the profile's `[cluster]` block overrides those three knobs. The full
+annotated TOML example (every key, the driver default each omission falls
+back to, and where a rule's own `time_limit` wins) lives once in
 [Cluster submission](../commands/run.md#cluster-submission) — that copy is
-authoritative; this page only adds the driver-default semantics above.
+authoritative.
 
 `extra_args` entries are emitted as scheduler directives **verbatim and
 unvalidated** — a typo reaches the scheduler as written (the same applies to

@@ -22,6 +22,23 @@ use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
+/// Run a synchronous checkpoint/file-I/O block on the blocking pool
+/// (#268 item 4, web minor): `load_node_statuses` / `load_metrics_bounded` /
+/// `read_tail_bounded` fully parse checkpoint.json through `std::fs`, and
+/// the polling endpoints call them on every request. A `JoinError` here can
+/// only mean the closure panicked — resume the original panic instead of
+/// fabricating an empty result.
+async fn blocking_checkpoint_io<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(value) => value,
+        Err(join_err) => std::panic::resume_unwind(join_err.into_panic()),
+    }
+}
+
 /// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
 /// address any run, everyone else only their own. Foreign and unknown runs
 /// both 404 — the resource set itself is private, so existence must not
@@ -855,25 +872,35 @@ pub async fn get_run_status(
     // truth), merged with the full rule list so unrun rules show as pending.
     // Config expansion matches `run` (issue #707): {config.*}-routed
     // producer/consumer pairs only match after placeholder expansion.
-    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
-        .ok()
-        .and_then(|wf| {
-            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &wf.rules,
-                &wf.config_placeholder_values(),
-            )
+    // The checkpoint reads are synchronous file I/O and this endpoint is
+    // polled — run the combined block on the blocking pool (#268 item 4).
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let snapshot = run.pipeline_snapshot.clone();
+    let (node_items, metrics) = blocking_checkpoint_io(move || {
+        let dag = oxo_flow_core::WorkflowConfig::parse(&snapshot)
             .ok()
-        });
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
-    let node_items = match &dag {
-        Some(d) => {
-            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
-        }
-        None => node_items,
-    };
+            .and_then(|wf| {
+                oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                    &wf.rules,
+                    &wf.config_placeholder_values(),
+                )
+                .ok()
+            });
+        let node_items =
+            checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running);
+        let node_items = match &dag {
+            Some(d) => checkpoint_status::with_all_rules(
+                node_items,
+                &d.execution_order().unwrap_or_default(),
+            ),
+            None => node_items,
+        };
+        let metrics =
+            checkpoint_status::load_metrics_bounded(std::path::Path::new(&workdir), 256 * 1024);
+        (node_items, metrics)
+    })
+    .await;
 
     let overall = service::compute_overall_status(&node_items, Some(&run.status));
 
@@ -881,8 +908,6 @@ pub async fn get_run_status(
     // sampler appends to workdir/metrics.jsonl; an absent file yields an
     // empty timeline (never fabricated numbers). Bounded read: this
     // endpoint is polled, so only the newest window is returned.
-    let workdir = std::path::Path::new(run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
     let last = metrics.last();
     let resources = ResourceSnapshot {
         cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
@@ -942,11 +967,16 @@ pub async fn get_dag_status(
         });
 
     // Node status comes from the engine's checkpoint state, merged with the
-    // full rule list so unrun rules show as pending.
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
+    // full rule list so unrun rules show as pending. The checkpoint read is
+    // synchronous file I/O and this endpoint is polled — run it on the
+    // blocking pool (#268 item 4). The DAG parse itself only consumes the
+    // in-memory snapshot string, so it stays on the async path.
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let node_items = blocking_checkpoint_io(move || {
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+    })
+    .await;
     let node_items = match &dag {
         Some(d) => {
             checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
@@ -1070,11 +1100,14 @@ pub async fn get_run_instances(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let workdir = run.workdir.as_deref().unwrap_or("");
-    let items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(workdir),
-        run.status == "running",
-    );
+    // The checkpoint read is synchronous file I/O and this endpoint is
+    // polled — run it on the blocking pool (#268 item 4).
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let items = blocking_checkpoint_io(move || {
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+    })
+    .await;
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
         .and_then(|wf| {
@@ -1148,26 +1181,30 @@ pub async fn get_diagnostics(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
+    // The checkpoint/log reads are synchronous file I/O — run the combined
+    // block on the blocking pool (#268 item 4, web minor).
+    let workdir = run.workdir.clone();
+    let running = run.status == "running";
+    let (node_items, log_output, benchmarks) = blocking_checkpoint_io(move || {
+        let dir = workdir.clone().unwrap_or_default();
+        let node_items = checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running);
 
-    // Try to read log output from workdir — the newest 256 KiB only:
-    // execution.log is the run's full unbounded log, and diagnosis keys
-    // off trailing error context, so buffering the whole file per request
-    // is pure memory amplification (issue #710).
-    let log_output = match run.workdir.as_ref() {
-        Some(wd) => checkpoint_status::read_tail_bounded(
-            std::path::Path::new(&format!("{wd}/execution.log")),
-            256 * 1024,
-        ),
-        None => String::new(),
-    };
+        // Try to read log output from workdir — the newest 256 KiB only:
+        // execution.log is the run's full unbounded log, and diagnosis keys
+        // off trailing error context, so buffering the whole file per request
+        // is pure memory amplification (issue #710).
+        let log_output = match workdir.as_deref() {
+            Some(wd) => checkpoint_status::read_tail_bounded(
+                std::path::Path::new(&format!("{wd}/execution.log")),
+                256 * 1024,
+            ),
+            None => String::new(),
+        };
 
-    let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(
-        run.workdir.as_deref().unwrap_or(""),
-    ));
+        let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(&dir));
+        (node_items, log_output, benchmarks)
+    })
+    .await;
 
     let diagnostics = service::diagnose_run(&node_items, &log_output, &benchmarks);
     Ok(Json(diagnostics))
@@ -2033,28 +2070,35 @@ pub async fn get_ai_status(
     let user = current_user::resolve(authenticated.as_ref());
     let _run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
-        std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
-        _run.status == "running",
-    )
-    .iter()
-    .map(|n| NodeExecutionStatus {
-        rule: n.rule.clone(),
-        status: n.status.to_string(),
-        duration_ms: n.duration_ms.map(|d| d as i64),
-        exit_code: n.exit_code,
-        started_at: n.started_at.clone(),
-        stderr_tail: n.stderr_tail.clone(),
-        stdout_tail: n.stdout_tail.clone(),
-    })
-    .collect();
+    // The checkpoint reads are synchronous file I/O and this endpoint is
+    // polled every 5s while the monitor tab is visible — run the combined
+    // block on the blocking pool (#268 item 4).
+    let workdir = _run.workdir.clone();
+    let running = _run.status == "running";
+    let (exec_nodes, metrics) = blocking_checkpoint_io(move || {
+        let dir = workdir.clone().unwrap_or_default();
+        let exec_nodes: Vec<NodeExecutionStatus> =
+            checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running)
+                .iter()
+                .map(|n| NodeExecutionStatus {
+                    rule: n.rule.clone(),
+                    status: n.status.to_string(),
+                    duration_ms: n.duration_ms.map(|d| d as i64),
+                    exit_code: n.exit_code,
+                    started_at: n.started_at.clone(),
+                    stderr_tail: n.stderr_tail.clone(),
+                    stdout_tail: n.stdout_tail.clone(),
+                })
+                .collect();
 
-    // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
-    // tree, sampled by the executor; the trend timeline travels in the
-    // response alongside the derived analysis. Bounded read: this endpoint
-    // is polled every 5s while the monitor tab is visible.
-    let workdir = std::path::Path::new(_run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
+        // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
+        // tree, sampled by the executor; the trend timeline travels in the
+        // response alongside the derived analysis.
+        let metrics =
+            checkpoint_status::load_metrics_bounded(std::path::Path::new(&dir), 256 * 1024);
+        (exec_nodes, metrics)
+    })
+    .await;
     let last = metrics.last();
     let host = crate::sys::get_host_resources();
     let resources = ResourceUsage {

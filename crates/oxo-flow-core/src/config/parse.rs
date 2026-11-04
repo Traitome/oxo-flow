@@ -689,6 +689,14 @@ impl WorkflowConfig {
                     }
                     module_members.push(rule.name.clone());
                     self.rules.push(rule);
+                } else {
+                    // A name clash used to be a silent drop — the user only
+                    // found out when a consumer reported a missing producer.
+                    // Say what was skipped and why.
+                    tracing::warn!(
+                        "include rule '{}' skipped: the host workflow already defines a rule with this name",
+                        rule.name
+                    );
                 }
             }
             self.module_rules

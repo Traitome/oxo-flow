@@ -672,12 +672,18 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
 
             try:
                 resource_range = json.loads(row["resource_range"])
-            except json.JSONDecodeError as exc:
-                resource_range = {}
+                if not isinstance(resource_range, dict):
+                    raise ValueError("expected a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                # Corrupted cell: None disables the lenient .get() fallbacks
+                # below (1-128 threads / 262144 MB) so the range check cannot
+                # read the corruption as a vacuous pass — the error is surfaced
+                # via capture_error instead.
+                resource_range = None
                 gold_errs.append(f"resource_range: {exc}")
             threads, memory = parse_resources(rule) if rule else (None, None)
             scores["resources_declared"] = 1.0 if (threads is not None or memory is not None) else 0.0
-            if threads is None and memory is None:
+            if resource_range is None or (threads is None and memory is None):
                 scores["resources_in_range"] = 0.0
             else:
                 ok = True
@@ -747,6 +753,10 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 expected_steps = expected_tools = expected_edges = expected_outputs = []
                 gold_errs.append(f"expected_steps/tools/dag_edges/outputs: {exc}")
 
+            # Defined before both consumers: the edge check below reads the map
+            # even when expected_steps is empty/failed to parse, and a gold row
+            # with edges but no steps must degrade to 0 coverage, not NameError.
+            name_map = {}
             if expected_steps:
                 # One scientific step gets at most one generated rule. The
                 # previous first-match search could reuse a helper rule for
@@ -773,7 +783,6 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 declared = [p for r in rules for p in r.get("output", [])]
                 scores["output_coverage"] = path_hits(expected_outputs, declared)
 
-            meta = load_meta(capture["meta"])
             scores["overall"] = mean(list(scores.values())) if scores else 0.0
             results.append(
                 {

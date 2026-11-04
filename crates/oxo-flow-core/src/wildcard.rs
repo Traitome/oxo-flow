@@ -662,9 +662,11 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
 /// comment that mentions `{meta.id}` or `{input[N]}` (e.g. explaining why
 /// a glob pattern was NOT used) must not warn. A `#` starts a comment when
 /// it begins a line or follows whitespace; `#` glued to a word
-/// (`dir${x}#2`, shebang-free `a#b`) is left alone. Quoted `#` characters
-/// are preserved — the scanners' false-positive evidence is all full-line
-/// comments, so a conservative quote-aware single-pass scan suffices.
+/// (`dir${x}#2`, shebang-free `a#b`) is left alone. Quote state is NOT
+/// tracked: a quoted `#` preceded by whitespace is still treated as a
+/// comment (`echo "a # b"` loses its tail). Callers must therefore use
+/// this only for diagnostic scanning over shell text, never to rewrite
+/// commands for execution.
 #[must_use = "stripping returns a new String"]
 pub fn strip_shell_comments(text: &str) -> String {
     if !text.contains('#') {

@@ -176,8 +176,12 @@ pub fn parse_snakemake_rules(source: &str) -> Result<Vec<SnakemakeRule>> {
                 let next_line = lines[i];
                 let next_trimmed = next_line.trim();
 
-                // Check if a new top-level rule starts
-                if (next_line.starts_with("rule ") || next_line.starts_with("checkpoint "))
+                // Check if a new top-level rule starts. Skipped while inside
+                // a triple-quoted shell: a Snakefile line like
+                // `rule book:` inside a heredoc is shell text, and breaking
+                // on it silently truncated the rule mid-body.
+                if !in_triple_shell
+                    && (next_line.starts_with("rule ") || next_line.starts_with("checkpoint "))
                     && next_trimmed.ends_with(':')
                 {
                     break;

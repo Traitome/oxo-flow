@@ -1448,6 +1448,13 @@ impl LocalExecutor {
                     .and_then(crate::scheduler::parse_memory_mb);
                 topo.select_node_for_job(mem_mb).unwrap_or(0)
             });
+            // Which node a memory-bound rule pins to is otherwise
+            // invisible in the logs.
+            tracing::debug!(
+                rule = %rule.name,
+                numa_node = node,
+                "command wrapped with numactl"
+            );
             Ok(topo.wrap_command_with_numa(&wrapped, node))
         } else {
             Ok(wrapped)
@@ -1650,8 +1657,17 @@ impl LocalExecutor {
                 .and_then(crate::scheduler::parse_memory_mb)
                 .unwrap_or(DEFAULT_SCRATCH_REQUIRED_MB);
             let allow_ram = required_mb <= MAX_RAM_SCRATCH_MB;
-            if let Some((_tier, tier_root)) = ladder.select_tier_for_scratch(required_mb, allow_ram)
+            if let Some((tier, tier_root)) = ladder.select_tier_for_scratch(required_mb, allow_ram)
             {
+                // The tier a rule runs on (RAM disk vs NVMe vs shared FS)
+                // is otherwise invisible — say it once per selection.
+                tracing::debug!(
+                    rule = %rule.name,
+                    tier = tier.as_str(),
+                    scratch_root = %tier_root.display(),
+                    required_mb,
+                    "scratch allocated on storage tier"
+                );
                 return tier_root.join(".oxo-flow-scratch").join(subpath);
             }
         }
@@ -2671,9 +2687,8 @@ impl LocalExecutor {
                 break;
             }
 
-            // R1 fix: trigger retries for TimeOut as well if needed.
-            // Original code had `if record.status != JobStatus::TimedOut` before the retry loop logic.
-            // Actually, the Phase 1 says "Fix timeout skipping retries".
+            // Timeouts enter the retry ladder like any other failure —
+            // the shell exits 152 (SIGXCPU) and the classifier tags it.
 
             if attempt + 1 < max_attempts {
                 // Retry visibility (audit #276 P4-3): retries were completely
@@ -3190,7 +3205,14 @@ fn build_execution_command_inner(
         }
     }
     if !dirs_to_create.is_empty() {
-        let mkdir_cmd = format!("mkdir -p {}", dirs_to_create.join(" "));
+        // Quoted individually: `{config.results_dir}` etc. are not subject
+        // to the wildcard charset gate, so a space in the value used to
+        // split into two bogus mkdir targets.
+        let quoted: Vec<String> = dirs_to_create
+            .iter()
+            .map(|d| format!("'{}'", crate::environment::escape_for_sh_single_quote(d)))
+            .collect();
+        let mkdir_cmd = format!("mkdir -p {}", quoted.join(" "));
         base_cmd = format!("{}\n{}", mkdir_cmd, base_cmd);
     }
 

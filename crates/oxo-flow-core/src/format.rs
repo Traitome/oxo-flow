@@ -2517,49 +2517,6 @@ pub fn check_format_version(version: &str) -> bool {
     version == FORMAT_VERSION || version.starts_with("1.")
 }
 
-/// Known bioinformatics file format extensions.
-pub const KNOWN_BIO_FORMATS: &[&str] = &[
-    ".bam",
-    ".sam",
-    ".cram",
-    ".vcf",
-    ".vcf.gz",
-    ".bcf",
-    ".fastq",
-    ".fastq.gz",
-    ".fq",
-    ".fq.gz",
-    ".bed",
-    ".bed.gz",
-    ".gff",
-    ".gff3",
-    ".gtf",
-    ".fa",
-    ".fasta",
-    ".fa.gz",
-    ".fasta.gz",
-    ".bw",
-    ".bigwig",
-    ".wig",
-    ".tsv",
-    ".csv",
-    ".h5",
-    ".hdf5",
-    ".maf",
-    ".seg",
-    ".bai",
-    ".crai",
-    ".tbi",
-    ".idx",
-];
-
-/// Check if a file path has a known bioinformatics format extension.
-#[must_use]
-pub fn is_known_bio_format(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    KNOWN_BIO_FORMATS.iter().any(|ext| lower.ends_with(ext))
-}
-
 /// Scan text for common secret patterns (API keys, passwords, tokens).
 ///
 /// Returns a list of warnings for any potential secrets found.
@@ -4477,15 +4434,6 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W010"));
-    }
-
-    #[test]
-    fn known_bio_formats() {
-        assert!(is_known_bio_format("sample.bam"));
-        assert!(is_known_bio_format("variants.vcf.gz"));
-        assert!(is_known_bio_format("reads.fastq.gz"));
-        assert!(!is_known_bio_format("readme.txt"));
-        assert!(!is_known_bio_format("config.toml"));
     }
 
     #[test]

@@ -1157,7 +1157,12 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         if (fc > 0 && keep_going) || nrf > 0 {
             propagate_transitive_failures(TransitiveFailureContext {
                 dag,
-                rule_names: &rule_names,
+                // The LIVE order, not the loop-start snapshot: re-entry and
+                // output_pattern discovery append mid-run instances, and a
+                // stale snapshot hid every dynamic rule from propagation.
+                // The dispatch-time `failed_rules_set` guard below stays the
+                // backstop for anything still racing.
+                rule_names: &*order,
                 submitted: &mut submitted,
                 failed_rules_set: &failed_rules_set,
                 skipped_count: &skipped_count,

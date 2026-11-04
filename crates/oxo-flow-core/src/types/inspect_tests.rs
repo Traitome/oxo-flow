@@ -35,9 +35,20 @@ fn test_introspect_vcf_text() {
     let info = introspect_bytes(vcf_header.as_bytes()).expect("valid VCF header");
 
     assert_eq!(info.format, BioFormat::Vcf);
-    assert_eq!(info.sort_order, Some(SortOrder::Coordinate));
+    // No sorting declaration in the header — the introspection must not
+    // fabricate one (TYPE-002 argued with a claim the file never made).
+    assert_eq!(info.sort_order, None);
     assert_eq!(info.reference_build.as_deref(), Some("GRCh38"));
     assert_eq!(info.contigs, vec!["chr1"]);
+
+    // An explicit ##sorting= declaration IS honored (after the fileformat
+    // line — that prefix is what dispatches the VCF parser).
+    let declared = vcf_header.replace(
+        "##fileformat=VCFv4.2\n",
+        "##fileformat=VCFv4.2\n##sorting=coordinate\n",
+    );
+    let info2 = introspect_bytes(declared.as_bytes()).expect("valid VCF header");
+    assert_eq!(info2.sort_order, Some(SortOrder::Coordinate));
 }
 
 #[test]

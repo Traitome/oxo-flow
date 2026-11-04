@@ -664,22 +664,14 @@ pub async fn run_command(
             order
                 .iter()
                 .filter(|name| {
-                    !ck.completed_rules.contains(*name)
-                        || (!tombstone_keep.contains(*name)
-                            && !config.get_rule(name).is_some_and(|rule| {
-                                crate::commands::run_preview::when_condition_false(
-                                    rule,
-                                    &config,
-                                    &wildcard_values,
-                                )
-                            })
-                            && config.get_rule(name).is_some_and(|rule| {
-                                !crate::commands::run_preview::rule_outputs_exist(
-                                    rule,
-                                    workdir_actual.as_ref(),
-                                    &wildcard_values,
-                                )
-                            }))
+                    crate::commands::run_preview::will_run_seed(
+                        name,
+                        &ck.completed_rules,
+                        &tombstone_keep,
+                        &config,
+                        &wildcard_values,
+                        workdir_actual.as_ref(),
+                    )
                 })
                 .cloned()
                 .collect()
@@ -745,6 +737,44 @@ pub async fn run_command(
     if let Some(cluster_profile) =
         cluster_path::routed_cluster_profile(profile.as_deref(), config.cluster.as_ref())
     {
+        // The remote wrapper accepts a fixed flag surface; warn ONLY for the
+        // flags the user actually passed (a blanket banner on every cluster
+        // run was noise). ClusterRunArgs deliberately does not carry these —
+        // they are parsed by clap but dropped by this dispatch.
+        for (passed, flag, note) in [
+            (
+                retry > 0,
+                "--retry",
+                "cluster drivers poll their own retry/backoff semantics",
+            ),
+            (
+                keep_going,
+                "--keep-going",
+                "the driver keeps dispatching independent jobs until the queue drains",
+            ),
+            (
+                timeout_secs > 0,
+                "--timeout",
+                "per-job walltime is set through -w/--walltime instead",
+            ),
+            (
+                provenance,
+                "--provenance",
+                "record output checksums on the local path, then submit",
+            ),
+            (
+                max_threads != 0 || max_memory != 0,
+                "--max-threads/--max-memory",
+                "per-rule [resources] and the [cluster] profile drive scheduler limits",
+            ),
+        ] {
+            if passed {
+                eprintln!(
+                    "  {} {flag} is not honored on the cluster path — {note}",
+                    "Warning:".bold().yellow()
+                );
+            }
+        }
         cluster_path::dispatch_cluster_run(
             cluster_profile,
             crate::commands::run_cluster::ClusterRunArgs {
