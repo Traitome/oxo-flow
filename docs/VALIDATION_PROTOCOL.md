@@ -26,6 +26,20 @@ This protocol covers:
 | **OQ** | Operational Qualification — verifies that the software operates as intended across its specified operating ranges. |
 | **PQ** | Performance Qualification — verifies that the software produces accurate and reproducible results using real-world or reference data. |
 
+## Official Standards & References
+
+IQ/OQ/PQ qualification is a framework defined and used by the following
+official regulatory and standards bodies. The templates in this document are
+aligned with these frameworks.
+
+- [FDA 21 CFR Part 11 — Electronic Records; Electronic Signatures](https://www.ecfr.gov/current/title-21/chapter-I/subchapter-A/part-11) — the U.S. federal regulation governing electronic records and signatures for FDA-regulated activities.
+
+- [FDA — Computer Software Assurance (CSA) for Production and Quality System Software](https://www.fda.gov/regulatory-information/search-fda-guidance-documents/computer-software-assurance-production-and-quality-system-software) — FDA's final guidance (September 2025) on a risk-based approach to validating software used in production and quality systems.
+
+- [EU GMP Annex 11 — Computerised Systems](https://health.ec.europa.eu/medicinal-products/eudralex/eudralex-volume-4_en) — the European Union's Good Manufacturing Practice annex covering computerised systems; see EudraLex Volume 4, Annex 11.
+
+- [ISPE GAMP 5 (Second Edition) — A Risk-Based Approach to Compliant GxP Computerized Systems](https://ispe.org/initiatives/regulatory/what-gamp) — the ISPE Good Automated Manufacturing Practice guide, the de facto industry framework for computerised system validation.
+
 ---
 
 ## Installation Qualification (IQ)
