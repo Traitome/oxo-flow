@@ -621,8 +621,13 @@ pub fn format_command(workflow: PathBuf, output: Option<PathBuf>, check: bool) -
                 std::fs::write(&path, &formatted)?;
                 eprintln!("Formatted workflow written to {}", path.display());
             }
+            // In-place rewrite (rustfmt/black convention): formatting the
+            // file where it stands makes `format` converge with
+            // `format --check` — printing to stdout forced every caller into
+            // shell redirects and left the file untouched.
             None => {
-                print!("{formatted}");
+                std::fs::write(&workflow, &formatted)?;
+                eprintln!("Formatted workflow written to {}", workflow.display());
             }
         }
     }

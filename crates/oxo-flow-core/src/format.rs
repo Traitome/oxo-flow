@@ -2610,14 +2610,32 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
     // --check` gate built on it — stable across processes. This mirrors
     // `canonical_toml_map` in config_impact.rs, which sorts maps for the
     // same reason when hashing fingerprints.
+    // Round-trip convergence: the parser ALWAYS injects
+    // `config.paired_pairs_list` / `config.paired_pairs_count` at parse time
+    // (config/parse.rs, issue #881) so `when = "config.paired_pairs_count > 0"`
+    // conditions work. They are fully re-derivable from `[[pairs]]`, so
+    // serializing them emits keys the user never wrote — `format` would then
+    // never converge with `format --check` (format → --check still exits 1).
+    // Strip exactly these two keys before serialization. Deliberately NOT
+    // reusing the wider `is_engine_injected_key_with` list (config_impact.rs):
+    // `samples_list` / `pairs_list` are only injected when the corresponding
+    // section is non-empty, but a user may also declare them directly with
+    // entries that exist nowhere else — stripping those would lose data on
+    // round-trip.
     match toml::Value::try_from(config) {
-        Ok(value) => toml::to_string_pretty(&value).unwrap_or_else(|e| {
-            format!(
-                "# Serialization error: {}\n# Falling back to inline format\n{}",
-                e,
-                toml::to_string(&value).unwrap_or_default()
-            )
-        }),
+        Ok(mut value) => {
+            if let Some(cfg) = value.get_mut("config").and_then(|v| v.as_table_mut()) {
+                cfg.remove("paired_pairs_list");
+                cfg.remove("paired_pairs_count");
+            }
+            toml::to_string_pretty(&value).unwrap_or_else(|e| {
+                format!(
+                    "# Serialization error: {}\n# Falling back to inline format\n{}",
+                    e,
+                    toml::to_string(&value).unwrap_or_default()
+                )
+            })
+        }
         // Value conversion only fails if the struct itself is not
         // serializable (should not happen); fall back to direct serialization.
         Err(_) => toml::to_string_pretty(config).unwrap_or_else(|e| {
@@ -4952,6 +4970,61 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let config = WorkflowConfig::parse(toml).unwrap();
         let formatted = format_workflow(&config);
         assert!(formatted.contains("depends_on = [\"setup\"]"));
+    }
+
+    #[test]
+    fn format_workflow_converges_with_check() {
+        // F-1 regression: format must be idempotent under parse — formatting
+        // the output of format_workflow again must not change it, otherwise
+        // `format` followed by `format --check` fails forever.
+        let toml = r#"
+            [workflow]
+            name = "pairs"
+            version = "1.0.0"
+
+            [[pairs]]
+            pair_id = "CASE_001"
+            experiment = "EXP_01"
+            control = "CTRL_01"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let once = format_workflow(&config);
+        assert!(
+            !once.contains("paired_pairs_list"),
+            "always-injected derived key must not be emitted: {once}"
+        );
+        assert!(!once.contains("paired_pairs_count"));
+        let reparsed = WorkflowConfig::parse(&once).unwrap();
+        let twice = format_workflow(&reparsed);
+        assert_eq!(once, twice, "format(parse(format(x))) != format(x)");
+    }
+
+    #[test]
+    fn format_workflow_keeps_user_declared_lists() {
+        // `samples_list` is NOT engine-injected-only: users may declare entries
+        // that exist nowhere else, so the formatter must keep it verbatim.
+        let toml = r#"
+            [workflow]
+            name = "lists"
+            version = "1.0.0"
+
+            [config]
+            samples_list = "manual"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(
+            formatted.contains("samples_list = \"manual\""),
+            "user-declared samples_list must survive formatting"
+        );
     }
 
     #[test]

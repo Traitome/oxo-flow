@@ -621,11 +621,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: EnvAction,
     },
-    /// Reformat a .oxoflow file into canonical TOML form.
+    /// Reformat a .oxoflow file into canonical TOML form (in place by default).
     Format {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'o', long, help = "Output file path")]
+        #[arg(
+            short = 'o',
+            long,
+            help = "Write formatted output to this path instead of in place"
+        )]
         output: Option<PathBuf>,
         #[arg(long, help = "Only check formatting, don't write")]
         check: bool,

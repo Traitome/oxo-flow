@@ -3491,34 +3491,47 @@ fn cli_diff_nonexistent_workflow() {
 
 #[test]
 fn cli_format_outputs_canonical_toml() {
+    // In-place default (rustfmt/black convention): formatting writes the file
+    // and no longer prints canonical TOML to stdout.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("f.oxoflow");
+    fs::write(&src, "[workflow]\nname = \"fmt-e2e\"\nversion = \"0.1.0\"\n\n[[rules]]\nname = \"step1\"\nshell = \"echo hi\"\n").unwrap();
+
     oxo_flow_cmd()
-        .args([
-            "format",
-            "examples/gallery/13_simple_variant_calling.oxoflow",
-        ])
+        .args(["format", src.to_str().unwrap()])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("[workflow]"));
+        .success();
+
+    let content = fs::read_to_string(&src).unwrap();
+    assert!(content.contains("[workflow]"));
+
+    // Convergence: the file now passes `--check` (F-1 — the formatter no
+    // longer emits parser-injected derived keys, so formatting twice is a
+    // fixed point).
+    oxo_flow_cmd()
+        .args(["format", src.to_str().unwrap(), "--check"])
+        .assert()
+        .success();
 }
 
 #[test]
 fn cli_format_save_to_file() {
     let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.oxoflow");
+    fs::write(&src, "[workflow]\nname = \"fmt-e2e\"\nversion = \"0.1.0\"\n\n[[rules]]\nname = \"step1\"\nshell = \"echo hi\"\n").unwrap();
     let out = dir.path().join("formatted.oxoflow");
 
     oxo_flow_cmd()
-        .args([
-            "format",
-            "examples/gallery/13_simple_variant_calling.oxoflow",
-            "-o",
-            out.to_str().unwrap(),
-        ])
+        .args(["format", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
         .assert()
         .success();
 
     assert!(out.exists());
     let content = fs::read_to_string(&out).unwrap();
     assert!(content.contains("[workflow]"));
+    // Input is untouched when `-o` is given.
+    let original = fs::read_to_string(&src).unwrap();
+    assert!(original.contains("name = \"fmt-e2e\""));
 }
 
 // ─── Touch subcommand ────────────────────────────────────────────────────────

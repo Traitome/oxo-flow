@@ -1,6 +1,6 @@
 # `oxo-flow format`
 
-Reformat a `.oxoflow` file into canonical TOML form.
+Reformat a `.oxoflow` file into canonical TOML form (in place by default).
 
 ---
 
@@ -24,7 +24,7 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--output` | `-o` | stdout | Write formatted output to a file |
+| `--output` | `-o` | in place | Write formatted output to this path instead of rewriting the input file |
 | `--check` | — | — | Check if the file is already formatted (exit non-zero if not) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
@@ -37,13 +37,13 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 
 ## Examples
 
-### Format and print to stdout
+### Format in place
 
 ```bash
 oxo-flow format pipeline.oxoflow
 ```
 
-### Save formatted output to a new file
+### Save formatted output to a new file (input untouched)
 
 ```bash
 oxo-flow format pipeline.oxoflow -o formatted.oxoflow
@@ -82,5 +82,10 @@ version = "0.1.0"
 - Internal parse state is never emitted: declarative `[config]` entries
   (`key = { default = …, … }`) roundtrip as themselves, not as a
   `[config_meta]` section
+- The always-derived fan-out keys `config.paired_pairs_list` /
+  `config.paired_pairs_count` (injected by the parser from `[[pairs]]`,
+  issue #881) are **not** emitted — they are re-derived at every parse, so
+  keeping them out is what makes `format` converge with `format --check`.
+  User-declared `samples_list` / `pairs_list` entries are preserved verbatim
 - Using `--check` is recommended for CI/CD pipelines to enforce style consistency
 - The file is re-serialized from the parsed configuration, so comments are not preserved
