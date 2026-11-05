@@ -204,9 +204,13 @@ inputs before running a rule and uploads remote outputs after it succeeds:
   recording the original remote URIs, so invalidation stays etag-driven.
 - **Scope** — staging is a local-executor feature. Cluster runs
   (`BackendDriver`) submit scripts unchanged: nodes use their own shared
-  storage. `dry-run` never stages or downloads. Remote globs and directory
-  references are rejected (exact object URIs only), remote `temp_output`s
-  are unsupported.
+  storage. `dry-run` never stages or downloads. Remote globs, directory
+  references, and remote `temp_output` entries are rejected at staging
+  time with a validation error — remote scratch cleanup is not
+  implemented, so `temp_output` paths must stay local (inside the
+  workdir). The `temporary = true` success-path deletion is likewise
+  local-only: remote outputs recorded as temporary are never removed
+  from the bucket.
 
 Deleting `.oxo-flow/staged/` is safe — a later run re-downloads (and may
 re-execute) instead of using the cache.
