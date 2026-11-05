@@ -228,6 +228,37 @@ fn reject_localrules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<(
     ))
 }
 
+/// `scratch = true` promises each instance a private scratch directory with
+/// its outputs moved back on success. The scratch machinery (per-instance
+/// dir selection via the storage-tier ladder, cwd swap, absolute input
+/// rendering, output move-back) lives in the local executor only — the
+/// cluster path would submit the job into the shared workdir, where tools
+/// writing fixed filenames collide across concurrent instances
+/// (issue #1013 C3). Reject at plan time, naming every offender, and point
+/// at the path that does honor the directive.
+fn reject_scratch_rules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        if sr.rule.scratch {
+            offenders.push(name.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "`scratch = true` cannot be honored on the cluster path — {} would \
+         run directly in the shared workdir, where fixed-filename outputs \
+         collide across concurrent instances; remove `scratch = true` or run \
+         the workflow on the local path (`oxo-flow run`) instead:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -465,6 +496,7 @@ pub(crate) async fn run_on_cluster(
     }
     reject_checkpoint_reentry(&plan, &to_run)?;
     reject_localrules(&plan, &to_run)?;
+    reject_scratch_rules(&plan, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
     let mut max_submitted = args
@@ -631,6 +663,7 @@ mod tests {
     use super::cluster_env_cache_dir;
     use super::reject_checkpoint_reentry;
     use super::reject_localrules;
+    use super::reject_scratch_rules;
     use oxo_flow_core::backend::ScheduledPlan;
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
@@ -877,6 +910,65 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = localrule_plan(dir.path());
         assert!(reject_localrules(&plan, &std::collections::HashSet::new()).is_ok());
+    }
+
+    /// A plan whose single rule declares `scratch = true`.
+    fn scratch_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"scratch\"\n[[rules]]\nname = \"sort_bam\"\n\
+                    scratch = true\nshell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scratch_rules_are_rejected_on_the_cluster_plan() {
+        // C3: `scratch = true` exists to run each instance in a private
+        // scratch directory whose outputs are moved back. The cluster path
+        // never consulted it — the job ran directly in the shared workdir,
+        // where fixed-filename tools collide across concurrent instances.
+        // The directive must be honored by refusing the submission, naming
+        // the rule, before anything leaves (issue #1013 C3).
+        let dir = tempfile::tempdir().unwrap();
+        let plan = scratch_plan(dir.path());
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_scratch_rules(&plan, &to_run)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("sort_bam") && msg.contains("oxo-flow run"),
+            "the rejection must name the rule and the local path: {msg}"
+        );
+        assert!(
+            msg.contains("scratch"),
+            "the rejection must name the directive being dishonored: {msg}"
+        );
+    }
+
+    #[test]
+    fn scratch_gate_passes_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_scratch_rules(&plan, &to_run).is_ok());
+    }
+
+    #[test]
+    fn scratch_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = scratch_plan(dir.path());
+        assert!(reject_scratch_rules(&plan, &std::collections::HashSet::new()).is_ok());
     }
 
     #[test]

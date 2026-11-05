@@ -514,6 +514,13 @@ exist on the shared filesystem the nodes see; it is created on the submit
 host at run start (the same fail-fast mkdir the local path performs) and
 the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
 
+Like `localrule = true` and `checkpoint = true`, the `scratch = true`
+directive is local-executor-only: workflows whose runnable rules declare it
+are **rejected at plan time** on the cluster path (naming every offender)
+instead of silently running those jobs in the shared workdir, where tools
+writing fixed filenames collide across concurrent instances. See
+[Scratch tier ladder](../reference/workflow-format.md#scratch-tier-ladder).
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every

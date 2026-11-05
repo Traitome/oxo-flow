@@ -709,7 +709,7 @@ memory = "32G"
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
-| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder) |
+| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder). Local-executor-only: cluster paths reject workflows whose runnable rules declare `scratch = true` before any submission |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
@@ -3408,8 +3408,12 @@ disk. The required size comes from the rule's `resources.disk` value
 (1 GiB when unset). If no tier qualifies, the scratch directory falls back
 to `<workdir>/.oxo-flow/scratch/` as before; without any tier configured
 the ladder is inert. Outputs are moved back to their declared paths after
-the rule completes. On cluster backends scratch tiers are not yet consulted
-(jobs run directly in the shared workdir).
+the rule completes. The scratch machinery is local-executor-only: the
+cluster path (`oxo-flow cluster submit` / `oxo-flow run --cluster` **rejects
+workflows whose runnable rules declare `scratch = true`** at plan time,
+naming each offender, instead of silently running the job in the shared
+workdir where fixed-filename outputs collide across concurrent instances.
+Remove the directive or run those rules on the local path).
 
 ## See Also
 
