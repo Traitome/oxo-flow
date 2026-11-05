@@ -3241,7 +3241,7 @@ url = "https://hooks.example.com/oxo"
 |---|---|---|---|
 | `url` | String | — (required) | Webhook endpoint URL |
 | `method` | String | `POST` | HTTP method (`POST`/`PUT`/`GET`) |
-| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed` (`rule_completed`/`rule_failed` are defined but not yet dispatched) |
+| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed`, plus the rule-level `rule_completed`/`rule_failed` (one payload per scheduled rule terminal state) |
 | `headers` | Table | `{}` | Custom request headers |
 | `secret` | String | — | HMAC key for the `X-OxoFlow-Signature` header |
 | `signature_scheme` | String | `hmac-sha256` | `hmac-sha256` (RFC 2104) or the legacy `sha256-keyed` |

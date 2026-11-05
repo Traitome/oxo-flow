@@ -46,6 +46,12 @@ pub(crate) struct TaskContext {
     pub provenance: bool,
     pub is_tty: bool,
     pub semaphore: Arc<tokio::sync::Semaphore>,
+    /// Per-rule webhook dispatch (`rule_completed`/`rule_failed`, issue
+    /// #1013 H1): `None` when the workflow has no `[webhook]` table — the
+    /// client filters unsubscribed events, so `Some` configs that only
+    /// subscribe to workflow-level events cost nothing per rule.
+    pub webhook: Option<oxo_flow_core::webhook::WebhookConfig>,
+    pub workflow_name: String,
 }
 
 /// Parameters specific to one scheduled rule invocation.
@@ -138,6 +144,15 @@ pub(crate) async fn execute_rule_task(
                     status: oxo_flow_core::executor::JobStatus::Success,
                     duration_ms: (duration * 1000.0) as u64,
                 });
+                notify_webhook_rule(
+                    ctx.webhook.as_ref(),
+                    &ctx.workflow_name,
+                    oxo_flow_core::webhook::WebhookEvent::RuleCompleted,
+                    &rule_name,
+                    record.exit_code,
+                    None,
+                )
+                .await;
                 if !ctx.is_tty {
                     if record.skip_reason.as_deref() == Some("restored from content cache") {
                         progress_narrate(
@@ -494,6 +509,21 @@ pub(crate) async fn execute_rule_task(
                     retries: record.retries,
                     duration_ms: (duration * 1000.0) as u64,
                 });
+                // Same masked-error contract as the checkpoint record
+                // (issue #99 B1): captured stderr is masked before it
+                // leaves the process boundary.
+                notify_webhook_rule(
+                    ctx.webhook.as_ref(),
+                    &ctx.workflow_name,
+                    oxo_flow_core::webhook::WebhookEvent::RuleFailed,
+                    &rule_name,
+                    record.exit_code,
+                    record.stderr.as_deref().map(|stderr| {
+                        let trimmed = stderr.trim();
+                        trimmed.lines().next_back().unwrap_or(trimmed).to_string()
+                    }),
+                )
+                .await;
                 // Always record: keep_going needs the final
                 // listing, non-required failures are listed in
                 // either mode, and the AI recovery path must be
@@ -589,6 +619,15 @@ pub(crate) async fn execute_rule_task(
                 retries: record.retries,
                 duration_ms: 0,
             });
+            notify_webhook_rule(
+                ctx.webhook.as_ref(),
+                &ctx.workflow_name,
+                oxo_flow_core::webhook::WebhookEvent::RuleFailed,
+                &rule_name,
+                record.exit_code,
+                record.stderr.clone(),
+            )
+            .await;
             let mut ck = ctx.checkpoint.lock().await;
             ck.record_run(&record, output_tail_bytes_from_env());
             ck.mark_failed(&rule_name);

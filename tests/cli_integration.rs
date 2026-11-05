@@ -10541,6 +10541,168 @@ shell = "exit 3"
     );
 }
 
+/// Rule-level webhook events: a `[webhook]` endpoint subscribed to
+/// `rule_completed`/`rule_failed` receives one payload per rule terminal
+/// state — with the rule name, exit code, and error text — and the default
+/// subscription (`workflow_completed` only) stays silent on rule events.
+#[test]
+fn cli_webhook_rule_events_reach_subscribed_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    // Minimal HTTP receiver: one request per connection, record the JSON
+    // body, answer 200 with `Connection: close` so the CLI's client
+    // reconnects for the next event. The thread dies with the test process.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break None,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(pos);
+                }
+            };
+            let Some(header_end) = header_end else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+            let content_length: usize = headers
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let body_start = header_end + 4;
+            while buf.len() < body_start + content_length {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let body = buf.get(body_start..).unwrap_or(&[]);
+            if tx.send(String::from_utf8_lossy(body).to_string()).is_err() {
+                break;
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+
+    // good produces boom's input, so the order is deterministic:
+    // rule_completed lands before rule_failed.
+    let wf = dir.path().join("hook-rules.oxoflow");
+    fs::write(
+        &wf,
+        format!(
+            r#"[workflow]
+name = "hook-rules"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:{port}/hook"
+events = ["rule_completed", "rule_failed"]
+timeout_secs = 5
+max_retries = 0
+
+[[rules]]
+name = "good"
+output = ["good.txt"]
+shell = "echo ok > {{output}}"
+
+[[rules]]
+name = "boom"
+input = ["good.txt"]
+output = ["never.txt"]
+shell = "echo kaboom >&2; exit 7"
+"#
+        ),
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the failing rule must still fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let payload = |name: &str| -> serde_json::Value {
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("no webhook payload arrived for '{name}'"));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("payload for '{name}' is not JSON ({e}): {raw}"))
+    };
+
+    let completed = payload("rule_completed");
+    assert_eq!(completed["event"], "rule_completed");
+    assert_eq!(completed["workflow_name"], "hook-rules");
+    assert_eq!(completed["data"]["rule"], "good");
+
+    let failed = payload("rule_failed");
+    assert_eq!(failed["event"], "rule_failed");
+    assert_eq!(failed["data"]["rule"], "boom");
+    assert_eq!(failed["data"]["exit_code"], 7);
+    let error = failed["data"]["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("kaboom"),
+        "error must carry the rule failure, got: {error}"
+    );
+
+    // Exactly the two subscribed events: the workflow-level events are not
+    // in this run's subscription and must not be sent either.
+    assert!(
+        rx.try_recv().is_err(),
+        "unsubscribed events must not be sent"
+    );
+
+    // Default subscription (`workflow_completed` only): a failing rule must
+    // produce no payload at all — rule events are strictly opt-in.
+    let wf2 = dir.path().join("hook-default.oxoflow");
+    fs::write(
+        &wf2,
+        format!(
+            r#"[workflow]
+name = "hook-default"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:{port}/hook"
+timeout_secs = 5
+max_retries = 0
+
+[[rules]]
+name = "boom2"
+output = ["never2.txt"]
+shell = "exit 3"
+"#
+        ),
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        rx.try_recv().is_err(),
+        "the default subscription must stay silent on rule events"
+    );
+}
+
 #[test]
 fn validate_rejects_sample_pattern_with_extra_wildcards() {
     // `{read}` used to be discovered as part of the sample name, so

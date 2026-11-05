@@ -278,6 +278,8 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         provenance,
         is_tty,
         semaphore: semaphore.clone(),
+        webhook: config.webhook.clone(),
+        workflow_name: config.workflow.name.clone(),
     });
 
     let mut waited_rounds: std::collections::HashMap<String, i32> = Default::default();
