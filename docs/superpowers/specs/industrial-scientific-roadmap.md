@@ -328,8 +328,8 @@ Decoupled Persistence             Visual Design System              Repair Conti
   - Introduce an OS/container runner with a minimal environment and enforced resources before allowing untrusted team tenants.
 - **Wave 1.1: PostgreSQL Run Lifecycle Parity**
   - Complete and test the existing `StorageBackend` run lifecycle through `sqlite.rs` and `postgres.rs`.
-  - Rename the historical `require_sqlite_for_runs` capability gate and error naming after live backend evidence exists.
-  - Add concurrency, crash-recovery, and multi-instance tests.
+  - Rename the historical `require_sqlite_for_runs` capability gate and error naming after live backend evidence exists. — **done (2026-11-05)**: renamed to `require_storage_backend_for_runs` / `RUNS_REQUIRE_STORAGE_BACKEND` after the live `postgres:16` contract run (554 passed / 0 failed).
+  - Add concurrency, crash-recovery, and multi-instance tests. — still open.
 - **Wave 1.2: Cloud and Kubernetes Execution**
   - Define whether each outbound adapter is API-native or an explicit CLI-wrapper prototype.
   - Implement API-native Kubernetes, AWS Batch, and Google Cloud Batch drivers only when their support and credential models are justified.

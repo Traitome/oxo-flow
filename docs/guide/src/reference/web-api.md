@@ -351,11 +351,14 @@ file on disk defines the version.
 > **Database Backends**: run-record persistence and lifecycle routing use
 > the unified `StorageBackend`, with SQLite and feature-gated PostgreSQL
 > implementations. A CI smoke test against a live PostgreSQL container
-> verifies the schema bootstrap and the core `StorageBackend` CRUD surface;
-> concurrency, crash recovery, and multi-instance behavior remain
-> unvalidated. If no backend is initialized, these endpoints return
-> `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}`;
-> the historical error code is scheduled for renaming after backend evidence.
+> verifies the schema bootstrap and the core `StorageBackend` CRUD surface,
+> and the storage contract was live-verified against `postgres:16`
+> (2026-11-05: full contract round-trip passed, web suite 554 passed /
+> 0 failed with the `postgres` feature); concurrency, crash recovery, and
+> multi-instance behavior remain unvalidated. The runs gate is
+> backend-agnostic: if no storage backend is initialized at all, these
+> endpoints return
+> `503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}`.
 > Team/HPC execution also lacks an OS-level tenant boundary and must not be
 > exposed to untrusted workflow authors.
 

@@ -57,9 +57,9 @@ pub struct Paginated<T: serde::Serialize> {
 /// revisions, templates, shares, run-record metadata, clusters, chat history,
 /// audit logging, webhook configuration, and AI provider configuration all
 /// consume this trait. Actual run execution remains SQLite-only and gates
-/// `/api/runs*` with `RUNS_REQUIRE_SQLITE`; PostgreSQL deployments advertise
-/// that split through `PG_CAPABILITY_MATRIX`. A new domain handler must call
-/// the trait, not add another raw-SQL path.
+/// `/api/runs*` with `RUNS_REQUIRE_STORAGE_BACKEND`; PostgreSQL deployments
+/// advertise that split through `PG_CAPABILITY_MATRIX`. A new domain handler
+/// must call the trait, not add another raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<(), String>;

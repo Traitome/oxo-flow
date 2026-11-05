@@ -495,16 +495,19 @@ pub fn build_router(mode: &str) -> Router {
             post(execution::handlers::visualize_report),
         )
         .route("/api/runs/{id}/files", get(execution::files::get_run_file))
-        .route_layer(axum::middleware::from_fn(require_sqlite_for_runs));
+        .route_layer(axum::middleware::from_fn(require_storage_backend_for_runs));
 
-    /// Structured capability boundary for PostgreSQL deployments (issue #207).
+    /// Structured capability boundary for deployments without an initialized
+    /// storage backend (issue #207).
     ///
-    /// Run lifecycle bookkeeping reads and writes through the embedded SQLite
-    /// pool, which postgres-mode servers never initialize. Gating the whole
-    /// `/api/runs*` domain at the router layer gives every run endpoint one
-    /// explicit, actionable answer instead of silent empty reads or spawn-task
-    /// degradations discovered mid-flight.
-    async fn require_sqlite_for_runs(
+    /// Run lifecycle bookkeeping reads and writes through the global
+    /// `StorageBackend` (embedded SQLite pool or PostgreSQL). Gating the
+    /// whole `/api/runs*` domain at the router layer gives every run endpoint
+    /// one explicit, actionable answer instead of silent empty reads or
+    /// spawn-task degradations discovered mid-flight. The check itself is
+    /// backend-agnostic — any initialized backend passes; only execution is
+    /// SQLite-only (live-verified against postgres:16, 2026-11-05).
+    async fn require_storage_backend_for_runs(
         req: axum::extract::Request,
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, (StatusCode, axum::Json<ApiError>)> {
@@ -1271,23 +1274,25 @@ async fn require_auth(
 /// Pure decision for the #207 runs gate — extracted so the 503 contract
 /// (code + status) is unit-testable without a database (issue #554): the
 /// middleware above is the only caller.
-fn runs_gate_verdict(sqlite_ready: bool) -> Result<(), (StatusCode, axum::Json<ApiError>)> {
-    if sqlite_ready {
+fn runs_gate_verdict(backend_ready: bool) -> Result<(), (StatusCode, axum::Json<ApiError>)> {
+    if backend_ready {
         return Ok(());
     }
     Err((
         StatusCode::SERVICE_UNAVAILABLE,
         axum::Json(ApiError {
-            code: "RUNS_REQUIRE_SQLITE".into(),
+            code: "RUNS_REQUIRE_STORAGE_BACKEND".into(),
             message: "Workflow run execution is not available on this deployment.".into(),
             detail: Some(
-                "Run execution uses the embedded SQLite engine; \
-                 PostgreSQL serves storage-backed metadata and configuration surfaces only."
+                "Run lifecycle bookkeeping requires an initialized storage backend \
+                 (embedded SQLite, or PostgreSQL with the `postgres` feature); \
+                 run *execution* itself remains SQLite-only."
                     .into(),
             ),
             suggestion: Some(
-                "Execute via `oxo-flow run` from the CLI, or use a personal-mode \
-                 server backed by SQLite."
+                "Start the server in personal mode (default SQLite), or deploy with \
+                 `DATABASE_URL=sqlite://…`; for PostgreSQL deployments execute via \
+                 `oxo-flow run` from the CLI."
                     .into(),
             ),
         }),
@@ -1300,11 +1305,11 @@ mod runs_gate_tests {
 
     #[test]
     fn runs_gate_503_contract() {
-        // #554: the PG-mode 503 contract pinned without a database —
-        // status SERVICE_UNAVAILABLE + code RUNS_REQUIRE_SQLITE.
+        // #554: the no-backend 503 contract pinned without a database —
+        // status SERVICE_UNAVAILABLE + code RUNS_REQUIRE_STORAGE_BACKEND.
         let err = runs_gate_verdict(false).unwrap_err();
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(err.1.code, "RUNS_REQUIRE_SQLITE");
+        assert_eq!(err.1.code, "RUNS_REQUIRE_STORAGE_BACKEND");
         assert!(runs_gate_verdict(true).is_ok());
     }
 }

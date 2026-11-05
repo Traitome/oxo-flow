@@ -211,7 +211,7 @@ pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:
      pipelines, revisions, templates, shares, run records, cluster inventory and mutations, \
      chat sessions and messages, audit logging, webhook configuration, and AI provider configuration\n  \
      unavailable: none (all web domain handlers decoupled through unified StorageBackend)\n  \
-     gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
+     gated 503 RUNS_REQUIRE_STORAGE_BACKEND: every /api/runs* endpoint \
      (record metadata is storage-backed; execution is SQLite-only)";
 
 /// Whether a database URL selects the PostgreSQL backend.
@@ -531,7 +531,7 @@ mod effective_bind_host_tests {
             "storage-backed full domain parity must be reflected: {unavailable}"
         );
         assert!(
-            PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),
+            PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_STORAGE_BACKEND"),
             "the runs gate must stay in the matrix"
         );
     }

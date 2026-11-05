@@ -167,12 +167,16 @@ Two constraints apply:
   run-record persistence. CI runs a live-PostgreSQL smoke test (a
   `services: postgres` container) that verifies the schema bootstrap and the
   core `StorageBackend` CRUD surface — users, runs, run nodes, audit logs,
-  webhook config, chat sessions — against a real server. That evidence does
-  NOT extend to production parity: concurrency, crash recovery, and
-  multi-instance behavior remain unvalidated, so test them before relying on
-  PostgreSQL for execution metadata. The historical
-  `503 RUNS_REQUIRE_SQLITE` name may remain until that evidence supports a
-  backend-agnostic rename.
+  webhook config, chat sessions — against a real server. The storage
+  contract was additionally live-verified against a `postgres:16` container
+  (2026-11-05): the full `postgres_storage_contract` round-trip passed and
+  the complete web test suite ran 554 passed / 0 failed with the `postgres`
+  feature enabled. That evidence does NOT extend to production parity:
+  concurrency, crash recovery, and multi-instance behavior remain
+  unvalidated, so test them before relying on PostgreSQL for execution
+  metadata. The runs gate is backend-agnostic in behavior — any initialized
+  storage backend passes — and answers `503 RUNS_REQUIRE_STORAGE_BACKEND`
+  only when no backend was initialized at all.
 - **Tenant safety**: team/HPC authorization is not an OS or container
   execution boundary. A normal workflow can run shell commands under the
   server account and may access server environment secrets. Do not invite
