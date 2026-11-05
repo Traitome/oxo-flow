@@ -1463,7 +1463,7 @@
         "localrule": {
           "type": "boolean",
           "default": false,
-          "description": "Always run locally"
+          "description": "Pin the rule to local execution; cluster paths refuse to submit it"
         },
         "checkpoint": {
           "type": "boolean",

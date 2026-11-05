@@ -194,6 +194,35 @@ fn reject_checkpoint_reentry(plan: &ScheduledPlan, to_run: &HashSet<String>) -> 
     ))
 }
 
+/// `localrule = true` is a promise that a rule never leaves this machine.
+/// The cluster path has no local executor to honor it with, and skipping
+/// the rule instead would unblock its dependents while its outputs never
+/// materialize (the driver treats anything outside the run set as
+/// satisfied) — under-execution. Reject at plan time, naming every
+/// offender, and point at the path that does honor the directive (issue
+/// #1013 E2).
+fn reject_localrules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        if sr.rule.localrule {
+            offenders.push(name.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "`localrule = true` cannot be honored on the cluster path — {} would \
+         be submitted to the scheduler anyway; remove `localrule = true` or run \
+         the workflow on the local path (`oxo-flow run`) instead:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -425,6 +454,7 @@ pub(crate) async fn run_on_cluster(
         check_budget(&plan, &to_run, budget)?;
     }
     reject_checkpoint_reentry(&plan, &to_run)?;
+    reject_localrules(&plan, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
     let mut max_submitted = args
@@ -590,6 +620,7 @@ mod tests {
     use super::check_budget;
     use super::cluster_env_cache_dir;
     use super::reject_checkpoint_reentry;
+    use super::reject_localrules;
     use oxo_flow_core::backend::ScheduledPlan;
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
@@ -782,6 +813,60 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = checkpoint_plan(dir.path());
         assert!(reject_checkpoint_reentry(&plan, &std::collections::HashSet::new()).is_ok());
+    }
+
+    /// A plan whose single rule pins itself to local execution.
+    fn localrule_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"localrule\"\n[[rules]]\nname = \"stage_refs\"\n\
+                    localrule = true\nshell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn localrule_rules_are_rejected_on_the_cluster_plan() {
+        // E2: `localrule = true` used to be parsed and ignored — the rule
+        // went to the scheduler anyway. The directive must be honored by
+        // refusing the submission, naming the rule, before anything leaves.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = localrule_plan(dir.path());
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_localrules(&plan, &to_run).unwrap_err().to_string();
+        assert!(
+            msg.contains("stage_refs") && msg.contains("oxo-flow run"),
+            "the rejection must name the rule and the local path: {msg}"
+        );
+        assert!(
+            msg.contains("localrule"),
+            "the rejection must name the directive being dishonored: {msg}"
+        );
+    }
+
+    #[test]
+    fn localrule_gate_passes_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_localrules(&plan, &to_run).is_ok());
+    }
+
+    #[test]
+    fn localrule_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = localrule_plan(dir.path());
+        assert!(reject_localrules(&plan, &std::collections::HashSet::new()).is_ok());
     }
 
     #[test]

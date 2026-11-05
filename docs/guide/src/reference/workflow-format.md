@@ -713,7 +713,7 @@ memory = "32G"
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
-| `localrule` | Boolean | No | Parsed but **not enforced yet** — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see [Resource Tuning](../how-to/resource-tuning.md)) |
+| `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
 | `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
@@ -1220,7 +1220,7 @@ resume.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
-| `localrule` | Boolean | `false` | Parsed but **not enforced yet** — every schedulable rule can currently be submitted to the cluster |
+| `localrule` | Boolean | `false` | Pin the rule to local execution — cluster paths refuse to submit it (fail fast before any submission, naming the rule) |
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 **DAG edge inference** — edges form when a rule's `input` paths match
@@ -1253,7 +1253,7 @@ depends_on = []  # Run first, before file-based dependencies
 [[rules]]
 name = "local_only"
 shell = "echo 'local task'"
-localrule = true  # NOTE: not yet enforced — every schedulable rule can be submitted
+localrule = true  # never submitted by cluster paths; run this workflow via `oxo-flow run`
 ```
 
 ### Input Groups (`input_groups`)
