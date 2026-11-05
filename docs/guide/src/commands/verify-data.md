@@ -2,7 +2,7 @@
 
 Verify a data tree against a vendor md5 sidecar (`md5sum` text format) and
 report mismatched, missing, and extra files in one pass. Turns post-incident
-audits and post-recovery verification into a single command (issue #935 P2).
+audits and post-recovery verification into a single command.
 
 ## Usage
 
@@ -12,8 +12,9 @@ oxo-flow verify-data <TREE> --from <MD5_FILE> [OPTIONS]
 
 ## Description
 
-Deliveries commonly ship `md5.txt` sidecars — the #926 incident tree did, and
-it is the only reason the corrupted files' original hashes were known.
+Deliveries commonly ship `md5.txt` sidecars — an incident tree that ships
+one keeps the corrupted files' original hashes known when nothing else
+does.
 `verify-data` walks `<TREE>` and compares every file listed in the sidecar
 against its recorded md5, then also scans the tree for files the sidecar does
 not list (extras).

@@ -83,8 +83,8 @@ version = "0.1.0"
   (`key = { default = …, … }`) roundtrip as themselves, not as a
   `[config_meta]` section
 - The always-derived fan-out keys `config.paired_pairs_list` /
-  `config.paired_pairs_count` (injected by the parser from `[[pairs]]`,
-  issue #881) are **not** emitted — they are re-derived at every parse, so
+  `config.paired_pairs_count` (injected by the parser from `[[pairs]]`)
+  are **not** emitted — they are re-derived at every parse, so
   keeping them out is what makes `format` converge with `format --check`.
   User-declared `samples_list` / `pairs_list` entries are preserved verbatim
 - Using `--check` is recommended for CI/CD pipelines to enforce style consistency

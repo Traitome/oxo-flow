@@ -98,7 +98,7 @@ oxo-flow env create [OPTIONS] <SPEC>
 
 ### `env gc`
 
-Inspect and clean up the **opt-in** shared environment store (issue #904).
+Inspect and clean up the **opt-in** shared environment store.
 
 The store is **disabled by default**: a workflow is self-contained and its
 pixi/venv environments materialize inside the workflow tree exactly like any
@@ -138,7 +138,7 @@ and exits — there is nothing to collect.
 
 - Only store dirs **not referenced** by any discovered run checkpoint (`env_store_refs` in `.oxo-flow/checkpoint.json`), AND older than `--min-age-days`
 - Checkpoint discovery covers the CURRENT workflow directory only — runs in other worktrees/workdirs sharing the store are invisible to GC and are protected **solely by the age gate**. The 90-day default is sized for that: keep it well above the longest interval between runs in any workdir sharing the store, and always check `--dry-run` output before a real collection
-- Referenced dirs are always kept — a running or resumable run keeps its environments (the #893 lesson)
+- Referenced dirs are always kept — a running or resumable run keeps its environments
 - Young dirs are kept even when torn/incomplete: a fresh torn dir may be a concurrent run mid-setup, so the age gate protects those too
 - Deleting a still-needed env is recoverable: the next run detects the broken link and rebuilds
 
@@ -194,5 +194,5 @@ oxo-flow env gc --dry-run
 - Run `env check` before submitting to a cluster to catch environment issues early
 - To check that environment **definition files** exist (conda YAML, venv
   directories, `pixi.toml`), use
-  [`oxo-flow test --deep`](test.md#deep-checks-deep) (finding `D002`)
+  [`oxo-flow test --deep`](test.md#deep-checks-deep) (finding [D002](../reference/glossary.md#diagnostic-codes))
 - Only **pixi** and **venv** environments participate in the shared store today; conda/docker/singularity keep their native cache layouts. See [`env gc`](#env-gc) for store maintenance

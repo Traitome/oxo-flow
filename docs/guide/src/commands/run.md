@@ -39,7 +39,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state (a small readiness manifest that rebuilds itself on demand). The retired post-run `cache_max_age_days` aging sweep warns and points at `oxo-flow env gc`, which reclaims the shared env store (`OXO_FLOW_ENV_STORE`) — not this directory |
-| `--resume-failed` | — | — | Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose `when` gate recorded `false` (they are skips, not failures — issue #690); `status` reports them as skipped, not failed |
+| `--resume-failed` | — | — | Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose `when` gate recorded `false` (they are skips, not failures); `status` reports them as skipped, not failed |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
 | `--provenance` | — | — | Track output file checksums for later verification |
@@ -129,7 +129,7 @@ For `github.com` clones the official URL is tried first, then the
 ### Custom working directory
 
 Relative paths in the workflow resolve against the workflow file's
-directory — the single resolution base (issue #427). When `--workdir`
+directory — the single resolution base. When `--workdir`
 differs from the workflow directory, the engine anchors workflow-shipped
 files so they stay valid from the execution cwd:
 
@@ -224,7 +224,7 @@ input group (all of its producers when-gated false, the files not
 pre-built on disk, and the group not `optional = "any"`) is dropped from
 the plan with a note — `rule '...' is unreachable — its upstream is
 when-gated false; removed from the full-run execution set` — instead of
-failing mid-run on a file that was never produced (issues #882/#883).
+failing mid-run on a file that was never produced.
 The when-gated rule itself stays in the plan and is counted as skipped
 exactly once by the executor. See
 [when-skipped instances](../reference/workflow-format.md#when-skipped-instances-and-downstream-consumers)
@@ -264,7 +264,7 @@ so entries that recent runs may still reference survive.
 
     Older versions swept this cache after every run, keyed off the workflow
     config key `cache_max_age_days`. That mechanism was retired in favor of
-    the explicit, store-aware `oxo-flow env gc` command (issue #974). A
+    the explicit, store-aware `oxo-flow env gc` command. A
     workflow that still declares the key now triggers a one-time warning
     pointing at `env gc`; the key has no effect.
 
@@ -279,7 +279,7 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 Pixi and venv environments can be materialized **once per content key** in a
 shared store (opt-in: set `$OXO_FLOW_ENV_STORE` to a non-empty path —
 location IS activation; unset keeps envs self-contained inside each workflow
-tree, exactly like pre-#904). When enabled, the workflow tree only holds a
+tree, exactly like before the store existed). When enabled, the workflow tree only holds a
 symlink into the store: ten checkouts of the same pipeline share one
 environment instead of re-downloading it ten times, and a deleted store dir
 heals itself — the next run detects the broken link and rebuilds. Clean up
@@ -306,15 +306,15 @@ Rules sharing one broken spec, and distinct specs failing with the
 identical backend-missing message, collapse into a single entry — one root
 cause per line, with the pending-rule count, an example rule, the primary
 spec, and a mode-aware remediation hint. Nothing ran, so the `--json`
-summary still reports the run as `failed` with zero counts (issue #142 H6).
+summary still reports the run as `failed` with zero counts.
 See [Troubleshooting — Environment Issues](../how-to/troubleshooting.md#environment-issues)
 for per-backend checks.
 
-The remediation depends on **why** the spec failed (issue #848):
+The remediation depends on **why** the spec failed:
 
 - **Manifest file not found** (pixi declared by relative path): the spec
   is resolved against the workflow directory (the same base the executor
-  uses, issue #427), and the hint says to create the manifest at the
+  uses), and the hint says to create the manifest at the
   resolved path or correct the rule's `pixi` path — installing the backend
   would not help when the file itself is absent. Other backends keep the
   install advice (a missing conda YAML surfaces only at task execution).
@@ -323,7 +323,8 @@ The remediation depends on **why** the spec failed (issue #848):
   (`install pixi (https://pixi.sh) and ensure it is on PATH`, and so on).
 
 This is the run-time safety net. `validate` and `plan`/dry-run preflight
-pixi manifests up front (error `E019`) so the failure surfaces before you
+pixi manifests up front (error
+[E019](../reference/glossary.md#diagnostic-codes)) so the failure surfaces before you
 commit to a run; `run` keeps the check because manifests can also be
 created between validate and run.
 
@@ -503,7 +504,7 @@ nothing changed submits nothing.
 Same-template instances that are ready together and agree on every
 scheduler-visible directive (threads, memory, time limit, partition,
 account, GPU spec, environment, workdir) are grouped into **one scheduler
-array** automatically (issue #74):
+array** automatically:
 
 ```toml
 [cluster]
@@ -545,7 +546,7 @@ oxo-flow run main.oxoflow --module 20_germline --module 30_vcf_norm -t report
 
 The closure is: the module's rules + every host rule producing one of its
 declared concrete contract inputs; upstream DAG dependents come through
-the regular target machinery. The closure is **when-aware** (issue #915):
+the regular target machinery. The closure is **when-aware**:
 two rules sharing one output path behind complementary `when` gates
 resolve to the satisfiable one — a rule whose template `when` evaluates
 false under the effective config never claims a producer slot, and a
@@ -557,7 +558,7 @@ previews the same set.
 The same when-awareness covers the preflight source gate on `-t`/`--module`
 runs: a missing input whose only remaining producer instance was vetoed by
 its `when` at fan-out does not gate the run. Expansion records those vetoed
-instances' declared outputs in `when_skipped_outputs` (#882), and the gate
+instances' declared outputs in `when_skipped_outputs`, and the gate
 exempts any missing pattern found there — config-expanded at compare time,
 so `{config.*}`-bearing recorded patterns match their expanded gate forms.
 The file belongs to a rule that will never run in this cohort, not to a
@@ -770,16 +771,16 @@ Mechanics:
   (`--log-file` if given, otherwise `.oxo-flow/logs/oxo-flow.log` in the
   workdir). In this mode the tracing tee is skipped on purpose — the
   redirect already captures everything, and a second writer would
-  duplicate every line (issue #194 A3).
+  duplicate every line.
 - The run log archives BOTH the structured tracing stream AND the
   user-facing progress narrative (`Running:` / `✓` / `Done:`) plus one
   JSON line per execution event (`workflow_started`, `rule_started`,
   `rule_completed`, `rule_failed`, `workflow_completed`) — the whole run is
-  replayable from the single file (issue #194 B1/B3). Failed rules emit
+  replayable from the single file. Failed rules emit
   `"event":"rule_failed"` (compact serde_json, no space after `:`) carrying
   `rule`, `exit_code`, `signal`, `retries`, and `duration_ms`, so
   `grep -c 'rule_failed' run.launch.log` counts failures without parsing
-  the human-facing `✗` narration (issue #856); `"signal":9` after an
+  the human-facing `✗` narration; `"signal":9` after an
   OOM-kill is the smoking gun distinguishing a memory-capped environment
   from a tool bug. `duration_ms` spans all attempts including retry
   delays, not just the final one. Staging failures (environment setup,
@@ -824,8 +825,7 @@ Notes:
   foreground invocation) and `--yes` — a detached child cannot prompt.
   `--workdir` is also what bundle discovery consults as a fallback: a
   `sample_pattern`/`pairs_pattern` that matches nothing inside the
-  extraction is retried against the workdir
-  ([#751](https://github.com/Traitome/oxo-flow/issues/751)).
+  extraction is retried against the workdir.
 - `--background` is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before `KEY=VALUE` overrides) apply to the whole command line as usual.
@@ -858,7 +858,7 @@ fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 `failed_rules`).
 
-Timestamp semantics (issue #850): the engine stamps
+Timestamp semantics: the engine stamps
 **`enqueued_at`** when an execution attempt is submitted and stamps
 **`started_at`** only after the rule has acquired its resources — the
 moment actual execution begins. Their difference is the time the rule
@@ -897,7 +897,7 @@ were captured**; the tails above are persisted in `rule_runs` regardless.
 When a rule succeeds, its declared log is empty (0-byte file or empty
 directory), *and* both captured tails are empty too, the run emits one
 Info-level hint that the tool likely self-logs elsewhere — quiet tools
-with output in any of the three stay silent (issue #832).
+with output in any of the three stay silent.
 
 ### Workflow version in the checkpoint
 
@@ -979,7 +979,7 @@ compares them against the current workflow:
     A toggle that leaves the gate true (or false) — e.g.
     `(config.refine_bins || config.run_checkm)` switching which term is
     true — reuses the completed rules instead of re-running hours-long
-    chains whose inputs and commands are identical (issue #198). Flipping a
+    chains whose inputs and commands are identical. Flipping a
     gate in either direction still invalidates: the engine pre-marks
     completed rules without re-evaluating `when`, so only plan-time
     detection can retire a now-skipped producer or cascade a newly-activated
@@ -1082,7 +1082,7 @@ compares:
 - **`expand_inputs`-baked inputs** whose producer is `when`-gated off under
   the active config are tolerated as absent: the manifest records the
   existing subset instead of erroring, so a no-op rerun does not
-  invalidate the rule and cascade its producers (issue #757). If a later
+  invalidate the rule and cascade its producers. If a later
   config change produces the missing files, the manifest then mismatches
   and the rule invalidates — the flip is still caught.
 
@@ -1179,7 +1179,7 @@ their outputs rebuild in the same run.
   their inputs are engine-managed intermediates governed by the
   upstream-cascade invalidation instead.
 - **Optional rules with permanently-absent inputs** (`optional = true` or
-  `optional = "any"`, issue #633): when a declared input cannot be resolved
+  `optional = "any"`): when a declared input cannot be resolved
   because its producer was never instantiated (an `input_groups` pattern
   that matched no files, or an endedness-filtered branch that never ran),
   the snapshot skips that entry and records a manifest for the inputs that
@@ -1223,8 +1223,8 @@ This is checkpoint-aware, not a blind delete:
   failed), so debugging a broken run never has to re-fetch intermediates.
 - Leaf rules (no dependents) keep their outputs — there is no downstream
   work for them to enable.
-- With an `[engine]` section present, the deletion is **disk-gated**
-  (issue #893): it only fires when free space at the workdir is below
+- With an `[engine]` section present, the deletion is **disk-gated**:
+  it only fires when free space at the workdir is below
   `reclaim_free_disk` at run end. With disk comfortable, the outputs are
   kept — so the next run skips the completed producer instead of
   re-materializing it — and one line explains the choice:
@@ -1295,8 +1295,8 @@ Tuning knobs (both fall back to their defaults when unset, invalid, or
 Known boundaries:
 
 - *Mid-run* reclaim of fan-out producers (`output_pattern` rules with
-  per-instance values) fires only with full instance attribution (issue
-  #846): the recorded instance combos from
+  per-instance values) fires only with full instance attribution: the
+  recorded instance combos from
   `checkpoint.output_pattern_domains` are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any
@@ -1320,8 +1320,7 @@ change silently while a pipeline is running against them. Declaring
 protected_data_trees = ["raw/", "reference/"]
 ```
 
-makes the engine treat those workdir-relative trees as protected (issue
-#935 P1):
+makes the engine treat those workdir-relative trees as protected:
 
 - **First observation** (first run/plan/dry-run after the key appears) records
   a baseline manifest in the checkpoint — per-file size + mtime, plus a
@@ -1414,7 +1413,7 @@ A progress bar shows execution progress with:
 
 Workflows composed from `[[include]]` modules group the plan listing and the
 `--keep-going` failure summary under module headers, so a composed pipeline
-reads as module → rule instead of one long flat list (issue #887):
+reads as module → rule instead of one long flat list:
 
 ```
 DAG: 6 rules in execution order
@@ -1498,4 +1497,4 @@ unchanged, so tooling that parses run logs keeps working.
   `--retry` so a transient OOM does not kill the whole run.
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup
-- Use `--cache-dir` to persist environment setup state across runs for faster startup (reclaim stale entries with `oxo-flow env gc` — the old post-run aging sweep was retired, issue #974)
+- Use `--cache-dir` to persist environment setup state across runs for faster startup (reclaim stale entries with `oxo-flow env gc` — the old post-run aging sweep was retired)

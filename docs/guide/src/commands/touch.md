@@ -17,7 +17,7 @@ oxo-flow touch [OPTIONS] <WORKFLOW> [OVERRIDES]...
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
-| `[OVERRIDES]...` | Direct config overrides as trailing positionals — the forms `KEY=VALUE` and `--KEY=VALUE` work for any key; the bare space form `--KEY VALUE` is accepted only for keys declared with the declarative inline-table syntax (`key = { default = … }`) and is rejected as an unknown argument for plain `key = "value"` keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on `{config.*}` (issue #432). Command flags must come **before** the overrides. |
+| `[OVERRIDES]...` | Direct config overrides as trailing positionals — the forms `KEY=VALUE` and `--KEY=VALUE` work for any key; the bare space form `--KEY VALUE` is accepted only for keys declared with the declarative inline-table syntax (`key = { default = … }`) and is rejected as an unknown argument for plain `key = "value"` keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on `{config.*}`. Command flags must come **before** the overrides. |
 
 ---
 
@@ -80,4 +80,3 @@ Done: 4 files touched, 0 wildcard patterns skipped
 - Wildcard patterns are skipped as they cannot be touched without specific values
 - Config overrides reuse `run`'s override machinery, so `touch` and `run`
   agree on what an override means and on the resolved output locations
-  (issue #432)

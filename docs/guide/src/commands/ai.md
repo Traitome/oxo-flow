@@ -145,7 +145,7 @@ loop. The steps:
   earlier ones fail. Default 1.
 - Before any model round is spent on a failed draft, mechanical error
   classes are repaired in code (e.g. a missing `[config]` declaration —
-  E005); only what the fixer cannot repair reaches the model.
+  [E005](../reference/glossary.md#diagnostic-codes)); only what the fixer cannot repair reaches the model.
 - If the budget runs out after a pipeline was drafted, the command
   **degrades instead of discarding**: the generated TOML is extracted
   from the transcript and written with a prominent review warning —

@@ -18,7 +18,7 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 
 | Argument | Description |
 |---|---|
-| `[CHECKPOINT]` | Path to a checkpoint JSON file. Defaults to `.oxo-flow/checkpoint.json` in the current directory. A workflow (`.oxoflow`) file is also accepted: its sibling `<workflow-dir>/.oxo-flow/checkpoint.json` is auto-resolved when it exists (issue #859) |
+| `[CHECKPOINT]` | Path to a checkpoint JSON file. Defaults to `.oxo-flow/checkpoint.json` in the current directory. A workflow (`.oxoflow`) file is also accepted: its sibling `<workflow-dir>/.oxo-flow/checkpoint.json` is auto-resolved when it exists |
 
 ---
 
@@ -65,8 +65,7 @@ oxo-flow status --timing --json
 
 Passing a workflow (`.oxoflow`) file instead of a checkpoint is a common
 mistake — especially mid-run, when the natural instinct is to point `status`
-at the pipeline definition. `status` handles it instead of rejecting it
-(issue #859):
+at the pipeline definition. `status` handles it instead of rejecting it:
 
 - If `<workflow-dir>/.oxo-flow/checkpoint.json` exists, it is used directly
   and the resolution is printed:
@@ -115,7 +114,7 @@ Skipped (when condition false):
 
 `status` reads a flushed snapshot of the run, not live state — the engine
 writes the checkpoint periodically, so on a busy run the file can lag
-real execution by a minute or more (issue #849). One line under the banner
+real execution by a minute or more. One line under the banner
 reports how old the snapshot is:
 
 ```
@@ -141,7 +140,7 @@ verdict prunes any stale entry), and the display also reconciles legacy
 checkpoints: an entry in `failed_rules` whose recorded verdict in
 `when_verdicts` is `false` is reported as gated-off instead of failed —
 under `Skipped (when condition false)` in the text view and in the
-`skipped_by_when` JSON key instead of `failed` (issue #690). The same
+`skipped_by_when` JSON key instead of `failed`. The same
 reconciliation applies to the resume banner: rules whose recorded verdict is
 `false` are counted as skips there, and the gate is re-judged on the resume
 (see [Checkpointing and Resuming](run.md#checkpointing-and-resuming)).
@@ -167,7 +166,7 @@ Skipped (when condition false):
 ### Staleness reasons
 
 When the checkpoint's workflow file is still present and parseable, `status`
-classifies every completed rule exactly the way `run` would (issue #432) and
+classifies every completed rule exactly the way `run` would and
 explains **why each rule would re-run right now** — output deleted, input
 manifest mismatch, config change, or a cascade from an upstream rule. The
 section (and the `staleness` JSON key) appears only when **at least one
@@ -244,7 +243,7 @@ With `--json`, output goes to stdout:
 `timings`, `total_time_secs`, and `memory` are only present with
 `--timing`; `memory` only lists rules with a sampled peak-RSS
 measurement. `checkpoint_mtime` (RFC 3339, UTC) and `snapshot_age_secs`
-appear whenever the file's modification time can be read (issue #849) —
+appear whenever the file's modification time can be read —
 see [Snapshot freshness](#snapshot-freshness). `staleness` appears
 whenever the workflow file can be loaded for classification **and** at
 least one completed rule would re-run (see
@@ -312,16 +311,16 @@ as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 `when_verdicts` records, per rule instance, the runtime verdict of its
 `when` gate (`true`/`false`) — used for config-change replay and to
-distinguish when-gated skips from real failures in `status` output (issue
-#690). `input_manifests` records, per completed rule, every resolved input file
+distinguish when-gated skips from real failures in `status` output.
+`input_manifests` records, per completed rule, every resolved input file
 (path, size, mtime in nanoseconds, and a content hash for files up to
-64 MiB) so later runs detect changed inputs (issue #72). Each entry also
+64 MiB) so later runs detect changed inputs. Each entry also
 carries `is_symlink` and `link_target` (the lexical link target for
 symlinked files) — display-only facts: they never influence invalidation
 by themselves, but a symlinked input is announced once per run and a
 size collapse through the link surfaces as `(TRUNCATED)` in the
-[invalidation diff](run.md#input-changes-and-manifest-invalidation)
-(issue #926). `tombstones` lists
+[invalidation diff](run.md#input-changes-and-manifest-invalidation).
+`tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. `reentries` records checkpoint
