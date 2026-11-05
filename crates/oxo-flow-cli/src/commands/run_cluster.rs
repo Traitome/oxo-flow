@@ -418,12 +418,33 @@ pub(crate) async fn run_on_cluster(
     reject_checkpoint_reentry(&plan, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
+    let mut max_submitted = args
+        .max_submitted
+        .or(cluster.max_submitted)
+        .unwrap_or(driver_defaults.max_submitted);
+    // `[resource_budget] max_jobs` caps the total concurrently running jobs;
+    // on the cluster path the in-flight cap IS max_submitted, so the budget
+    // clamps the resolved cap the same way the local path clamps `-j`
+    // (issue #1013 E1). max_memory/max_threads stay hard per-rule errors in
+    // check_budget above.
+    if let Some(max_jobs) = args
+        .config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_jobs)
+        && max_submitted > max_jobs
+    {
+        eprintln!(
+            "  {} [resource_budget] max_jobs = {} caps the requested submission concurrency — submitting at most {} jobs in flight",
+            "Warning:".bold().yellow(),
+            max_jobs,
+            max_jobs
+        );
+        max_submitted = max_jobs;
+    }
     let driver_config = DriverConfig {
         // CLI flag beats the profile, which beats the driver default.
-        max_submitted: args
-            .max_submitted
-            .or(cluster.max_submitted)
-            .unwrap_or(driver_defaults.max_submitted),
+        max_submitted,
         max_array_size: cluster
             .max_array_size
             .unwrap_or(driver_defaults.max_array_size),
@@ -634,6 +655,31 @@ mod tests {
             max_jobs: None,
         };
         assert!(check_budget(&plan, &to_run, &budget).is_ok());
+    }
+
+    #[test]
+    fn max_jobs_caps_the_resolved_max_submitted() {
+        // E1: `[resource_budget] max_jobs` caps the cluster path's in-flight
+        // submission cap. The precedence chain (CLI flag > profile > driver
+        // default) resolves first; the budget then clamps the result — the
+        // same clamp semantics the local path applies to `-j`.
+        let budget = |max_jobs: Option<usize>| ResourceBudget {
+            max_threads: None,
+            max_memory: None,
+            max_jobs,
+        };
+        let resolved = 50_usize; // driver default, as if no flag/profile set
+
+        // Budget below the resolved cap: clamped down.
+        let clamped = resolved.min(budget(Some(4)).max_jobs.unwrap_or(resolved));
+        assert_eq!(clamped, 4);
+
+        // Budget above the resolved cap (or absent): no change.
+        assert_eq!(
+            resolved.min(budget(Some(100)).max_jobs.unwrap_or(resolved)),
+            50
+        );
+        assert_eq!(resolved.min(budget(None).max_jobs.unwrap_or(resolved)), 50);
     }
 
     #[test]

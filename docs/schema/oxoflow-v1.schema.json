@@ -455,13 +455,16 @@
       "description": "Global resource limits",
       "properties": {
         "max_threads": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Reject any rule that declares more threads (cluster submissions)."
         },
         "max_memory": {
-          "type": "string"
+          "type": "string",
+          "description": "Reject any rule that declares more memory, e.g. \"256G\" (cluster submissions)."
         },
         "max_jobs": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Cap on concurrently running jobs; clamps the requested -j concurrency (local) or the in-flight submission cap (cluster)."
         }
       }
     },

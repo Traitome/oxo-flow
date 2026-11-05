@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "4188d061db7ea934c8faf8ca28bd9b8b7d2561cc8af4eb209bfe02e855e9576f",
+  "schemaSha256": "c472ee28fae15f314e33b04ee5a8f1b38d1df5eedd733a32566a8ca6a3acfc5a",
   "contexts": {
     "root": {
       "keys": [
@@ -271,17 +271,17 @@
       "keys": [
         {
           "key": "max_jobs",
-          "description": "",
+          "description": "Cap on concurrently running jobs; clamps the requested -j concurrency (local) or the in-flight submission cap (cluster).",
           "type": "integer"
         },
         {
           "key": "max_memory",
-          "description": "",
+          "description": "Reject any rule that declares more memory, e.g. \"256G\" (cluster submissions).",
           "type": "string"
         },
         {
           "key": "max_threads",
-          "description": "",
+          "description": "Reject any rule that declares more threads (cluster submissions).",
           "type": "integer"
         }
       ]

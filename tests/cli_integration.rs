@@ -11444,3 +11444,83 @@ fn e017_message_no_longer_claims_silent_ignoral() {
         "contradictory 'silently ignored' claim must be gone: {stderr}"
     );
 }
+
+#[test]
+fn cli_run_resource_budget_max_jobs_serializes_local_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("budget.oxoflow");
+    let log = dir.path().join("order.log");
+
+    // Three independent branches; each marks its begin/end in a shared log
+    // with a sleep between them. If the scheduler ever runs two at once, a
+    // BEGIN will appear before the previous END and the adjacency assertion
+    // below fails.
+    let branch = |name: &str| {
+        format!(
+            r#"
+[[rules]]
+name = "{name}"
+output = ["{root}/{name}.txt"]
+shell = "echo BEGIN {name} >> {log} && sleep 0.3 && echo END {name} >> {log} && echo done > {root}/{name}.txt"
+"#,
+            root = dir.path().to_str().unwrap(),
+            log = log.to_str().unwrap(),
+            name = name,
+        )
+    };
+
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+[workflow]
+name = "budget-capped"
+version = "1.0.0"
+
+[resource_budget]
+max_jobs = 1
+{}
+{}
+{}
+[[rules]]
+name = "merge_all"
+input = ["{root}/branch_a.txt", "{root}/branch_b.txt", "{root}/branch_c.txt"]
+output = ["{root}/merged.txt"]
+shell = "cat {root}/branch_a.txt {root}/branch_b.txt {root}/branch_c.txt > {root}/merged.txt"
+"#,
+            branch("branch_a"),
+            branch("branch_b"),
+            branch("branch_c"),
+            root = dir.path().to_str().unwrap(),
+        ),
+    )
+    .unwrap();
+
+    // -j 3 asks for full parallelism; the budget must clamp it to 1.
+    let assert = oxo_flow_cmd()
+        .args(["run", workflow.to_str().unwrap(), "-j", "3"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("[resource_budget] max_jobs = 1 caps the requested -j 3"),
+        "expected the max_jobs clamp warning on stderr, got: {stderr}"
+    );
+
+    let content = fs::read_to_string(&log).unwrap();
+    let markers: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        markers.len(),
+        6,
+        "expected 3 BEGIN/END pairs in the log, got: {markers:?}"
+    );
+    for pair in markers.chunks(2) {
+        let begin = pair[0].split_whitespace().nth(1).unwrap();
+        let end = pair[1].split_whitespace().nth(1).unwrap();
+        assert_eq!(
+            begin, end,
+            "BEGIN/END interleaved — max_jobs = 1 did not serialize the run: {markers:?}"
+        );
+    }
+}

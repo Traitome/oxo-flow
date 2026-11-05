@@ -49,7 +49,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [[values]]          # Optional: named value lists for parameter wildcards
 [metadata]          # Optional: per-sample metadata columns ({meta.<column>})
-[resource_budget]   # Optional: resource limits (enforced on cluster submissions; local runs use `--max-threads`/`--max-memory`)
+[resource_budget]   # Optional: resource limits (max_jobs clamps concurrency on both paths; max_threads/max_memory enforced on cluster submissions — local runs use `--max-threads`/`--max-memory`)
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
