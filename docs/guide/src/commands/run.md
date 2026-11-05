@@ -502,6 +502,18 @@ checkpoint exactly as a local run does — `status`, `resume`, and re-run
 invalidation behave identically, and a second `run --profile slurm` with
 nothing changed submits nothing.
 
+The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
+#907) travels onto the cluster too: every submitted job script exports
+`TMPDIR`/`TMP`/`TEMP` to the resolved directory before the rule's command
+runs (issue #1013). Cluster jobs start from the scheduler's clean
+environment, so the exports are baked into each job's rendered command —
+after the workdir `cd` guard and outside the environment wrapper, so
+wrapped child processes (`conda run`, `pixi run`, venv activation) and
+tools honoring `TMPDIR` all land in the scratch volume. The directory must
+exist on the shared filesystem the nodes see; it is created on the submit
+host at run start (the same fail-fast mkdir the local path performs) and
+the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every

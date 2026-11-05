@@ -3356,8 +3356,10 @@ Notes:
   Container backends (docker/singularity) do not see host environment
   variables by default; point the container image's temp setting at a
   mounted path, or wait for explicit `-e` pass-through support. Cluster
-  submissions (`run --profile` with `[cluster]`) do not yet honor
-  `tmp_dir`/`OXO_FLOW_TMPDIR` — the same gap as output-tail bytes there.
+  submissions (`run --profile` with `[cluster]`) honor it too: each job
+  script exports `TMPDIR`/`TMP`/`TEMP` to the resolved directory before
+  the rule's command (the directory must exist on the nodes' shared
+  filesystem — see [Cluster submission](../commands/run.md#cluster-submission)).
   The `OXO_FLOW_TMPDIR` override is used verbatim: it must already be
   absolute, `~` and `..` are not expanded, and a relative value anchors to
   the process working directory — unlike the config value, which anchors

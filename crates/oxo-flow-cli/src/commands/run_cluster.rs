@@ -57,6 +57,11 @@ pub(crate) struct ClusterRunArgs<'a> {
     /// has no AI recovery. A request is announced at submit time, never
     /// silently accepted.
     pub ai_recover: bool,
+    /// Resolved run scratch directory (`[engine] tmp_dir` /
+    /// `OXO_FLOW_TMPDIR`, issues #907 + #1013 C2): exported as
+    /// `TMPDIR`/`TMP`/`TEMP` into every cluster job shell, matching the
+    /// local executor's process-env injection.
+    pub tmp_dir: Option<&'a Path>,
 }
 
 /// Outcome of a cluster run, mirroring what the local loop reports.
@@ -436,12 +441,17 @@ pub(crate) async fn run_on_cluster(
             "Warning:".bold().yellow()
         );
     }
-    let mut plan = ScheduledPlan::build(
+    // issue #1013 C2: honor the run's scratch directory on the cluster
+    // path — export it into every job shell (build_with_scratch), since
+    // jobs start from the scheduler's clean environment. `merge` is None
+    // on this path, so nothing re-expands the prefixed commands.
+    let mut plan = ScheduledPlan::build_with_scratch(
         args.config,
         args.dag,
         args.workdir,
         &env_resolver,
         args.wildcard_values,
+        args.tmp_dir,
     )
     .map_err(|e| anyhow::anyhow!("failed to build the execution plan: {e}"))?;
 

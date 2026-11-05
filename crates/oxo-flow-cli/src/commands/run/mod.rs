@@ -895,6 +895,10 @@ pub async fn run_command(
                 cache_dir: cache_dir.clone(),
                 skip_env_setup,
                 ai_recover,
+                // [engine] tmp_dir / OXO_FLOW_TMPDIR follow the job onto
+                // the cluster (issue #1013 C2) — the same resolved value
+                // the local path injects into its process envs.
+                tmp_dir: tmp_dir_resolved.as_deref(),
             },
             &mut json_summary,
             &workflow,
