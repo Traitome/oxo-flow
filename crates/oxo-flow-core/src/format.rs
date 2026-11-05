@@ -1732,6 +1732,36 @@ pub fn lint_format(
             });
         }
 
+        // W037: `resource_hint.runtime` / `resource_hint.io_bound` are
+        // parsed and round-tripped but consumed by nothing — the memory
+        // estimator reads only `input_size` and `memory_scale`. A workflow
+        // author setting them expects scheduler behavior that does not
+        // exist; naming the reserved knobs at lint time keeps the gap
+        // visible (issue #1013 E7).
+        if let Some(hint) = &rule.resource_hint
+            && (hint.runtime.is_some() || hint.io_bound.is_some())
+            && executes
+            && !can_never_run
+        {
+            let fields = match (hint.runtime.is_some(), hint.io_bound.is_some()) {
+                (true, true) => "runtime and io_bound",
+                (true, false) => "runtime",
+                _ => "io_bound",
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "resource_hint {fields} parsed but not consumed — the scheduler only uses input_size and memory_scale today"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W037".to_string(),
+                suggestion: Some(
+                    "declare enforced limits instead (resources.time_limit, resources.memory, resources.threads) — runtime and io_bound are reserved for future scheduler work"
+                        .to_string(),
+                ),
+            });
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -6556,6 +6586,99 @@ shell = "samtools faidx {{config.reference}}"
         assert!(
             !diagnostics.iter().any(|d| d.code == "W036"),
             "no input_function declared — no W036: {diagnostics:?}"
+        );
+    }
+
+    // ---- W037: resource_hint.runtime / io_bound parsed but not consumed ----
+    // The memory estimator reads only `input_size` and `memory_scale`;
+    // `runtime` and `io_bound` are reserved knobs with no scheduler
+    // behavior behind them. W037 names the gap at lint time (issue
+    // #1013 E7).
+
+    #[test]
+    fn lint_w037_flags_reserved_resource_hint_fields() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+
+            [rules.resource_hint]
+            input_size = "medium"
+            memory_scale = 2.0
+            runtime = "slow"
+            io_bound = false
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w037: Vec<_> = diagnostics.iter().filter(|d| d.code == "W037").collect();
+        assert_eq!(w037.len(), 1, "exactly one W037: {diagnostics:?}");
+        assert_eq!(w037[0].rule.as_deref(), Some("align"));
+        assert!(
+            w037[0].message.contains("runtime and io_bound"),
+            "message names both reserved fields: {}",
+            w037[0].message
+        );
+        assert!(
+            w037[0].message.contains("input_size and memory_scale"),
+            "message states what IS consumed: {}",
+            w037[0].message
+        );
+    }
+
+    #[test]
+    fn lint_w037_names_only_the_declared_reserved_field() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "fastqc"
+            input = ["sample.fq"]
+            output = ["fastqc.html"]
+            shell = "fastqc sample.fq"
+
+            [rules.resource_hint]
+            runtime = "fast"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w037: Vec<_> = diagnostics.iter().filter(|d| d.code == "W037").collect();
+        assert_eq!(w037.len(), 1, "exactly one W037: {diagnostics:?}");
+        assert!(
+            w037[0].message.contains("runtime")
+                && !w037[0].message.contains("and io_bound")
+                && !w037[0].message.contains("io_bound"),
+            "message names only runtime: {}",
+            w037[0].message
+        );
+    }
+
+    #[test]
+    fn lint_no_w037_with_only_consumed_hint_fields() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+
+            [rules.resource_hint]
+            input_size = "large"
+            memory_scale = 4.0
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W037"),
+            "only consumed hint fields — no W037: {diagnostics:?}"
         );
     }
 

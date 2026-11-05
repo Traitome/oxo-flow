@@ -175,6 +175,14 @@ fires alongside so the missing dynamic behavior is never invisible.
 The repair is to declare the inputs statically (`input = [...]`,
 glob inputs, or `expand_inputs`).
 
+[W037](../reference/glossary.md#diagnostic-codes) flags a rule whose
+`resource_hint` sets `runtime` or `io_bound`. Both fields are parsed
+and round-tripped, but nothing consumes them — the memory estimator
+reads only `input_size` and `memory_scale`. The repair is to declare
+enforced limits instead (`resources.time_limit`, `resources.memory`,
+`resources.threads`); the reserved hints stay legal TOML so external
+tooling can keep writing them.
+
 ---
 
 ## Notes

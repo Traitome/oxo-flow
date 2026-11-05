@@ -717,7 +717,7 @@ memory = "32G"
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
 | `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
-| `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
+| `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling — `input_size` and `memory_scale` feed the memory estimator; `runtime` and `io_bound` are parsed but **not consumed** by anything today, and `lint` flags them with `W037` |
 
 > **Run-path field validation.** Rule *names* (charset:
 > alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
@@ -1063,13 +1063,15 @@ When exact requirements unknown, provide hints for estimation:
 [rules.resource_hint]
 input_size = "medium"     # small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)
 memory_scale = 2.0        # Estimated memory = input_size × scale
-runtime = "slow"          # reserved: parsed, not yet consumed by the scheduler
-io_bound = true           # reserved: parsed, not yet consumed by the scheduler
+runtime = "slow"          # reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037
+io_bound = true           # reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037
 ```
 
 Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`. The
 `runtime` and `io_bound` hints are reserved scheduler knobs: only
-`input_size` and `memory_scale` are consumed today.
+`input_size` and `memory_scale` are consumed today, and `lint` flags every
+use of the reserved two with `W037`. For enforced limits declare
+`resources.time_limit` / `resources.memory` / `resources.threads` instead.
 
 ### NUMA pinning
 
