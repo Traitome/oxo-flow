@@ -4999,7 +4999,7 @@ Companion index files that tools auto-derive from a linked file's path
 <ol>
 <li><strong>DAG is naturally sequential</strong>: Run <code>oxo-flow graph workflow.oxoflow</code> and check <strong>Width</strong> in the header. If width=1, every rule depends on the previous one — no parallelism is possible. Consider splitting large rules into independent sub-tasks.</li>
 <li><strong>Resource constraints</strong>: If rules declare high thread/memory requirements (e.g., 32 threads each on a 64-thread machine), the resource pool may only allow 1-2 concurrent jobs. Either reduce declarations or increase <code>--max-threads</code>/<code>--max-memory</code>.</li>
-<li><strong>Implicit file dependencies</strong>: Check that intermediate output files use unique names — if two rules write the same output path, one silently overwrites the other (the engine does not refuse to run; <code>oxo-flow lint</code> flags it as <a href="../../commands/lint/">W033</a>).</li>
+<li><strong>Implicit file dependencies</strong>: Check that intermediate output files use unique names — if two rules write the same output path, one silently overwrites the other (the engine does not refuse to run; <code>oxo-flow lint</code> flags it as <a href="../../reference/glossary/#diagnostic-codes">W033</a>).</li>
 </ol>
 <h3 id="orphan-rules-rules-that-never-connect">Orphan rules (rules that never connect)<a class="headerlink" href="#orphan-rules-rules-that-never-connect" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: A rule exists in the workflow but has no connections to other rules — neither consuming their outputs nor producing inputs for them.</p>
@@ -5039,8 +5039,8 @@ common complementary shape — one rule gated <code>X != ''</code> and the other
 <code>X == ''</code> on the same expression — and reports the pair as an <strong>info</strong>
 instead of a warning ("output collision (unreachable): ... their <code>when</code>
 gates are complementary on 'X' — collision is not reachable at runtime"),
-so the intent stays visible without flagging a race that cannot happen
-(issue #860). Any other gating shape still reports the warning.</p>
+so the intent stays visible without flagging a race that cannot happen.
+Any other gating shape still reports the warning.</p>
 <h3 id="deadlock-detected">Deadlock detected<a class="headerlink" href="#deadlock-detected" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>Deadlock detected: 3 rules stuck. Stuck rules: align_S001, align_S002, align_S003. Check resource constraints (threads/memory) and dependencies.</code></p>
 <p><strong>Solution</strong>: Pending rules are stuck because none can become ready — typically an

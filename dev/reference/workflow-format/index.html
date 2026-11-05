@@ -4231,15 +4231,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#engine-runtime-disk-pressure-guard-issue-843" class="md-nav__link">
+  <a href="#engine-runtime-disk-pressure-guard" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [engine] — Runtime Disk-Pressure Guard (issue #843)
+        [engine] — Runtime Disk-Pressure Guard
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard (issue #843)">
+    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6588,15 +6588,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#engine-runtime-disk-pressure-guard-issue-843" class="md-nav__link">
+  <a href="#engine-runtime-disk-pressure-guard" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [engine] — Runtime Disk-Pressure Guard (issue #843)
+        [engine] — Runtime Disk-Pressure Guard
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard (issue #843)">
+    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6719,8 +6719,8 @@
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907) + protected data trees (#935)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard + global scratch dir + protected data trees</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -6799,7 +6799,7 @@ boundary.</p>
 <p>Resulting rules: <code>qc::fastqc</code>, <code>qc::trim</code>, <code>align</code></p>
 <h3 id="interface-contracts">Interface Contracts<a class="headerlink" href="#interface-contracts" title="Permanent link">#</a></h3>
 <p>An <code>[[include]]</code> may declare a typed interface — what the host must wire
-in, what the module exposes, and config defaults it reads (issue #112).
+in, what the module exposes, and config defaults it reads.
 All checks run at <strong>validation time</strong>; execution semantics are unchanged,
 and includes without a contract behave exactly as before.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># qc.oxoflow</span>
@@ -6887,8 +6887,8 @@ had written them:</p>
   not namespaced by the module. Two modules that both need a group named
   <code>all</code> share it, exactly as two host-side sections would.</li>
 <li><strong>Identical duplicate declarations</strong> (same identifier, same content)
-  collapse into one with a warning naming the group/pair — the issue #823
-  cross-source semantics.</li>
+  collapse into one with a warning naming the group/pair — the same
+  cross-source semantics as duplicate host-side declarations.</li>
 <li><strong>Conflicting declarations</strong> (same identifier, different content) fail
   with a config error naming both sides, because fan-out would produce
   colliding task/output paths.</li>
@@ -7090,7 +7090,7 @@ lists in the shell.</p>
   rewritten by <code>--samples</code> filtering.</li>
 <li><code>config.paired_pairs_list</code> (pair ids whose control is non-empty,
   comma-joined) and <code>config.paired_pairs_count</code> (their count, an integer,
-  <code>0</code> for a tumor-only cohort) — the paired subset of <code>[[pairs]]</code> (#881).
+  <code>0</code> for a tumor-only cohort) — the paired subset of <code>[[pairs]]</code>.
   Use <code>paired_pairs_list</code> in <code>expand_inputs</code> to scope cohort aggregation
   rules to genuinely paired pairs, and gate paired-only cohort rules with
   <code>when = "config.paired_pairs_count != 0"</code> (unquoted — the comparison
@@ -7440,17 +7440,17 @@ by declaring it explicitly.</p>
 <tr>
 <td><code>shell_prelude</code></td>
 <td>String</td>
-<td>Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line (issue #92) — e.g. <code>set -euo pipefail</code> for fail-fast shells. <strong>Opt-in</strong>: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. <code>pipefail</code> requires bash (the engine falls back to <code>sh</code> only when bash is absent)</td>
+<td>Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line — e.g. <code>set -euo pipefail</code> for fail-fast shells. <strong>Opt-in</strong>: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. <code>pipefail</code> requires bash (the engine falls back to <code>sh</code> only when bash is absent)</td>
 </tr>
 </tbody>
 </table>
 <h3 id="condamamba-environment-naming">Conda/mamba environment naming<a class="headerlink" href="#condamamba-environment-naming" title="Permanent link">#</a></h3>
 <p>For file-backed env specs the conda/mamba env name is derived as
 <code>&lt;stem-or-yaml-name&gt;-&lt;hash8&gt;</code>, where <code>hash8</code> is the first 8 hex chars
-of the SHA-256 of the YAML <strong>content</strong> (issue #159). Relative env file
+of the SHA-256 of the YAML <strong>content</strong>. Relative env file
 specs (<code>conda</code>, <code>mamba</code>, <code>pixi</code>, <code>venv_requirements</code>) resolve against
 the <strong>workflow directory</strong> — the single base for relative paths in the
-workflow file (issue #427); with <code>--workdir</code> the engine anchors them
+workflow file; with <code>--workdir</code> the engine anchors them
 automatically, so rule shells running from the workdir still find the
 specs. <code>venv</code> (a directory the backend creates in the workdir) and
 <code>conda_prefix</code>/<code>mamba_prefix</code> (an environment store outside the
@@ -7632,7 +7632,7 @@ disk space matters.</p>
 <td><code>output_pattern</code></td>
 <td>String</td>
 <td>No</td>
-<td>Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A <code>[[values]]</code> wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with <code>output</code>/<code>transform</code>/<code>input_groups</code> — see <a href="#runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs</a></td>
+<td>Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A <code>[[values]]</code> wildcard in the pattern is a plan-time fan-out trigger instead. Mutually exclusive with <code>output</code>/<code>transform</code>/<code>input_groups</code> — see <a href="#runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs</a></td>
 </tr>
 <tr>
 <td><code>shell</code></td>
@@ -7800,7 +7800,7 @@ disk space matters.</p>
 <td><code>log</code></td>
 <td>String</td>
 <td>No</td>
-<td>Log file path for rule execution output. The engine creates its parent directory and expands <code>{config.x}</code>/wildcards in the path, but <strong>populating the file is the rule's job</strong> — typically via <code>2&gt; {log}</code> in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's <code>rule_runs</code> regardless, and a succeeded rule whose declared log <em>and</em> both captured tails are all empty earns one Info hint that the tool likely self-logs (issue #832)</td>
+<td>Log file path for rule execution output. The engine creates its parent directory and expands <code>{config.x}</code>/wildcards in the path, but <strong>populating the file is the rule's job</strong> — typically via <code>2&gt; {log}</code> in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's <code>rule_runs</code> regardless, and a succeeded rule whose declared log <em>and</em> both captured tails are all empty earns one Info hint that the tool likely self-logs</td>
 </tr>
 <tr>
 <td><code>group</code></td>
@@ -7812,7 +7812,7 @@ disk space matters.</p>
 <td><code>cache_key</code></td>
 <td>String</td>
 <td>No</td>
-<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3)</td>
+<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run</td>
 </tr>
 <tr>
 <td><code>input_function</code></td>
@@ -7925,7 +7925,7 @@ disk space matters.</p>
 </tbody>
 </table>
 <blockquote>
-<p><strong>Run-path field validation (#523).</strong> Rule <em>names</em> (charset:
+<p><strong>Run-path field validation.</strong> Rule <em>names</em> (charset:
 alphanumeric, <code>_</code>, <code>-</code>, <code>:</code>), <code>resources.memory</code>/<code>memory</code> formats
 (<code>&lt;number&gt;&lt;G|M|K|T&gt;</code>), thread counts and <code>retry_delay</code> formats are
 validated when the workflow is parsed — an invalid value fails the run
@@ -8222,9 +8222,9 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 |---|---|---|
 | Success + <code>temp_output</code> | Kept — no success-path cleanup runs; mark <code>temporary = true</code> instead if you want outputs deleted after the run |
 | Failure + <code>temp_output</code> | Cleaned to prevent stale partial files |
-| Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors; issue #756) |
+| Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors) |
 | Transform with <code>cleanup=true</code> | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With <code>[engine]</code> thresholds configured, this post-run deletion only fires when free space is below <code>reclaim_free_disk</code> at run end — with disk comfortable the outputs are kept so later runs skip the producer (issue #893; see the [engine] notes). For <code>output_pattern</code> rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |</p>
+| Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With <code>[engine]</code> thresholds configured, this post-run deletion only fires when free space is below <code>reclaim_free_disk</code> at run end — with disk comfortable the outputs are kept so later runs skip the producer (see the [engine] notes). For <code>output_pattern</code> rules, deletion is per recorded instance (only the concrete paths that ran and completed); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |</p>
 <p><code>temporary</code> is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
 so a plain re-run skips the rule and does NOT regenerate the file — it comes
@@ -8236,7 +8236,7 @@ and modification time; when the rule fails (non-zero exit, timeout, or
 missing outputs after an exit-0 shell), the declared outputs are
 invalidated: files created during the attempt are deleted, and every
 pre-existing declared output moves aside as <code>&lt;name&gt;.oxo-failed</code> — modified
-or untouched (issue #756). The recorded failure schedules a re-execution,
+or untouched. The recorded failure schedules a re-execution,
 and a stale file surviving at the declared path would block that re-run
 inside the script (<code>ln: File exists</code>, <code>mv: cannot move ... File exists</code>);
 move-aside keeps it recoverable, and <code>protected_output</code> remains the escape
@@ -8252,7 +8252,7 @@ run's process group ("one run = one process group"), so the engine snapshots
 parent→child links via sysinfo and signals each descendant individually,
 deepest first: SIGTERM to the whole subtree, a 10-second grace poll for
 survivors, a re-scan for descendants spawned during the window, then SIGKILL
-to whatever remains (issue #194):</p>
+to whatever remains:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="k">[rules.resources]</span>
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"4h"</span><span class="w">  </span><span class="c1"># SIGTERM → grace → SIGKILL escalation after 4 hours</span>
 </span></code></pre></div>
@@ -8506,7 +8506,7 @@ differently from the producer still connect when the templates are
 identical apart from the wildcard names at the same positions
 (<code>bqsr/{experiment}/{experiment}.bam</code> matches
 <code>bqsr/{sample}/{sample}.bam</code>) — every <code>{...}</code> placeholder is
-canonicalized to <code>{}</code> before the final comparison (issue #863).
+canonicalized to <code>{}</code> before the final comparison.
 Templates differing in shape or in any literal segment never connect.
 Rules that declare the SAME output string (shared
 bins/staging directories — e.g. two assembler variants emitting into one
@@ -8542,8 +8542,8 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
 <ul>
 <li><code>pattern</code> — path glob with <code>{wildcard}</code> placeholders, relative to the
   workflow file's directory (the same root <code>sample_pattern</code> scans). A
-  bare <code>*</code> outside <code>{wildcard}</code> spans is a <strong>segment-local glob</strong>
-  (issue #246): <code>raw/{sample}_*_R1.fastq.gz</code> groups every lane file of a
+  bare <code>*</code> outside <code>{wildcard}</code> spans is a <strong>segment-local glob</strong>:
+  <code>raw/{sample}_*_R1.fastq.gz</code> groups every lane file of a
   sample without enumerating lane names — the CAT_FASTQ shape, where the
   per-sample file count is not known ahead of time and no <code>[[values]]</code>
   table can list it. <code>**</code> (cross-segment recursion) is rejected. Note a
@@ -8575,8 +8575,7 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
   skipped for that key with a warning (no instance = nothing to run).</li>
 <li>When the workflow declares a sample domain (<code>[[sample_groups]]</code>,
   <code>sample_pattern</code>, or <code>[[pairs]]</code>), <code>group_by = "sample"</code> group keys
-  must be in that domain — keys outside it are pruned with a warning
-  (#246). A key whose value is an underscore-suffixed form of a declared
+  must be in that domain — keys outside it are pruned with a warning. A key whose value is an underscore-suffixed form of a declared
   sample (<code>S1_REP1</code> for declared <code>S1</code>) is kept: replicate-suffix naming
   folds by base id, the same convention the group pattern itself uses.</li>
 </ul>
@@ -8854,7 +8853,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>cache_key</code></td>
 <td>String</td>
-<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3)</td>
+<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run</td>
 </tr>
 </tbody>
 </table>
@@ -8953,7 +8952,7 @@ over inputs it will never read. An <strong>unresolvable</strong> <code>values_fr
 config key, non-string/array value) is deliberately NOT treated as empty —
 the executor expands zero instances silently in that case, so validate keeps
 the input-existence check to surface the typo as a missing-input diagnostic
-instead of silently passing (issue #616; the stricter <code>[[values]]</code> tables and
+instead of silently passing (the stricter <code>[[values]]</code> tables and
 <code>transform.split</code> reject an unresolvable reference outright).</p>
 <h3 id="expand-inputs">Expand Inputs<a class="headerlink" href="#expand-inputs" title="Permanent link">#</a></h3>
 <p>The <code>expand_inputs</code> field generates additional input combinations via Cartesian
@@ -9208,15 +9207,15 @@ environment still being set up, or waiting on the resource pool).
 Every 30s the engine compares rules it considers running against the
 processes it can actually see; a rule that has been Running for over
 <code>OXO_FLOW_SPAWN_WATCHDOG_SECS</code> (default 600) with no child process at
-all is reported by name, and the report distinguishes two cases
-(issue #847). If the rule is queued in the resource pool — it has not
+all is reported by name, and the report distinguishes two cases.
+If the rule is queued in the resource pool — it has not
 acquired its threads/memory yet — the report is a WARN pointing at
 the scheduler's own 60-second blockage lines, because a queued wait
 is benign and self-resolving. A rule that is <em>not</em> queued (has
 acquired resources, or is parked in environment setup) and still has
 no child process gets the <code>tracing::error!</code> report with the explicit
 dispatch state <code>dispatched-not-forked</code> — that is the genuine
-lost-wakeup signature (issue #685). Both reports land in the run log
+lost-wakeup signature. Both reports land in the run log
 as well as stderr. The watchdog re-arms: once a rule is past the
 threshold it is re-reported on every 30s tick, and each report carries
 a consecutive fire count. After <code>OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES</code>
@@ -9226,7 +9225,7 @@ every 30s tick), the stuck rule is requeued to <em>Pending</em> instead of
 wedging its lane forever: the engine kills any stuck process tree,
 aborts the never-forked spawn task, releases any pool reservation it
 holds, clears the checkpoint running-set entry, and re-dispatches the
-rule when it next becomes ready (issue #872). If the wedge repeats,
+rule when it next becomes ready. If the wedge repeats,
 the engine keeps requeueing — the fire count restarts on each
 requeue, so a permanently wedged rule cycles between Running and
 Pending rather than failing the run; there is currently no cumulative
@@ -9255,7 +9254,7 @@ inline map (<code>FilePatterns::Map</code>) and reference the entries with
 </span></code></pre></div>
 <p>There is no <code>[rules.named_input]</code> / <code>[rules.named_output]</code> TOML table —
 the map is the value of <code>input</code>/<code>output</code> itself (a sub-table named
-<code>named_input</code> fails validation with E017).</p>
+<code>named_input</code> fails validation with <a href="../glossary/#diagnostic-codes">E017</a>).</p>
 <p>A named reference to a key the rule does not declare is likewise never
 substituted (literal brace text at render time) and is flagged by <strong>W034</strong>
 along with the rule's actual keys, so a typo like <code>{input.tumer}</code> is
@@ -9286,8 +9285,8 @@ per combination:</p>
 <li>Every rule referencing <code>{assembler}</code> (bare form) or <code>{values.assembler}</code>
   (namespaced form) expands into one instance per value. The reference may
   live in any trigger field — inputs, outputs, shell, <code>when</code>,
-  <code>expand_inputs</code> patterns, <strong>or the rule's <code>output_pattern</code></strong> (issue
-  #296): a pattern-only reference fans the producer out per value with the
+  <code>expand_inputs</code> patterns, <strong>or the rule's <code>output_pattern</code></strong>: a
+  pattern-only reference fans the producer out per value with the
   pattern baked per instance, exactly as it already does for
   <code>{sample}</code>/pair wildcards.</li>
 </ul>
@@ -9538,7 +9537,7 @@ group metadata</strong>: it fans out per <code>(group, sample)</code> pair as a 
 <code>{key}</code> wildcard in paths/shell/log and as <code>wildcard.&lt;key&gt;</code> in <code>when</code>
 conditions — the same vocabulary as the inline
 <code>metadata</code> table. This is how a cohort declares a second read
-dimension (issue #283):</p>
+dimension:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble"</span>
 </span><span id="__span-73-3"><a id="__codelineno-73-3" name="__codelineno-73-3" href="#__codelineno-73-3"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{long_reads}"</span><span class="p">]</span>
@@ -9891,7 +9890,7 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <tr>
 <td><code>regex_extract("path", "pattern", group?)</code></td>
 <td><code>regex_extract('alignment/{sample}.flagstat', '(\\d+) \\+ \\d+ mapped', 1) &gt; config.min_mapped_reads</code></td>
-<td>Data-dependent gate — parse an integer out of a text report's first regex match (issue #312). <code>group</code> defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030</td>
+<td>Data-dependent gate — parse an integer out of a text report's first regex match. <code>group</code> defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030</td>
 </tr>
 <tr>
 <td><code>wildcard.&lt;key&gt; == "value"</code></td>
@@ -9929,7 +9928,7 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <h3 id="data-dependent-when-gates">Data-Dependent <code>when</code> Gates<a class="headerlink" href="#data-dependent-when-gates" title="Permanent link">#</a></h3>
 <p>The runtime functions <code>reads_count(path)</code>, <code>wc_lines(path)</code>,
 <code>file_size(path)</code>, and <code>regex_extract(path, pattern, group?)</code> let a <code>when</code>
-gate inspect files produced earlier in the same run (issues #282/#312) —
+gate inspect files produced earlier in the same run —
 e.g. skip a variant caller on samples whose trimmed FASTQ has too few
 records:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a><span class="k">[[rules]]</span>
@@ -9949,8 +9948,7 @@ records:</p>
   resolve against the workflow directory. <code>{input}</code> / <code>{log}</code> in rule
   commands stay workdir-relative — data and logs are addressed from the
   run cwd (matching the freshness gates and the engine's log-dir
-  creation), so point <code>--workdir</code> at the directory holding your data
-  (issue #427).</li>
+  creation), so point <code>--workdir</code> at the directory holding your data.</li>
 <li><strong>Phase semantics</strong> — at <em>plan time</em> a runtime-function atom whose file
   is missing — or whose file is an output of this run but still holds a
   previous run's stale value — defers (<code>true</code>, the rule stays in the plan
@@ -9985,7 +9983,7 @@ records:</p>
   failure: the rule never enters <code>failed_rules</code> (a stale entry is pruned),
   <code>status</code> reports it under <em>Skipped (when condition false)</em>
   (<code>skipped_by_when</code> in <code>--json</code>), and <code>report --r-data</code> writes it to
-  <code>metrics.tsv</code> as <code>skipped_by_when</code> (issue #690).</li>
+  <code>metrics.tsv</code> as <code>skipped_by_when</code>.</li>
 <li><strong>Scope</strong> — only <code>when</code> strings may call these functions; <code>shell</code>,
   <code>input</code>, and <code>output</code> cannot read the filesystem at plan time.</li>
 </ul>
@@ -10013,7 +10011,7 @@ continue to gate at execution as before.</p>
 a downstream <strong>cohort consumer</strong> that fans its input over
 <code>config.pairs_list</code> via <code>expand_inputs</code> still bakes every pair's concrete
 path into <code>rule.input</code> — including the path of the instance that never ran.
-The engine closes that gap in two layers (issues #882/#883):</p>
+The engine closes that gap in two layers:</p>
 <ul>
 <li><strong>Baked inputs</strong> — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
@@ -10029,12 +10027,12 @@ The engine closes that gap in two layers (issues #882/#883):</p>
   not <code>optional = "any"</code>) is pruned from the full-run execution plan with
   a note ("rule … is unreachable — its upstream is when-gated false"),
   instead of failing at runtime on the absent file. The same
-  death-propagation already applied to <code>--target</code> runs (issue #247)
+  death-propagation already applied to <code>--target</code> runs
   applies when no targets are given. The when-gated rule itself stays in
   the plan: the executor evaluates its <code>when</code> and counts it as skipped
   exactly once.</li>
 </ul>
-<p>The baked-input drop is <strong>live-producer aware</strong> (issue #931): a recorded
+<p>The baked-input drop is <strong>live-producer aware</strong>: a recorded
 when-skipped path is dropped from the baked input list only when no live
 final-DAG instance declares the same path. Complementary when-gated
 producer twins (e.g. paired-mode <code>mutect2</code> and tumor-only <code>mutect2_tumoronly</code>
@@ -10044,15 +10042,15 @@ an entry IS dropped (the path has no live producer anywhere in the DAG), it
 stays in <code>expand_inputs_baked</code> as provenance for snapshot invalidation.</p>
 <p>If EVERY expanded entry is dropped, the consumer would execute with empty
 <code>{input}</code> args — planning fails instead with a validation error naming the
-rule (issue #931). Fix the producer's <code>when</code>-condition/config so a live
+rule. Fix the producer's <code>when</code>-condition/config so a live
 instance covers the paths, or give the consumer a fallback input.</p>
 <p>Avoid <code>expand_inputs</code> over an output path that two rules both declare
 unless the twins are complementary when-gates (the duplicate-owner shape
 lint <a href="../../commands/lint/">W033</a> warns about other shapes). On the <code>run</code>
 side a missing input whose only remaining producer instance was vetoed by
-its <code>when</code> at fan-out is exempt from the missing-source gate (issue #915)
+its <code>when</code> at fan-out is exempt from the missing-source gate
 — expansion records vetoed instances' declared outputs in
-<code>when_skipped_outputs</code> (#882, including deferred <code>output_pattern</code> consumer
+<code>when_skipped_outputs</code> (including deferred <code>output_pattern</code> consumer
 combos vetoed at runtime instantiation) and the gate exempts any missing
 pattern found there, config-expanded at compare time so <code>{config.*}</code>-bearing
 recorded patterns match their expanded gate forms. The file belongs to a
@@ -10640,7 +10638,7 @@ domain per sample instance, and consumers instantiate over the union.</p>
   scan; discovered files are literals, so exact-match edge inference works
   as usual.</li>
 <li>A <code>[[values]]</code> wildcard in the pattern is <strong>not</strong> fresh — it is a
-  plan-time bound dimension (issue #296). The producer fans out per value
+  plan-time bound dimension. The producer fans out per value
   with the pattern baked per instance, the pattern is registered
   producer-side in the DAG (so a per-value consumer's materialized input
   exact-matches its own producer instance), and a pattern whose wildcards
@@ -10655,7 +10653,7 @@ domain per sample instance, and consumers instantiate over the union.</p>
   consumer references on its own project as an extra Cartesian dimension at
   instantiation, under the same plan-time semantics as a static fan-out —
   <code>wildcard_constraints</code> filtered and per-instance <code>when</code> gates evaluated,
-  so gated-off combos never become instances (issue #296 follow-up). A
+  so gated-off combos never become instances. A
   consumer declared <strong>before</strong> its producer is legal but warned
   (<code>output_pattern consumer declared BEFORE its producer; the fan-out still
   resolves, but declare the producer first for stable run attribution</code>).
@@ -10690,7 +10688,7 @@ domain per sample instance, and consumers instantiate over the union.</p>
 </ul>
 <h2 id="webhook-workflow-level-notifications"><code>[webhook]</code> — Workflow-Level Notifications<a class="headerlink" href="#webhook-workflow-level-notifications" title="Permanent link">#</a></h2>
 <p>Post <code>workflow_started</code> / <code>workflow_completed</code> / <code>workflow_failed</code> events
-to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
+to an HTTP endpoint when a run starts and finishes —
 the transport counterpart of the <code>on_complete</code> / <code>on_error</code> shell hooks.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-111-1"><a id="__codelineno-111-1" name="__codelineno-111-1" href="#__codelineno-111-1"></a><span class="k">[webhook]</span>
 </span><span id="__span-111-2"><a id="__codelineno-111-2" name="__codelineno-111-2" href="#__codelineno-111-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
@@ -10767,7 +10765,7 @@ where <code>data</code> carries the run counters (<code>succeeded</code>, <code>
 and, on failure, an <code>error</code> summary. Notifications are <strong>best-effort</strong> —
 an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.</p>
-<h2 id="engine-runtime-disk-pressure-guard-issue-843"><code>[engine]</code> — Runtime Disk-Pressure Guard (issue #843)<a class="headerlink" href="#engine-runtime-disk-pressure-guard-issue-843" title="Permanent link">#</a></h2>
+<h2 id="engine-runtime-disk-pressure-guard"><code>[engine]</code> — Runtime Disk-Pressure Guard<a class="headerlink" href="#engine-runtime-disk-pressure-guard" title="Permanent link">#</a></h2>
 <p>Optional run-time disk monitoring and hardware placement knobs. Without this
 section the engine never measures free space mid-run and behavior is
 unchanged.</p>
@@ -10775,7 +10773,7 @@ unchanged.</p>
 </span><span id="__span-112-2"><a id="__codelineno-112-2" name="__codelineno-112-2" href="#__codelineno-112-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
 </span><span id="__span-112-3"><a id="__codelineno-112-3" name="__codelineno-112-3" href="#__codelineno-112-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
 </span><span id="__span-112-4"><a id="__codelineno-112-4" name="__codelineno-112-4" href="#__codelineno-112-4"></a><span class="c1"># tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule</span>
-</span><span id="__span-112-5"><a id="__codelineno-112-5" name="__codelineno-112-5" href="#__codelineno-112-5"></a><span class="c1"># protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data (issue #935)</span>
+</span><span id="__span-112-5"><a id="__codelineno-112-5" name="__codelineno-112-5" href="#__codelineno-112-5"></a><span class="c1"># protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data</span>
 </span><span id="__span-112-6"><a id="__codelineno-112-6" name="__codelineno-112-6" href="#__codelineno-112-6"></a><span class="c1"># numa_aware = true          # optional: discover NUMA topology at run start (also implied by rule-level numa_pin/numa_node)</span>
 </span><span id="__span-112-7"><a id="__codelineno-112-7" name="__codelineno-112-7" href="#__codelineno-112-7"></a><span class="c1"># staging_mode = "stream"    # optional: global remote-input staging mode (rule-level / [defaults] override this)</span>
 </span><span id="__span-112-8"><a id="__codelineno-112-8" name="__codelineno-112-8" href="#__codelineno-112-8"></a><span class="c1"># tier0_ram_scratch = "/dev/shm"        # optional: RAM/tmpfs scratch tier</span>
@@ -10808,13 +10806,13 @@ unchanged.</p>
 <td><code>tmp_dir</code></td>
 <td>String</td>
 <td>—</td>
-<td>Global scratch directory (issue #907). Injected as <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> into every rule shell and into rule-level (<code>pre_exec</code>, <code>on_success</code>, <code>on_failure</code>) and workflow-level (<code>on_complete</code>, <code>on_error</code>) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable <code>OXO_FLOW_TMPDIR</code> overrides this value per invocation (set it to redirect temp traffic without editing the workflow)</td>
+<td>Global scratch directory. Injected as <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> into every rule shell and into rule-level (<code>pre_exec</code>, <code>on_success</code>, <code>on_failure</code>) and workflow-level (<code>on_complete</code>, <code>on_error</code>) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable <code>OXO_FLOW_TMPDIR</code> overrides this value per invocation (set it to redirect temp traffic without editing the workflow)</td>
 </tr>
 <tr>
 <td><code>protected_data_trees</code></td>
 <td>Array of String</td>
 <td>—</td>
-<td>Workdir-relative data trees whose content must not change behind the engine's back (issue #935 P1) — e.g. <code>["raw/", "reference/"]</code>. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud <code>PROTECTED TREE DRIFT:</code> section when a file changed, was removed, or appeared. <code>run</code> <strong>refuses to execute</strong> on drift unless <code>--allow-protected-drift</code> is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented</td>
+<td>Workdir-relative data trees whose content must not change behind the engine's back — e.g. <code>["raw/", "reference/"]</code>. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud <code>PROTECTED TREE DRIFT:</code> section when a file changed, was removed, or appeared. <code>run</code> <strong>refuses to execute</strong> on drift unless <code>--allow-protected-drift</code> is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented</td>
 </tr>
 <tr>
 <td><code>numa_aware</code></td>
@@ -10895,8 +10893,7 @@ following hold: the rule is marked <code>temporary = true</code>, it is not a le
 has dependents), every dependent has completed <strong>and each dependent's own
 declared outputs still exist on disk</strong> — a completed rule whose outputs went
 missing will re-execute and needs its inputs in place, so reclaiming them
-underneath it would break the re-run (the reclaim-vs-resume race, fixed
-under issue #843), the paths are not <code>protected_output</code>, and the files
+underneath it would break the re-run (the reclaim-vs-resume race), the paths are not <code>protected_output</code>, and the files
 exist on disk. Reclaimed rules get a tombstone in <code>checkpoint.json</code> — the
 same mechanism the success-path <code>temporary</code> cleanup uses — so a later run
 that needs the outputs regenerates them first (lazy cascade-up). See
@@ -10936,7 +10933,7 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   to the workflow file's directory.</li>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
   per-instance values) fires only with full instance attribution
-  (issue #846): the recorded instance combos from
+  (full instance attribution): the recorded instance combos from
   <code>checkpoint.output_pattern_domains</code> are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any
@@ -10950,8 +10947,8 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   explicitly (e.g. a <code>genome.fa</code> rule also declaring <code>genome.fa.fai</code>) so
   reclaim + cleanup can track them.</li>
 <li>When <code>[engine]</code> thresholds are configured, the success-path <code>temporary</code>
-  sweep is gated on the same reclaim floor as mid-run reclaim (issue
-  #893): if free space at the workdir is at/above <code>reclaim_free_disk</code>
+  sweep is gated on the same reclaim floor as mid-run reclaim:
+  if free space at the workdir is at/above <code>reclaim_free_disk</code>
   when the run finishes, temporary outputs are <strong>kept</strong> (a one-line ℹ
   note names both numbers) so the next run skips the completed producers
   instead of re-materializing them. The sweep only fires when the run

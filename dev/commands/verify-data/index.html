@@ -3996,13 +3996,14 @@
 <h1 id="verify-data">verify-data<a class="headerlink" href="#verify-data" title="Permanent link">#</a></h1>
 <p>Verify a data tree against a vendor md5 sidecar (<code>md5sum</code> text format) and
 report mismatched, missing, and extra files in one pass. Turns post-incident
-audits and post-recovery verification into a single command (issue #935 P2).</p>
+audits and post-recovery verification into a single command.</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow<span class="w"> </span>verify-data<span class="w"> </span>&lt;TREE&gt;<span class="w"> </span>--from<span class="w"> </span>&lt;MD5_FILE&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </span></code></pre></div>
 <h2 id="description">Description<a class="headerlink" href="#description" title="Permanent link">#</a></h2>
-<p>Deliveries commonly ship <code>md5.txt</code> sidecars — the #926 incident tree did, and
-it is the only reason the corrupted files' original hashes were known.
+<p>Deliveries commonly ship <code>md5.txt</code> sidecars — an incident tree that ships
+one keeps the corrupted files' original hashes known when nothing else
+does.
 <code>verify-data</code> walks <code>&lt;TREE&gt;</code> and compares every file listed in the sidecar
 against its recorded md5, then also scans the tree for files the sidecar does
 not list (extras).</p>

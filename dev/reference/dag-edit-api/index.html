@@ -4546,10 +4546,10 @@ returned in <code>validation_errors</code> with <code>success: false</code>, and
 back atomically — <code>toml_content</code> echoes the caller's unchanged input and the
 undo/redo history is untouched. Edits that break parsing — invalid TOML syntax, unknown fields, or
 duplicate rule names — are rejected with HTTP <code>400</code> instead. Cycle detection
-<strong>is</strong> part of the edit validation path: since issue #466, <code>validate_format</code>
+<strong>is</strong> part of the edit validation path: <code>validate_format</code>
 builds the DAG with parsed config values on every edit, so a cycle introduced
 via <code>depends_on</code> edits surfaces immediately as <code>success: false</code> with the
-<code>DAG error:</code> (E006) message in <code>validation_errors</code> (the edit is rolled back
+<code>DAG error:</code> (<a href="../glossary/#diagnostic-codes">E006</a>) message in <code>validation_errors</code> (the edit is rolled back
 atomically). See <a href="../dag-engine/">DAG Engine</a>.</p>
 </li>
 <li>

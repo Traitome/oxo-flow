@@ -3945,8 +3945,30 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#benchmark-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark terms
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4785,8 +4807,30 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#benchmark-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark terms
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
   
 </li>
       
@@ -5245,7 +5289,7 @@ below list every code the engine currently emits.</p>
 </tr>
 <tr>
 <td><code>W024</code></td>
-<td>A wildcard has no declared source — it will stay literal at run time. Also surfaced by <code>validate</code> (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it (#973 F6)</td>
+<td>A wildcard has no declared source — it will stay literal at run time. Also surfaced by <code>validate</code> (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it</td>
 </tr>
 <tr>
 <td><code>W025</code></td>
@@ -5296,9 +5340,8 @@ parse-level errors): <code>S001</code> invalid TOML syntax, <code>S002</code> mi
 <code>S005</code> a rule entry that is not a table, and <code>S006</code> an unknown top-level
 section (checked against the parser's own E017 whitelist — the documented
 sections are never flagged; since the parsed config cannot retain unknown
-keys, <code>S006</code> is the one schema code users can actually trigger, per issue</p>
-<h1 id="470-s007-warns-when-workflowformat_version-is-present-but">470). <code>S007</code> warns when <code>[workflow].format_version</code> is present but<a class="headerlink" href="#470-s007-warns-when-workflowformat_version-is-present-but" title="Permanent link">#</a></h1>
-<p>unrecognized, and <code>S008</code> is the secret-scanning warning: a token-shaped
+keys, <code>S006</code> is the one schema code users can actually trigger). <code>S007</code> warns when <code>[workflow].format_version</code> is present but
+unrecognized, and <code>S008</code> is the secret-scanning warning: a token-shaped
 pattern in the raw file (<a href="../security/">security</a>); like the whole S-series,
 it reaches users only through the lint pass.</p>
 <p>The full, current list with suggestions is best read from the commands:

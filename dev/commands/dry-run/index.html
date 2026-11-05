@@ -4147,11 +4147,11 @@
 [KEY=VALUE]...</code> is byte-identical, flag for flag. The documentation speaks
 of the execution <strong>plan</strong> (this page's "Plan:" headline, the checkpoint
 preview's <code>plan</code> array in <code>--json</code>); the subcommand now matches that
-vocabulary (issue #831).</p>
+vocabulary.</p>
 <p><code>dry-run</code> accepts the same configuration inputs as <code>run</code> — <code>--arg</code>,
 trailing <code>KEY=VALUE</code> overrides, <code>--profile</code>, <code>--rerun</code>, and
 <code>--resume-failed</code> — and predicts the execution set with the exact same
-machinery (issue #77 parity contract). The preview also mirrors the
+machinery. The preview also mirrors the
 executor's freshness gate: a rule with no checkpoint entry whose outputs
 are up to date is predicted as skipped, exactly as <code>run</code> would skip it.</p>
 <hr />
@@ -4266,7 +4266,7 @@ model for a plain-language explanation.</p>
 <p>The <code>SCI-FEATURECOUNTS-STRAND</code> check fires only when featureCounts is
 actually <strong>invoked</strong> (a command word) without a strandness flag — a rule
 that merely passes a <code>.../featurecounts</code> output <em>path</em> to another tool
-stays silent (issue #441). It also stays silent when the config declares
+stays silent. It also stays silent when the config declares
 <code>strandedness = "unstranded"</code> (the default <code>-s 0</code> is then deliberate), and
 its advice is evidence-driven: determine strandedness with RSeQC
 <code>infer_experiment.py</code> or the samplesheet's strandedness column before
@@ -4275,8 +4275,7 @@ setting <code>-s 1</code>/<code>-s 2</code>.</p>
 (or <code>expand_inputs</code> patterns) activate a fan-out dimension — <code>{sample}</code> /
 <code>{group}</code>, a pair wildcard, a <code>[[values]]</code> table name, or an
 <code>output_pattern</code> producer's fresh wildcard — while the declared outputs
-are <strong>not keyed by that dimension</strong> (issue #443; per-dimension keying
-since #829). Expansion creates one instance per fan-out element; every
+are <strong>not keyed by that dimension</strong> (the check is per-dimension). Expansion creates one instance per fan-out element; every
 instance of an unkeyed dimension bakes the SAME concrete output path:
 concurrently they race, sequentially they duplicate work N−1 times. The
 check is per-dimension, so a rule whose outputs carry one dimension's
@@ -4405,9 +4404,9 @@ their work stays untouched, counted as <code>protected</code>.</p>
 question that matters before any run: <strong>what happens next</strong> — how many
 rules execute, how many are skipped, and how much completed work the
 checkpoint holds. The total rule count in the DAG is shown as
-<code>DAG size</code>, not as the headline number (issue #432: <code>DAG: 391 rules would
-execute</code> read as "everything re-runs" while 381 of them were actually
-up to date — a costly misread during triage). The summary line also
+<code>DAG size</code>, not as the headline number — the headline answers "what
+happens next", while a bare rule count could read as "everything
+re-runs" when most rules are actually up to date. The summary line also
 answers how much prior work survives (<code>protected</code>): rules outside this
 execution set stay untouched. The cascade line makes the infection chain
 visible — one sample's data change reaching the queue-level rules is
@@ -4447,7 +4446,7 @@ prediction is machine-readable:</p>
 <code>"reference_builds"</code> (reference names whose build outputs are missing —
 <code>--skip-ref-build</code> empties the list).</p>
 <p>Pixi manifests declared by pending rules are preflighted exactly like
-<code>run</code> does at start-up (issue #848): every non-skip rule's <code>pixi = "…"</code>
+<code>run</code> does at start-up: every non-skip rule's <code>pixi = "…"</code>
 spec is resolved against the workflow directory and existence-checked.
 Missing manifests appear under the top-level key
 <code>"env_manifest_issues"</code> (an array of <code>{"rule", "spec"}</code> objects, <code>spec</code>

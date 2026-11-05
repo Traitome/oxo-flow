@@ -4108,8 +4108,8 @@
   (<code>key = { default = …, … }</code>) roundtrip as themselves, not as a
   <code>[config_meta]</code> section</li>
 <li>The always-derived fan-out keys <code>config.paired_pairs_list</code> /
-  <code>config.paired_pairs_count</code> (injected by the parser from <code>[[pairs]]</code>,
-  issue #881) are <strong>not</strong> emitted — they are re-derived at every parse, so
+  <code>config.paired_pairs_count</code> (injected by the parser from <code>[[pairs]]</code>)
+  are <strong>not</strong> emitted — they are re-derived at every parse, so
   keeping them out is what makes <code>format</code> converge with <code>format --check</code>.
   User-declared <code>samples_list</code> / <code>pairs_list</code> entries are preserved verbatim</li>
 <li>Using <code>--check</code> is recommended for CI/CD pipelines to enforce style consistency</li>

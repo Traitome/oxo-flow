@@ -4203,7 +4203,8 @@ or split on whitespace — match on the path prefix instead.</p>
 <code>sample_pattern</code>, or <code>[[values]]</code> entry) keeps the brace token <strong>literal</strong>
 at run time and then fails with a precise hard error. <code>lint</code> warns about
 this (<code>W024</code>); <code>validate</code> — the first gate in the recommended
-validate → dry-run → run path — now surfaces the same <code>W024</code> diagnostic
+validate → dry-run → run path — now surfaces the same
+<a href="../../reference/glossary/#diagnostic-codes">W024</a> diagnostic
 so a green validate no longer hides a workflow that cannot run:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>✓ p.oxoflow — 1 rule, 0 dependencies
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
@@ -4224,13 +4225,13 @@ expanded instance (<code>step1_lane_L1</code>) rather than the template rule.</p
 <ul>
 <li>Exits with code <code>0</code> on success, <code>1</code> on failure</li>
 <li>Validates TOML parsing, rule semantics, and DAG construction</li>
-<li>Missing input files are reported as warnings (not errors). A rule's declared pixi manifest, by contrast, is existence-checked and reported as error <code>E019</code> (a missing environment file blocks every rule that needs it at run time); <code>--as-include</code> skips input-existence checks, the pixi-manifest preflight, and DAG construction, but cycle detection still applies (cycles are semantic errors, not missing files)</li>
-<li><code>[wildcard_constraints]</code> entries are compiled with the same helper the expansion engine uses — an uncompilable pattern surfaces as error <code>E020</code> (defense-in-depth for programmatically constructed configs; TOML-parsed workflows already fail at parse time with a config error)</li>
-<li>input/output patterns carrying Snakemake-style inline wildcard constraints (e.g. <code>{sample:[A-Z]+}</code>) surface as error <code>E021</code> — the engine's wildcard grammar is <code>{name}</code> only, so the brace group would stay literal text instead of expanding; move the regex into <code>[wildcard_constraints]</code></li>
+<li>Missing input files are reported as warnings (not errors). A rule's declared pixi manifest, by contrast, is existence-checked and reported as error <a href="../../reference/glossary/#diagnostic-codes">E019</a> (a missing environment file blocks every rule that needs it at run time); <code>--as-include</code> skips input-existence checks, the pixi-manifest preflight, and DAG construction, but cycle detection still applies (cycles are semantic errors, not missing files)</li>
+<li><code>[wildcard_constraints]</code> entries are compiled with the same helper the expansion engine uses — an uncompilable pattern surfaces as error <a href="../../reference/glossary/#diagnostic-codes">E020</a> (defense-in-depth for programmatically constructed configs; TOML-parsed workflows already fail at parse time with a config error)</li>
+<li>input/output patterns carrying Snakemake-style inline wildcard constraints (e.g. <code>{sample:[A-Z]+}</code>) surface as error <a href="../../reference/glossary/#diagnostic-codes">E021</a> — the engine's wildcard grammar is <code>{name}</code> only, so the brace group would stay literal text instead of expanding; move the regex into <code>[wildcard_constraints]</code></li>
 <li>Relative paths resolve against the workflow file's directory — the same base rules run from — so warnings are accurate even when invoked from another directory. This includes the pixi-manifest preflight: <code>pixi = "envs/x.toml"</code> is checked at <code>&lt;workflow dir&gt;/envs/x.toml</code>, never against the invoking CWD</li>
 <li>Environments and tools are not verified here — the pixi-manifest check only confirms the manifest file exists, not that the pixi binary is installed or that the environment solves. Use
   <a href="../test/#deep-checks-deep"><code>oxo-flow test --deep</code></a> (checks environment
-  definition files D002 and PATH binaries D003) or <code>oxo-flow env check</code>
+  definition files <a href="../../reference/glossary/#diagnostic-codes">D002</a> and PATH binaries <a href="../../reference/glossary/#diagnostic-codes">D003</a>) or <code>oxo-flow env check</code>
   for environment validation</li>
 <li>Run <code>validate</code> before <code>run</code> to catch errors early without consuming compute resources</li>
 <li><a href="../lint/"><code>lint</code></a> is a strict superset: it runs all <code>validate</code> checks plus

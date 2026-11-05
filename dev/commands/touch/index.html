@@ -4027,7 +4027,7 @@
 </tr>
 <tr>
 <td><code>[OVERRIDES]...</code></td>
-<td>Direct config overrides as trailing positionals — the forms <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> work for any key; the bare space form <code>--KEY VALUE</code> is accepted only for keys declared with the declarative inline-table syntax (<code>key = { default = … }</code>) and is rejected as an unknown argument for plain <code>key = "value"</code> keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on <code>{config.*}</code> (issue #432). Command flags must come <strong>before</strong> the overrides.</td>
+<td>Direct config overrides as trailing positionals — the forms <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> work for any key; the bare space form <code>--KEY VALUE</code> is accepted only for keys declared with the declarative inline-table syntax (<code>key = { default = … }</code>) and is rejected as an unknown argument for plain <code>key = "value"</code> keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on <code>{config.*}</code>. Command flags must come <strong>before</strong> the overrides.</td>
 </tr>
 </tbody>
 </table>
@@ -4105,8 +4105,7 @@
 <li>Useful for forcing the engine to skip rules when outputs were generated externally</li>
 <li>Wildcard patterns are skipped as they cannot be touched without specific values</li>
 <li>Config overrides reuse <code>run</code>'s override machinery, so <code>touch</code> and <code>run</code>
-  agree on what an override means and on the resolved output locations
-  (issue #432)</li>
+  agree on what an override means and on the resolved output locations</li>
 </ul>
 
 

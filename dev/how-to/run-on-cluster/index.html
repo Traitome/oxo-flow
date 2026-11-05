@@ -4452,7 +4452,7 @@ when you need at least one GPU (<code>gpu = 1</code> or higher).</p>
   suffix (<code>"4096"</code>, <code>"8G"</code>, <code>"16384M"</code>, <code>"1T"</code>). Fractional (<code>"16.5G"</code>)
   and multi-letter-suffix (<code>"4096MB"</code>, <code>"2GB"</code>) figures parse to nothing
   engine-wide and are <strong>rejected at validate time</strong> — the same predicate
-  <code>check</code>'s E004 diagnostic applies, so a config that loads is a config
+  <code>check</code>'s <a href="../../reference/glossary/#diagnostic-codes">E004</a> diagnostic applies, so a config that loads is a config
   the pool, the quota, and every scheduler render agree on. Because
   PBS <code>mem=</code> and SGE <code>h_vmem=</code> default to their own units (words/bytes),
   those two backends receive the figure with an <strong>explicit unit</strong>
@@ -4863,7 +4863,7 @@ remains required and is validated the same strict way.</p>
   (every round a ready rule spends beyond the <code>max_submitted</code> cap gains
   +1). A producer parked at the cap therefore outranks fresh
   high-priority rules after <code>priority gap</code> rounds — priority-inversion
-  starvation cannot persist (issue #134).</li>
+  starvation cannot persist.</li>
 <li><strong>In-flight jobs are cancelled on failure</strong>: when a required rule
   fails, the driver cancels every job already submitted
   (<code>scancel</code>/<code>qdel</code>/<code>bkill</code>) before the run exits — no orphaned cluster

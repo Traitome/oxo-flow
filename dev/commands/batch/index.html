@@ -4219,7 +4219,7 @@
 <td><code>--json-output</code></td>
 <td>—</td>
 <td>—</td>
-<td>Output results as formatted JSON (legacy alias — the global <code>--json</code> now drives the same output). With <code>--dry-run</code> it emits the previewed commands as JSON on stdout (issue #864)</td>
+<td>Output results as formatted JSON (legacy alias — the global <code>--json</code> now drives the same output). With <code>--dry-run</code> it emits the previewed commands as JSON on stdout</td>
 </tr>
 <tr>
 <td><code>--dry-run</code></td>
@@ -4326,7 +4326,7 @@
 <p>With <code>--json-output</code> (or the global <code>--json</code>), the dry-run preview is also
 written to stdout as JSON — the preview IS the result in dry-run, so
 scripts can consume the exact commands that would run without executing
-anything (issue #864). The human-readable preview stays on stderr either
+anything. The human-readable preview stays on stderr either
 way, so redirecting stdout always yields pure JSON:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>-n<span class="w"> </span>--json-output<span class="w"> </span><span class="s2">"samtools flagstat {item}"</span><span class="w"> </span>*.bam<span class="w"> </span>&gt;<span class="w"> </span>preview.json
 </span></code></pre></div>
@@ -4355,8 +4355,7 @@ way, so redirecting stdout always yields pure JSON:</p>
 <li>Environment spec format: <code>conda: env.yaml</code> or <code>docker: image:tag</code></li>
 <li>
 <p>In dry-run, the human-readable preview goes to stderr; with
-  <code>--json-output</code>/<code>--json</code> the same preview is emitted as JSON on stdout
-  (issue #864)</p>
+  <code>--json-output</code>/<code>--json</code> the same preview is emitted as JSON on stdout</p>
 </li>
 <li>
 <p>Generated workflows create one rule per item (<code>batch_item_1</code>, <code>batch_item_2</code>, ...)</p>
@@ -4365,7 +4364,7 @@ way, so redirecting stdout always yields pure JSON:</p>
 <h2 id="exit-codes">Exit Codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>0</strong> — all items succeeded.</li>
-<li><strong>1</strong> — any item failed (#540). The per-item failures are still listed in
+<li><strong>1</strong> — any item failed. The per-item failures are still listed in
   the output and in <code>--json-output</code>'s <code>results</code> array. <code>--stop-on-error</code>
   (<code>-x</code>) additionally aborts the batch on the FIRST failed item instead of
   running the rest.</li>

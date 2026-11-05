@@ -4478,7 +4478,7 @@ ignored.</p>
 <li><strong>Anonymous surface</strong>: <code>/api/system</code>, <code>/api/metrics</code>, <code>/api/ai/test</code>,
   and <code>/api/hpc</code> require authentication; <code>GET /api/ai/config</code> stays
   public; <code>/api/events</code> requires a one-time <code>?ticket=</code> from
-  <code>POST /api/events/ticket</code> (EventSource cannot set headers; #522) and
+  <code>POST /api/events/ticket</code> (EventSource cannot set headers) and
   streams only the subscriber's runs; <code>/api/share/{token}</code>
   is public by design (the token is the credential).</li>
 <li><strong>Env-password logins</strong> auto-provision a real users row (previously any
@@ -4616,7 +4616,7 @@ and bypass the limiter.</p>
 </span></code></pre></div>
 <p>For TLS-terminating proxies (the common public deployment), also declare
 the public origin so minted share URLs tell the truth about the transport
-(#907 R16) — by default they carry <code>oxo+http://</code> with the local bind
+— by default they carry <code>oxo+http://</code> with the local bind
 host/port, which is unreachable from outside the proxy:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># /etc/oxo-flow/server.env (append) — public HTTPS entry point</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nv">OXO_FLOW_PUBLIC_URL</span><span class="o">=</span>https://flows.lab.example.edu/oxo-flow

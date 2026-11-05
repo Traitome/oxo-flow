@@ -4118,7 +4118,7 @@
 with an absolute <code>out_dir</code> is <strong>allowed</strong> when the resolved path lies inside the
 run workdir (pipelines legitimately clean up their own outputs), while root,
 home (<code>~</code>), <code>--no-preserve-root</code> forms, and any target outside the workdir
-remain hard errors. The static lint (E011) still flags raw <code>rm -rf /</code>-style
+remain hard errors. The static lint (<a href="../glossary/#diagnostic-codes">E011</a>) still flags raw <code>rm -rf /</code>-style
 templates regardless.</p>
 <p>Quoted operands are parsed, not blanket-rejected: each operand may be
 individually wrapped in balanced quotes (<code>rm -rf $prefix "$prefix.fa"</code> — the
@@ -4179,8 +4179,8 @@ intentional:</p>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>and the rule will run; it is flagged because such content can also ride in on
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>rendered wildcard values — verify it is intentional
 </span></code></pre></div>
-<p>The static lint for the same idioms is <code>W023</code> (aggregated one diagnostic per
-command since #375).</p>
+<p>The static lint for the same idioms is <a href="../glossary/#diagnostic-codes">W023</a> (aggregated one diagnostic per
+command).</p>
 <hr />
 <h2 id="layer-2-path-traversal-protection">Layer 2 — Path Traversal Protection<a class="headerlink" href="#layer-2-path-traversal-protection" title="Permanent link">#</a></h2>
 <p>Output paths are validated to prevent file system escape:</p>

@@ -3286,6 +3286,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#shared-environment-store-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4246,6 +4268,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#shared-environment-store-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4387,7 +4431,7 @@ or rename it, build the suffixed env, or drop <code>--skip-env-setup</code>.</p>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>conda</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses YAML environment file</li>
-<li><strong>Naming</strong>: A file-backed spec resolves to the env name <code>&lt;name&gt;-&lt;hash8&gt;</code>, where <code>&lt;name&gt;</code> is the YAML's <code>name:</code> field (falling back to the file stem) and <code>&lt;hash8&gt;</code> is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one (issue #159). Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (<code>conda env create -n &lt;name&gt;-&lt;hash8&gt; -f envs/spec.yaml</code>); the engine prints the expected name when it detects the env is missing under <code>--skip-env-setup</code></li>
+<li><strong>Naming</strong>: A file-backed spec resolves to the env name <code>&lt;name&gt;-&lt;hash8&gt;</code>, where <code>&lt;name&gt;</code> is the YAML's <code>name:</code> field (falling back to the file stem) and <code>&lt;hash8&gt;</code> is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one. Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (<code>conda env create -n &lt;name&gt;-&lt;hash8&gt; -f envs/spec.yaml</code>); the engine prints the expected name when it detects the env is missing under <code>--skip-env-setup</code></li>
 <li><strong>Activation</strong>: Runs <code>conda run --no-capture-output -n &lt;env_name&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code> — <code>--no-capture-output</code> (conda ≥ 4.13) keeps stdout/stderr live, and the <code>PATH</code> prefix makes the rule see the env's own tools first</li>
 <li><strong>Caching</strong>: Environments are created once and reused across rules that share the same YAML file</li>
 </ul>
@@ -4403,8 +4447,8 @@ or rename it, build the suffixed env, or drop <code>--skip-env-setup</code>.</p>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>pixi</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses the <code>pixi.toml</code> manifest the rule names</li>
-<li><strong>Activation</strong>: Runs <code>pixi run --manifest-path &lt;pixi.toml&gt; bash -c '&lt;command&gt;'</code> — the <strong>whole</strong> rule command travels inside the env. <code>pixi run</code> is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (<code>&amp;&amp;</code>, <code>|</code>) and the executor's prepended <code>mkdir -p</code> line escape the env and run on the host PATH (live-caught on a SLURM cluster, issue #354). The spec is a <strong>manifest path</strong>, not an environment name (<code>-e</code> would only search the current directory for a discoverable manifest)</li>
-<li><strong>Lockfile</strong>: Pixi's native lockfile ensures reproducible resolution, and is part of the environment's identity: the pixi cache is keyed by the manifest spec <strong>plus content hashes of the manifest and its sibling <code>pixi.lock</code></strong> (<code>pixi:&lt;path&gt;:&lt;hash8&gt;:&lt;hash8&gt;</code>), so an in-place edit of either — e.g. committing a reproducibility pin to the lockfile — invalidates the cache and the next run rebuilds the environment (#827; before it the key covered the manifest only and a lock re-pin was silently ignored). Unreadable or missing files degrade to empty tags. Rule fingerprints carry the same digests, so completed rules referencing the spec are invalidated too (see <a href="../../commands/run/#config-changes-and-precise-invalidation">run — config changes and precise invalidation</a>)</li>
+<li><strong>Activation</strong>: Runs <code>pixi run --manifest-path &lt;pixi.toml&gt; bash -c '&lt;command&gt;'</code> — the <strong>whole</strong> rule command travels inside the env. <code>pixi run</code> is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (<code>&amp;&amp;</code>, <code>|</code>) and the executor's prepended <code>mkdir -p</code> line escape the env and run on the host PATH (live-caught on a SLURM cluster). The spec is a <strong>manifest path</strong>, not an environment name (<code>-e</code> would only search the current directory for a discoverable manifest)</li>
+<li><strong>Lockfile</strong>: Pixi's native lockfile ensures reproducible resolution, and is part of the environment's identity: the pixi cache is keyed by the manifest spec <strong>plus content hashes of the manifest and its sibling <code>pixi.lock</code></strong> (<code>pixi:&lt;path&gt;:&lt;hash8&gt;:&lt;hash8&gt;</code>), so an in-place edit of either — e.g. committing a reproducibility pin to the lockfile — invalidates the cache and the next run rebuilds the environment. Unreadable or missing files degrade to empty tags. Rule fingerprints carry the same digests, so completed rules referencing the spec are invalidated too (see <a href="../../commands/run/#config-changes-and-precise-invalidation">run — config changes and precise invalidation</a>)</li>
 <li><strong>Site quirks (live-verified)</strong>: hand-written manifests must declare <code>platforms</code> (e.g. <code>platforms = ["linux-64"]</code>) — modern pixi refuses to solve a workspace without them; and <code>pixi</code> must be on <code>$PATH</code> inside batch jobs, which start with a clean environment</li>
 </ul>
 <h3 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">#</a></h3>
@@ -4439,9 +4483,8 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 <li><strong>Caching</strong>: Venvs are stored in a cache directory keyed by the declared
   venv spec <strong>plus a content hash of the requirements file</strong>
   (<code>venv:&lt;path&gt;:&lt;hash8&gt;</code>), so editing <code>requirements.txt</code> in place
-  invalidates the cache and the next run rebuilds the environment
-  (#532 — previously the key was the path only and edits were silently
-  ignored). Unreadable/missing files degrade to the plain path key.</li>
+  invalidates the cache and the next run rebuilds the environment.
+  Unreadable/missing files degrade to the plain path key.</li>
 </ul>
 <h3 id="hpc-modules">HPC Modules<a class="headerlink" href="#hpc-modules" title="Permanent link">#</a></h3>
 <ul>
@@ -4514,13 +4557,13 @@ only ever be lost.</p>
 </span></code></pre></div>
 <p>The <code>env check</code> command calls the resolver's <code>validate_spec</code> for each rule's
 environment (relative file specs — <code>conda</code>/<code>mamba</code>/<code>pixi</code>/
-<code>venv_requirements</code> — resolve against the workflow directory first, issue</p>
-<h1 id="427-which-verifies-backend-availability-on-the-current-system">427), which verifies <strong>backend availability on the current system</strong><a class="headerlink" href="#427-which-verifies-backend-availability-on-the-current-system" title="Permanent link">#</a></h1>
-<p>(e.g. the conda/pixi/docker/singularity binary exists and is runnable;
+<code>venv_requirements</code> — resolve against the workflow directory first),
+which verifies <strong>backend availability on the current system</strong>
+(e.g. the conda/pixi/docker/singularity binary exists and is runnable;
 a pixi spec must point at a <code>pixi.toml</code> manifest). It does not
 re-check spec files or image reference syntax — <code>validate</code> and <code>lint</code> cover
 declaration-level checks.</p>
-<h2 id="shared-environment-store-opt-in-904">Shared environment store (opt-in, #904)<a class="headerlink" href="#shared-environment-store-opt-in-904" title="Permanent link">#</a></h2>
+<h2 id="shared-environment-store-opt-in">Shared environment store (opt-in)<a class="headerlink" href="#shared-environment-store-opt-in" title="Permanent link">#</a></h2>
 <p>By default every workflow is <strong>self-contained</strong>: pixi and venv environments
 materialize inside the workflow tree (<code>.pixi</code> next to the manifest, the venv
 dir) like any other artifact. Setting <code>OXO_FLOW_ENV_STORE</code> to a non-empty
@@ -4540,7 +4583,7 @@ is rebuilt automatically. Details: <a href="../../commands/env/#env-gc"><code>en
 <li><a href="../../how-to/use-environments/">Use Environments how-to</a> — practical recipes</li>
 <li><a href="../../commands/env/"><code>env</code> command</a> — CLI reference</li>
 <li><a href="../../commands/run/"><code>run</code> command</a> — <code>--skip-env-setup</code> and <code>--cache-dir</code> options</li>
-<li><a href="#shared-environment-store-opt-in-904">Shared env store (opt-in)</a> — <code>OXO_FLOW_ENV_STORE</code> semantics and GC</li>
+<li><a href="#shared-environment-store-opt-in">Shared env store (opt-in)</a> — <code>OXO_FLOW_ENV_STORE</code> semantics and GC</li>
 <li><a href="../china-mirrors/">China Network Mirrors</a> — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable

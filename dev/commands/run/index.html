@@ -2896,8 +2896,69 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#forcing-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forcing Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint re-entry (checkpoint = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4691,8 +4752,69 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#forcing-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forcing Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint re-entry (checkpoint = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4847,7 +4969,7 @@
 <td><code>--resume-failed</code></td>
 <td>—</td>
 <td>—</td>
-<td>Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose <code>when</code> gate recorded <code>false</code> (they are skips, not failures — issue #690); <code>status</code> reports them as skipped, not failed</td>
+<td>Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose <code>when</code> gate recorded <code>false</code> (they are skips, not failures); <code>status</code> reports them as skipped, not failed</td>
 </tr>
 <tr>
 <td><code>--profile</code></td>
@@ -4990,7 +5112,7 @@ config overrides, <code>--workdir</code>, checkpoint-aware dry-run previews, etc
 <a href="../../how-to/china-mirrors/">China Mirrors</a>).</p>
 <h3 id="custom-working-directory">Custom working directory<a class="headerlink" href="#custom-working-directory" title="Permanent link">#</a></h3>
 <p>Relative paths in the workflow resolve against the workflow file's
-directory — the single resolution base (issue #427). When <code>--workdir</code>
+directory — the single resolution base. When <code>--workdir</code>
 differs from the workflow directory, the engine anchors workflow-shipped
 files so they stay valid from the execution cwd:</p>
 <ul>
@@ -5069,7 +5191,7 @@ input group (all of its producers when-gated false, the files not
 pre-built on disk, and the group not <code>optional = "any"</code>) is dropped from
 the plan with a note — <code>rule '...' is unreachable — its upstream is
 when-gated false; removed from the full-run execution set</code> — instead of
-failing mid-run on a file that was never produced (issues #882/#883).
+failing mid-run on a file that was never produced.
 The when-gated rule itself stays in the plan and is counted as skipped
 exactly once by the executor. See
 <a href="../../reference/workflow-format/#when-skipped-instances-and-downstream-consumers">when-skipped instances</a>
@@ -5098,7 +5220,7 @@ so entries that recent runs may still reference survive.</p>
 <p class="admonition-title">Removed: <code>cache_max_age_days</code></p>
 <p>Older versions swept this cache after every run, keyed off the workflow
 config key <code>cache_max_age_days</code>. That mechanism was retired in favor of
-the explicit, store-aware <code>oxo-flow env gc</code> command (issue #974). A
+the explicit, store-aware <code>oxo-flow env gc</code> command. A
 workflow that still declares the key now triggers a one-time warning
 pointing at <code>env gc</code>; the key has no effect.</p>
 </div>
@@ -5109,7 +5231,7 @@ pointing at <code>env gc</code>; the key has no effect.</p>
 <p>Pixi and venv environments can be materialized <strong>once per content key</strong> in a
 shared store (opt-in: set <code>$OXO_FLOW_ENV_STORE</code> to a non-empty path —
 location IS activation; unset keeps envs self-contained inside each workflow
-tree, exactly like pre-#904). When enabled, the workflow tree only holds a
+tree, exactly like before the store existed). When enabled, the workflow tree only holds a
 symlink into the store: ten checkouts of the same pipeline share one
 environment instead of re-downloading it ten times, and a deleted store dir
 heals itself — the next run detects the broken link and rebuilds. Clean up
@@ -5131,14 +5253,14 @@ before anything executes:</p>
 identical backend-missing message, collapse into a single entry — one root
 cause per line, with the pending-rule count, an example rule, the primary
 spec, and a mode-aware remediation hint. Nothing ran, so the <code>--json</code>
-summary still reports the run as <code>failed</code> with zero counts (issue #142 H6).
+summary still reports the run as <code>failed</code> with zero counts.
 See <a href="../../how-to/troubleshooting/#environment-issues">Troubleshooting — Environment Issues</a>
 for per-backend checks.</p>
-<p>The remediation depends on <strong>why</strong> the spec failed (issue #848):</p>
+<p>The remediation depends on <strong>why</strong> the spec failed:</p>
 <ul>
 <li><strong>Manifest file not found</strong> (pixi declared by relative path): the spec
   is resolved against the workflow directory (the same base the executor
-  uses, issue #427), and the hint says to create the manifest at the
+  uses), and the hint says to create the manifest at the
   resolved path or correct the rule's <code>pixi</code> path — installing the backend
   would not help when the file itself is absent. Other backends keep the
   install advice (a missing conda YAML surfaces only at task execution).</li>
@@ -5147,7 +5269,8 @@ for per-backend checks.</p>
   (<code>install pixi (https://pixi.sh) and ensure it is on PATH</code>, and so on).</li>
 </ul>
 <p>This is the run-time safety net. <code>validate</code> and <code>plan</code>/dry-run preflight
-pixi manifests up front (error <code>E019</code>) so the failure surfaces before you
+pixi manifests up front (error
+<a href="../../reference/glossary/#diagnostic-codes">E019</a>) so the failure surfaces before you
 commit to a run; <code>run</code> keeps the check because manifests can also be
 created between validate and run.</p>
 <h3 id="pass-config-values">Pass config values<a class="headerlink" href="#pass-config-values" title="Permanent link">#</a></h3>
@@ -5293,7 +5416,7 @@ nothing changed submits nothing.</p>
 <p>Same-template instances that are ready together and agree on every
 scheduler-visible directive (threads, memory, time limit, partition,
 account, GPU spec, environment, workdir) are grouped into <strong>one scheduler
-array</strong> automatically (issue #74):</p>
+array</strong> automatically:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="k">[cluster]</span>
 </span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
 </span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
@@ -5328,7 +5451,7 @@ producers of its declared inputs:</p>
 </span></code></pre></div>
 <p>The closure is: the module's rules + every host rule producing one of its
 declared concrete contract inputs; upstream DAG dependents come through
-the regular target machinery. The closure is <strong>when-aware</strong> (issue #915):
+the regular target machinery. The closure is <strong>when-aware</strong>:
 two rules sharing one output path behind complementary <code>when</code> gates
 resolve to the satisfiable one — a rule whose template <code>when</code> evaluates
 false under the effective config never claims a producer slot, and a
@@ -5339,7 +5462,7 @@ previews the same set.</p>
 <p>The same when-awareness covers the preflight source gate on <code>-t</code>/<code>--module</code>
 runs: a missing input whose only remaining producer instance was vetoed by
 its <code>when</code> at fan-out does not gate the run. Expansion records those vetoed
-instances' declared outputs in <code>when_skipped_outputs</code> (#882), and the gate
+instances' declared outputs in <code>when_skipped_outputs</code>, and the gate
 exempts any missing pattern found there — config-expanded at compare time,
 so <code>{config.*}</code>-bearing recorded patterns match their expanded gate forms.
 The file belongs to a rule that will never run in this cohort, not to a
@@ -5518,16 +5641,16 @@ background process and returns to the shell immediately:</p>
   (<code>--log-file</code> if given, otherwise <code>.oxo-flow/logs/oxo-flow.log</code> in the
   workdir). In this mode the tracing tee is skipped on purpose — the
   redirect already captures everything, and a second writer would
-  duplicate every line (issue #194 A3).</li>
+  duplicate every line.</li>
 <li>The run log archives BOTH the structured tracing stream AND the
   user-facing progress narrative (<code>Running:</code> / <code>✓</code> / <code>Done:</code>) plus one
   JSON line per execution event (<code>workflow_started</code>, <code>rule_started</code>,
   <code>rule_completed</code>, <code>rule_failed</code>, <code>workflow_completed</code>) — the whole run is
-  replayable from the single file (issue #194 B1/B3). Failed rules emit
+  replayable from the single file. Failed rules emit
   <code>"event":"rule_failed"</code> (compact serde_json, no space after <code>:</code>) carrying
   <code>rule</code>, <code>exit_code</code>, <code>signal</code>, <code>retries</code>, and <code>duration_ms</code>, so
   <code>grep -c 'rule_failed' run.launch.log</code> counts failures without parsing
-  the human-facing <code>✗</code> narration (issue #856); <code>"signal":9</code> after an
+  the human-facing <code>✗</code> narration; <code>"signal":9</code> after an
   OOM-kill is the smoking gun distinguishing a memory-capped environment
   from a tool bug. <code>duration_ms</code> spans all attempts including retry
   delays, not just the final one. Staging failures (environment setup,
@@ -5571,8 +5694,7 @@ the pid is in the summary line and (while the run is in flight) in
   foreground invocation) and <code>--yes</code> — a detached child cannot prompt.
   <code>--workdir</code> is also what bundle discovery consults as a fallback: a
   <code>sample_pattern</code>/<code>pairs_pattern</code> that matches nothing inside the
-  extraction is retried against the workdir
-  (<a href="https://github.com/Traitome/oxo-flow/issues/751">#751</a>).</li>
+  extraction is retried against the workdir.</li>
 <li><code>--background</code> is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before <code>KEY=VALUE</code> overrides) apply to the whole command line as usual.</li>
@@ -5600,7 +5722,7 @@ terminating <strong><code>signal</code></strong> when the process died to one. T
 fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 <code>failed_rules</code>).</p>
-<p>Timestamp semantics (issue #850): the engine stamps
+<p>Timestamp semantics: the engine stamps
 <strong><code>enqueued_at</code></strong> when an execution attempt is submitted and stamps
 <strong><code>started_at</code></strong> only after the rule has acquired its resources — the
 moment actual execution begins. Their difference is the time the rule
@@ -5636,7 +5758,7 @@ were captured</strong>; the tails above are persisted in <code>rule_runs</code> 
 When a rule succeeds, its declared log is empty (0-byte file or empty
 directory), <em>and</em> both captured tails are empty too, the run emits one
 Info-level hint that the tool likely self-logs elsewhere — quiet tools
-with output in any of the three stay silent (issue #832).</p>
+with output in any of the three stay silent.</p>
 <h3 id="workflow-version-in-the-checkpoint">Workflow version in the checkpoint<a class="headerlink" href="#workflow-version-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>When the workflow file lives inside a git repository, oxo-flow records the
 repository's <strong>HEAD commit SHA</strong> in the checkpoint (<code>workflow_git_sha</code>) at
@@ -5708,7 +5830,7 @@ compares them against the current workflow:</p>
     A toggle that leaves the gate true (or false) — e.g.
     <code>(config.refine_bins || config.run_checkm)</code> switching which term is
     true — reuses the completed rules instead of re-running hours-long
-    chains whose inputs and commands are identical (issue #198). Flipping a
+    chains whose inputs and commands are identical. Flipping a
     gate in either direction still invalidates: the engine pre-marks
     completed rules without re-evaluating <code>when</code>, so only plan-time
     detection can retire a now-skipped producer or cascade a newly-activated
@@ -5804,7 +5926,7 @@ compares:</p>
 <li><strong><code>expand_inputs</code>-baked inputs</strong> whose producer is <code>when</code>-gated off under
   the active config are tolerated as absent: the manifest records the
   existing subset instead of erroring, so a no-op rerun does not
-  invalidate the rule and cascade its producers (issue #757). If a later
+  invalidate the rule and cascade its producers. If a later
   config change produces the missing files, the manifest then mismatches
   and the rule invalidates — the flip is still caught.</li>
 </ul>
@@ -5892,7 +6014,7 @@ their outputs rebuild in the same run.</p>
   their inputs are engine-managed intermediates governed by the
   upstream-cascade invalidation instead.</li>
 <li><strong>Optional rules with permanently-absent inputs</strong> (<code>optional = true</code> or
-  <code>optional = "any"</code>, issue #633): when a declared input cannot be resolved
+  <code>optional = "any"</code>): when a declared input cannot be resolved
   because its producer was never instantiated (an <code>input_groups</code> pattern
   that matched no files, or an endedness-filtered branch that never ran),
   the snapshot skips that entry and records a manifest for the inputs that
@@ -5932,8 +6054,8 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
   failed), so debugging a broken run never has to re-fetch intermediates.</li>
 <li>Leaf rules (no dependents) keep their outputs — there is no downstream
   work for them to enable.</li>
-<li>With an <code>[engine]</code> section present, the deletion is <strong>disk-gated</strong>
-  (issue #893): it only fires when free space at the workdir is below
+<li>With an <code>[engine]</code> section present, the deletion is <strong>disk-gated</strong>:
+  it only fires when free space at the workdir is below
   <code>reclaim_free_disk</code> at run end. With disk comfortable, the outputs are
   kept — so the next run skips the completed producer instead of
   re-materializing it — and one line explains the choice:</li>
@@ -5980,7 +6102,7 @@ startup, at every scheduling round, and every 60 s while work is parked:</p>
 </ul>
 <p>Protected outputs (<code>protected_output</code>) are never reclaimed, and the final
 (leaf) rule's outputs always survive. See
-<a href="../../reference/workflow-format/#engine-runtime-disk-pressure-guard-issue-843"><code>[engine]</code> in the workflow format reference</a>
+<a href="../../reference/workflow-format/#engine-runtime-disk-pressure-guard"><code>[engine]</code> in the workflow format reference</a>
 for the full field table and edge cases.</p>
 <p>Tuning knobs (both fall back to their defaults when unset, invalid, or
 <code>0</code>, so a typo can never disable the abort):</p>
@@ -5993,8 +6115,8 @@ for the full field table and edge cases.</p>
 <p>Known boundaries:</p>
 <ul>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> rules with
-  per-instance values) fires only with full instance attribution (issue
-  #846): the recorded instance combos from
+  per-instance values) fires only with full instance attribution: the
+  recorded instance combos from
   <code>checkpoint.output_pattern_domains</code> are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any
@@ -6014,8 +6136,7 @@ change silently while a pipeline is running against them. Declaring</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="k">[engine]</span>
 </span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
 </span></code></pre></div>
-<p>makes the engine treat those workdir-relative trees as protected (issue</p>
-<h1 id="935-p1">935 P1):<a class="headerlink" href="#935-p1" title="Permanent link">#</a></h1>
+<p>makes the engine treat those workdir-relative trees as protected:</p>
 <ul>
 <li><strong>First observation</strong> (first run/plan/dry-run after the key appears) records
   a baseline manifest in the checkpoint — per-file size + mtime, plus a
@@ -6095,7 +6216,7 @@ the config surface.</p>
 <h3 id="module-grouped-output">Module-grouped output<a class="headerlink" href="#module-grouped-output" title="Permanent link">#</a></h3>
 <p>Workflows composed from <code>[[include]]</code> modules group the plan listing and the
 <code>--keep-going</code> failure summary under module headers, so a composed pipeline
-reads as module → rule instead of one long flat list (issue #887):</p>
+reads as module → rule instead of one long flat list:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>DAG: 6 rules in execution order
 </span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>  Preprocessing — 2 rules
 </span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3" href="#__codelineno-45-3"></a>    1. fastqc
@@ -6172,7 +6293,7 @@ unchanged, so tooling that parses run logs keeps working.</p>
   <code>--retry</code> so a transient OOM does not kill the whole run.</li>
 <li>Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)</li>
 <li>Use <code>--skip-env-setup</code> when environments are pre-built to avoid redundant setup</li>
-<li>Use <code>--cache-dir</code> to persist environment setup state across runs for faster startup (reclaim stale entries with <code>oxo-flow env gc</code> — the old post-run aging sweep was retired, issue #974)</li>
+<li>Use <code>--cache-dir</code> to persist environment setup state across runs for faster startup (reclaim stale entries with <code>oxo-flow env gc</code> — the old post-run aging sweep was retired)</li>
 </ul>
 
 

@@ -4078,16 +4078,17 @@
 </span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>Summary: 0 errors, 1 warning, 3 info
 </span></code></pre></div>
 <p>Each diagnostic prints a <code>hint:</code> line (when a suggestion exists) showing
-the fix, matching the style of <code>validate</code> and <code>run</code> output. W007
+the fix, matching the style of <code>validate</code> and <code>run</code> output.
+<a href="../../reference/glossary/#diagnostic-codes">W007</a>
 suggests <code>target = true</code>: a rule marked as a target is built by default
 when <code>oxo-flow run</code> is invoked without an explicit <code>-t</code>, so marking the
 final leaf rules (like <code>fastqc</code> above) makes them part of the default
 run — see <a href="../../reference/workflow-format/#priority-and-targeting">Workflow Format: Priority and Targeting</a>.
-W025 flags the deprecated rule-level <code>threads = N</code> / <code>memory = "8G"</code>
+<a href="../../reference/glossary/#diagnostic-codes">W025</a> flags the deprecated rule-level <code>threads = N</code> / <code>memory = "8G"</code>
 fields (superseded by <code>[rules.resources]</code> in v0.4) so old workflows
 surface the migration instead of silently keeping their old settings —
 see <a href="../../reference/workflow-format/#resources-extended">Workflow Format: Rule resources</a>.
-W031 flags a consumer rule that reads the output of a <code>when</code>-gated
+<a href="../../reference/glossary/#diagnostic-codes">W031</a> flags a consumer rule that reads the output of a <code>when</code>-gated
 producer without a <code>when</code> gate of its own: when the producer's gate is
 off, its files never appear and the consumer's inputs cannot be resolved
 at plan time (dry-run <code>input ✗</code>) or the run fails outright. Wildcard
@@ -4099,7 +4100,7 @@ on the consumer or splitting it into <code>when</code>-gated variants (the
 tolerance for a missing producer are not flagged: <code>optional = true</code> /
 <code>"any"</code> rules, <code>input_groups</code> disk-discovery fallbacks, and consumers
 that already carry any <code>when</code> gate.
-W033 flags two rules that write the same output path — including
+<a href="../../reference/glossary/#diagnostic-codes">W033</a> flags two rules that write the same output path — including
 differently-named wildcards over the same template (<code>variants/{smp}.vcf</code>
 vs <code>variants/{sample}.vcf</code>) and identical literal paths. The engine does
 not refuse to run: both rules execute and the second to finish silently
@@ -4115,7 +4116,7 @@ counterpart <code>results/{sample}.vcf</code> when <code>out_dir = "results"</co
 not collide with <code>{config.alt_dir}/{sample}.vcf</code> when the values differ.</p>
 <p>When both writers carry meaningful <code>when</code> gates that are <em>complementary
 empty-string checks on the same expression</em> — <code>X != ''</code> on one and
-<code>X == ''</code> on the other (issue #860; the paired/tumor-only
+<code>X == ''</code> on the other (the paired/tumor-only
 <code>mutect2_paired</code>/<code>mutect2_tumoronly</code> shape) — each rule runs exactly when
 the other does not, so the pair can never race and the collision is not
 reachable at runtime. W033 then downgrades to an <strong>info</strong> note naming the
@@ -4136,7 +4137,7 @@ executor cannot parse as a reference falls through to its default-true
 verdict).
 See
 <a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.
-W034 flags an <code>{input[N]}</code> / <code>{output[N]}</code> placeholder whose index is out
+<a href="../../reference/glossary/#diagnostic-codes">W034</a> flags an <code>{input[N]}</code> / <code>{output[N]}</code> placeholder whose index is out
 of range, or a named <code>{input.key}</code> / <code>{output.key}</code> whose key the rule
 does not declare. The substitution loop only renders indices <code>0..len</code>
 (list-form: declaration order; map-form: keys in sorted order; dir-form:
@@ -4151,7 +4152,7 @@ role-bearing IO — declare a map and use named access (<code>tumor = "..."</cod
 <code>{input.tumor}</code>), which also survives reordering. Lines that are comments
 in the rendered script are exempt, and <code>script</code> paths are checked the
 same way as inline <code>shell</code>.
-W032 flags a <code>[config]</code> key whose <em>name</em> looks like a secret
+<a href="../../reference/glossary/#diagnostic-codes">W032</a> flags a <code>[config]</code> key whose <em>name</em> looks like a secret
 (<code>token</code>, <code>secret</code>, <code>passwd</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
 <code>access_key</code>, <code>private_key</code>, <code>ssh_key</code>, <code>key</code> — matched at word/segment
 boundaries, so names that merely contain these as a substring, like
@@ -4165,7 +4166,7 @@ clusters and in CI artifacts. The repair is the declaration itself:</p>
 <p>Declared-sensitive keys are env-routed and masked on disk, so W032
 never flags them — see
 <a href="../../reference/workflow-format/#config-configuration-variables"><code>[config]</code> — Configuration Variables</a>.
-W035 flags a command that reads a shell glob — e.g. <code>cat
+<a href="../../reference/glossary/#diagnostic-codes">W035</a> flags a command that reads a shell glob — e.g. <code>cat
 stats/*.count.txt</code> — in a rule that declares no inputs. The shell
 expands the glob at run time, so the DAG builder never sees the
 individual files: the rule gets no edges against the rules that

@@ -4758,7 +4758,7 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">groups</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">parallel_groups</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">// [["fastqc", "trim_reads"], ["align"], ["multiqc"]]</span>
 </span></code></pre></div>
-<p>This is used by <code>oxo-flow dry-run</code> to display the execution plan grouped by level, and by <code>oxo-flow run</code> to suggest a <code>-j</code> value: each group is evaluated against its own heaviest rule (<code>min(group width, cores ÷ heaviest threads in the group)</code>), and the suggestion is the maximum across groups — so a wide wave of light rules is not starved by an unrelated heavy wave (issue #361). The resource pool still enforces declared threads at execution time, so running with a higher <code>-j</code> than suggested is safe.</p>
+<p>This is used by <code>oxo-flow dry-run</code> to display the execution plan grouped by level, and by <code>oxo-flow run</code> to suggest a <code>-j</code> value: each group is evaluated against its own heaviest rule (<code>min(group width, cores ÷ heaviest threads in the group)</code>), and the suggestion is the maximum across groups — so a wide wave of light rules is not starved by an unrelated heavy wave. The resource pool still enforces declared threads at execution time, so running with a higher <code>-j</code> than suggested is safe.</p>
 <hr />
 <h2 id="critical-path-analysis">Critical Path Analysis<a class="headerlink" href="#critical-path-analysis" title="Permanent link">#</a></h2>
 <h3 id="critical_path"><code>critical_path()</code><a class="headerlink" href="#critical_path" title="Permanent link">#</a></h3>
@@ -4958,10 +4958,10 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 </span></code></pre></div>
 <p>Use these to understand workflow structure: root rules are your entry points (typically consuming raw data), and leaf rules produce your final deliverables.</p>
 <h3 id="orphan-rules">Orphan Rules<a class="headerlink" href="#orphan-rules" title="Permanent link">#</a></h3>
-<p>The <code>WorkflowDag</code> API has no orphan query, and no dedicated orphan lint exists. The closest check is <code>oxo-flow validate</code>'s W020 warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.</p>
+<p>The <code>WorkflowDag</code> API has no orphan query, and no dedicated orphan lint exists. The closest check is <code>oxo-flow validate</code>'s <a href="../glossary/#diagnostic-codes">W020</a> warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.</p>
 <h3 id="output-collision-detection">Output Collision Detection<a class="headerlink" href="#output-collision-detection" title="Permanent link">#</a></h3>
 <p>Output-collision checking is enforced by <code>oxo-flow lint</code> (warning
-<strong>W033</strong>): two rules writing the same output path — differently-named
+<strong><a href="../glossary/#diagnostic-codes">W033</a></strong>): two rules writing the same output path — differently-named
 wildcards over one template (<code>variants/{smp}.vcf</code> vs
 <code>variants/{sample}.vcf</code>) and identical literal paths count too — trigger
 a warning, because the second to finish silently overwrites the first.</p>
@@ -5055,7 +5055,7 @@ starvation <strong>impossible</strong>, not merely unlikely:</p>
 rule set its own group), restore the missing <code>depends_on</code> edge so
 downstream rules cannot start before their producers, or declare <code>output</code>
 on producer rules that execute commands but declare nothing (<code>lint</code>
-flags these with warning W019).</p>
+flags these with warning <a href="../glossary/#diagnostic-codes">W019</a>).</p>
 <h3 id="a-rule-i-expect-to-run-is-being-skipped">"A rule I expect to run is being skipped"<a class="headerlink" href="#a-rule-i-expect-to-run-is-being-skipped" title="Permanent link">#</a></h3>
 <ol>
 <li>Check <code>depends_on</code> — does the rule have unresolved explicit dependencies?</li>
@@ -5072,7 +5072,7 @@ flags these with warning W019).</p>
    <code>.oxo-flow/checkpoint.json</code> (see
    <a href="../../commands/run/#input-changes-and-manifest-invalidation">Input changes and manifest invalidation</a>)</li>
 </ol>
-<p><strong>Durability &amp; reuse guarantees</strong> (issue #194):</p>
+<p><strong>Durability &amp; reuse guarantees</strong>:</p>
 <ul>
 <li>The checkpoint is written <strong>atomically</strong> — serialized to a sibling
   <code>.tmp</code>, fsynced, renamed over the target, then the parent directory is
@@ -5087,7 +5087,7 @@ flags these with warning W019).</p>
   grace period</strong> (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the
   grace window are caught by a re-scan before the KILL sweep.</li>
-<li>Abort demotion is <strong>evidence-based twice over</strong> (#525): a failed rule
+<li>Abort demotion is <strong>evidence-based twice over</strong>: a failed rule
   is only demoted to <em>cancelled</em> when its pid was in the abort's kill
   snapshots <strong>and</strong> its record shows a pure signal death. A sibling the
   kernel OOM-killer shot at the same moment carries the same signal
@@ -5095,7 +5095,7 @@ flags these with warning W019).</p>
   survives. The SIGINT teardown records engine-killed rules with
   <code>signal = SIGTERM, exit_code = none</code> (real evidence) instead of a
   fabricated exit code.</li>
-<li>Aborts kill auxiliary children too (#524): every rule-side spawn
+<li>Aborts kill auxiliary children too: every rule-side spawn
   (environment setup/verify, <code>pre_exec</code>, success/failure hooks) sets
   <code>kill_on_drop</code>, so cancelling a task kills its in-flight child instead
   of orphaning it — an interrupted <code>conda env create</code> can no longer

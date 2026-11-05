@@ -4127,8 +4127,7 @@ list).</p>
 <ul>
 <li><code>stderr_patterns</code> are <strong>case-insensitive regular expressions</strong>, compiled
   once per engine and shared process-wide. Entries must stay specific
-  (loader lines, tool error prefixes) — near-miss words must not fire
-  (issue #708).</li>
+  (loader lines, tool error prefixes) — near-miss words must not fire.</li>
 <li>A pattern <strong>without exit codes</strong> fires on any non-zero or unknown exit
   code — never on exit 0. A rule that exited 0 has nothing to diagnose.</li>
 <li>The AI monitor's failure classifier (<code>monitor_agent::classify_failure</code>)
@@ -4377,7 +4376,7 @@ crate re-exports it via
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>}
 </span></code></pre></div>
 <p><code>resource_bottlenecks</code> lists rules whose measured memory use pressed against
-their declared limit (issue #67 §4):</p>
+their declared limit:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="err">resource_bo</span><span class="kc">ttlene</span><span class="err">cks</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"markdup"</span><span class="p">,</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">"metric"</span><span class="p">:</span><span class="w"> </span><span class="s2">"max_memory_mb"</span><span class="p">,</span>
@@ -4415,8 +4414,7 @@ their declared limit (issue #67 §4):</p>
 </span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="n">fix_config_path</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
 </span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Every new pattern must ship with two test rows in the module's tests
-(issue #708):</p>
+<p>Every new pattern must ship with two test rows in the module's tests:</p>
 <ul>
 <li>a canonical trigger line in <code>CANONICAL_TRIGGERS</code> (proves the pattern is
   not dead — the test fails if a pattern has no row, or a row no pattern),</li>

@@ -2672,6 +2672,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4014,6 +4025,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4059,7 +4081,7 @@ and total runtime.</p>
 <tbody>
 <tr>
 <td><code>[CHECKPOINT]</code></td>
-<td>Path to a checkpoint JSON file. Defaults to <code>.oxo-flow/checkpoint.json</code> in the current directory. A workflow (<code>.oxoflow</code>) file is also accepted: its sibling <code>&lt;workflow-dir&gt;/.oxo-flow/checkpoint.json</code> is auto-resolved when it exists (issue #859)</td>
+<td>Path to a checkpoint JSON file. Defaults to <code>.oxo-flow/checkpoint.json</code> in the current directory. A workflow (<code>.oxoflow</code>) file is also accepted: its sibling <code>&lt;workflow-dir&gt;/.oxo-flow/checkpoint.json</code> is auto-resolved when it exists</td>
 </tr>
 </tbody>
 </table>
@@ -4136,8 +4158,7 @@ and total runtime.</p>
 <h3 id="workflow-file-arguments">Workflow-file arguments<a class="headerlink" href="#workflow-file-arguments" title="Permanent link">#</a></h3>
 <p>Passing a workflow (<code>.oxoflow</code>) file instead of a checkpoint is a common
 mistake — especially mid-run, when the natural instinct is to point <code>status</code>
-at the pipeline definition. <code>status</code> handles it instead of rejecting it
-(issue #859):</p>
+at the pipeline definition. <code>status</code> handles it instead of rejecting it:</p>
 <ul>
 <li>If <code>&lt;workflow-dir&gt;/.oxo-flow/checkpoint.json</code> exists, it is used directly
   and the resolution is printed:</li>
@@ -4177,7 +4198,7 @@ at the pipeline definition. <code>status</code> handles it instead of rejecting 
 <h3 id="snapshot-freshness">Snapshot freshness<a class="headerlink" href="#snapshot-freshness" title="Permanent link">#</a></h3>
 <p><code>status</code> reads a flushed snapshot of the run, not live state — the engine
 writes the checkpoint periodically, so on a busy run the file can lag
-real execution by a minute or more (issue #849). One line under the banner
+real execution by a minute or more. One line under the banner
 reports how old the snapshot is:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>  State as of 118s ago (checkpoint written 14:32:07 local)
 </span></code></pre></div>
@@ -4195,7 +4216,7 @@ verdict prunes any stale entry), and the display also reconciles legacy
 checkpoints: an entry in <code>failed_rules</code> whose recorded verdict in
 <code>when_verdicts</code> is <code>false</code> is reported as gated-off instead of failed —
 under <code>Skipped (when condition false)</code> in the text view and in the
-<code>skipped_by_when</code> JSON key instead of <code>failed</code> (issue #690). The same
+<code>skipped_by_when</code> JSON key instead of <code>failed</code>. The same
 reconciliation applies to the resume banner: rules whose recorded verdict is
 <code>false</code> are counted as skips there, and the gate is re-judged on the resume
 (see <a href="../run/#checkpointing-and-resuming">Checkpointing and Resuming</a>).</p>
@@ -4215,7 +4236,7 @@ reconciliation applies to the resume banner: rules whose recorded verdict is
 </span></code></pre></div>
 <h3 id="staleness-reasons">Staleness reasons<a class="headerlink" href="#staleness-reasons" title="Permanent link">#</a></h3>
 <p>When the checkpoint's workflow file is still present and parseable, <code>status</code>
-classifies every completed rule exactly the way <code>run</code> would (issue #432) and
+classifies every completed rule exactly the way <code>run</code> would and
 explains <strong>why each rule would re-run right now</strong> — output deleted, input
 manifest mismatch, config change, or a cascade from an upstream rule. The
 section (and the <code>staleness</code> JSON key) appears only when <strong>at least one
@@ -4279,7 +4300,7 @@ first):</p>
 <p><code>timings</code>, <code>total_time_secs</code>, and <code>memory</code> are only present with
 <code>--timing</code>; <code>memory</code> only lists rules with a sampled peak-RSS
 measurement. <code>checkpoint_mtime</code> (RFC 3339, UTC) and <code>snapshot_age_secs</code>
-appear whenever the file's modification time can be read (issue #849) —
+appear whenever the file's modification time can be read —
 see <a href="#snapshot-freshness">Snapshot freshness</a>. <code>staleness</code> appears
 whenever the workflow file can be loaded for classification <strong>and</strong> at
 least one completed rule would re-run (see
@@ -4341,16 +4362,16 @@ as SHA-256 digests) and <code>rule_fingerprints</code> the structural fingerprin
 drive <a href="../run/#config-changes-and-precise-invalidation">precise invalidation</a>.
 <code>when_verdicts</code> records, per rule instance, the runtime verdict of its
 <code>when</code> gate (<code>true</code>/<code>false</code>) — used for config-change replay and to
-distinguish when-gated skips from real failures in <code>status</code> output (issue</p>
-<h1 id="690-input_manifests-records-per-completed-rule-every-resolved-input-file">690). <code>input_manifests</code> records, per completed rule, every resolved input file<a class="headerlink" href="#690-input_manifests-records-per-completed-rule-every-resolved-input-file" title="Permanent link">#</a></h1>
-<p>(path, size, mtime in nanoseconds, and a content hash for files up to
-64 MiB) so later runs detect changed inputs (issue #72). Each entry also
+distinguish when-gated skips from real failures in <code>status</code> output.
+<code>input_manifests</code> records, per completed rule, every resolved input file
+(path, size, mtime in nanoseconds, and a content hash for files up to
+64 MiB) so later runs detect changed inputs. Each entry also
 carries <code>is_symlink</code> and <code>link_target</code> (the lexical link target for
 symlinked files) — display-only facts: they never influence invalidation
 by themselves, but a symlinked input is announced once per run and a
 size collapse through the link surfaces as <code>(TRUNCATED)</code> in the
-<a href="../run/#input-changes-and-manifest-invalidation">invalidation diff</a>
-(issue #926). <code>tombstones</code> lists
+<a href="../run/#input-changes-and-manifest-invalidation">invalidation diff</a>.
+<code>tombstones</code> lists
 outputs of <a href="../run/#temporary-rules-temporary-true"><code>temporary</code></a>
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. <code>reentries</code> records checkpoint
