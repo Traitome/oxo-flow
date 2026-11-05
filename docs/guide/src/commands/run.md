@@ -285,7 +285,10 @@ environment instead of re-downloading it ten times, and a deleted store dir
 heals itself — the next run detects the broken link and rebuilds. Clean up
 unreferenced environments with [`oxo-flow env gc`](env.md#env-gc). Conda,
 Docker, and Singularity environments keep their native cache layouts and are
-unaffected.
+unaffected — the store is pixi/venv-only by design (see the [`env`
+command](env.md#notes) for the rationale: conda name envs already share a
+central prefix, conda prefixes are not relocatable, containers use their own
+registries, modules come from the cluster).
 
 ### Backend preflight: fail fast on a missing environment backend
 
