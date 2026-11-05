@@ -1762,6 +1762,32 @@ pub fn lint_format(
             });
         }
 
+        // W038: `format_hint` and `pipe` are parsed and round-tripped but
+        // consumed by nothing — no I/O optimization, validation, or FIFO
+        // wiring reads them. An author setting them expects behavior that
+        // does not exist; naming the reserved knobs at lint time keeps the
+        // gap visible (issue #1013 E4/E5).
+        let has_format_hint = !rule.format_hint.is_empty();
+        if (has_format_hint || rule.pipe) && executes && !can_never_run {
+            let fields = match (has_format_hint, rule.pipe) {
+                (true, true) => "format_hint and pipe",
+                (true, false) => "format_hint",
+                _ => "pipe",
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "{fields} parsed but not consumed — the engine performs no format-specific I/O or FIFO streaming today"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W038".to_string(),
+                suggestion: Some(
+                    "remove the directive, or rely on staging_mode = \"stream_fifo\" for real FIFO staging — format_hint and pipe are reserved for future I/O work"
+                        .to_string(),
+                ),
+            });
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -6679,6 +6705,83 @@ shell = "samtools faidx {{config.reference}}"
         assert!(
             !diagnostics.iter().any(|d| d.code == "W037"),
             "only consumed hint fields — no W037: {diagnostics:?}"
+        );
+    }
+
+    // ---- W038: format_hint / pipe parsed but not consumed ----
+    // No I/O optimization, validation, or FIFO wiring reads either field;
+    // only staging_mode delivers real FIFO staging. W038 names the gap at
+    // lint time (issue #1013 E4/E5).
+
+    #[test]
+    fn lint_w038_flags_format_hint_and_pipe() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+            format_hint = ["fastq", "bam"]
+            pipe = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w038: Vec<_> = diagnostics.iter().filter(|d| d.code == "W038").collect();
+        assert_eq!(w038.len(), 1, "exactly one W038: {diagnostics:?}");
+        assert_eq!(w038[0].rule.as_deref(), Some("align"));
+        assert!(
+            w038[0].message.contains("format_hint and pipe"),
+            "message names both reserved fields: {}",
+            w038[0].message
+        );
+    }
+
+    #[test]
+    fn lint_w038_names_only_the_declared_reserved_field() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "qc"
+            input = ["sample.fq"]
+            output = ["qc.html"]
+            shell = "fastqc sample.fq"
+            format_hint = ["fastq"]
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w038: Vec<_> = diagnostics.iter().filter(|d| d.code == "W038").collect();
+        assert_eq!(w038.len(), 1, "exactly one W038: {diagnostics:?}");
+        assert!(
+            w038[0].message.contains("format_hint")
+                && !w038[0].message.contains("and pipe")
+                && !w038[0].message.contains(" pipe"),
+            "message names only format_hint: {}",
+            w038[0].message
+        );
+    }
+
+    #[test]
+    fn lint_no_w038_without_reserved_io_directives() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W038"),
+            "no reserved I/O directives — no W038: {diagnostics:?}"
         );
     }
 

@@ -422,7 +422,9 @@ much completed work stays protected.
    content cache when the key, inputs, outputs, and rendered command hash
    identically to a previous run — bump the key when a dependency's
    behavior changes without touching the declared inputs. (`pipe` is
-   parsed but not wired up yet — do not rely on it.)
+   parsed but not wired up yet — do not rely on it; `oxo-flow lint`
+   flags every use with W038. `staging_mode = "stream_fifo"` is the
+   real FIFO staging path.)
 
 ### Memory issues with large workflows
 

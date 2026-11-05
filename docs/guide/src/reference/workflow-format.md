@@ -719,8 +719,8 @@ memory = "32G"
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
 | `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
-| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
-| `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
+| `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today — use `staging_mode = "stream_fifo"` for real FIFO staging); `oxo-flow lint` flags every use with **W038** |
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling — `input_size` and `memory_scale` feed the memory estimator; `runtime` and `io_bound` are parsed but **not consumed** by anything today, and `lint` flags them with `W037` |
 
@@ -1410,8 +1410,8 @@ retry_delay = "30s"
 | Field | Type | Description |
 |-------|------|-------------|
 | `ancient` | Array | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution |
-| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization) |
-| `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
+| `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; use `staging_mode = "stream_fifo"` for real FIFO staging); `oxo-flow lint` flags every use with **W038** |
 | `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
 
 ```toml
@@ -1419,7 +1419,8 @@ retry_delay = "30s"
 name = "align"
 input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
 ancient = ["ref/hg38.fa"]  # never triggers rebuild, however new the file is
-# format_hint and checksum are accepted but currently have no effect
+# format_hint and pipe are accepted but have no effect — `oxo-flow lint`
+# flags them with W038; checksum (below) is enforced via provenance
 ```
 
 ### Organization
