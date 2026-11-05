@@ -639,7 +639,12 @@ At render time each executed rule instance contributes one markdown subsection, 
 - Without an execution record (dry run, or a checkpoint from before this feature), the declared annotation is resolved at report time: inline caption first, then `report.file` relative to the workdir.
 - A missing or unreadable `report.file` never fails the report — the rule simply contributes no caption.
 
-Captions are text/markdown only; embedding figures is not supported in v1.
+Captions render as literal text/markdown, not interpreted HTML: in the
+Markdown report they appear as a fenced block, and in the HTML report as an
+escaped `<pre>` — deliberately XSS-safe, so image links, scripts, and other
+inline HTML inside a caption are shown verbatim rather than executed.
+Embedding figures is not supported in v1 (the report's own aggregate-metrics
+section can render inline SVG charts from declared metrics).
 
 ---
 
