@@ -1883,6 +1883,8 @@
       
         
       
+        
+      
     
     
     
@@ -2246,6 +2248,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4075,7 +4105,7 @@
 <li>Cohort joint genotyping with CombineGVCFs</li>
 <li>Per-sample rule expansion and <code>expand_inputs</code> fan-in</li>
 <li>Mixed environments (conda, singularity)</li>
-<li>Clinical-grade variant annotation with VEP</li>
+<li>Clinical-review-oriented variant annotation with VEP</li>
 <li>Report configuration with provenance tracking</li>
 </ul>
 </div>
@@ -4760,12 +4790,12 @@ command</a> for the supported surface.</p>
 mechanics of per-sample expansion and <code>expand_inputs</code>.</p>
 <h2 id="clinical-considerations">Clinical Considerations<a class="headerlink" href="#clinical-considerations" title="Permanent link">#</a></h2>
 <h3 id="bqsr-base-quality-score-recalibration">BQSR (Base Quality Score Recalibration)<a class="headerlink" href="#bqsr-base-quality-score-recalibration" title="Permanent link">#</a></h3>
-<p>BQSR corrects systematic errors in base quality scores assigned by the sequencer. It uses known variant sites (dbSNP, Mills indels) to distinguish true variants from sequencing artifacts. This step is critical for clinical-grade variant calling accuracy.</p>
+<p>BQSR corrects systematic errors in base quality scores assigned by the sequencer. It uses known variant sites (dbSNP, Mills indels) to distinguish true variants from sequencing artifacts. BQSR can improve calibration for suitable cohorts, but this example is not a validated clinical assay and does not establish clinical accuracy.</p>
 <h3 id="gvcf-mode">GVCF Mode<a class="headerlink" href="#gvcf-mode" title="Permanent link">#</a></h3>
 <p>HaplotypeCaller runs in GVCF mode (<code>-ERC GVCF</code>) to produce genomic VCFs that contain information about both variant and reference-confident sites. This enables downstream joint genotyping across cohorts without re-running variant calling.</p>
 <p>The <code>combine_gvcfs</code> rule merges the per-sample GVCFs into a single cohort GVCF (<code>variants/cohort.g.vcf.gz</code>), and <code>genotype_gvcfs</code> performs joint genotyping across the cohort in one run.</p>
 <h3 id="vqsr-variant-quality-score-recalibration">VQSR (Variant Quality Score Recalibration)<a class="headerlink" href="#vqsr-variant-quality-score-recalibration" title="Permanent link">#</a></h3>
-<p>Instead of fixed hard filters, the pipeline applies VQSR for clinical-grade variant calling:</p>
+<p>Instead of fixed hard filters, the pipeline demonstrates VQSR for research and clinical-review workflows:</p>
 <ol>
 <li><strong>vqsr_snps</strong> — GATK VariantRecalibrator builds a recalibration model from annotation features (QD, MQ, MQRankSum, ReadPosRankSum, FS, SOR), using hapmap, omni, and 1000G as training/truth resources and dbSNP as a known-sites resource.</li>
 <li><strong>apply_vqsr_snps</strong> — GATK ApplyVQSR applies the SNP model at <code>--truth-sensitivity-filter-level 99.7</code>, retaining high sensitivity while filtering false positives.</li>

@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2444,6 +2446,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4543,16 +4573,16 @@ or cancel/collect jobs after an interrupted run.</p>
 <td><code>--backend</code></td>
 <td><code>-b</code></td>
 <td><code>$OXO_FLOW_CLUSTER_BACKEND</code>, then <code>slurm</code></td>
-<td>Cluster backend (<code>slurm</code>, <code>pbs</code>, <code>sge</code>, <code>lsf</code>) — on a SLURM site you never need to type it</td>
+<td>Cluster backend (<code>slurm</code>, <code>pbs</code>, <code>sge</code>, <code>lsf</code>, <code>kubernetes</code>/<code>k8s</code>, <code>aws-batch</code>, <code>gcp-batch</code>) — on a SLURM site you never need to type it</td>
 </tr>
 </tbody>
 </table>
 <p>An <strong>explicit</strong> value is always validated — <code>-b slrm</code> fails with
-<code>unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf</code> rather
+<code>unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch</code> rather
 than silently querying SLURM. The default applies only when the flag is
 omitted entirely. On a non-SLURM site set the default once in your shell
 profile:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_CLUSTER_BACKEND</span><span class="o">=</span>pbs<span class="w">   </span><span class="c1"># or sge / lsf</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_CLUSTER_BACKEND</span><span class="o">=</span>pbs<span class="w">   </span><span class="c1"># or sge / lsf / kubernetes / aws-batch / gcp-batch</span>
 </span></code></pre></div>
 <hr />
 <h2 id="options-submit">Options (Submit)<a class="headerlink" href="#options-submit" title="Permanent link">#</a></h2>
@@ -4747,20 +4777,23 @@ via the rule's output files.</p>
 <p>For a workflow rule with conda environment, different backends produce different scripts
 (threads/memory come from the rule's resources; the <code>-q</code>/<code>-a</code> flags add queue/account
 directives; <code>--walltime</code> — or a rule's <code>time_limit</code>, which wins — adds a time directive,
-<code>#SBATCH --time=</code> on SLURM and <code>walltime=</code> on PBS):</p>
+<code>#SBATCH --time=</code> on SLURM and <code>walltime=</code> on PBS; every script is also pinned to the
+run directory so relative output paths stay inside it — <code>#SBATCH --chdir</code> on SLURM,
+a body <code>cd</code> on PBS, <code>#$ -wd</code> on SGE, <code>#BSUB -cwd</code> on LSF):</p>
 <h3 id="slurm-script">SLURM Script<a class="headerlink" href="#slurm-script" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1">#SBATCH --job-name=bwa_align</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="c1">#SBATCH --cpus-per-task=16</span>
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1">#SBATCH --mem=32G</span>
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="c1">#SBATCH --partition=compute</span>
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="c1">#SBATCH --output=logs/bwa_align.out</span>
-</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1">#SBATCH --error=logs/bwa_align.err</span>
-</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>
-</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>
-</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1">#SBATCH --chdir='/abs/path/to/workdir'</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="c1">#SBATCH --job-name=bwa_align</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1">#SBATCH --cpus-per-task=16</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="c1">#SBATCH --mem=32G</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="c1">#SBATCH --partition=compute</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1">#SBATCH --output=logs/bwa_align.out</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="c1">#SBATCH --error=logs/bwa_align.err</span>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>
+</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="pbstorque-script">PBS/Torque Script<a class="headerlink" href="#pbstorque-script" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="ch">#!/bin/bash</span>
@@ -4768,38 +4801,41 @@ directives; <code>--walltime</code> — or a rule's <code>time_limit</code>, whi
 </span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="c1">#PBS -l nodes=1:ppn=16,mem=32G</span>
 </span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1">#PBS -o logs/bwa_align.out</span>
 </span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">#PBS -e logs/bwa_align.err</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="nb">cd</span><span class="w"> </span><span class="s1">'/abs/path/to/workdir'</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>
+</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="sge-script">SGE Script<a class="headerlink" href="#sge-script" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1">#$ -N bwa_align</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="c1">#$ -pe smp 16</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1">#$ -l h_vmem=32G</span>
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">#$ -o logs/bwa_align.out</span>
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="c1">#$ -e logs/bwa_align.err</span>
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a>
-</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1">#$ -wd '/abs/path/to/workdir'</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="c1">#$ -N bwa_align</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1">#$ -pe smp 16</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">#$ -l h_vmem=32G</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="c1">#$ -o logs/bwa_align.out</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="c1">#$ -e logs/bwa_align.err</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="lsf-script">LSF Script<a class="headerlink" href="#lsf-script" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1">#BSUB -J bwa_align</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1">#BSUB -n 16</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="c1">#BSUB -M 33554432</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="c1">#BSUB -o logs/bwa_align.out</span>
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1">#BSUB -e logs/bwa_align.err</span>
-</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>
-</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>
-</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1">#BSUB -cwd '/abs/path/to/workdir'</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1">#BSUB -J bwa_align</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1">#BSUB -n 16</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="c1">#BSUB -M 33554432</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1">#BSUB -o logs/bwa_align.out</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="c1">#BSUB -e logs/bwa_align.err</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <p>Memory is emitted as an explicit KB figure (<code>32G</code> → <code>33554432</code>) in both
 <code>-R 'rusage[mem=…]'</code> and <code>-M</code>: LSF's documented mem_spec unit set is
@@ -4807,12 +4843,11 @@ KB/MB/GB with KB as the default, and the bare <code>32G</code> form oxo-flow sto
 internally is not a valid mem_spec. The <code>rusage</code> is what actually places
 the job on a host with room; multi-threaded rules also carry
 <code>span[hosts=1]</code> inside the same <code>-R</code> string.</p>
-<p>Environment wrapping is applied automatically: conda rules are wrapped in
-<code>conda run --no-capture-output -n &lt;env&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'</code>, docker rules in
-<code>docker run --rm --user $(id -u):$(id -g) ... &lt;image&gt; sh -c '&lt;bash shim&gt;' sh '...'</code>, singularity/apptainer rules in
-<code>&lt;apptainer|singularity&gt; exec --bind &lt;workdir&gt;:&lt;workdir&gt; ... &lt;image&gt; sh -c '&lt;bash shim&gt;' sh '...'</code>, and rules
-without an environment run the command directly. The shim re-execs the
-command under <code>bash</code> when the image ships it — see
+<p>Environment wrapping is applied automatically — conda, docker, and
+singularity/apptainer rules (plus pixi, venv, and module environments) each
+get their resolver's wrapper, and rules without an environment run the
+command directly. The exact per-backend wrapping forms, the bash shim, and
+the read-only mount rules are specified once in
 <a href="../../how-to/run-on-cluster/#environment-wrapping">Environment Wrapping</a>.</p>
 <h3 id="dependency-aware-submit-script">Dependency-Aware Submit Script<a class="headerlink" href="#dependency-aware-submit-script" title="Permanent link">#</a></h3>
 <p>When using <code>--with-dependencies</code>, oxo-flow generates a <code>submit.sh</code> wrapper that handles job submission order:</p>

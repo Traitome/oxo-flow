@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2049,6 +2051,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4195,6 +4225,8 @@ expanded instance (<code>step1_lane_L1</code>) rather than the template rule.</p
 <li>Exits with code <code>0</code> on success, <code>1</code> on failure</li>
 <li>Validates TOML parsing, rule semantics, and DAG construction</li>
 <li>Missing input files are reported as warnings (not errors). A rule's declared pixi manifest, by contrast, is existence-checked and reported as error <code>E019</code> (a missing environment file blocks every rule that needs it at run time); <code>--as-include</code> skips input-existence checks, the pixi-manifest preflight, and DAG construction, but cycle detection still applies (cycles are semantic errors, not missing files)</li>
+<li><code>[wildcard_constraints]</code> entries are compiled with the same helper the expansion engine uses — an uncompilable pattern surfaces as error <code>E020</code> (defense-in-depth for programmatically constructed configs; TOML-parsed workflows already fail at parse time with a config error)</li>
+<li>input/output patterns carrying Snakemake-style inline wildcard constraints (e.g. <code>{sample:[A-Z]+}</code>) surface as error <code>E021</code> — the engine's wildcard grammar is <code>{name}</code> only, so the brace group would stay literal text instead of expanding; move the regex into <code>[wildcard_constraints]</code></li>
 <li>Relative paths resolve against the workflow file's directory — the same base rules run from — so warnings are accurate even when invoked from another directory. This includes the pixi-manifest preflight: <code>pixi = "envs/x.toml"</code> is checked at <code>&lt;workflow dir&gt;/envs/x.toml</code>, never against the invoking CWD</li>
 <li>Environments and tools are not verified here — the pixi-manifest check only confirms the manifest file exists, not that the pixi binary is installed or that the environment solves. Use
   <a href="../test/#deep-checks-deep"><code>oxo-flow test --deep</code></a> (checks environment

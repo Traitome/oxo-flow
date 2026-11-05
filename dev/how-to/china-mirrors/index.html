@@ -1832,6 +1832,8 @@
       
         
       
+        
+      
     
     
     
@@ -2195,6 +2197,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4138,7 +4168,10 @@ See the <a href="#git-github">Git (GitHub)</a> section below for more proxy opti
 <p><strong>Built-in fallback</strong>: when oxo-flow clones a <code>github.com</code> repository itself
 (<code>oxo-flow pull gh:owner/repo</code>, <code>oxo-flow run gh:owner/repo[@ref]</code>), it tries
 the official URL first and then falls back to the <code>ghfast.top</code> and
-<code>gh-proxy.com</code> mirrors automatically — no configuration needed.</p>
+<code>gh-proxy.com</code> mirrors automatically — no configuration needed. The same
+applies to community-reference fetches in the eval tooling: set
+<code>OXO_GITHUB_MIRROR=https://ghfast.top/</code> (trailing slash optional) to route
+them through a mirror; unset, they go to GitHub directly.</p>
 <p>For your own manual <code>git clone</code> commands, when HTTPS-based GitHub proxies
 (like <code>ghfast.top</code>) are slow or unreliable, try using SSH as a first
 alternative — SSH often bypasses the same network issues that affect HTTPS:</p>

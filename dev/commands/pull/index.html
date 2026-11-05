@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2069,6 +2071,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../init/" class="md-nav__link">
         
   
@@ -2421,6 +2451,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3949,6 +3996,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4103,6 +4167,13 @@ Every failure is reported with a pointer to the
 <p>Every downloaded bundle is verified against its <code>manifest.json</code> before being
 saved. If any file's SHA-256 checksum doesn't match the manifest, the download
 is rejected with a clear error message showing which file failed.</p>
+<h3 id="size-limit">Size limit<a class="headerlink" href="#size-limit" title="Permanent link">#</a></h3>
+<p>Bundles are buffered in memory before verification, so every source — GitHub
+releases, HTTP(S) URLs, and local files (<code>pull &lt;file&gt;.tar.zst</code>) — is capped at
+<code>OXO_FLOW_PULL_MAX_BYTES</code> bytes (default 1 GiB). A larger source is rejected
+before it is read; raise the variable for genuinely bigger bundles:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">OXO_FLOW_PULL_MAX_BYTES</span><span class="o">=</span><span class="m">4294967296</span><span class="w"> </span>oxo-flow<span class="w"> </span>pull<span class="w"> </span>./big-bundle.tar.zst
+</span></code></pre></div>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../publish/">oxo-flow publish</a> — create bundles</li>

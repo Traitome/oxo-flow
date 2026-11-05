@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -3442,6 +3472,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#scientific-preflight-biological-contract-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scientific Preflight &amp; Biological Contract Catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scientific Preflight &amp; Biological Contract Catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#biological-subtyping-violations-type-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Biological Subtyping Violations (TYPE-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#curated-scientific-preflight-catalog-sci-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Curated Scientific Preflight Catalog (SCI-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3972,6 +4041,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#scientific-preflight-biological-contract-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scientific Preflight &amp; Biological Contract Catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scientific Preflight &amp; Biological Contract Catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#biological-subtyping-violations-type-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Biological Subtyping Violations (TYPE-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#curated-scientific-preflight-catalog-sci-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Curated Scientific Preflight Catalog (SCI-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4011,7 +4119,7 @@ Every diagnosis is reproducible given the same inputs.</p>
 <li><strong>Relevant log lines</strong> for context</li>
 </ul>
 <p>It does NOT use AI. It matches error signatures (log keywords, exit codes)
-against a curated library of 30 error patterns (tool, resource, data,
+against a curated library of 31 error patterns (tool, resource, data,
 system, and config classes — see
 <code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code> for the full
 list).</p>
@@ -4023,15 +4131,16 @@ list).</p>
   (issue #708).</li>
 <li>A pattern <strong>without exit codes</strong> fires on any non-zero or unknown exit
   code — never on exit 0. A rule that exited 0 has nothing to diagnose.</li>
-<li>The same pattern table backs <code>monitor_agent::is_known_error_pattern</code>, so
-  the AI monitor and the diagnostics service never disagree on a
-  classification.</li>
+<li>The AI monitor's failure classifier (<code>monitor_agent::classify_failure</code>)
+  runs the same pattern table, so the AI monitor and the diagnostics
+  service never disagree on a classification.</li>
 </ul>
 <h2 id="error-pattern-library">Error Pattern Library<a class="headerlink" href="#error-pattern-library" title="Permanent link">#</a></h2>
-<p>30 patterns total across five categories — Tool (5), Resource (5), Data (7),
-System (6), Config (7). The tables below cover the most common; the
-authoritative list is
-<code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>.</p>
+<p>31 patterns total across five categories — Tool (5), Resource (5), Data (7),
+System (6), Config (8). The tables below cover the most common; the
+authoritative list is <code>crates/oxo-flow-core/src/diagnostics.rs</code> (the web
+crate re-exports it via
+<code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>).</p>
 <h3 id="tool-errors">Tool Errors<a class="headerlink" href="#tool-errors" title="Permanent link">#</a></h3>
 <table>
 <thead>
@@ -4291,8 +4400,8 @@ their declared limit (issue #67 §4):</p>
   an empty list.</li>
 </ul>
 <h2 id="extending-the-pattern-library">Extending the Pattern Library<a class="headerlink" href="#extending-the-pattern-library" title="Permanent link">#</a></h2>
-<p>Add new patterns in <code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>
-(inside <code>DiagnosticsEngine::new()</code>):</p>
+<p>Add new patterns in <code>crates/oxo-flow-core/src/diagnostics.rs</code> (inside
+<code>DiagnosticsEngine::new()</code>):</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">Pattern</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="s">"new_pattern_id"</span><span class="p">,</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorCategory</span><span class="p">::</span><span class="n">Tool</span><span class="p">,</span>
@@ -4313,6 +4422,141 @@ their declared limit (issue #67 §4):</p>
   not dead — the test fails if a pattern has no row, or a row no pattern),</li>
 <li>and, when near-miss words exist, a benign line in <code>BENIGN_LOG_LINES</code>
   that mentions the vocabulary without being a real error.</li>
+</ul>
+<h2 id="scientific-preflight-biological-contract-catalog">Scientific Preflight &amp; Biological Contract Catalog<a class="headerlink" href="#scientific-preflight-biological-contract-catalog" title="Permanent link">#</a></h2>
+<p>While runtime diagnostics analyze failed executions, the <strong>Scientific Preflight Engine</strong> (<code>crates/oxo-flow-core/src/scientific_preflight.rs</code>) and <strong>Biological Semantic Subtyping System</strong> (<code>crates/oxo-flow-core/src/types/</code>) inspect workflow DAGs <em>prior to execution</em>. They catch scientifically unsound configurations (e.g. training VQSR on single samples, unstranded quantification on stranded libraries, or uncompressed tabix inputs) before compute resources are wasted.</p>
+<h3 id="biological-subtyping-violations-type-">Biological Subtyping Violations (<code>TYPE-*</code>)<a class="headerlink" href="#biological-subtyping-violations-type-" title="Permanent link">#</a></h3>
+<p>The biological type system verifies formal format and coordination contracts across DAG edges.</p>
+<table>
+<thead>
+<tr>
+<th>Diagnostic Code</th>
+<th>Category</th>
+<th>Biological Violation</th>
+<th>Automated Coercion / Remediation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TYPE-001</code></td>
+<td>Format</td>
+<td>Data format incompatibility across producer and consumer channels (e.g. SAM passed into BAM consumer)</td>
+<td>Synthesizes conversion rules (e.g. <code>samtools view -b</code>)</td>
+</tr>
+<tr>
+<td><code>TYPE-002</code></td>
+<td>Sort Order</td>
+<td>Sort order conflict (e.g. queryname-sorted BAM piped into coordinate-indexed consumer)</td>
+<td>Inserts sort step (<code>samtools sort</code>)</td>
+</tr>
+<tr>
+<td><code>TYPE-003</code></td>
+<td>Index</td>
+<td>Missing companion index artifact (e.g. BAM without <code>.bai</code>, VCF without <code>.tbi</code>)</td>
+<td>Generates indexer rule (<code>samtools index</code>, <code>tabix -p vcf</code>)</td>
+</tr>
+<tr>
+<td><code>TYPE-004</code></td>
+<td>Assembly</td>
+<td>Reference build conflict (e.g. GRCh38 BAM consumed by GRCh37 variant caller)</td>
+<td>Re-aligns or re-indexes with matching reference genome</td>
+</tr>
+<tr>
+<td><code>TYPE-005</code></td>
+<td>Metadata</td>
+<td>Missing read group <code>@RG</code> metadata fields required by downstream tools</td>
+<td>Injects read group tags (<code>bwa mem -R '@RG...'</code>)</td>
+</tr>
+<tr>
+<td><code>TYPE-006</code></td>
+<td>Compression</td>
+<td>Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required)</td>
+<td>Re-compresses stream (<code>bgzip</code>)</td>
+</tr>
+<tr>
+<td><code>TYPE-007</code></td>
+<td>Attributes</td>
+<td>Extensible attribute contract mismatch: the consumer's declared <code>[types.*]</code> attributes (e.g. <code>variant_type=germline</code> implied by <code>gvcf</code>) are missing or hold different values on the producer side</td>
+<td>Declares the missing <code>key=value</code> attributes on the producer output type</td>
+</tr>
+<tr>
+<td><code>TYPE-UNKNOWN</code></td>
+<td>Resolution</td>
+<td>A <code>types.&lt;name&gt;</code> reference on a rule input/output does not match any <code>[types.*]</code> declaration (or inline spec fails to parse)</td>
+<td>Fixes the type name or adds the missing <code>[types.*]</code> declaration</td>
+</tr>
+</tbody>
+</table>
+<h3 id="curated-scientific-preflight-catalog-sci-">Curated Scientific Preflight Catalog (<code>SCI-*</code>)<a class="headerlink" href="#curated-scientific-preflight-catalog-sci-" title="Permanent link">#</a></h3>
+<p>Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.</p>
+<h4 id="1-germline-somatic-variant-calling">1. Germline &amp; Somatic Variant Calling<a class="headerlink" href="#1-germline-somatic-variant-calling" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-VQSR-COHORT</code>: VariantRecalibrator runs on fewer than 30 samples; GATK recommends minimum ~30 samples for WGS/WES to train Gaussian mixture models. Use hard filtering (<code>VariantFiltration</code>) for small cohorts.</li>
+<li><code>SCI-BQSR-NO-KNOWN-SITES</code>: BaseRecalibrator invoked without <code>--known-sites</code> resources (e.g. dbSNP, Mills); recalibration cannot model true variation without baseline polymorphic sites.</li>
+<li><code>SCI-MUTECT2-TUMOR-ONLY</code>: Mutect2 executed without matched normal sample; somatic calls depend strictly on population allele frequencies and miss private germline variants and mapping artifacts.</li>
+<li><code>SCI-MUTECT2-NO-PON</code>: Mutect2 in tumor-only mode missing Panel of Normals (<code>--panel-of-normals</code>); recurrent sequencing artifacts will be called as somatic mutations.</li>
+<li><code>SCI-MUTECT2-NO-GERMLINE</code>: Mutect2 in tumor-only mode missing <code>--germline-resource</code>; population allele frequency priors cannot be applied to filter common germline leakage.</li>
+<li><code>SCI-HAPLOTYPECALLER-GVCF-ERC</code>: HaplotypeCaller producing a <code>.g.vcf</code> path without <code>-ERC GVCF</code> or <code>--emit-ref-confidence GVCF</code>; emits flat VCF without reference confidence blocks.</li>
+<li><code>SCI-GENOTYPEGVCFS-NO-NEW-QUAL</code>: GenotypeGVCFs invoked without explicit quality scoring flags; legacy Phred calculations inflate variant scores in large cohorts.</li>
+<li><code>SCI-DEEPVARIANT-MODEL-TYPE</code>: DeepVariant executed without <code>--model_type</code>; CNN weights must match sequencing chemistry (<code>WGS</code>, <code>WES</code>, <code>PACBIO</code>, <code>ONT</code>).</li>
+<li><code>SCI-MANTA-NO-CONFIG</code>: Manta structural variant caller configured without reference genome FASTA specification.</li>
+<li><code>SCI-STRELKA-NO-MANTA</code>: Somatic Strelka execution omitting <code>--indelCandidates</code> from upstream Manta; small somatic indel sensitivity is substantially reduced.</li>
+<li><code>SCI-STRELKA-TARGETS-UNCOMPRESSED</code>: Strelka target region BED is uncompressed; Strelka requires bgzip-compressed and tabix-indexed target regions (<code>.bed.gz</code>).</li>
+<li><code>SCI-VEP-OFFLINE-CACHE</code>: Ensembl VEP running without local <code>--cache</code> or <code>--offline</code> flags; live REST queries break offline reproducibility and throttle batch jobs.</li>
+</ul>
+<h4 id="2-alignment-coordinate-sorting">2. Alignment &amp; Coordinate Sorting<a class="headerlink" href="#2-alignment-coordinate-sorting" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-BWA-MEM-NO-RG</code>: <code>bwa mem</code> alignment lacks read group specification (<code>-R</code>); missing <code>@RG</code> headers prevent downstream GATK/Picard processing.</li>
+<li><code>SCI-BOWTIE2-NO-RG</code>: <code>bowtie2</code> alignment lacks read group specification (<code>--rg-id</code> / <code>--rg</code>).</li>
+<li><code>SCI-MINIMAP2-PRESET</code>: <code>minimap2</code> invoked without technology preset (<code>-x</code>); default parameters degrade alignment accuracy on PacBio, ONT, or short reads.</li>
+<li><code>SCI-SAMTOOLS-INDEX-UNSORTED</code>: <code>samtools index</code> applied to SAM or unsorted BAM; requires coordinate-sorted BAM/CRAM.</li>
+<li><code>SCI-MARKDUPLICATES-REMOVE-DUPS</code>: Picard/GATK <code>MarkDuplicates</code> configured with <code>REMOVE_DUPLICATES=true</code>; permanently discards reads needed for discordant pair and split-read CNV/SV analyses.</li>
+<li><code>SCI-HISAT2-NO-SPLICE-SITES</code>: <code>hisat2</code> RNA-seq alignment executed without <code>--known-splicesite-infile</code>; reduces junction discovery sensitivity across annotated exons.</li>
+<li><code>SCI-FASTP-DEDUPLICATION</code>: <code>fastp</code> PCR deduplication enabled without UMI barcodes on RNA-seq; removes real biological read depth for highly expressed transcripts.</li>
+</ul>
+<h4 id="3-bulk-single-cell-rna-seq">3. Bulk &amp; Single-Cell RNA-seq<a class="headerlink" href="#3-bulk-single-cell-rna-seq" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-FEATURECOUNTS-STRAND</code>: <code>featureCounts</code> executed without explicit strandness flag (<code>-s</code>); defaults to unstranded (<code>-s 0</code>), miscounting stranded libraries.</li>
+<li><code>SCI-FEATURECOUNTS-MULTI-OVERLAP</code>: <code>featureCounts</code> runs with <code>-O</code> (multi-overlapping); causes duplicate assignments for overlapping genes on opposite strands.</li>
+<li><code>SCI-STAR-SJDB-OVERHANG</code>: <code>STAR</code> index generation with annotation omits <code>--sjdbOverhang</code>; default 100 degrades junction mapping for 150bp or 75bp reads.</li>
+<li><code>SCI-STAR-GENOME-LOAD</code>: <code>STAR</code> uses <code>--genomeLoad LoadAndKeep</code> in shared batch clusters; shared memory segments risk node memory exhaustion and eviction.</li>
+<li><code>SCI-SALMON-LIBTYPE</code>: <code>salmon quant</code> uses automatic library type detection (<code>-l A</code>); can select inconsistent strandedness models on shallow-coverage libraries.</li>
+<li><code>SCI-SALMON-NO-GC-BIAS</code>: <code>salmon quant</code> executed without <code>--gcBias</code> correction on Illumina reads; fails to correct for sequence-specific coverage bias.</li>
+<li><code>SCI-KALLISTO-SINGLE-END-FRAG</code>: <code>kallisto quant --single</code> executed without mean fragment length (<code>-l</code>) or standard deviation (<code>-s</code>).</li>
+<li><code>SCI-RSEM-NO-STRAND</code>: <code>rsem-calculate-expression</code> lacks explicit <code>--strand-specific</code> setting.</li>
+<li><code>SCI-STRINGTIE-NO-GUIDE</code>: <code>stringtie</code> novel assembly running without reference guide (<code>-G</code>); leads to fragmented transcript models.</li>
+<li><code>SCI-DESEQ2-MIN-REPLICATES</code>: Differential expression analysis configured with fewer than 3 biological replicates; insufficient degrees of freedom for negative binomial dispersion estimation.</li>
+<li><code>SCI-CELLRANGER-INTRONS</code>: <code>cellranger count</code> on single-nucleus RNA-seq (snRNA-seq) lacks <code>--include-introns</code>; pre-mRNA intronic reads account for up to 50% of nuclear signal.</li>
+<li><code>SCI-SEURAT-NO-NORMALIZATION</code>: Single-cell clustering or dimensionality reduction executed on raw counts without prior <code>NormalizeData</code> or <code>SCTransform</code>.</li>
+</ul>
+<h4 id="4-epigenomics-chip-seq-atac-seq">4. Epigenomics, ChIP-seq &amp; ATAC-seq<a class="headerlink" href="#4-epigenomics-chip-seq-atac-seq" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-MACS2-GENOME-SIZE</code>: <code>macs2 callpeak</code> missing explicit effective genome size (<code>-g</code>); default human (<code>hs</code>) invalidates peak p-values and FDR on other organisms.</li>
+<li><code>SCI-MACS2-BROAD-PEAKS</code>: <code>macs2 callpeak</code> targeting broad marks (H3K27me3, H3K9me3) without <code>--broad</code>; fragments diffuse enrichment into artificial narrow peaks.</li>
+<li><code>SCI-MACS2-PAIRED-END-FORMAT</code>: <code>macs2 callpeak</code> on paired-end data specifying <code>-f BAM</code> instead of <code>-f BAMPE</code>; discards exact paired fragment length modeling.</li>
+<li><code>SCI-CHIP-NO-CONTROL</code>: <code>macs2 callpeak</code> running without matched input control (<code>-c</code>); causes elevated false-positive peak calling due to chromatin accessibility biases.</li>
+<li><code>SCI-ATAC-SHIFT-COORDINATES</code>: ATAC-seq peak calling executed on unshifted BAMs; reads must be shifted (+4 bp on +, -5 bp on - strand) to center on Tn5 cut sites.</li>
+<li><code>SCI-BISMARK-NON-DIRECTIONAL</code>: <code>bismark</code> alignment on non-directional bisulfite library (PBAT) lacks <code>--non_directional</code>; discards over 50% of sequencing reads.</li>
+<li><code>SCI-BOWTIE-BISULFITE-MISMATCH</code>: Bisulfite alignment uses default strict mismatch scoring; bisulfite conversion artifacts require relaxed mismatch tolerance.</li>
+<li><code>SCI-BEDTOOLS-GENOME-FILE</code>: <code>bedtools slop</code>/<code>flank</code> executed without chromosome length definitions (<code>-g</code>).</li>
+</ul>
+<h4 id="5-metagenomics-microbiome">5. Metagenomics &amp; Microbiome<a class="headerlink" href="#5-metagenomics-microbiome" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-KRAKEN2-CONFIDENCE</code>: <code>kraken2</code> runs with default confidence threshold of 0.0; shared k-mers cause high false-positive genus and species classifications.</li>
+<li><code>SCI-BRACKEN-READ-LEN</code>: <code>bracken</code> abundance re-estimation lacks read length parameter (<code>-r</code>) matching the database distribution.</li>
+<li><code>SCI-QIIME2-DENOISE-TRIM</code>: QIIME2 DADA2 denoising configured without 3' quality truncation (<code>--p-trunc-len 0</code>); degraded read ends inflate error models and spurious ASVs.</li>
+<li><code>SCI-HUMANN-NUCLEOTIDE-DB</code>: <code>humann</code> metabolic profiling executed without explicit ChocoPhlAn database path (<code>--nucleotide-database</code>).</li>
+<li><code>SCI-METAPHLAN-UNKNOWN-ESTIMATION</code>: <code>metaphlan</code> with <code>--unknown_estimation</code> lacks explicit marker database index (<code>--bowtie2db</code>).</li>
+<li><code>SCI-CHECKM-NO-LINEAGE</code>: <code>checkm lineage_wf</code> missing genome FASTA extension flag (<code>-x</code>).</li>
+</ul>
+<h4 id="6-workflow-concurrency-hardware-dataflow">6. Workflow Concurrency, Hardware &amp; Dataflow<a class="headerlink" href="#6-workflow-concurrency-hardware-dataflow" title="Permanent link">#</a></h4>
+<ul>
+<li><code>SCI-AGG-RACE</code>: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other.</li>
+<li><code>SCI-SORT-THREADS-MEM-PRODUCT</code>: <code>samtools sort -m</code> per-thread memory multiplied by thread count exceeds the rule resource budget; leads to kernel OOM kills.</li>
+<li><code>SCI-TMPDIR-NOT-SCRATCH</code>: Heavy I/O tools write intermediate files to system <code>/tmp</code> instead of engine-managed scratch space (<code>${TMPDIR}</code>).</li>
+<li><code>SCI-PIPE-FAIL-DISABLED</code>: Multi-stage shell pipelines (<code>cmd1 | cmd2 | cmd3</code>) lack <code>set -o pipefail</code>; upstream tool crashes are silently masked.</li>
+<li><code>SCI-ZERO-BYTE-COMPLETION</code>: Rule masks failures by creating empty binary outputs (<code>|| touch {output}</code>), causing downstream tools to crash on corrupt streams.</li>
+<li><code>SCI-MULTI-TENANT-PORT-COLLISION</code>: Interactive server rules specify hardcoded server ports (e.g. <code>--port 8888</code>), causing collision failures on multi-tenant nodes.</li>
 </ul>
 
 

@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2267,6 +2269,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4521,7 +4551,12 @@ above is a first run on fresh state: a <code>⚠ no checkpoint …</code> warnin
 completed]</code> marker (see below); with an existing checkpoint the warning is
 replaced by checkpoint status details and completed rules instead show
 <code>[skipped]</code>/re-entry markers. The sample-scoped output also includes a
-<code>Sample readiness:</code> section.</p>
+<code>Sample readiness:</code> section.
+When the checkpoint file exists but is <strong>corrupt</strong>, the warning names the
+corruption instead of claiming the checkpoint is missing — the plan then
+degrades to empty state so dry-run stays usable as the recovery tool,
+while <code>oxo-flow run</code> refuses to start on the same file until it is fixed
+or removed.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

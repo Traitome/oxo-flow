@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2049,6 +2051,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4134,7 +4164,19 @@ clusters and in CI artifacts. The repair is the declaration itself:</p>
 </span></code></pre></div>
 <p>Declared-sensitive keys are env-routed and masked on disk, so W032
 never flags them — see
-<a href="../../reference/workflow-format/#config-configuration-variables"><code>[config]</code> — Configuration Variables</a>.</p>
+<a href="../../reference/workflow-format/#config-configuration-variables"><code>[config]</code> — Configuration Variables</a>.
+W035 flags a command that reads a shell glob — e.g. <code>cat
+stats/*.count.txt</code> — in a rule that declares no inputs. The shell
+expands the glob at run time, so the DAG builder never sees the
+individual files: the rule gets no edges against the rules that
+produce them and can be scheduled before they exist, failing with
+<code>cat: 'stats/*.count.txt': No such file or directory</code>. The repair is
+to declare the glob in <code>input = [...]</code> — glob inputs are compiled by
+the DAG builder and linked to every matching producer output, so they
+create real edges — or, for gather/fan-in steps, to list the files via
+<code>expand_inputs</code>. Pattern arguments (<code>find data -name '*.tmp'</code>) and
+cleanup commands (<code>rm -rf build/*</code>) are not data reads and are not
+flagged.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

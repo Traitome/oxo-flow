@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -3687,10 +3717,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#run-control-truth-all-modes" class="md-nav__link">
+  <a href="#run-control-status-all-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Run Control Truth (all modes)
+        Run Control Status (all modes)
       
     </span>
   </a>
@@ -4077,10 +4107,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#run-control-truth-all-modes" class="md-nav__link">
+  <a href="#run-control-status-all-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Run Control Truth (all modes)
+        Run Control Status (all modes)
       
     </span>
   </a>
@@ -4243,7 +4273,7 @@ Choose the mode that fits your team size and infrastructure.</p>
 </tr>
 <tr>
 <td>Run execution</td>
-<td>SQLite-backed servers only — with PostgreSQL the whole <code>/api/runs*</code> surface answers <code>503 RUNS_REQUIRE_SQLITE</code>; library/AI/auth keep working</td>
+<td>Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, while concurrency/crash-recovery/multi-instance remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors</td>
 </tr>
 <tr>
 <td>Auth</td>
@@ -4264,10 +4294,12 @@ Choose the mode that fits your team size and infrastructure.</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_VIEWER_PASSWORD</span><span class="o">=</span>...
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ORCID_CLIENT_ID</span><span class="o">=</span>...
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ORCID_CLIENT_SECRET</span><span class="o">=</span>...
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GITHUB_CLIENT_ID</span><span class="o">=</span>...
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GITHUB_CLIENT_SECRET</span><span class="o">=</span>...
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--mode<span class="w"> </span>team
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Test the ORCID flow against sandbox.orcid.org instead of production (optional)</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1"># export ORCID_SANDBOX=1</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GITHUB_CLIENT_ID</span><span class="o">=</span>...
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GITHUB_CLIENT_SECRET</span><span class="o">=</span>...
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--mode<span class="w"> </span>team
 </span></code></pre></div>
 <p><strong>Authentication</strong>: role-based password authentication comes from the
 <code>OXO_FLOW_*_PASSWORD</code> environment variables (with a dev-mode fallback when
@@ -4277,10 +4309,11 @@ automatic fallback chain between mechanisms.</p>
 <p><strong>User management</strong>: beyond the env-var credentials, accounts created on
 the <strong>Users</strong> page (or <code>POST /api/users</code>) carry a bcrypt-hashed password in
 the database and sign in through the same <code>/api/auth/login</code> endpoint.
-Every state-changing request (create/update/delete/run actions) is recorded
-in the audit trail — <strong>Audit</strong> page or <code>GET /api/audit</code> — with the acting
-user and the real outcome. The trail spans all users, so it is admin-only
-outside personal mode.</p>
+State-changing requests attempt an audit entry visible on the <strong>Audit</strong> page
+or through <code>GET /api/audit</code>, with the acting user and recorded outcome. Audit
+writes are not yet a durable, fail-closed compliance ledger, so do not treat a
+missing entry as proof that no action occurred. The trail spans all users and
+is admin-only outside personal mode.</p>
 <p><strong>Workspace isolation</strong>:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>workspace/
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>└── users/
@@ -4357,7 +4390,7 @@ outside personal mode.</p>
 rule: <code>DATABASE_URL</code> starting with <code>postgres://</code> (or <code>postgresql://</code>)
 selects the PostgreSQL backend; anything else (including unset, which
 defaults to <code>sqlite://oxo-flow.db</code> in the working directory) stays SQLite.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># PostgreSQL (library/AI/auth domains; run execution stays SQLite-only)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># PostgreSQL (storage-backed web metadata and backend-routed run records)</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">DATABASE_URL</span><span class="o">=</span>postgres://oxo:secret@db.lab.example.edu:5432/oxo_flow
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--mode<span class="w"> </span>team<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0
 </span></code></pre></div>
@@ -4368,10 +4401,25 @@ defaults to <code>sqlite://oxo-flow.db</code> in the working directory) stays SQ
   <code>cargo build --features postgres</code> (or the equivalent in your own
   image). On a build without the feature, a <code>postgres://</code> <code>DATABASE_URL</code>
   aborts startup with a clear error instead of silently falling back.</li>
-<li><strong>Run-execution boundary</strong>: with PostgreSQL, run execution and its
-  lifecycle bookkeeping stay SQLite-only — every <code>/api/runs*</code> request
-  answers <code>503 RUNS_REQUIRE_SQLITE</code>. Library/AI/auth domains keep
-  working (see <a href="../../reference/web-system-architecture/">web-system-architecture</a>).</li>
+<li><strong>Run execution</strong>: the <code>StorageBackend</code> trait has PostgreSQL code paths for
+  run-record persistence. CI runs a live-PostgreSQL smoke test (a
+  <code>services: postgres</code> container) that verifies the schema bootstrap and the
+  core <code>StorageBackend</code> CRUD surface — users, runs, run nodes, audit logs,
+  webhook config, chat sessions — against a real server. The storage
+  contract was additionally live-verified against a <code>postgres:16</code> container
+  (2026-11-05): the full <code>postgres_storage_contract</code> round-trip passed and
+  the complete web test suite ran 554 passed / 0 failed with the <code>postgres</code>
+  feature enabled. That evidence does NOT extend to production parity:
+  concurrency, crash recovery, and multi-instance behavior remain
+  unvalidated, so test them before relying on PostgreSQL for execution
+  metadata. The runs gate is backend-agnostic in behavior — any initialized
+  storage backend passes — and answers <code>503 RUNS_REQUIRE_STORAGE_BACKEND</code>
+  only when no backend was initialized at all.</li>
+<li><strong>Tenant safety</strong>: team/HPC authorization is not an OS or container
+  execution boundary. A normal workflow can run shell commands under the
+  server account and may access server environment secrets. Do not invite
+  untrusted tenants until the isolation gate in
+  <code>docs/superpowers/audits/industrial-scientific-audit-ledger.md</code> passes.</li>
 </ul>
 <h2 id="startup-verification">Startup Verification<a class="headerlink" href="#startup-verification" title="Permanent link">#</a></h2>
 <p>On startup, oxo-flow prints the version banner, the serve mode and address, and tracing log lines:</p>
@@ -4480,20 +4528,21 @@ before falling back to the shared runtime:</p>
 browser e2e suite (and any local automation) legitimately exceeds the
 100 req/min budget and must set it. Never set it on a team/hpc
 production server: the limiter is the brute-force protection.</p>
-<h2 id="run-control-truth-all-modes">Run Control Truth (all modes)<a class="headerlink" href="#run-control-truth-all-modes" title="Permanent link">#</a></h2>
-<p>Run control is backed by real process signaling, and crash recovery tells
-the truth:</p>
+<h2 id="run-control-status-all-modes">Run Control Status (all modes)<a class="headerlink" href="#run-control-status-all-modes" title="Permanent link">#</a></h2>
+<p>Run control uses process signaling, but lifecycle truth remains
+prototype-grade:</p>
 <ul>
-<li><strong>Cancel</strong> sends SIGTERM (then SIGKILL after a 5 s grace) to the run's
-  process group — rules run <em>inside</em> the run group, so no rule process
-  survives a cancel.</li>
-<li><strong>Pause/resume</strong> freezes and thaws the same group (SIGSTOP/SIGCONT).</li>
-<li><strong>Crash restart</strong>: on startup, runs left <code>running</code>/<code>paused</code> are probed —
-  a live CLI is re-attached (cancel/pause keep working) and monitored to
-  its end; a finished one is attributed from the exit record the wrapper
-  shell wrote (<code>.exit-code</code>), so a completed run is never rewritten to
-  <code>failed</code> by a restart.</li>
+<li><strong>Cancel</strong> attempts SIGTERM, then SIGKILL after a grace period, against the
+  run's process group. Cancellation errors and races with completion are not
+  yet reconciled through monotonic compare-and-set transitions.</li>
+<li><strong>Pause/resume</strong> sends SIGSTOP/SIGCONT, but persistence failures and missing
+  process groups can leave the database state inconsistent with the process.</li>
+<li><strong>Crash restart</strong> attempts to probe and re-attach unfinished runs. The
+  backend does not yet provide restart-safe multi-instance ownership or proof
+  that a terminal state cannot be overwritten in every race.</li>
 </ul>
+<p>Do not present these controls as crash-consistent or compliance-grade. The
+release blockers and required tests are tracked in the audit ledger.</p>
 <h2 id="production-deployment">Production Deployment<a class="headerlink" href="#production-deployment" title="Permanent link">#</a></h2>
 <p>Two pieces complete a production serve: a supervised service and — when
 users reach the server over a network — a reverse proxy in front of it.</p>
@@ -4527,9 +4576,10 @@ unit:</p>
 </span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nv">DEEPSEEK_API_KEY</span><span class="o">=</span>…
 </span></code></pre></div>
 <p>A stop (<code>systemctl stop oxo-flow</code>) delivers SIGTERM; the server drains
-connections and exits. Runs in flight are not force-killed — cancel them
-from the UI before a planned stop, or let the crash-restart probe
-re-attach them on the next start (see <a href="#run-control-truth-all-modes">Run Control Truth</a>).</p>
+connections and exits. Runs in flight are not force-killed. Cancel them from
+the UI before a planned stop and verify the terminal state; restart recovery
+is not yet qualified for unattended production use (see
+<a href="#run-control-status-all-modes">Run Control Status</a>).</p>
 <h3 id="nginx-reverse-proxy">nginx reverse proxy<a class="headerlink" href="#nginx-reverse-proxy" title="Permanent link">#</a></h3>
 <p>Behind a reverse proxy every request arrives at oxo-flow with the
 proxy's own IP as the transport peer — the rate limiter would key all

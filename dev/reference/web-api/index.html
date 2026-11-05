@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4262,7 +4292,19 @@ file on disk defines the version.</p>
 <h2 id="execution-runs">Execution &amp; Runs<a class="headerlink" href="#execution-runs" title="Permanent link">#</a></h2>
 <h3 id="create-run">Create Run<a class="headerlink" href="#create-run" title="Permanent link">#</a></h3>
 <blockquote>
-<p><strong>PostgreSQL deployments</strong>: every <code>/api/runs*</code> endpoint returns <code>503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}</code> — run execution requires a SQLite-backed server. Library/AI/auth domains remain available.</p>
+<p><strong>Database Backends</strong>: run-record persistence and lifecycle routing use
+the unified <code>StorageBackend</code>, with SQLite and feature-gated PostgreSQL
+implementations. A CI smoke test against a live PostgreSQL container
+verifies the schema bootstrap and the core <code>StorageBackend</code> CRUD surface,
+and the storage contract was live-verified against <code>postgres:16</code>
+(2026-11-05: full contract round-trip passed, web suite 554 passed /
+0 failed with the <code>postgres</code> feature); concurrency, crash recovery, and
+multi-instance behavior remain unvalidated. The runs gate is
+backend-agnostic: if no storage backend is initialized at all, these
+endpoints return
+<code>503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}</code>.
+Team/HPC execution also lacks an OS-level tenant boundary and must not be
+exposed to untrusted workflow authors.</p>
 </blockquote>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/runs
 </span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>Content-Type: application/json
@@ -4295,6 +4337,20 @@ downstream) — the rest keep their checkpoint records and are skipped. Runs
 without <code>pipeline_id</code> get a fresh per-run sandbox and execute everything.
 Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</code> /
 <code>404 PIPELINE_NOT_FOUND</code>).</p>
+<p><strong>Typed-workflow admission limit:</strong> directly submitted typed workflows are
+checked by the same core BioType validator as CLI preflight. Typed
+declarations are detected structurally from parsed TOML, including both
+table forms such as <code>[types.*]</code> / <code>[rules.types]</code> and inline forms such as
+<code>types = { ... }</code>. Only the host workflow and locally staged sources reached
+through <code>[[include]]</code> participate in that check; unrelated staged assets are
+ignored. Any reachable typed include or uninspectable include fails closed
+regardless of optional fields. A directly typed workflow is validated in
+place when it has no include graph; adding <code>config_overrides</code> to that direct
+typed path also fails closed. In those cases the web layer cannot yet
+reconstruct the CLI's fully resolved graph, so it responds with
+<code>400 {"code":"TYPED_ADMISSION_UNSUPPORTED"}</code> before creating a run row. Use
+the CLI admission path for typed workflows that depend on includes or
+configuration overrides until resolved admission lands.</p>
 <p>Execution flags are forwarded to the CLI executor:</p>
 <ul>
 <li><code>dry_run: true</code> spawns the preview subcommand (<code>oxo-flow dry-run</code>) —
@@ -4310,9 +4366,13 @@ Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</c
   <code>envs/clinical/pixi.toml</code>), values are the file contents. Keys are
   validated as relative workspace paths — absolute paths, <code>..</code> components,
   and degenerate keys (empty, <code>.</code>-only, trailing slash) are rejected
-  (<code>400 INVALID_INCLUDE_PATH</code>), and the key <code>workflow.oxoflow</code>
-  is rejected because it would overwrite the main workflow. Files are written
-  beside <code>workflow.oxoflow</code> in the run directory, where the CLI's
+  (<code>400 INVALID_INCLUDE_PATH</code>). Keys are canonicalized before validation
+  and staging, so aliases such as <code>./workflow.oxoflow</code> and duplicate
+  canonical keys, including case-insensitive aliases, are rejected; any
+  canonical key equal to
+  <code>workflow.oxoflow</code> (case-insensitively) is refused because it would
+  overwrite the main workflow. Files are written beside <code>workflow.oxoflow</code>
+  in the run directory, where the CLI's
   <code>resolve_includes</code> resolves them unchanged — the same machinery local
   <code>oxo-flow run</code> uses. Note: <code>pipeline_snapshot</code> in the run row stores only
   the host TOML, so status/DAG endpoints re-parse it without includes; the
@@ -4390,7 +4450,7 @@ The instance-level dry-run plan (<code>checkpoint_preview</code> + execution ord
 </span></code></pre></div>
 Read-only drift audit of the run's <code>[engine] protected_data_trees</code> (issue #935 slice 3). The response mirrors the CLI dry-run's <code>protected_tree_drift</code> object:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="p">{</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="w">  </span><span class="nt">"drifted_files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/S1.fq: 1024 B @2026-01-01 → 0 B @2026-01-02 (TRUNCATED)"</span><span class="p">],</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="w">  </span><span class="nt">"drifted_files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/S1.fq: 1024 B @&lt;baseline-time&gt; → 0 B @&lt;current-time&gt; (TRUNCATED)"</span><span class="p">],</span>
 </span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="w">  </span><span class="nt">"new_trees"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
 </span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
 </span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a><span class="p">}</span>
@@ -4457,6 +4517,9 @@ Chart data built from real sources: <code>files</code> maps the run's file tree 
 The retry spawns a real run, so it pays the same #213 runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
 the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code> (#519).
+Like every <code>ApiResult</code> error, the 429 carries no <code>Retry-After</code> header
+(the typed tuple cannot carry headers) — the countdown lives in the
+error <code>message</code> instead (<code>retry in {wait_secs}s</code>).
 <code>from_rule</code> is <strong>not supported</strong>: the engine has no "re-run from rule X
 downstream" mode (<code>--target</code> selects the <em>upstream</em> closure), so the field is
 rejected with <code>400 UNSUPPORTED_FIELD</code> instead of being silently ignored.</p>
@@ -4633,8 +4696,25 @@ only a <code>prompt</code> field fails deserialization); <code>context</code> is
 <p>The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. <code>GET /api/ai/config/effective</code> shows the resolved result and
-which level supplied each field. API keys are stored encrypted at rest
-(#205) and never echoed back — responses mark <code>key_set</code> instead.</p>
+which level supplied each field. API keys are never echoed back — responses
+mark <code>key_set</code> instead. Rows are encrypted at rest only when
+<code>OXO_FLOW_MASTER_KEY</code> is configured; without it, the local database uses the
+documented plaintext compatibility mode (#205).</p>
+<p>There is deliberately no DELETE endpoint: resetting a tier means saving
+<code>provider: "disabled"</code> through the same PUT endpoints. A disabled user-tier
+row makes that user fall back to the shared runtime; a disabled server-tier
+row disables the shared runtime (immediately via the same reconfiguration
+path, and again on the next startup when the row is restored). Omitting
+<code>provider</code> in a PUT body defaults to <code>"disabled"</code>, so a save that only flips
+a toggle must carry the current provider over (the bundled Settings page
+does exactly that).</p>
+<p>Provider names are validated before either configuration endpoint writes
+to storage. An unsupported name returns <code>400 INVALID_AI_PROVIDER</code> and
+leaves the existing configuration untouched. If storage succeeds but the
+runtime cannot activate the new provider, the endpoint returns
+<code>500 AI_RECONFIGURE_FAILED</code>; the durable row remains available for the
+next startup, but the caller must correct the provider settings rather
+than assuming the running process switched.</p>
 <p>See <a href="../ai-translation/">AI Translation Layer</a> for details.</p>
 <hr />
 <h2 id="chat-v08-ai-companion">Chat (v0.8 AI Companion)<a class="headerlink" href="#chat-v08-ai-companion" title="Permanent link">#</a></h2>
@@ -4698,11 +4778,17 @@ run endpoint.</p>
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:</p>
 <ul>
-<li><code>sha256-keyed</code> (default) — <code>sha256(secret‖body)</code>, the pre-v0.12 format.
-  The default keeps existing webhook consumers working across upgrades.</li>
-<li><code>hmac-sha256</code> — RFC 2104 HMAC (<code>X-OxoFlow-Signature: hmac-sha256=&lt;hex&gt;</code>),
-  the recommended opt-in for new deployments.</li>
+<li><code>hmac-sha256</code> — RFC 2104 HMAC (<code>X-OxoFlow-Signature: hmac-sha256=&lt;hex&gt;</code>).
+  This is the default for a new web-server row and for a workflow <code>[webhook]</code>
+  section.</li>
+<li><code>sha256-keyed</code> — frozen <code>sha256(secret‖body)</code> compatibility. Existing
+  web-server rows keep this scheme when an update omits <code>signature_scheme</code>;
+  it is not the default for a new row.</li>
 </ul>
+<p>An unknown or non-string <code>signature_scheme</code> returns
+<code>400 INVALID_SIGNATURE_SCHEME</code> rather than being silently coerced. The PUT
+response and subsequent GET report the scheme actually stored. The settings
+UI exposes the choice and labels the legacy scheme as compatibility-only.</p>
 <p>Validation on <code>PUT</code> (issue #907 N5): <code>url</code> must parse as an absolute
 <code>http://</code> or <code>https://</code> URL with a host (<code>400 INVALID_URL</code> otherwise — a
 bare <code>https://</code> prefix no longer passes). Enabling delivery requires a
@@ -4742,7 +4828,8 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
 The stored <code>ssh_key</code> is a secret (#517): it is never returned by any
 response (including the upsert echo) — clients see <code>ssh_key_set: true |
 false</code> instead. When <code>OXO_FLOW_MASTER_KEY</code> is set, the key is sealed at
-rest with the same AES-256-GCM scheme as AI provider keys.
+rest with the same AES-256-GCM scheme as AI provider keys; without it, the
+database stores plaintext compatibility-mode rows.
 <code>POST /api/runs</code> accepts <code>cluster_id</code>: the run then stages its workdir to
 the remote host (tar over stdio — no rsync), executes under a per-run
 nohup wrapper, and pulls the results back on completion so every

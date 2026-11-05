@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4439,9 +4469,10 @@ written top-down — each layer links to a dedicated reference page.</p>
 <li><strong>Plan fully, then execute.</strong> Wildcard expansion, DAG construction,
    cycle detection, and target selection all happen before the first job
    starts. What can be decided statically is decided statically.</li>
-<li><strong>Hermetic per-rule environments.</strong> Every rule names its software
+<li><strong>Isolated per-rule environments.</strong> Every rule names its software
    environment (conda, docker, …); the engine resolves, builds, caches,
-   and wraps it — tool versions never leak between steps.</li>
+   and wraps it to reduce tool-version leaks between steps. This is not a
+   complete host, credential, or tenant security boundary.</li>
 <li><strong>Resources as first-class constraints.</strong> Threads, memory, GPU, and
    custom pools are declared per rule and enforced by a scheduler that
    waits instead of over-subscribing.</li>
@@ -4465,7 +4496,7 @@ execution substrate.</p>
     end
 
     subgraph surfaces["oxo-flow surfaces"]
-        cli["oxo-flow CLI&lt;br/&gt;32 subcommands"]
+        cli["oxo-flow CLI&lt;br/&gt;33 subcommands"]
         web["Web server&lt;br/&gt;axum + REST + SSE"]
         ai["AI layer&lt;br/&gt;orchestrator + tools"]
     end
@@ -4473,7 +4504,7 @@ execution substrate.</p>
     subgraph world["Execution substrate"]
         fs["Working directory&lt;br/&gt;inputs / outputs / logs"]
         env["Environment engines&lt;br/&gt;conda · mamba · pixi&lt;br/&gt;docker · singularity&lt;br/&gt;venv · modules · system"]
-        hpc["HPC schedulers&lt;br/&gt;SLURM · PBS · SGE · LSF"]
+        hpc["HPC schedulers&lt;br/&gt;SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch"]
         obj["Object storage&lt;br/&gt;S3 · GCS"]
         llm["LLM providers&lt;br/&gt;DeepSeek · Claude&lt;br/&gt;OpenAI-compatible · Ollama"]
         git["Git remotes&lt;br/&gt;workflow repositories"]
@@ -4535,7 +4566,7 @@ compiled, licensed, and audited in isolation.</p>
 <td><code>oxo-flow-cli</code></td>
 <td>binary</td>
 <td>core, ai, web</td>
-<td>User-facing <code>oxo-flow</code> binary: 32 subcommands, run loop, human rendering</td>
+<td>User-facing <code>oxo-flow</code> binary: 33 subcommands, run loop, human rendering</td>
 </tr>
 <tr>
 <td><code>oxo-flow-desktop</code></td>
@@ -4601,7 +4632,7 @@ the execution layer knows the planning layer's outputs, never the reverse.</p>
         direction LR
         envm["environment.rs&lt;br/&gt;8 backends"]
         storm["storage/&lt;br/&gt;local · s3 · gcs"]
-        clum["cluster.rs&lt;br/&gt;SLURM · PBS · SGE · LSF"]
+        clum["cluster.rs&lt;br/&gt;7 backends: SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch"]
         misc["report · container&lt;br/&gt;webhook · git · format"]
     end
 
@@ -4636,7 +4667,7 @@ the execution layer knows the planning layer's outputs, never the reverse.</p>
 </tr>
 <tr>
 <td><code>deep_check.rs</code></td>
-<td>Static consistency checks beyond <code>validate</code> (D001–D004 codes)</td>
+<td>Static consistency checks beyond <code>validate</code> (D001–D005 codes)</td>
 </tr>
 <tr>
 <td><code>config_impact.rs</code></td>
@@ -5150,7 +5181,17 @@ draft) and
 <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 — non-thinking generations run
 12–20 s, but a single thinking round routinely passes two minutes; a
 measured GLM round took 145 s, which the old 120 s default killed
-mid-round). Below the orchestrator, the
+mid-round). A third knob covers third-party Anthropic-compatible proxies
+fronting a <em>smaller</em> model: <code>OXO_FLOW_AI_CONTEXT_TOKENS</code> declares the
+endpoint's full context window (e.g. 131072 for a GLM/DeepSeek relay that
+rejects overflow with HTTP 400), and the Claude backend then clamps
+<code>max_tokens</code> per request — estimated input size (UTF-16-weighted chars/4
+with a 1.5× safety factor and 4096-token margin) is subtracted from the
+window before the configured output budget is sent, floored at 1024 so a
+hopelessly oversized request still reaches the server and its 400 drives
+the transcript-compression retry. Unset, the budget is sent as configured
+(real Anthropic models size their window server-side). Below the
+orchestrator, the
 provider backends retry transient transport failures (dropped or
 reset connections, response bodies that fail to decode), plus the
 gateway-outage signature — a transient HTTP status (408, 502, 503,

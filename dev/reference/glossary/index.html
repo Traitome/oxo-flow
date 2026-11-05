@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -5118,6 +5148,14 @@ below list every code the engine currently emits.</p>
 <td><code>E019</code></td>
 <td>A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). <code>validate</code> and <code>plan</code>/dry-run preflight it the same way they existence-check static inputs; <code>run</code> fails before executing anything</td>
 </tr>
+<tr>
+<td><code>E020</code></td>
+<td>A <code>[wildcard_constraints]</code> entry is not a valid regex (e.g. the impossible range <code>[z-a]+</code>). Parse rejects such entries for TOML-loaded configs, so this diagnostic is defense-in-depth for programmatically constructed configs — it runs the SAME shared compilation helper the plan-time fan-out and runtime projection use, making the validate-time error byte-identical to the run-time one</td>
+</tr>
+<tr>
+<td><code>E021</code></td>
+<td>A rule's input/output pattern uses Snakemake-style inline wildcard constraint syntax (e.g. <code>{sample:[A-Z]+}</code>). The engine's wildcard grammar is <code>{name}</code> only — a <code>:</code>-carrying brace group is never parsed as a wildcard, so it stays literal brace text and the tool fails on a path that looks valid. Constraints belong in <code>[wildcard_constraints]</code></td>
+</tr>
 </tbody>
 </table>
 <h3 id="lint-warnings-lint">Lint warnings (<code>lint</code>)<a class="headerlink" href="#lint-warnings-lint" title="Permanent link">#</a></h3>
@@ -5244,6 +5282,10 @@ below list every code the engine currently emits.</p>
 <tr>
 <td><code>W034</code></td>
 <td>An <code>{input[N]}</code>/<code>{output[N]}</code> index is out of range, or a named <code>{input.key}</code>/<code>{output.key}</code> is not declared — renders as literal brace text and the tool fails on a path that looks valid</td>
+</tr>
+<tr>
+<td><code>W035</code></td>
+<td>A command reads a shell glob (e.g. <code>cat stats/*.count.txt</code>) while the rule declares no inputs — globs are expanded by the shell at run time and create no DAG dependency, so the rule may run before the files it reads exist</td>
 </tr>
 </tbody>
 </table>

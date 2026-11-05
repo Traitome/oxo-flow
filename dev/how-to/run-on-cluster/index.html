@@ -1982,6 +1982,8 @@
       
         
       
+        
+      
     
     
     
@@ -2345,6 +2347,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4264,7 +4294,7 @@
 
 
 <h1 id="run-on-a-cluster">Run on a Cluster<a class="headerlink" href="#run-on-a-cluster" title="Permanent link">#</a></h1>
-<p>This guide explains how to execute oxo-flow workflows on HPC clusters using SLURM, PBS, SGE, and LSF backends.</p>
+<p>This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, and GCP Batch for cloud runs.</p>
 <hr />
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">#</a></h2>
 <p>oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the <code>.oxoflow</code> file (<code>threads</code>, <code>memory</code>, <code>gpu</code>, <code>time_limit</code>) are mapped to the appropriate scheduler directives. The <code>disk</code> field is <strong>not</strong> mapped to any scheduler directive — it only produces a local warning during <code>oxo-flow run</code>.</p>
@@ -4322,6 +4352,21 @@
 <td><strong>LSF</strong></td>
 <td>Supported</td>
 <td><code>#BSUB</code></td>
+</tr>
+<tr>
+<td><strong>Kubernetes</strong></td>
+<td>Supported (spec generation)</td>
+<td><code>k8s Job</code></td>
+</tr>
+<tr>
+<td><strong>AWS Batch</strong></td>
+<td>Supported (spec generation)</td>
+<td><code>aws-batch</code></td>
+</tr>
+<tr>
+<td><strong>GCP Batch</strong></td>
+<td>Supported (spec generation)</td>
+<td><code>gcp-batch</code></td>
 </tr>
 </tbody>
 </table>
@@ -4498,10 +4543,10 @@ plans, so a script maps back to a planned rule by name. The <code>sh -c '…' sh
 <a href="#environment-wrapping">Environment Wrapping</a>, and <code>singularity</code> is
 substituted when <code>apptainer</code> is absent.</p>
 <p>Note the workdir pinning at the top of each script (<code>--chdir</code> / <code>cd</code> /
-<code>-wd</code>): without it SLURM starts a job in the submission directory, PBS in
-<code>$HOME</code>, and SGE in a queue-configured directory, so a rule's relative
-output paths would silently land outside the run directory. The examples
-below show the pin for each backend.</p>
+<code>-wd</code> / <code>-cwd</code>): without it SLURM starts a job in the submission
+directory, PBS in <code>$HOME</code>, and SGE in a queue-configured directory, so a
+rule's relative output paths would silently land outside the run
+directory. The examples below show the pin for each backend.</p>
 <hr />
 <h2 id="pbs-example">PBS Example<a class="headerlink" href="#pbs-example" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="ch">#!/bin/bash</span>
@@ -4535,28 +4580,33 @@ below show the pin for each backend.</p>
 <hr />
 <h2 id="lsf-example">LSF Example<a class="headerlink" href="#lsf-example" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#BSUB -J align_batch_S1</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#BSUB -n 16</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1">#BSUB -M 33554432</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">#BSUB -W 24:00</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">#BSUB -o logs/align_batch_S1.out</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1">#BSUB -e logs/align_batch_S1.err</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#BSUB -cwd /abs/path/to/workdir</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#BSUB -J align_batch_S1</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#BSUB -n 16</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">#BSUB -M 33554432</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">#BSUB -W 24:00</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1">#BSUB -o logs/align_batch_S1.out</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1">#BSUB -e logs/align_batch_S1.err</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
 </span></code></pre></div>
-<p>The memory figure is explicit KB (<code>"32G"</code> = 32768 MB × 1024) because LSF's
-own default unit is KB; <code>span[hosts=1]</code> rides in the <code>-R</code> string so a
-multi-thread rule stays on one host. <code>-W 24:00</code> is the parsed form of the
-rule's <code>time_limit = "24h"</code> — LSF takes <code>[HH:]MM</code>. The workdir pin other
-backends need is implicit here: an LSF job starts in the directory the
-script was submitted from.</p>
+<p>The memory figure is explicit KB, and <code>span[hosts=1]</code> rides in the <code>-R</code>
+string — why both are emitted that way is explained once in the
+<a href="../../commands/cluster/#lsf-script">cluster command's LSF script section</a>.
+<code>-W 24:00</code> is the parsed form of the
+rule's <code>time_limit = "24h"</code> — LSF takes <code>[HH:]MM</code>. The workdir pin is
+explicit here too: the generated script carries <code>#BSUB -cwd</code>, the same
+pinned-directory directive the other backends get.</p>
 <hr />
 <h2 id="environment-wrapping">Environment Wrapping<a class="headerlink" href="#environment-wrapping" title="Permanent link">#</a></h2>
-<p>When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:</p>
+<p>When generating cluster scripts, oxo-flow automatically wraps commands
+through the environment resolver (rules without an environment run the
+command directly). This table is the single source for the per-backend
+wrapping forms — other pages link here instead of restating them:</p>
 <table>
 <thead>
 <tr>
@@ -4778,48 +4828,19 @@ settling finished jobs from the scheduler's accounting store:</p>
 SLURM site you never type <code>-b</code>; on a PBS site set the environment variable
 once (<code>export OXO_FLOW_CLUSTER_BACKEND=pbs</code>). An explicit-but-typoed value
 is still rejected outright (<code>unknown cluster backend '…' — expected slurm,
-pbs, sge, or lsf</code>) — the default never swallows a bad name.</p>
+pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch</code>) — the default
+never swallows a bad name.</p>
 <hr />
 <h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>
 <p><code>run --profile</code> submits and tracks jobs through the backend driver, whose
-built-in defaults are:</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Default</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>max_submitted</code></td>
-<td><code>50</code></td>
-<td>Jobs in flight at once (pending + running); submissions top up to this cap as slots free</td>
-</tr>
-<tr>
-<td><code>max_array_size</code></td>
-<td><code>1001</code></td>
-<td>The scheduler's array limit; larger scatter groups are chunked into several arrays</td>
-</tr>
-<tr>
-<td><code>poll_interval</code></td>
-<td><code>5s</code></td>
-<td>Delay between scheduler polls</td>
-</tr>
-</tbody>
-</table>
-<p>Override them in the profile's <code>[cluster]</code> block:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">[cluster]</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
-</span></code></pre></div>
+built-in defaults (<code>max_submitted</code> 50, <code>max_array_size</code> 1001,
+<code>poll_interval</code> 5s) are specified once in the
+<a href="../../reference/execution-backends/#backenddriver"><code>DriverConfig</code> table</a>;
+the profile's <code>[cluster]</code> block overrides those three knobs. The full
+annotated TOML example (every key, the driver default each omission falls
+back to, and where a rule's own <code>time_limit</code> wins) lives once in
+<a href="../../commands/run/#cluster-submission">Cluster submission</a> — that copy is
+authoritative.</p>
 <p><code>extra_args</code> entries are emitted as scheduler directives <strong>verbatim and
 unvalidated</strong> — a typo reaches the scheduler as written (the same applies to
 <code>cluster submit --extra-arg</code>). Cluster CLI actions resolve <code>--backend</code> as

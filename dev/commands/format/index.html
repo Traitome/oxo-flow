@@ -1686,6 +1686,8 @@
       
         
       
+        
+      
     
     
     
@@ -2118,10 +2120,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#format-and-print-to-stdout" class="md-nav__link">
+  <a href="#format-in-place" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Format and print to stdout
+        Format in place
       
     </span>
   </a>
@@ -2129,10 +2131,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#save-formatted-output-to-a-new-file" class="md-nav__link">
+  <a href="#save-formatted-output-to-a-new-file-input-untouched" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Save formatted output to a new file
+        Save formatted output to a new file (input untouched)
       
     </span>
   </a>
@@ -2201,6 +2203,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -3891,10 +3921,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#format-and-print-to-stdout" class="md-nav__link">
+  <a href="#format-in-place" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Format and print to stdout
+        Format in place
       
     </span>
   </a>
@@ -3902,10 +3932,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#save-formatted-output-to-a-new-file" class="md-nav__link">
+  <a href="#save-formatted-output-to-a-new-file-input-untouched" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Save formatted output to a new file
+        Save formatted output to a new file (input untouched)
       
     </span>
   </a>
@@ -3976,7 +4006,7 @@
 
 
 <h1 id="oxo-flow-format"><code>oxo-flow format</code><a class="headerlink" href="#oxo-flow-format" title="Permanent link">#</a></h1>
-<p>Reformat a <code>.oxoflow</code> file into canonical TOML form.</p>
+<p>Reformat a <code>.oxoflow</code> file into canonical TOML form (in place by default).</p>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow format [OPTIONS] &lt;WORKFLOW&gt;
@@ -4012,8 +4042,8 @@
 <tr>
 <td><code>--output</code></td>
 <td><code>-o</code></td>
-<td>stdout</td>
-<td>Write formatted output to a file</td>
+<td>in place</td>
+<td>Write formatted output to this path instead of rewriting the input file</td>
 </tr>
 <tr>
 <td><code>--check</code></td>
@@ -4046,10 +4076,10 @@
 </blockquote>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<h3 id="format-and-print-to-stdout">Format and print to stdout<a class="headerlink" href="#format-and-print-to-stdout" title="Permanent link">#</a></h3>
+<h3 id="format-in-place">Format in place<a class="headerlink" href="#format-in-place" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>format<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
-<h3 id="save-formatted-output-to-a-new-file">Save formatted output to a new file<a class="headerlink" href="#save-formatted-output-to-a-new-file" title="Permanent link">#</a></h3>
+<h3 id="save-formatted-output-to-a-new-file-input-untouched">Save formatted output to a new file (input untouched)<a class="headerlink" href="#save-formatted-output-to-a-new-file-input-untouched" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>format<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-o<span class="w"> </span>formatted.oxoflow
 </span></code></pre></div>
 <h3 id="check-formatting-in-ci">Check formatting in CI<a class="headerlink" href="#check-formatting-in-ci" title="Permanent link">#</a></h3>
@@ -4077,6 +4107,11 @@
 <li>Internal parse state is never emitted: declarative <code>[config]</code> entries
   (<code>key = { default = …, … }</code>) roundtrip as themselves, not as a
   <code>[config_meta]</code> section</li>
+<li>The always-derived fan-out keys <code>config.paired_pairs_list</code> /
+  <code>config.paired_pairs_count</code> (injected by the parser from <code>[[pairs]]</code>,
+  issue #881) are <strong>not</strong> emitted — they are re-derived at every parse, so
+  keeping them out is what makes <code>format</code> converge with <code>format --check</code>.
+  User-declared <code>samples_list</code> / <code>pairs_list</code> entries are preserved verbatim</li>
 <li>Using <code>--check</code> is recommended for CI/CD pipelines to enforce style consistency</li>
 <li>The file is re-serialized from the parsed configuration, so comments are not preserved</li>
 </ul>

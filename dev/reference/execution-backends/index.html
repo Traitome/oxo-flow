@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -3942,7 +3972,8 @@ checkpoint semantics.</p>
 </span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">        </span><span class="c1">// `{base}_{index}` ids (true); PBS/SGE/LSF list only the base id</span>
 </span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>The first implementation, <code>ClusterExecutor</code> (SLURM/PBS/SGE/LSF), renders
+<p>The first implementation, <code>ClusterExecutor</code> (SLURM/PBS/SGE/LSF, extended
+by k8s and the AWS/GCP Batch backends), renders
 scripts with the existing directive generator (<code>core/cluster.rs</code>, unchanged)
 and performs real submission and tracking:</p>
 <ul>
@@ -3976,7 +4007,9 @@ dry-run preview uses). The driver:</p>
   dynamically discovered instances execute in the same run (see
   <a href="#checkpoint-re-entry">Checkpoint re-entry</a> below).</li>
 </ul>
-<p><code>DriverConfig</code> supplies the knobs, with these defaults:</p>
+<p><code>DriverConfig</code> supplies the knobs, with these defaults (this table is the
+single source for driver defaults — other pages link here instead of
+restating it):</p>
 <table>
 <thead>
 <tr>
@@ -4043,15 +4076,17 @@ run's <code>force_rules</code> — the same bypass set the local executor receiv
 <code>run</code> has already applied and persisted its invalidation analysis by the time
 the cluster path runs. <code>tests/cluster_run_profile.rs</code> pins that combination to
 what the local executor actually executes from identical state.</p>
-<p>Real-scheduler validation: SLURM is live-verified end-to-end (including
-GPU). SGE (Son of Grid Engine 8.1.9) and OpenPBS 23.06 are verified on
-containerized real schedulers — master + 2 exec hosts built from source —
-with the chain and array matrices passing 6/6 and 20/20 per backend
-(issue #356). The harness, workflows, and runners live in
-<code>scripts/real-cluster-matrix/</code>. LSF cannot be stood up the same way (the
-community edition is IBMid-gated); its directive and status semantics are
-cross-checked against IBM's bsub reference and the jokergoo/bsub client.
-Re-attach to in-flight jobs is a follow-up.</p>
+<p>Historical scheduler evidence includes containerized SLURM, SGE (Son of
+Grid Engine 8.1.9), and OpenPBS 23.06 runs from the harness in
+<code>scripts/real-cluster-matrix/</code>. Those artifacts demonstrate that parts of
+the adapter paths executed; they are not a current commit-bound campaign,
+a designated-host qualification, or proof of production behavior. LSF
+cannot be stood up the same way (the community edition is IBMid-gated);
+its directive and status semantics are cross-checked against IBM's bsub
+reference and the jokergoo/bsub client. Re-attach to in-flight jobs,
+cancellation reconciliation, per-element accounting, and crash recovery
+remain evidence gaps. See the audit ledger before describing any backend
+as production-ready.</p>
 <p>Accounting is read once per job as it settles, not once per poll, and feeds
 both the run directory and the checkpoint benchmarks — see
 <a href="../../commands/run/#what-a-finished-job-records">what a finished job records</a>.
@@ -4071,9 +4106,11 @@ reports state alone.</p>
 <p>See <a href="../workflow-format/#checkpoint-re-entry">Workflow Format</a> for the config
 surface. A <code>checkpoint = true</code> rule writes a re-entry manifest at runtime;
 when it completes, the engine merges the new values, re-expands the rule
-templates, and executes the new instances in the same run — on the local
-path (<code>run</code>) and on the driver path alike. Every round is still a static
-plan, so previews stay deterministic and resumes reconstruct the same plan.</p>
+templates, and executes the new instances in the same run. This works on the
+local path (<code>oxo-flow run</code>); cluster submissions reject <code>checkpoint = true</code>
+rules at plan time instead of silently skipping the dynamically discovered
+instances. Every round is still a static plan, so previews stay deterministic
+and resumes reconstruct the same plan.</p>
 
 
 

@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4187,9 +4217,12 @@ closing the DNS-rebinding window between screening and connecting
 (allowlisted hosts and IP literals skip DNS and need no pin). Redirect
 hops are re-screened the same way — a hop that lands in internal space is
 refused, and an approved hop connects to its own vetted address.</p>
-<p>This preserves the trust boundary: the AI never executes autonomously,
-and attacker-influenced skill manifests cannot aim it at internal
-services.</p>
+<p>These controls narrow the attack surface but are not a complete trust
+boundary. A generic <code>OXO_FLOW_MCP_TOKEN</code> is sent to every activated MCP
+endpoint unless a per-server token overrides it, and automatically approved
+project reads combined with outbound fetches can create a data-exfiltration
+path. Activate only reviewed skills and MCP servers, prefer per-server tokens,
+and treat this subsystem as prototype-grade until the audit gates close.</p>
 <h3 id="protocol-version-and-authentication">Protocol Version and Authentication<a class="headerlink" href="#protocol-version-and-authentication" title="Permanent link">#</a></h3>
 <p>On connect the client proposes the newest MCP protocol version it speaks
 (<code>2025-06-18</code>) at <code>initialize</code> and uses whatever version the server
@@ -4202,12 +4235,15 @@ request.</p>
 environment — never from a skill manifest, which is attacker-influenced
 text (#518):</p>
 <ul>
-<li><code>OXO_FLOW_MCP_TOKEN</code> — generic token sent to every MCP server</li>
+<li><code>OXO_FLOW_MCP_TOKEN</code> — generic token sent to every MCP server unless a
+  per-server override is present</li>
 <li><code>OXO_FLOW_MCP_TOKEN_&lt;SERVER&gt;</code> — per-server token (server name
   uppercased, non-alphanumeric characters folded to <code>_</code>; e.g. server
   <code>fs-gdrive</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE</code>)</li>
 </ul>
-<p>The per-server variable wins when both are set. The <code>&lt;SERVER&gt;</code> name is
+<p>The per-server variable wins when both are set. Do not use the generic token
+with a skill catalog that can select an operator-unreviewed endpoint. The
+<code>&lt;SERVER&gt;</code> name is
 folded from the endpoint URL's host, port and path (everything after the
 scheme — <code>mcp://fs-gdrive:9000/v1</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1</code>),
 so two servers sharing a host on different paths get distinct variables.

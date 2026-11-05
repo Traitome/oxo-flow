@@ -1945,6 +1945,8 @@
       
         
       
+        
+      
     
     
     
@@ -2308,6 +2310,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4240,7 +4270,7 @@ and community submissions.</p>
 </tr>
 <tr>
 <td><strong>AI Companion &amp; Scientist Team</strong></td>
-<td>Natural language pipeline generation, intelligent refinement, 30+ domain diagnostic patterns, automated recovery, and multi-agent review profile</td>
+<td>Natural language pipeline generation, intelligent refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile</td>
 </tr>
 <tr>
 <td><strong>Disk-pressure &amp; scratch safety</strong></td>
@@ -4272,7 +4302,7 @@ and community submissions.</p>
 </tr>
 <tr>
 <td><strong>Cluster backends</strong></td>
-<td>Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling</td>
+<td>Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling</td>
 </tr>
 <tr>
 <td><strong>Wildcard expansion</strong></td>
@@ -4287,15 +4317,15 @@ and community submissions.</p>
 <li><strong>DAG as pure declarative data, not imperative code</strong> — <code>.oxoflow</code> TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.</li>
 <li><strong>Cryptographic determinism over file timestamps</strong> — Exact reproducibility through SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old <code>mtime</code> heuristics as the source of truth.</li>
 <li><strong>Physical resource boundaries as first-class constraints</strong> — Built-in multi-stage runtime disk-pressure protection and scratch volume isolation (<code>tmp_dir</code>) prevent catastrophic out-of-disk failures on long-running pipelines.</li>
-<li><strong>Hermetic environment isolation</strong> — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) guarantee tool versions never collide.</li>
-<li><strong>Rust-native compiled performance &amp; safety</strong> — Compiled native binary with no external runtime dependencies, <code>#![forbid(unsafe_code)]</code>, and sub-second startup with zero JVM or Python overhead.</li>
+<li><strong>Environment isolation</strong> — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) reduce tool-version conflicts; this is not a complete host or tenant boundary.</li>
+<li><strong>Rust-native compiled performance &amp; safety</strong> — Compiled native binary with no embedded Python or JVM runtime, <code>#![forbid(unsafe_code)]</code>, and fast startup; bioinformatics tools, containers, and environment managers remain explicit external dependencies.</li>
 <li><strong>AI as an architectural citizen</strong> — Grounded on deterministic engine APIs with structured <code>{code, message, detail, suggestion}</code> error contracts, unified validation feedback loops, and 30+ domain diagnostic patterns.</li>
 </ol>
 <hr />
 <h2 id="who-is-this-for">Who Is This For?<a class="headerlink" href="#who-is-this-for" title="Permanent link">#</a></h2>
-<p><strong>Bioinformaticians</strong> who build and maintain analysis pipelines — oxo-flow gives you a faster, type-safe workflow engine with clear error messages, reproducibility guarantees, and no external runtime dependency.</p>
+<p><strong>Bioinformaticians</strong> who build and maintain analysis pipelines — oxo-flow gives you a fast workflow engine with clear error messages, explicit reproducibility controls, and no external runtime dependency.</p>
 <p><strong>Research laboratories and core facilities</strong> running genomics workflows — the reporting system produces structured, auditable reports (engine version, workflow checksum, checkpoint provenance), and container packaging ensures reproducibility across environments.</p>
-<p><strong>Researchers</strong> who need reproducible science — every workflow execution is deterministic, and environments are locked per rule so results are the same on any machine.</p>
+<p><strong>Researchers</strong> who need reproducible science — the engine records execution evidence and supports pinned environments, but identical biological results still require controlled inputs, references, software, commands, hardware, and external services.</p>
 <p><strong>Core facility staff</strong> managing multi-sample, multi-assay workloads — the DAG engine and cluster backends handle parallelism and resource scheduling automatically.</p>
 <hr />
 <h2 id="how-to-use-this-guide">How to Use This Guide<a class="headerlink" href="#how-to-use-this-guide" title="Permanent link">#</a></h2>
@@ -4339,7 +4369,7 @@ and community submissions.</p>
 <li><a href="how-to/generate-reports/">Generate Reports</a></li>
 </ul>
 <h3 id="if-you-need-exact-syntax-and-options">If you need exact syntax and options<a class="headerlink" href="#if-you-need-exact-syntax-and-options" title="Permanent link">#</a></h3>
-<p>See the <strong>Command Reference</strong> for all 31 CLI subcommands with usage, options, and examples, or the <a href="reference/vscode-extension/">VS Code Extension</a> reference for the first-party editor integration.</p>
+<p>See the <strong>Command Reference</strong> for all 33 CLI subcommands with usage, options, and examples, or the <a href="reference/vscode-extension/">VS Code Extension</a> reference for the first-party editor integration.</p>
 <h3 id="if-you-want-the-full-technical-details">If you want the full technical details<a class="headerlink" href="#if-you-want-the-full-technical-details" title="Permanent link">#</a></h3>
 <p>See <strong>Architecture &amp; Design</strong> for in-depth documentation of the DAG engine, environment system, <code>.oxoflow</code> format specification, and web API.</p>
 <hr />
@@ -4426,7 +4456,7 @@ mixing it with run logs.</p>
 <p>Jia Ding, Yun Peng, Ruochen Wei, Boquan Wang, Jian-Guo Zhou, <strong>Shixiang Wang</strong>, <em>BLIT: an R package for seamless integration of command-line bioinformatics tool universe</em>, Bioinformatics Advances, Volume 6, Issue 1, 2026, vbag088, <a href="https://doi.org/10.1093/bioadv/vbag088">https://doi.org/10.1093/bioadv/vbag088</a></p>
 </blockquote>
 <h2 id="join-the-community">Join the Community<a class="headerlink" href="#join-the-community" title="Permanent link">#</a></h2>
-<p>oxo-flow is a <strong>community-driven, open-source project</strong> licensed under Apache 2.0. Bug reports, feature requests, and contributions are welcome.</p>
+<p>The core, AI, CLI, and desktop components are Apache-2.0 licensed; the web crate uses a separate Academic/Commercial license. Bug reports, feature requests, and contributions are welcome. See the repository licensing table for the authoritative per-crate terms.</p>
 <table>
 <thead>
 <tr>

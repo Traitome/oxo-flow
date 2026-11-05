@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4510,7 +4540,8 @@ code <code>NO_REDO</code>.</p>
 <h2 id="important-notes">Important Notes<a class="headerlink" href="#important-notes" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>File-based edges are immutable via the edit API.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules, which the edit API cannot currently modify.</li>
-<li><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are
+<li>
+<p><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are
 returned in <code>validation_errors</code> with <code>success: false</code>, and the edit is rolled
 back atomically — <code>toml_content</code> echoes the caller's unchanged input and the
 undo/redo history is untouched. Edits that break parsing — invalid TOML syntax, unknown fields, or
@@ -4519,8 +4550,11 @@ duplicate rule names — are rejected with HTTP <code>400</code> instead. Cycle 
 builds the DAG with parsed config values on every edit, so a cycle introduced
 via <code>depends_on</code> edits surfaces immediately as <code>success: false</code> with the
 <code>DAG error:</code> (E006) message in <code>validation_errors</code> (the edit is rolled back
-atomically). See <a href="../dag-engine/">DAG Engine</a>.</li>
-<li><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</li>
+atomically). See <a href="../dag-engine/">DAG Engine</a>.</p>
+</li>
+<li>
+<p><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</p>
+</li>
 <li><strong>Undo/redo is in-memory.</strong> Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.</li>
 </ul>
 <hr />

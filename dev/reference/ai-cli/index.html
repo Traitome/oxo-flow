@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4818,10 +4848,11 @@ pipeline, and for experienced users evaluating one. Three layers:</p>
 execute), <strong>explain shows the principle</strong> (why each step exists). Every fact
 in the explanation is computed deterministically from the workflow definition
 plus the embedded knowledge bases (tool table, bioSkills, pipeline graph,
-scientific preflight) — the model only writes prose over those verified
-facts, so it cannot invent parameters, versions, or caveats. The deterministic
-findings are always printed separately (stderr, or the <code>review</code> array in
-<code>--json</code>), so nothing critical is silently dropped even if the model omits it.</p>
+scientific preflight). Model prose is advisory and can omit or misstate a
+detail; the deterministic skeleton and findings are authoritative. The
+deterministic findings are always printed separately (stderr, or the <code>review</code>
+array in <code>--json</code>), so consumers must not treat model prose as the evidence
+surface.</p>
 <p><code>--json</code> emits the deterministic skeleton (rule metadata, I/O, resources,
 matched knowledge, findings) with model-written prose in dedicated fields —
 safe for documentation generators. <code>--level</code> defaults to <code>beginner</code> because
@@ -4867,12 +4898,17 @@ explicit disable:</p>
 </span></code></pre></div>
 <hr />
 <h2 id="provider-failure-handling">Provider failure handling<a class="headerlink" href="#provider-failure-handling" title="Permanent link">#</a></h2>
-<p>The provider layer treats model failures explicitly — nothing is silently dropped:</p>
+<p>The provider layer classifies common model failures; tool-argument handling
+is fail-closed end to end:</p>
 <ul>
-<li><strong>Broken tool-call arguments are repaired</strong>: if a model (e.g. DeepSeek under
-  load) truncates a tool call's arguments JSON, it is repaired to <code>{}</code> and the
-  call still executes; structurally broken calls (missing id/name) raise a
-  <code>ToolError</code> instead of being ignored.</li>
+<li><strong>Malformed tool-call arguments fail closed</strong>: if a model truncates or
+  mangles a tool call's arguments JSON, the parser passes the payload
+  through raw and the orchestrator rejects the call before any tool runs —
+  the model receives a tool-result message carrying the parse error and a
+  re-emit instruction. Arguments are never "repaired" to <code>{}</code> behind the
+  caller's back. Wire-format echoes (Anthropic <code>tool_use.input</code>, Ollama
+  <code>arguments</code>) keep a protocol-valid object fallback, but such a call can no
+  longer execute.</li>
 <li><strong>Context overflows are classified and recovered</strong>: HTTP 400/413 responses
   with context-window markers map to <code>ContextOverflow</code>; the transcript is
   compressed (system + recent turns kept, middle turns replaced by a marker)
@@ -4906,10 +4942,16 @@ explicit disable:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">[ai]</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">    </span><span class="c1"># "ask" | "always" | "never"</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">    </span><span class="c1"># parsed but not enforced by the current recovery path</span>
 </span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
 </span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># "compact" | "full"</span>
 </span></code></pre></div>
+<blockquote>
+<p><strong>Current safety limitation</strong>: <code>auto_fix</code> is parsed but has no runtime consumer in the repair
+path. Workflow-level provider/model selection is also not guaranteed to reconfigure the CLI
+runtime. Do not treat either setting as an authorization or data-governance control until the
+audit gates for AI remediation are closed.</p>
+</blockquote>
 <h3 id="generation-team-profiles">Generation team profiles<a class="headerlink" href="#generation-team-profiles" title="Permanent link">#</a></h3>
 <p><code>template --ai</code> runs one generation agent with the engine-gate correction
 loop (the <strong>compact</strong> profile, default). The <strong>full</strong> profile adds three
@@ -4964,8 +5006,8 @@ repository.</p>
 <tbody>
 <tr>
 <td><code>OXO_FLOW_AI_PROVIDER</code></td>
-<td>Provider: <code>deepseek</code>, <code>claude</code>, <code>openai</code>, <code>ollama</code></td>
-<td><code>disabled</code></td>
+<td>Provider: <code>deepseek</code>, <code>claude</code>, <code>openai</code>, <code>ollama</code>, or <code>disabled</code></td>
+<td>unset: auto-detect from credentials; <code>disabled</code> only when none resolve</td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_API_KEY</code></td>
@@ -4986,6 +5028,11 @@ repository.</p>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
 <td>Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced</td>
 <td><code>16384</code></td>
+</tr>
+<tr>
+<td><code>OXO_FLOW_AI_CONTEXT_TOKENS</code></td>
+<td>Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. <code>131072</code>). The Claude backend clamps <code>max_tokens</code> per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side)</td>
+<td>unset</td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
@@ -5057,13 +5104,19 @@ repository.</p>
 <p><strong>Zero-config auto-detection</strong>: when <code>OXO_FLOW_AI_PROVIDER</code> is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — <code>ANTHROPIC_AUTH_TOKEN</code> / <code>ANTHROPIC_API_KEY</code> / <code>CLAUDE_API_KEY</code> → claude, <code>OPENAI_API_KEY</code> → openai, <code>DEEPSEEK_API_KEY</code> → deepseek, <code>OLLAMA_HOST</code> → ollama. Gateway setups that only export <code>ANTHROPIC_AUTH_TOKEN</code> + <code>ANTHROPIC_BASE_URL</code> + <code>ANTHROPIC_MODEL</code> therefore work without any oxo-flow-specific configuration. An explicit <code>OXO_FLOW_AI_PROVIDER</code> (including <code>disabled</code>) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests, and a whitespace-only credential value counts as absent.</p>
 <hr />
 <h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">#</a></h2>
-<p>The AI agent combines five embedded knowledge sources (all compiled into the binary at build time):</p>
+<p>The AI agent combines several embedded knowledge sources, all compiled into
+the binary at build time. Exact current record counts are exposed by
+<code>oxo-flow ai</code> and by <code>knowledge_meta.json</code>; do not hard-code a catalog count
+in a manuscript or release claim.</p>
 <ol>
-<li><strong>Tool Reference Table</strong>: 40 curated bioinformatics tools with resource allocations (threads, memory)</li>
-<li><strong>Bioconda Tool Database</strong>: 6,525 curated CLI tools with current versions and descriptions (<code>knowledge_meta.json</code>: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via <code>lookup_tool</code></li>
-<li><strong>bioSkills Library</strong>: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via <code>lookup_skill</code></li>
-<li><strong>Pipeline Knowledge Graph</strong>: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
-<li><strong>Skill Protocol Docs</strong>: the full SKILL.md document for every documented pipeline-graph skill (77 of 78 nodes; the <code>shared</code> pseudo-node has none) — fetched one at a time via <code>lookup_doc</code> by skill id, display name, or unique substring; each doc carries Required Tools, the canonical Workflow, and caveats</li>
+<li><strong>Tool reference data</strong> with resource guidance for common bioinformatics tools.</li>
+<li><strong>Bioconda tool records</strong> with versions and descriptions, queried on demand
+   through <code>lookup_tool</code>.</li>
+<li><strong>bioSkills records</strong> with domain procedures, commands, and caveats,
+   matched by assay type or queried through <code>lookup_skill</code>.</li>
+<li><strong>Pipeline graph transitions</strong> queried through <code>lookup_pipeline</code> for
+   multi-step topology design.</li>
+<li><strong>Skill protocol documents</strong> fetched one at a time through <code>lookup_doc</code>.</li>
 </ol>
 <p>Token efficiency: embedded data is <strong>never added to the LLM context wholesale</strong>. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed. The one deliberate exception is <code>lookup_doc</code>, whose full-protocol response is larger by design (roughly 2-5K tokens per fetched doc) and is still strictly on demand — one skill at a time.</p>
 <p>The agent:</p>
@@ -5342,13 +5395,18 @@ unchanged.</p>
 <ol>
 <li>Rule fails → capture error signature</li>
 <li>AI matches against known error patterns (OOM, segfault, missing files, etc.)</li>
-<li>AI proposes root cause + specific fix</li>
-<li>If safe to auto-apply: original archived, fix applied</li>
-<li>Run can be retried with corrected workflow</li>
+<li>AI proposes a root cause and bounded patch</li>
+<li>Current behavior may display or apply a proposal, but <code>auto_fix</code> is not yet
+   an enforced authorization control and a partial replacement block can
+   overwrite a complete workflow</li>
+<li>A repair is not described as fixed until the complete workflow validates,
+   the applied diff is reviewed, and a rerun verifies its outputs</li>
 </ol>
+<p>See the CLI/AI blockers in
+<code>docs/superpowers/audits/industrial-scientific-audit-ledger.md</code>.</p>
 <hr />
 <h2 id="embedded-knowledge-freshness">Embedded Knowledge Freshness<a class="headerlink" href="#embedded-knowledge-freshness" title="Permanent link">#</a></h2>
-<p>The four knowledge sources are compiled into the binary at build time, so
+<p>The knowledge sources are compiled into the binary at build time, so
 they only change when the binary is rebuilt. Every data file is documented
 by <code>crates/oxo-flow-ai/src/knowledge/knowledge_meta.json</code> — a plain JSON
 document listing each source's record count, generation timestamp, and
@@ -5424,37 +5482,37 @@ workflow, merge its PR, and re-dispatch the release.</p>
 <tr>
 <td>Phase 1</td>
 <td>AI template generation</td>
-<td>✅ Complete</td>
+<td>Implemented but unproven</td>
 </tr>
 <tr>
 <td>Phase 2</td>
 <td>AI dry-run + validate analysis</td>
-<td>✅ Complete</td>
+<td>Implemented but unproven</td>
 </tr>
 <tr>
 <td>Phase 3</td>
 <td>AI error recovery (<code>--ai-recover</code>)</td>
-<td>✅ Complete</td>
+<td>Prototype / blocked by partial-file replacement and unverified rerun</td>
 </tr>
 <tr>
 <td>Phase 4</td>
 <td>Scope-level AI config, AI plugin types (trait surface only — no loader, see <code>oxo_flow_ai::plugin</code>)</td>
-<td>✅ Complete</td>
+<td>Prototype / workflow-scoped policy is not fully enforced</td>
 </tr>
 <tr>
 <td>Phase 5</td>
 <td>MCP/Skill ecosystem</td>
-<td>✅ Complete</td>
+<td>Prototype / security trust-boundary work remains</td>
 </tr>
 <tr>
 <td>Phase 6</td>
 <td>Workflow explanation (<code>ai explain</code>)</td>
-<td>✅ Complete</td>
+<td>Implemented but unproven</td>
 </tr>
 <tr>
 <td>Phase 7</td>
-<td>Provider failure handling (tool-call repair, overflow recovery, bounded results)</td>
-<td>✅ Complete</td>
+<td>Provider failure handling</td>
+<td>Implemented but unproven; malformed tool arguments are fail-closed (AI-07)</td>
 </tr>
 </tbody>
 </table>

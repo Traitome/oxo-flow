@@ -1684,6 +1684,8 @@
       
         
       
+        
+      
     
     
     
@@ -2047,6 +2049,34 @@
     
   
     graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
   
 
     
@@ -4192,15 +4222,26 @@ title bar.</p>
 <td><code>oxo-flow schema &gt; oxo-flow-schema.json</code></td>
 </tr>
 <tr>
+<td>Open Documentation</td>
+<td>opens the guide in the system browser</td>
+</tr>
+<tr>
+<td>Open Settings</td>
+<td>jumps to <code>oxo-flow.executablePath</code> in VS Code settings</td>
+</tr>
+<tr>
 <td>Report Issue / Suggest Improvement</td>
 <td>opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached)</td>
 </tr>
 </tbody>
 </table>
-<p>Pipeline commands surface in the command palette only while an <code>.oxoflow</code>
-editor is active, so the palette stays quiet in other files. Long-running
-operations (validate, lint, clean preview, status, AI status) show a progress
-notification. Error toasts carry a <strong>Report Issue</strong> button that opens the
+<p>The core pipeline commands (Run, Run At Target…, Dry Run, Validate, Lint,
+Format Document, View DAG) surface in the command palette only while an
+<code>.oxoflow</code> editor is active, so the palette stays quiet in other files; the
+remaining commands (Resume, Generate with AI, Clean, Status, AI Status,
+Export Schema, Open Docs/Settings, Report Issue, command picker) are always
+available. Long-running operations (validate, lint, clean preview, status,
+AI status) show a progress notification. Error toasts carry a <strong>Report Issue</strong> button that opens the
 report with the error pre-attached.</p>
 <p>Run / Dry Run / Graph execute as <strong>tasks</strong> (<code>type: "oxo-flow"</code>), so they get
 a dedicated terminal panel, re-run support, and <code>tasks.json</code> customization:</p>
@@ -4258,6 +4299,11 @@ the description.</p>
 <td><code>oxo-flow.autoOpenGraph</code></td>
 <td><code>false</code></td>
 <td>Open the DAG graph after a successful run (last picked format, default ASCII)</td>
+</tr>
+<tr>
+<td><code>oxo-flow.ai.backend</code></td>
+<td><code>auto</code></td>
+<td>Backend for <strong>Generate Pipeline with AI</strong>: <code>auto</code> uses the CLI provider when configured, else the editor language model; <code>cli</code> / <code>ide</code> force one path (the <code>ide</code> path always grounds drafts through <code>oxo-flow validate</code> with one repair round)</td>
 </tr>
 <tr>
 <td><code>oxo-flow.trace</code></td>
