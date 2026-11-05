@@ -16,10 +16,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 /// [`crate::wildcard::expand_values_namespace`].
 pub(crate) static VALUES_NS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{values\.(\w+)\}").expect("valid values-namespace regex"));
@@ -389,6 +385,11 @@ pub struct Defaults {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_limit: Option<String>,
+
+    /// Default remote input staging mode ("eager", "stream_fifo" / "stream", "passthrough").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
 }
 
 /// Prepend a shell prelude to a command on its own line (issue #92).
@@ -852,6 +853,31 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protected_data_trees: Option<Vec<String>>,
+
+    /// Global remote input staging mode ("eager", "stream_fifo" / "stream", "passthrough").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
+
+    /// Whether NUMA-aware node allocation and affinity wrapping are enabled.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numa_aware: Option<bool>,
+
+    /// Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. `/dev/shm`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier0_ram_scratch: Option<String>,
+
+    /// Tier 1 local fast scratch directory (local NVMe SSD, e.g. `/mnt/nvme/scratch`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier1_nvme_scratch: Option<String>,
+
+    /// Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier2_shared_scratch: Option<String>,
 }
 
 impl EngineConfig {
@@ -942,6 +968,65 @@ impl std::fmt::Display for ReferenceDatabase {
 ///
 /// Pairs can be gated with a `when` condition (the same expression
 /// language as rule `when`, evaluated against `config.*` and
+/// Shared loader for the three tabular sidecar files (`ExperimentControlPair`,
+/// `SampleGroup`, `SampleMetadata`): stat-first regular-file gate (issue #714,
+/// pattern from #695/#706 — a FIFO's metadata length is 0, so the size gate
+/// alone would pass and the read below would block forever), a 50 MB ceiling
+/// against accidental binary input, and the file read. One implementation so
+/// the gates can never drift apart again (they already did once).
+fn read_tabular_file(path: &Path, label: &str) -> Result<String> {
+    let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
+        path: path.to_path_buf(),
+        message: format!("failed to read metadata for {} file: {}", label, e),
+    })?;
+
+    if !metadata.is_file() {
+        return Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("{} file is not a regular file", label),
+        });
+    }
+
+    // 50MB limit to prevent OOM on accidental binary file input
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!(
+                "{} file is too large ({} bytes). Maximum allowed size is 50MB.",
+                label,
+                metadata.len()
+            ),
+        });
+    }
+
+    std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
+        path: path.to_path_buf(),
+        message: format!("failed to read {} file: {}", label, e),
+    })
+}
+
+/// Shared extension dispatch for the tabular sidecar loaders; the per-type
+/// error labels keep pointing at the file kind the user actually wrote.
+fn dispatch_tabular_format<T>(
+    path: &Path,
+    content: &str,
+    label: &str,
+    json: fn(&str, &Path) -> Result<Vec<T>>,
+    csv: fn(&str, &Path) -> Result<Vec<T>>,
+    tsv: fn(&str, &Path) -> Result<Vec<T>>,
+) -> Result<Vec<T>> {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match extension {
+        "json" => json(content, path),
+        "csv" => csv(content, path),
+        "tsv" | "txt" | "" => tsv(content, path),
+        _ => Err(OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("unsupported {} file format: {}", label, extension),
+        }),
+    }
+}
+
 /// `file_exists(...)`): a pair whose condition is false is excluded from
 /// wildcard fan-out — it declares no rule instances. This lets one static
 /// `[[pairs]]` table serve profile-switched sample sets:
@@ -1022,48 +1107,15 @@ impl ExperimentControlPair {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for pairs file: {}", e),
-        })?;
-
-        // Stat-first regular-file gate (issue #714, pattern from #695/#706):
-        // a FIFO's metadata length is 0, so the size gate alone would pass and
-        // the open below would block forever.
-        if !metadata.is_file() {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: "pairs file is not a regular file".to_string(),
-            });
-        }
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "pairs file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read pairs file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported pairs file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "pairs")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "pairs",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     /// Discover pairs from a wildcard pattern by scanning the filesystem.
@@ -1458,38 +1510,15 @@ impl SampleGroup {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for sample_groups file: {}", e),
-        })?;
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "sample_groups file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read sample_groups file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported sample_groups file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "sample_groups")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "sample_groups",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
@@ -1658,38 +1687,15 @@ impl SampleMetadata {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata for metadata_file: {}", e),
-        })?;
-
-        // 50MB limit to prevent OOM on accidental binary file input
-        if metadata.len() > 50 * 1024 * 1024 {
-            return Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!(
-                    "metadata file is too large ({} bytes). Maximum allowed size is 50MB.",
-                    metadata.len()
-                ),
-            });
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: format!("failed to read metadata_file: {}", e),
-        })?;
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        match extension {
-            "json" => Self::parse_json(&content, path),
-            "csv" => Self::parse_csv(&content, path),
-            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
-            _ => Err(OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: format!("unsupported metadata file format: {}", extension),
-            }),
-        }
+        let content = read_tabular_file(path, "metadata")?;
+        dispatch_tabular_format(
+            path,
+            &content,
+            "metadata",
+            Self::parse_json,
+            Self::parse_csv,
+            Self::parse_tsv,
+        )
     }
 
     fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
@@ -1916,6 +1922,11 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<EngineConfig>,
+
+    /// Named biological type specifications (`[types.<name>]`).
+    #[serde(default, rename = "types")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub types: BTreeMap<String, crate::types::BioTypeSpec>,
 
     /// Shared resource groups for limiting concurrent access to APIs or databases.
     #[serde(default, rename = "resource_groups")]
@@ -2200,15 +2211,6 @@ impl<S> WorkflowState<S> {
 pub fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
     // Stringify every value once, then expand to a fixed point so nested
     // `{config.x}` references resolve regardless of map iteration order.
-    let stringified: HashMap<String, String> = config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect();
+    let stringified = crate::config_impact::config_placeholder_map(config);
     crate::executor::expand_to_fixed_point(path, &stringified, |value| value.to_owned())
 }

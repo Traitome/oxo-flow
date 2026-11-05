@@ -345,6 +345,16 @@ pub struct Resources {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub groups: HashMap<String, u32>,
+
+    /// Whether to pin execution to a specific NUMA node.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub numa_pin: bool,
+
+    /// Explicit NUMA node ID to bind to (e.g., 0, 1).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numa_node: Option<u32>,
 }
 
 fn default_threads() -> u32 {
@@ -391,6 +401,8 @@ impl Default for Resources {
             time_limit: None,
             partition: None,
             groups: HashMap::new(),
+            numa_pin: false,
+            numa_node: None,
         }
     }
 }
@@ -608,6 +620,18 @@ impl EnvironmentSpec {
         } else {
             None
         }
+    }
+
+    /// True when a conda/mamba spec looks like a repository file (has a
+    /// directory component or a YAML extension) rather than a bare env name
+    /// or an inline package list.
+    ///
+    /// Single source for the deep-check (D002) and `versions.yml` static
+    /// classifiers: both must draw the same line or a spec can be reported
+    /// as "file-backed" by one surface and "bare env name" by the other.
+    #[must_use]
+    pub fn spec_is_file_backed(spec: &str) -> bool {
+        spec.contains('/') || spec.ends_with(".yaml") || spec.ends_with(".yml")
     }
 
     /// Convenience wrapper: the inline package list for THIS spec's `conda`
@@ -1479,6 +1503,13 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub pipe: bool,
 
+    /// Remote input staging mode: "eager" (default, download full object to scratch),
+    /// "stream" / "stream_fifo" (stream on demand via FIFO pipe), or "passthrough"
+    /// (leave raw remote URI untouched).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging_mode: Option<crate::storage::StagingMode>,
+
     /// Checksum algorithm for output integrity verification ("md5", "sha256").
     ///
     /// When set, output file checksums are computed after execution and stored
@@ -1521,6 +1552,11 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpreter: Option<String>,
+
+    /// Semantic biological type specifications for this rule's inputs and outputs.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<crate::types::RuleTypesSpec>,
 }
 
 impl Rule {
@@ -1533,6 +1569,17 @@ impl Rule {
     /// Returns the effective memory requirement.
     pub fn effective_memory(&self) -> Option<&str> {
         self.memory.as_deref().or(self.resources.memory.as_deref())
+    }
+
+    /// Returns the effective remote input staging mode.
+    pub fn effective_staging_mode(&self) -> crate::storage::StagingMode {
+        if let Some(mode) = self.staging_mode {
+            mode
+        } else if self.pipe {
+            crate::storage::StagingMode::StreamFifo
+        } else {
+            crate::storage::StagingMode::Eager
+        }
     }
 
     /// Validate the rule for internal consistency.
@@ -1800,6 +1847,13 @@ impl RuleBuilder {
         self
     }
 
+    /// Set biological type specifications.
+    #[must_use]
+    pub fn types(mut self, types: crate::types::RuleTypesSpec) -> Self {
+        self.rule.types = Some(types);
+        self
+    }
+
     /// Set the rule's report annotation (inline caption text).
     pub fn report(mut self, report: crate::rule::RuleReport) -> Self {
         self.rule.report = Some(report);
@@ -1908,6 +1962,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn pipe(mut self, pipe: bool) -> Self {
         self.rule.pipe = pipe;
+        self
+    }
+
+    /// Set remote input staging mode.
+    #[must_use]
+    pub fn staging_mode(mut self, mode: crate::storage::StagingMode) -> Self {
+        self.rule.staging_mode = Some(mode);
         self
     }
 

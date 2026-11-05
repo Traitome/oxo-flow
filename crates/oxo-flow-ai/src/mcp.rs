@@ -53,11 +53,6 @@ pub trait McpClient: Send + Sync {
 
     /// Human-readable server name for logging.
     fn server_name(&self) -> &str;
-
-    /// Whether the server is connected and responsive.
-    async fn ping(&self) -> Result<bool, AiError> {
-        Ok(true)
-    }
 }
 
 // ── MCP tool definition ────────────────────────────────────────────────────
@@ -66,6 +61,9 @@ pub trait McpClient: Send + Sync {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDef {
     pub name: String,
+    /// Optional per the MCP spec (only name/inputSchema are required); a
+    /// server that omits it must not take its whole tools/list down.
+    #[serde(default)]
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,
@@ -166,8 +164,21 @@ impl Tool for McpToolBridge {
 /// them; the request handling below is identical across all of them.
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 /// Versions this client can work with. The transport (JSON-RPC over POST,
-/// JSON or SSE bodies, `mcp-session-id`) is identical across them.
-const MCP_UNDERSTOOD_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// JSON or SSE bodies, `mcp-session-id`) is identical across them. The
+/// newest entry IS `MCP_PROTOCOL_VERSION` — one literal, one source of
+/// truth.
+const MCP_UNDERSTOOD_VERSIONS: &[&str] = &[MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
+
+/// Shared refusal text for the MCP SSRF screen: every blocked/failed
+/// endpoint names the reason AND points at the allowlist, so an operator
+/// sees the escape hatch without reading the source (#518).
+fn mcp_refused(base_url: &str, why: String) -> AiError {
+    AiError::Config {
+        message: format!(
+            "MCP endpoint '{base_url}' refused: {why} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
+        ),
+    }
+}
 
 /// Pure precedence core for the MCP bearer token (#948 P3-7d): the
 /// per-server token wins over the generic one — a credential pinned to
@@ -267,12 +278,12 @@ pub struct McpHttpClient {
 /// change between here and `rpc` cannot re-point the connection into
 /// internal space. Allowlisted hosts and IP literals skip DNS and need no
 /// pin (`None`).
-fn screen_mcp_endpoint(
-    base_url: &str,
-    allow: &[String],
-) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
-    use std::net::ToSocketAddrs;
+enum McpScreenTarget {
+    ExemptOrLiteral,
+    Resolve { host: String, port: u16 },
+}
 
+fn preflight_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<McpScreenTarget, AiError> {
     use crate::tools::builtin::{BLOCKED_HOST_SUFFIXES, ip_is_forbidden};
 
     let parsed = reqwest::Url::parse(base_url).map_err(|e| AiError::Config {
@@ -284,13 +295,9 @@ fn screen_mcp_endpoint(
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_ascii_lowercase();
-    let blocked = |why: String| AiError::Config {
-        message: format!(
-            "MCP endpoint '{base_url}' refused: {why} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
-        ),
-    };
+    let blocked = |why: String| mcp_refused(base_url, why);
     if allow.iter().any(|a| a == &host) {
-        return Ok(None);
+        return Ok(McpScreenTarget::ExemptOrLiteral);
     }
     if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
         return Err(blocked(format!("host {host:?} is site-local")));
@@ -303,16 +310,23 @@ fn screen_mcp_endpoint(
         } else {
             // Literal IP: no name resolution happens, so there is nothing
             // to pin.
-            Ok(None)
+            Ok(McpScreenTarget::ExemptOrLiteral)
         };
     }
     let port = parsed
         .port()
         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let addrs: Vec<_> = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|e| blocked(format!("host {host:?} does not resolve: {e}")))?
-        .collect();
+    Ok(McpScreenTarget::Resolve { host, port })
+}
+
+fn validate_mcp_resolved_addrs(
+    base_url: &str,
+    host: String,
+    addrs: &[std::net::SocketAddr],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    use crate::tools::builtin::ip_is_forbidden;
+
+    let blocked = |why: String| mcp_refused(base_url, why);
     if let Some(offender) = addrs.iter().map(|a| a.ip()).find(|ip| ip_is_forbidden(*ip)) {
         return Err(blocked(format!(
             "host {host:?} resolves into forbidden address space ({offender})"
@@ -329,6 +343,43 @@ fn screen_mcp_endpoint(
         )));
     };
     Ok(Some((host, first)))
+}
+
+fn screen_mcp_endpoint(
+    base_url: &str,
+    allow: &[String],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    use std::net::ToSocketAddrs;
+
+    let target = preflight_mcp_endpoint(base_url, allow)?;
+    let (host, port) = match target {
+        McpScreenTarget::ExemptOrLiteral => return Ok(None),
+        McpScreenTarget::Resolve { host, port } => (host, port),
+    };
+    let addrs: Vec<_> = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|e| mcp_refused(base_url, format!("host {host:?} does not resolve: {e}")))?
+        .collect();
+    validate_mcp_resolved_addrs(base_url, host, &addrs)
+}
+
+/// Async variant of [`screen_mcp_endpoint`] using [`tokio::net::lookup_host`]
+/// so the redirect loop in [`McpHttpClient::rpc`] does not block worker threads
+/// on DNS lookups.
+pub(crate) async fn screen_mcp_endpoint_async(
+    base_url: &str,
+    allow: &[String],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
+    let target = preflight_mcp_endpoint(base_url, allow)?;
+    let (host, port) = match target {
+        McpScreenTarget::ExemptOrLiteral => return Ok(None),
+        McpScreenTarget::Resolve { host, port } => (host, port),
+    };
+    let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| mcp_refused(base_url, format!("host {host:?} does not resolve: {e}")))?
+        .collect();
+    validate_mcp_resolved_addrs(base_url, host, &addrs)
 }
 
 /// Build an MCP HTTP client, optionally pinned to a vetted address.
@@ -431,6 +482,42 @@ impl McpHttpClient {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Same-origin credential headers for a POST to an MCP endpoint:
+    /// session id, negotiated protocol version and bearer token. Every
+    /// request to the base origin carries this set (`rpc` and the
+    /// `notifications/initialized` notification alike); cross-origin
+    /// redirect hops call none of it. One helper so the two sites cannot
+    /// drift.
+    fn attach_session_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        // Audit F6: a poisoned mutex (a prior holder panicked mid-update)
+        // must not turn every later MCP call into a panic — recover the
+        // data and continue; the guarded values are plain strings.
+        if let Some(sid) = self
+            .session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            req = req.header("mcp-session-id", sid);
+        }
+        // Post-initialize requests announce the negotiated version
+        // (#948 P3-7a) so version-strict servers can validate it.
+        if let Some(pv) = self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            req = req.header("MCP-Protocol-Version", pv);
+        }
+        // Bearer auth (#948 P3-7d): token resolved from the environment at
+        // construction — never logged, never stored in manifests.
+        if let Some(token) = &self.bearer_token {
+            req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        req
+    }
+
     /// Send one JSON-RPC request, returning the `result` value.
     async fn rpc(
         &self,
@@ -477,21 +564,7 @@ impl McpHttpClient {
                 .header("Accept", "application/json, text/event-stream")
                 .json(&body);
             if same_origin {
-                if let Some(sid) = self.session_id.lock().unwrap().clone() {
-                    req = req.header("mcp-session-id", sid);
-                }
-                // Post-initialize requests announce the negotiated version
-                // (#948 P3-7a) so version-strict servers can validate it.
-                let pv = self.protocol_version.lock().unwrap().clone();
-                if let Some(pv) = pv {
-                    req = req.header("MCP-Protocol-Version", pv);
-                }
-                // Bearer auth (#948 P3-7d): token resolved from the
-                // environment at construction — never logged, never stored
-                // in manifests. Cross-origin redirect hops get nothing.
-                if let Some(token) = &self.bearer_token {
-                    req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-                }
+                req = self.attach_session_headers(req);
             } else {
                 tracing::info!(
                     "MCP redirect hop {current_url} crosses origins — auth, session and protocol headers omitted"
@@ -517,7 +590,7 @@ impl McpHttpClient {
                         message: format!("MCP redirect Location '{location}' is invalid: {e}"),
                     })?;
                 let next_url = next.to_string();
-                current_pin = screen_mcp_endpoint(&next_url, &self.allow)?;
+                current_pin = screen_mcp_endpoint_async(&next_url, &self.allow).await?;
                 tracing::info!("MCP endpoint {current_url} redirected to {next_url}");
                 current_url = next_url;
                 continue;
@@ -530,7 +603,7 @@ impl McpHttpClient {
             if same_origin
                 && let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str())
             {
-                *self.session_id.lock().unwrap() = Some(v.to_string());
+                *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.to_string());
             }
             let text = response.text().await.map_err(|e| AiError::Transport {
                 message: format!("MCP response read failed: {e}"),
@@ -730,7 +803,10 @@ impl McpClient for McpHttpClient {
             version = %server_version,
             "MCP protocol version negotiated"
         );
-        *self.protocol_version.lock().unwrap() = Some(server_version);
+        *self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(server_version);
         // Spec: once initialize returns an mcp-session-id, every
         // subsequent request — the initialized notification included —
         // must carry it. This is a fire-and-forget notification (no id,
@@ -738,7 +814,7 @@ impl McpClient for McpHttpClient {
         // any other request to this origin: session id, negotiated
         // protocol version and bearer token. (The version is stored just
         // above, so it is already available here.)
-        let mut note_req = self
+        let note_req = self
             .http
             .post(&self.base_url)
             .header("Accept", "application/json, text/event-stream")
@@ -746,16 +822,7 @@ impl McpClient for McpHttpClient {
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized",
             }));
-        if let Some(sid) = self.session_id.lock().unwrap().clone() {
-            note_req = note_req.header("mcp-session-id", sid);
-        }
-        if let Some(pv) = self.protocol_version.lock().unwrap().clone() {
-            note_req = note_req.header("MCP-Protocol-Version", pv);
-        }
-        if let Some(token) = &self.bearer_token {
-            note_req = note_req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-        }
-        let _ = note_req.send().await;
+        let _ = self.attach_session_headers(note_req).send().await;
 
         // tools/list is paginated: the first page carries `nextCursor` when
         // more tools exist. Ignoring it silently exposed only the first page
@@ -1653,6 +1720,36 @@ mod tests {
         assert!(McpHttpClient::new_with_allowlist("mcp://127.0.0.1:8080", allow.clone()).is_ok());
         assert!(McpHttpClient::new_with_allowlist("mcp://10.0.0.5:8080", allow).is_ok());
         assert!(McpHttpClient::new("mcp://localhost:8080").is_err());
+    }
+
+    #[tokio::test]
+    async fn mcp_endpoints_are_ssrf_screened_async() {
+        assert!(
+            screen_mcp_endpoint_async("mcp://localhost:8080", &[])
+                .await
+                .is_err()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &[])
+                .await
+                .is_err()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &[])
+                .await
+                .is_err()
+        );
+        let allow = vec!["10.0.0.5".to_string(), "127.0.0.1".to_string()];
+        assert!(
+            screen_mcp_endpoint_async("mcp://127.0.0.1:8080", &allow)
+                .await
+                .is_ok()
+        );
+        assert!(
+            screen_mcp_endpoint_async("mcp://10.0.0.5:8080", &allow)
+                .await
+                .is_ok()
+        );
     }
 
     #[test]

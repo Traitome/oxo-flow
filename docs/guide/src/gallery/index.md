@@ -1,10 +1,10 @@
 # Workflow Gallery
 
-The Workflow Gallery is a curated collection of complete, validated example workflows that progress from fundamental concepts to production-grade bioinformatics pipelines. Every workflow in this gallery passes `oxo-flow validate` and demonstrates real CLI output.
+The Workflow Gallery is a curated collection of complete, validated example workflows that progress from fundamental concepts to reference-scale bioinformatics pipelines. Every workflow in this gallery passes `oxo-flow validate` and demonstrates real CLI output.
 
 Use this gallery to learn oxo-flow incrementally — each example builds on concepts from the previous one.
 
-For larger, production workflows — ports of popular nf-core & Snakemake pipelines, original designs, and community submissions — see the **[oxo-flow-community catalog](https://oxo-flow-community.github.io/)**.
+For larger reference workflows — ports of popular nf-core & Snakemake pipelines, original designs, and community submissions — see the **[oxo-flow-community catalog](https://oxo-flow-community.github.io/)**.
 
 ---
 
@@ -67,7 +67,7 @@ Learn the fundamental building blocks: rules, shell commands, inputs, outputs, a
 Master wildcards for multi-sample processing, scatter-gather parallelism patterns, and per-rule environment isolation with conda, docker, and singularity.
 
 ### Advanced (Workflows 06–10)
-Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with auditable checkpoint-driven reporting and complex DAG topologies — plus the unified `transform` operator for scatter-gather parallelism.
+Build reference-scale bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with checkpoint-driven reporting and complex DAG topologies, plus the unified `transform` operator for scatter-gather parallelism.
 
 ### Applied Patterns (Workflows 11–16)
 Reference pipelines for real study designs: condition-gated branches, population cohorts with cohort-level joint genotyping, per-sample germline calling, paired tumor/control somatic calling (single pair and `[[pairs]]`-scaled), and 16S amplicon analysis with QIIME2.

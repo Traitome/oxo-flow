@@ -799,6 +799,11 @@ impl CheckpointState {
         // workflow's view of the shared workdir (issue #935) — same reasoning
         // as `input_manifests` above.
         self.protected_tree_baselines.clear();
+        // The "deleted by design" ledger of a foreign workflow must not
+        // survive either: `provenance verify` would otherwise report the
+        // other workflow's cleaned intermediates against this one's
+        // provenance view.
+        self.cleaned_checksums.clear();
     }
 
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
@@ -2638,6 +2643,15 @@ mod tests {
             Ok(String::new())
         }
 
+        async fn read_range(
+            &self,
+            _path: &StoragePath,
+            _offset: u64,
+            len: usize,
+        ) -> Result<Vec<u8>> {
+            Ok(vec![0u8; len])
+        }
+
         async fn write(&self, _path: &StoragePath, _data: &[u8]) -> Result<()> {
             Ok(())
         }
@@ -3193,6 +3207,7 @@ mod tests {
             group: None,
             samples: vec!["S2".into()],
             pairs: vec![],
+            values: Default::default(),
         });
         ck.record_reentry(crate::reentry::ReentryRecord {
             round: 2,
@@ -3200,6 +3215,7 @@ mod tests {
             group: None,
             samples: vec!["S2".into(), "S3".into()],
             pairs: vec![],
+            values: Default::default(),
         });
         // Same rule → superseded, not appended.
         assert_eq!(ck.reentries.len(), 1);

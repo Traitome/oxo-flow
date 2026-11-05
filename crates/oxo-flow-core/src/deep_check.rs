@@ -16,6 +16,10 @@
 //!   used in commands, `reference_dir`-derived tool indexes, and
 //!   `[[references]]` outputs. Data can arrive later (issue #63), so a
 //!   missing path is a warning.
+//! - **D005 (warning)** — biological source files are introspected against
+//!   their `[types]` declarations (`crate::types`), so a header that will
+//!   fail the engine's BioTypes contract (format, sort order, read-group
+//!   tags, compression) is named before the run starts.
 //!
 //! All relative paths resolve against `base_dir` — the directory the
 //! executor runs rules from (the workflow file's directory, or `--workdir`).
@@ -68,6 +72,8 @@ pub struct DeepCheckReport {
     pub commands_probed: usize,
     /// Reference paths evaluated.
     pub references_checked: usize,
+    /// Biological input headers evaluated against BioTypeSpec contracts.
+    pub biological_headers_checked: usize,
 }
 
 /// Interpreters that announce a script path as their next plain argument.
@@ -295,6 +301,43 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
                 check_reference_path(&mut report, &mut seen, base_dir, value, Some(&rule.name));
             }
         }
+
+        // 5. Biological input headers (D005, warning).
+        if let Some(rule_types) = &rule.types {
+            for (channel, type_name) in &rule_types.inputs {
+                let matching_paths: Vec<String> = rule
+                    .input
+                    .iter()
+                    .filter(|p| {
+                        is_resolvable_path(p)
+                            && (channel == "default"
+                                || p.contains(channel)
+                                || rule_types.inputs.len() == 1)
+                    })
+                    .cloned()
+                    .collect();
+
+                let expected_spec = config.types.get(type_name).cloned().or_else(|| {
+                    type_name
+                        .parse::<crate::types::BioFormat>()
+                        .ok()
+                        .map(crate::types::BioTypeSpec::new)
+                });
+
+                if let Some(spec) = expected_spec {
+                    for path in matching_paths {
+                        check_biological_header(
+                            &mut report,
+                            &mut seen,
+                            base_dir,
+                            &path,
+                            &rule.name,
+                            &spec,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // (b) `reference_dir`-derived tool indexes for tools mentioned in shells.
@@ -355,6 +398,44 @@ fn check_script_path(
     }
 }
 
+/// Check one biological source input header: mismatch → D005 warning.
+fn check_biological_header(
+    report: &mut DeepCheckReport,
+    seen: &mut HashSet<(String, String)>,
+    base_dir: &Path,
+    path: &str,
+    rule_name: &str,
+    spec: &crate::types::BioTypeSpec,
+) {
+    let resolved = resolve_path(path, base_dir);
+    if !resolved.is_file() {
+        return;
+    }
+    report.biological_headers_checked += 1;
+    if let Err(violations) = crate::types::introspect_path_with_spec(&resolved, spec) {
+        for v in violations {
+            if !seen.insert((
+                "D005".to_string(),
+                format!("{}:{}:{}", path, v.code, v.message),
+            )) {
+                continue;
+            }
+            report.findings.push(DeepFinding {
+                severity: Severity::Warning,
+                code: "D005".to_string(),
+                message: format!(
+                    "biological header contract mismatch for '{path}': {}",
+                    v.message
+                ),
+                rule: Some(rule_name.to_string()),
+                suggestion: v.suggestion,
+                path: path.to_string(),
+            });
+            report.warning_count += 1;
+        }
+    }
+}
+
 /// Check one reference-data path: missing → D004 warning.
 fn check_reference_path(
     report: &mut DeepCheckReport,
@@ -395,7 +476,7 @@ fn env_file_candidates(env: &crate::rule::EnvironmentSpec) -> Vec<(String, Strin
         // Bare env names are legal (`conda_env_name_from_spec` falls back to
         // the file stem); only file-like specs are repository files.
         if let Some(value) = spec
-            && looks_file_like(value)
+            && crate::rule::EnvironmentSpec::spec_is_file_backed(value)
         {
             candidates.push((value.clone(), what.to_string()));
         }
@@ -412,26 +493,10 @@ fn env_file_candidates(env: &crate::rule::EnvironmentSpec) -> Vec<(String, Strin
     candidates
 }
 
-/// True when a conda/mamba spec looks like a repository file (has a
-/// directory component or a YAML extension) rather than a bare env name.
-fn looks_file_like(value: &str) -> bool {
-    value.contains('/') || value.ends_with(".yaml") || value.ends_with(".yml")
-}
-
 /// Map every `[config]` value to the `config.<key>` form the executor
 /// resolves in commands (`{config.data_dir}` → value).
 fn config_vars(config: &WorkflowConfig) -> HashMap<String, String> {
-    config
-        .config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect()
+    config.config_placeholder_values()
 }
 
 /// Expand `{config.x}` placeholders (simple substitution only, mirroring
@@ -1069,5 +1134,46 @@ mod tests {
     fn find_in_path_returns_none_for_unknown_name() {
         let dir = tempfile::tempdir().unwrap();
         assert!(find_in_path("no_such_tool_xyz", std::iter::once(dir.path())).is_none());
+    }
+
+    // ── D005: biological header checks ─────────────────────────────────────
+
+    #[test]
+    fn d005_checks_biological_source_input_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let sam_path = dir.path().join("in.sam");
+        std::fs::write(
+            &sam_path,
+            b"@HD	VN:1.6	SO:unsorted
+@SQ	SN:chr1	LN:248956422
+",
+        )
+        .unwrap();
+
+        let toml = wf(r#"
+            [types.sorted_bam]
+            format = "bam"
+            sort_order = "coordinate"
+            index = "bai"
+
+            [[rules]]
+            name = "call"
+            input = ["in.sam"]
+            output = ["out.vcf"]
+            shell = "echo out > out.vcf"
+            [rules.types]
+            inputs = { default = "sorted_bam" }
+        "#);
+
+        let report = deep_for(&toml, dir.path());
+        assert_eq!(report.biological_headers_checked, 1);
+        let d005 = findings_of(&report, "D005");
+        assert!(
+            !d005.is_empty(),
+            "must detect format/sort/index mismatch: {:?}",
+            d005
+        );
+        let messages: Vec<&str> = d005.iter().map(|f| f.message.as_str()).collect();
+        assert!(messages.iter().any(|m| m.contains("format mismatch")));
     }
 }

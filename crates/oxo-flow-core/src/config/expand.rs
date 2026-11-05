@@ -13,10 +13,6 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use std::collections::HashMap;
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
     /// Expand rules that contain pair or group wildcards into concrete instances.
     ///
@@ -216,7 +212,7 @@ impl WorkflowConfig {
             self.rule_templates = self.rules.clone();
         }
         use crate::wildcard::{
-            expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
+            expand_pattern, validate_wildcard_constraints_compiled,
             wildcard_combinations_from_groups, wildcard_combinations_from_pairs,
         };
 
@@ -319,8 +315,12 @@ impl WorkflowConfig {
         // (#530) — fixed aliases plus every pair metadata key.
         let pair_wildcards = self.pair_fanout_wildcards();
 
-        // Wildcards that trigger group expansion
-        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
+        // Wildcards that trigger group expansion: the same shared vocabulary
+        // as pairs (#530) — `wildcard_combinations_from_groups` binds
+        // "group"/"sample" AND every group metadata key into every combo, so
+        // trigger detection must use the identical vocabulary or a rule
+        // referencing a bare `{<metadata_key>}` never expands.
+        let group_wildcards = self.group_fanout_wildcards();
 
         // The known `{meta.<column>}` vocabulary (issue #227 item 2): the
         // union of columns any metadata row defines. Used for the
@@ -355,7 +355,7 @@ impl WorkflowConfig {
             );
             for w in wildcards {
                 if pair_wildcards.iter().any(|pw| pw == w.as_str())
-                    || GROUP_WILDCARDS.contains(&w.as_str())
+                    || group_wildcards.iter().any(|gw| gw == w.as_str())
                     || self.values.iter().any(|v| v.name == w)
                     || w.starts_with("meta.")
                     || w.starts_with("config.")
@@ -519,7 +519,7 @@ impl WorkflowConfig {
             }
 
             let mentions_group = trigger_text.iter().any(|t| {
-                GROUP_WILDCARDS.iter().any(|w| {
+                group_wildcards.iter().any(|w| {
                     t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
                 })
             });
@@ -812,24 +812,15 @@ impl WorkflowConfig {
                             ) {
                                 // Instance skipped (#882) — record its
                                 // would-be outputs for expand_inputs
-                                // filtering (mirrors the pair branch).
-                                let skipped = rule
-                                    .output
-                                    .iter()
-                                    .map(|p| {
-                                        if has_wildcards(p)
-                                            || crate::wildcard::contains_values_namespace(p)
-                                        {
-                                            crate::wildcard::expand_values_namespace(
-                                                &expand_pattern(p, &merged)
-                                                    .unwrap_or_else(|_| p.clone()),
-                                                &merged,
-                                            )
-                                        } else {
-                                            p.clone()
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
+                                // filtering (mirrors the pair branch, via
+                                // the same shared helper).
+                                let expanded_out =
+                                    super::model::expand_rule_patterns(&rule.output, &merged);
+                                let skipped: Vec<String> = match expanded_out {
+                                    crate::rule::FilePatterns::List(v) => v,
+                                    crate::rule::FilePatterns::Map(m) => m.into_values().collect(),
+                                    crate::rule::FilePatterns::Dir { path, .. } => vec![path],
+                                };
                                 self.when_skipped_outputs.extend(skipped);
                                 continue;
                             }
@@ -864,60 +855,18 @@ impl WorkflowConfig {
                                 Some(Self::bake_meta_when(&baked, &self.metadata, &merged));
                         }
 
-                        expanded.input = rule
-                            .input
-                            .iter()
-                            .map(|p| {
-                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
-                                {
-                                    crate::wildcard::expand_values_namespace(
-                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
-                                        &merged,
-                                    )
-                                } else {
-                                    p.clone()
-                                }
-                            })
-                            .collect();
-                        expanded.output = rule
-                            .output
-                            .iter()
-                            .map(|p| {
-                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
-                                {
-                                    crate::wildcard::expand_values_namespace(
-                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
-                                        &merged,
-                                    )
-                                } else {
-                                    p.clone()
-                                }
-                            })
-                            .collect();
+                        // The shared expansion helpers (same functions the
+                        // pair/values branches call) — this block used to be
+                        // a third hand-copied mirror of the exact same
+                        // has_wildcards → expand_pattern →
+                        // expand_values_namespace dance.
+                        expanded.input = super::model::expand_rule_patterns(&rule.input, &merged);
+                        expanded.output = super::model::expand_rule_patterns(&rule.output, &merged);
                         if let Some(ref shell) = rule.shell {
-                            expanded.shell = if has_wildcards(shell)
-                                || crate::wildcard::contains_values_namespace(shell)
-                            {
-                                Some(crate::wildcard::expand_values_namespace(
-                                    &expand_pattern(shell, &merged)
-                                        .unwrap_or_else(|_| shell.clone()),
-                                    &merged,
-                                ))
-                            } else {
-                                Some(shell.clone())
-                            };
+                            expanded.shell = Some(super::model::expand_rule_shell(shell, &merged));
                         }
                         if let Some(ref log) = rule.log {
-                            expanded.log = if has_wildcards(log)
-                                || crate::wildcard::contains_values_namespace(log)
-                            {
-                                Some(crate::wildcard::expand_values_namespace(
-                                    &expand_pattern(log, &merged).unwrap_or_else(|_| log.clone()),
-                                    &merged,
-                                ))
-                            } else {
-                                Some(log.clone())
-                            };
+                            expanded.log = Some(super::model::expand_rule_shell(log, &merged));
                         }
                         // output_pattern (issue #227 item 5): bake the bound
                         // wildcards per instance (see the pair branch).
@@ -1131,6 +1080,21 @@ impl WorkflowConfig {
                 {
                     values = resolved;
                 }
+                if values.is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "scatter rule '{}' has an empty value domain for '{}'",
+                            rule.name, scatter.variable
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "define at least one value in scatter.values or ensure \
+                             scatter.values_from resolves to a non-empty list; an empty domain \
+                             would silently remove this analysis branch"
+                                .to_string(),
+                        ),
+                    });
+                }
 
                 let mut scatter_outputs = Vec::new();
 
@@ -1311,31 +1275,20 @@ impl WorkflowConfig {
                         },
                     };
 
-                    let mut map_rule = Rule {
-                        name: map_rule_name,
-                        input: map_input,
-                        output: vec![chunk_output].into(),
-                        shell: Some(map_shell),
-                        // Inherit the parent's required semantics (issue
-                        // #142 H5): Rule's plain Default makes bools false
-                        // while serde defaults `required` to true — an
-                        // engine-generated chunk must not silently become
-                        // best-effort.
-                        required: rule.required,
-
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        retries: rule.retries,
-                        ..Default::default()
-                    };
-
-                    #[allow(deprecated)]
-                    {
-                        map_rule.threads = rule.threads;
-                        map_rule.memory = rule.memory.clone();
-                    }
+                    // Clone the authored rule and override only generated
+                    // identity and I/O/command fields. Reconstructing from
+                    // Rule::default silently dropped env_group, hooks,
+                    // localrule, staging, benchmark/report settings, tags,
+                    // groups, and other execution semantics.
+                    let mut map_rule = rule.clone();
+                    map_rule.name = map_rule_name;
+                    map_rule.input = map_input;
+                    map_rule.output = vec![chunk_output].into();
+                    map_rule.shell = Some(map_shell);
+                    map_rule.transform = None;
+                    map_rule.scatter = None;
+                    map_rule.output_pattern = None;
+                    map_rule.cleanup_chunks = false;
 
                     final_rules.push(map_rule);
                 }
@@ -1413,25 +1366,15 @@ impl WorkflowConfig {
                         });
                     };
 
-                    let mut combine_rule = Rule {
-                        name: combine_rule_name,
-                        input: FilePatterns::List(all_chunk_outputs.clone()),
-                        output: rule.output.clone(),
-                        shell: Some(combine_shell),
-                        required: rule.required,
-                        cleanup_chunks: transform.cleanup,
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        ..Default::default()
-                    };
-
-                    #[allow(deprecated)]
-                    {
-                        combine_rule.threads = rule.threads;
-                        combine_rule.memory = rule.memory.clone();
-                    }
+                    let mut combine_rule = rule.clone();
+                    combine_rule.name = combine_rule_name;
+                    combine_rule.input = FilePatterns::List(all_chunk_outputs.clone());
+                    combine_rule.output = rule.output.clone();
+                    combine_rule.shell = Some(combine_shell);
+                    combine_rule.transform = None;
+                    combine_rule.scatter = None;
+                    combine_rule.output_pattern = None;
+                    combine_rule.cleanup_chunks = transform.cleanup;
 
                     final_rules.push(combine_rule);
                 }
@@ -1538,21 +1481,11 @@ impl WorkflowConfig {
     /// Compile every `[wildcard_constraints]` regex once. Shared by the
     /// plan-time fan-out and the runtime output_pattern-consumer
     /// projection, so the per-consumer loop never recompiles them
-    /// (#268 perf family).
+    /// (#268 perf family). Compilation itself routes through
+    /// `wildcard::compile_wildcard_constraint_map` — the same helper the
+    /// validate-time E020 diagnostic uses, so the two never drift.
     pub(crate) fn compiled_wildcard_constraints(&self) -> Result<HashMap<String, regex::Regex>> {
-        self.wildcard_constraints
-            .iter()
-            .map(|(name, pattern)| {
-                regex::Regex::new(pattern)
-                    .map(|re| (name.clone(), re))
-                    .map_err(|e| OxoFlowError::Wildcard {
-                        rule: String::new(),
-                        message: format!(
-                            "invalid regex constraint '{pattern}' for wildcard '{name}': {e}"
-                        ),
-                    })
-            })
-            .collect()
+        crate::wildcard::compile_wildcard_constraint_map(&self.wildcard_constraints)
     }
 
     /// Materialize one rule's `expand_inputs` patterns into concrete
@@ -3002,33 +2935,70 @@ impl WorkflowConfig {
             let n = self
                 .resolve_config_list(n_str)
                 .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()));
-            let n = match n {
-                Some(n) => n,
-                None => match n_str.parse::<usize>() {
-                    Ok(n) => n,
-                    Err(_) => {
-                        tracing::warn!(
-                            "split.n '{}' is not a number — falling back to a single chunk",
-                            n_str
-                        );
-                        1
-                    }
-                },
-            };
+            let n =
+                match n {
+                    Some(n) => n,
+                    None => match n_str.parse::<usize>() {
+                        Ok(n) => n,
+                        Err(_) => return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform.split.n '{}' is neither a positive integer nor a \
+                             numeric config value",
+                                n_str
+                            ),
+                            rule: None,
+                            suggestion: Some(
+                                "set split.n to an integer or a config key that resolves to one; \
+                             a fallback would silently change the analysis fan-out"
+                                    .to_string(),
+                            ),
+                        }),
+                    },
+                };
+            if n == 0 {
+                return Err(OxoFlowError::Validation {
+                    message: "transform.split.n must be greater than zero".to_string(),
+                    rule: None,
+                    suggestion: Some(
+                        "use a positive integer or provide split.values/split.values_from"
+                            .to_string(),
+                    ),
+                });
+            }
             // Generate chunk indices: 0, 1, 2, ..., n-1
             return Ok((0..n).map(|i| i.to_string()).collect());
         }
 
         if let Some(ref glob) = split.glob {
             // Glob expansion - find matching files
-            let matches: Vec<String> = glob::glob(glob)
+            let glob_path = std::path::Path::new(glob);
+            let search_pattern = if glob_path.is_absolute() {
+                glob_path.to_path_buf()
+            } else if let Some(base_dir) = self.base_dir.as_deref() {
+                base_dir.join(glob_path)
+            } else {
+                glob_path.to_path_buf()
+            };
+            let search_pattern = search_pattern.to_string_lossy();
+            let matches: Vec<String> = glob::glob(&search_pattern)
                 .map_err(|e| OxoFlowError::Validation {
                     message: format!("invalid glob pattern: {}", e),
                     rule: None,
                     suggestion: None,
                 })?
                 .filter_map(|p| p.ok())
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|p| {
+                    if !glob_path.is_absolute()
+                        && let Some(base_dir) = self.base_dir.as_deref()
+                    {
+                        return p
+                            .strip_prefix(base_dir)
+                            .unwrap_or(&p)
+                            .to_string_lossy()
+                            .to_string();
+                    }
+                    p.to_string_lossy().to_string()
+                })
                 .collect();
             if matches.is_empty() {
                 return Err(OxoFlowError::Validation {

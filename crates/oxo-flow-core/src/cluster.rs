@@ -4,9 +4,8 @@
 //!
 //! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.
 
-use crate::environment::EnvironmentResolver;
+use crate::error::Result;
 use crate::rule::Rule;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -22,6 +21,12 @@ pub enum ClusterBackend {
     Sge,
     /// IBM Spectrum LSF.
     Lsf,
+    /// Kubernetes batch Jobs.
+    Kubernetes,
+    /// AWS Batch managed compute.
+    AwsBatch,
+    /// Google Cloud Batch.
+    GcpBatch,
 }
 
 impl fmt::Display for ClusterBackend {
@@ -31,6 +36,9 @@ impl fmt::Display for ClusterBackend {
             Self::Pbs => write!(f, "pbs"),
             Self::Sge => write!(f, "sge"),
             Self::Lsf => write!(f, "lsf"),
+            Self::Kubernetes => write!(f, "kubernetes"),
+            Self::AwsBatch => write!(f, "aws-batch"),
+            Self::GcpBatch => write!(f, "gcp-batch"),
         }
     }
 }
@@ -44,6 +52,9 @@ impl FromStr for ClusterBackend {
             "pbs" => Ok(Self::Pbs),
             "sge" => Ok(Self::Sge),
             "lsf" => Ok(Self::Lsf),
+            "kubernetes" | "k8s" => Ok(Self::Kubernetes),
+            "aws-batch" | "awsbatch" => Ok(Self::AwsBatch),
+            "gcp-batch" | "gcpbatch" => Ok(Self::GcpBatch),
             other => Err(format!("unknown cluster backend: {other}")),
         }
     }
@@ -65,46 +76,6 @@ pub struct ClusterJobConfig {
     pub extra_args: Vec<String>,
 }
 
-/// Status of a job submitted to a cluster scheduler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClusterJobStatus {
-    /// Job is queued and waiting to start.
-    Pending,
-    /// Job is currently executing.
-    Running,
-    /// Job finished successfully.
-    Completed,
-    /// Job finished with an error.
-    Failed,
-    /// Status could not be determined.
-    Unknown,
-}
-
-impl fmt::Display for ClusterJobStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::Running => write!(f, "running"),
-            Self::Completed => write!(f, "completed"),
-            Self::Failed => write!(f, "failed"),
-            Self::Unknown => write!(f, "unknown"),
-        }
-    }
-}
-
-/// A job that has been submitted to a cluster scheduler.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterJob {
-    /// Scheduler-assigned job identifier.
-    pub job_id: String,
-    /// Name of the rule this job executes.
-    pub rule_name: String,
-    /// Current status of the job.
-    pub status: ClusterJobStatus,
-    /// Time the job was submitted.
-    pub submit_time: Option<DateTime<Utc>>,
-}
-
 /// Generate a scheduler submit script for the given backend.
 ///
 /// The returned string is a complete shell script including the `#!/bin/bash`
@@ -115,43 +86,22 @@ pub fn generate_submit_script(
     rule: &Rule,
     shell_cmd: &str,
     cluster_config: &ClusterJobConfig,
-) -> String {
+) -> Result<String> {
     match backend {
-        ClusterBackend::Slurm => generate_slurm_script(rule, shell_cmd, cluster_config),
-        ClusterBackend::Pbs => generate_pbs_script(rule, shell_cmd, cluster_config),
-        ClusterBackend::Sge => generate_sge_script(rule, shell_cmd, cluster_config),
-        ClusterBackend::Lsf => generate_lsf_script(rule, shell_cmd, cluster_config),
+        ClusterBackend::Slurm => Ok(generate_slurm_script(rule, shell_cmd, cluster_config)),
+        ClusterBackend::Pbs => Ok(generate_pbs_script(rule, shell_cmd, cluster_config)),
+        ClusterBackend::Sge => Ok(generate_sge_script(rule, shell_cmd, cluster_config)),
+        ClusterBackend::Lsf => Ok(generate_lsf_script(rule, shell_cmd, cluster_config)),
+        ClusterBackend::Kubernetes => {
+            crate::backend::k8s::generate_k8s_job_manifest(rule, shell_cmd, cluster_config)
+        }
+        ClusterBackend::AwsBatch => {
+            crate::backend::aws_batch::generate_aws_batch_job_spec(rule, shell_cmd, cluster_config)
+        }
+        ClusterBackend::GcpBatch => {
+            crate::backend::gcp_batch::generate_gcp_batch_job_spec(rule, shell_cmd, cluster_config)
+        }
     }
-}
-
-/// Generate a scheduler submit script with environment wrapping.
-///
-/// This is the recommended way to generate cluster scripts as it properly
-/// wraps the shell command through the environment resolver (conda, docker,
-/// singularity, pixi, venv) before generating the submit script.
-pub fn generate_submit_script_with_env(
-    backend: &ClusterBackend,
-    rule: &Rule,
-    shell_cmd: &str,
-    cluster_config: &ClusterJobConfig,
-    env_resolver: &EnvironmentResolver,
-) -> Result<String, String> {
-    // Wrap command through environment resolver
-    let wrapped_cmd = env_resolver
-        .wrap_command(
-            shell_cmd,
-            &rule.environment,
-            Some(&rule.resources),
-            std::path::Path::new("."),
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(generate_submit_script(
-        backend,
-        rule,
-        &wrapped_cmd,
-        cluster_config,
-    ))
 }
 
 /// Generate an ARRAY submit script for a group of same-rule instances
@@ -168,8 +118,26 @@ pub fn generate_array_submit_script(
     cmd_dir: &str,
     count: usize,
     config: &ClusterJobConfig,
-) -> String {
-    let base = generate_submit_script(backend, rule, "", config);
+) -> Result<String> {
+    match backend {
+        ClusterBackend::Kubernetes => {
+            return crate::backend::k8s::generate_k8s_array_job_manifest(
+                rule, cmd_dir, count, config,
+            );
+        }
+        ClusterBackend::AwsBatch => {
+            return crate::backend::aws_batch::generate_aws_batch_array_spec(
+                rule, cmd_dir, count, config,
+            );
+        }
+        ClusterBackend::GcpBatch => {
+            return crate::backend::gcp_batch::generate_gcp_batch_array_spec(
+                rule, cmd_dir, count, config,
+            );
+        }
+        _ => {}
+    }
+    let base = generate_submit_script(backend, rule, "", config)?;
     let mut lines: Vec<String> = base.lines().map(str::to_string).collect();
 
     let (range_directive, task_var) = match backend {
@@ -177,6 +145,7 @@ pub fn generate_array_submit_script(
         ClusterBackend::Pbs => ("#PBS -J 1-{count}", "PBS_ARRAY_INDEX"),
         ClusterBackend::Sge => ("#$ -t 1-{count}", "SGE_TASK_ID"),
         ClusterBackend::Lsf => ("#BSUB -J \"{name}[1-{count}]\"", "LSB_JOBINDEX"),
+        _ => unreachable!(),
     };
     let range = range_directive
         .replace("{count}", &count.to_string())
@@ -234,7 +203,7 @@ pub fn generate_array_submit_script(
         _ => {}
     }
 
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 /// Returns the shell command used to submit a job to the given backend.
@@ -244,16 +213,32 @@ pub fn submit_command(backend: &ClusterBackend) -> &'static str {
         ClusterBackend::Pbs => "qsub",
         ClusterBackend::Sge => "qsub",
         ClusterBackend::Lsf => "bsub",
+        ClusterBackend::Kubernetes => "kubectl",
+        ClusterBackend::AwsBatch => "aws",
+        ClusterBackend::GcpBatch => "gcloud",
     }
 }
 
-/// Returns the shell command used to query job status on the given backend.
-pub fn status_command(backend: &ClusterBackend) -> &'static str {
+/// The manual submit command for a directory of rendered scripts, in the
+/// form each backend actually accepts. The standalone `cluster submit`
+/// hints print this instead of hand-rolled strings that had drifted from
+/// the invocations `ClusterExecutor::submit` really issues (the cloud
+/// backends take manifest files, not script arguments).
+pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
     match backend {
-        ClusterBackend::Slurm => "squeue -j",
-        ClusterBackend::Pbs => "qstat",
-        ClusterBackend::Sge => "qstat",
-        ClusterBackend::Lsf => "bjobs",
+        ClusterBackend::Slurm => format!("sbatch --parsable {dir}/*.sh"),
+        ClusterBackend::Pbs | ClusterBackend::Sge => format!("qsub {dir}/*.sh"),
+        ClusterBackend::Lsf => format!("bsub {dir}/*.sh"),
+        ClusterBackend::Kubernetes => format!("kubectl create -f {dir}/*.sh"),
+        ClusterBackend::AwsBatch => format!(
+            "for f in {dir}/*.sh; do aws batch submit-job --cli-input-json \"file://$f\"; done"
+        ),
+        // The manual form mirrors the executor's minted id: sanitized
+        // basename clamped to the 41-char name budget inside GCP's
+        // 63-char job-id cap.
+        ClusterBackend::GcpBatch => format!(
+            "for f in {dir}/*.sh; do n=$(basename \"$f\" .sh | tr '[:upper:]_' '[:lower:]-') | sed 's/[^a-z0-9-]//g' | cut -c1-41; gcloud batch jobs submit \"oxoflow-$n-$(date +%s)\" --config \"file://$f\"; done"
+        ),
     }
 }
 
@@ -732,7 +717,8 @@ mod tests {
             "/run/jobs/align",
             3,
             &config,
-        );
+        )
+        .unwrap();
         assert!(script.contains("#SBATCH --array=1-3"), "{script}");
         assert!(
             script.contains("--cpus-per-task=4"),
@@ -758,7 +744,8 @@ mod tests {
             "/run/jobs/align",
             3,
             &config,
-        );
+        )
+        .unwrap();
         assert!(lsf.contains("#BSUB -o logs/align.%I.out"), "{lsf}");
         assert!(lsf.contains("#BSUB -e logs/align.%I.err"), "{lsf}");
 
@@ -768,7 +755,8 @@ mod tests {
             (ClusterBackend::Sge, "#$ -t 1-3", "SGE_TASK_ID"),
             (ClusterBackend::Lsf, "#BSUB -J", "LSB_JOBINDEX"),
         ] {
-            let s2 = generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &config);
+            let s2 = generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &config)
+                .unwrap();
             assert!(s2.contains(range), "{backend:?}: {s2}");
             assert!(s2.contains(var), "{backend:?}: {s2}");
         }
@@ -837,15 +825,6 @@ mod tests {
         assert!(ClusterBackend::from_str("unknown").is_err());
     }
 
-    #[test]
-    fn job_status_display() {
-        assert_eq!(ClusterJobStatus::Pending.to_string(), "pending");
-        assert_eq!(ClusterJobStatus::Running.to_string(), "running");
-        assert_eq!(ClusterJobStatus::Completed.to_string(), "completed");
-        assert_eq!(ClusterJobStatus::Failed.to_string(), "failed");
-        assert_eq!(ClusterJobStatus::Unknown.to_string(), "unknown");
-    }
-
     // -- Submit / status commands -------------------------------------------
 
     #[test]
@@ -854,14 +833,6 @@ mod tests {
         assert_eq!(submit_command(&ClusterBackend::Pbs), "qsub");
         assert_eq!(submit_command(&ClusterBackend::Sge), "qsub");
         assert_eq!(submit_command(&ClusterBackend::Lsf), "bsub");
-    }
-
-    #[test]
-    fn status_commands() {
-        assert_eq!(status_command(&ClusterBackend::Slurm), "squeue -j");
-        assert_eq!(status_command(&ClusterBackend::Pbs), "qstat");
-        assert_eq!(status_command(&ClusterBackend::Sge), "qstat");
-        assert_eq!(status_command(&ClusterBackend::Lsf), "bjobs");
     }
 
     // -- Script generation --------------------------------------------------
@@ -875,7 +846,8 @@ mod tests {
             &rule,
             "bwa mem ref.fa in.fq",
             &config,
-        );
+        )
+        .unwrap();
 
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#SBATCH --job-name=bwa_align"));
@@ -902,7 +874,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Pbs, &rule, "fastqc input.fq", &config);
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "fastqc input.fq", &config)
+                .unwrap();
 
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#PBS -N fastqc"));
@@ -929,7 +902,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Sge, &rule, "gatk HaplotypeCaller", &config);
+            generate_submit_script(&ClusterBackend::Sge, &rule, "gatk HaplotypeCaller", &config)
+                .unwrap();
 
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#$ -N variant_call"));
@@ -959,7 +933,8 @@ mod tests {
             &rule,
             "samtools sort in.bam -o out.bam",
             &config,
-        );
+        )
+        .unwrap();
 
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#BSUB -J samtools_sort"));
@@ -998,7 +973,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config).unwrap();
         assert!(script.contains("#BSUB -M lots"), "{script}");
         assert!(!script.contains("rusage"), "{script}");
     }
@@ -1016,7 +992,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config);
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config)
+                .unwrap();
         assert!(script.contains("#BSUB -W 01:30"), "{script}");
     }
 
@@ -1035,7 +1012,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Lsf, &rule, "spades.py --isolate", &config);
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "spades.py --isolate", &config)
+                .unwrap();
         assert!(script.contains("#BSUB -W 24 hours"), "{script}");
         assert!(!script.contains("#BSUB -W 01:00"), "{script}");
         assert!(!script.contains("#BSUB -W 1:00"), "{script}");
@@ -1055,7 +1033,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "spades.py", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "spades.py", &config).unwrap();
         assert!(script.contains("#SBATCH --time=24 hours"), "{script}");
         assert!(!script.contains("#SBATCH --time=01:00:00"), "{script}");
     }
@@ -1075,7 +1054,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config);
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config)
+                .unwrap();
         assert!(script.contains("#BSUB -W 24:00"), "{script}");
     }
 
@@ -1129,22 +1109,11 @@ mod tests {
             walltime: None,
             extra_args: vec!["--gres=gpu:1".to_string(), "--exclusive".to_string()],
         };
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "echo done", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "echo done", &config).unwrap();
 
         assert!(script.contains("#SBATCH --gres=gpu:1"));
         assert!(script.contains("#SBATCH --exclusive"));
-    }
-
-    #[test]
-    fn cluster_job_construction() {
-        let job = ClusterJob {
-            job_id: "12345".to_string(),
-            rule_name: "bwa_align".to_string(),
-            status: ClusterJobStatus::Running,
-            submit_time: Some(Utc::now()),
-        };
-        assert_eq!(job.job_id, "12345");
-        assert_eq!(job.status, ClusterJobStatus::Running);
     }
 
     // -- GPU directive tests ------------------------------------------------
@@ -1176,7 +1145,8 @@ mod tests {
         };
         let config = make_config();
         let script =
-            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("#SBATCH --gres=gpu:2"));
     }
@@ -1213,7 +1183,8 @@ mod tests {
         };
         let config = make_config();
         let script =
-            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("#SBATCH --gres=gpu:v100:4"));
     }
@@ -1250,7 +1221,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("gpu=2"));
     }
@@ -1287,7 +1259,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("#$ -l gpu=2"));
     }
@@ -1324,7 +1297,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config)
+                .unwrap();
 
         // -gpu takes a quoted run-options string (num=<n>), not a bare count.
         assert!(script.contains("#BSUB -gpu \"num=2\""), "{script}");
@@ -1371,7 +1345,7 @@ mod tests {
                 walltime: None,
                 extra_args: vec![],
             };
-            let script = generate_submit_script(&backend, &rule, "echo hello", &config);
+            let script = generate_submit_script(&backend, &rule, "echo hello", &config).unwrap();
             assert!(
                 !script.contains(forbidden),
                 "{backend:?} script must not contain '{forbidden}':\n{script}"
@@ -1411,7 +1385,8 @@ mod tests {
             ..Default::default()
         };
         let config = make_config();
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "echo hello", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "echo hello", &config).unwrap();
         assert!(!script.contains("gres=gpu:0"), "\n{script}");
         assert!(script.contains("#SBATCH --mem-per-gpu=40G"), "\n{script}");
     }
@@ -1449,7 +1424,8 @@ mod tests {
             walltime: Some("24:00:00".to_string()),
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "sleep 100", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "sleep 100", &config).unwrap();
 
         // Per-rule walltime should override config walltime (DD-HH:MM:SS format)
         assert!(script.contains("#SBATCH --time=2-00:00:00"));
@@ -1487,7 +1463,8 @@ mod tests {
             walltime: Some("48:00:00".to_string()),
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "sleep 100", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "sleep 100", &config).unwrap();
 
         assert!(script.contains("walltime=3-00:00:00"));
     }
@@ -1523,7 +1500,8 @@ mod tests {
             walltime: Some("12:00:00".to_string()),
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Sge, &rule, "analysis.sh", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Sge, &rule, "analysis.sh", &config).unwrap();
 
         assert!(script.contains("#$ -l h_rt=06:00:00"));
     }
@@ -1544,108 +1522,14 @@ mod tests {
         assert_eq!(format_walltime_for_scheduler("24 hours"), "24 hours");
     }
 
-    // -- Module loading tests ------------------------------------------------
-
-    #[test]
-    fn slurm_module_loading() {
-        let rule = Rule {
-            name: "gatk_job".to_string(),
-            input: vec![].into(),
-            output: vec![].into(),
-            shell: Some("gatk HaplotypeCaller".to_string()),
-            script: None,
-            threads: Some(4),
-            memory: Some("8G".to_string()),
-            resources: Resources::default(),
-            environment: EnvironmentSpec {
-                modules: vec!["java/11".to_string(), "gatk/4.2".to_string()],
-                ..EnvironmentSpec::default()
-            },
-            log: None,
-            benchmark: None,
-            params: HashMap::new(),
-            priority: 0,
-            target: false,
-            group: None,
-            description: None,
-            ..Default::default()
-        };
-        let config = make_config();
-        let env_resolver = crate::environment::EnvironmentResolver::new();
-        let script = generate_submit_script_with_env(
-            &ClusterBackend::Slurm,
-            &rule,
-            "gatk HaplotypeCaller",
-            &config,
-            &env_resolver,
-        )
-        .unwrap();
-
-        // Module loading is now handled by EnvironmentResolver.wrap_command()
-        // Modules are loaded in a single line: "module load java/11 gatk/4.2"
-        assert!(
-            script.contains("module load java/11 gatk/4.2"),
-            "Expected 'module load java/11 gatk/4.2' in script, got:\n{}",
-            script
-        );
-    }
-
-    #[test]
-    fn pbs_module_loading() {
-        let rule = Rule {
-            name: "bwa_job".to_string(),
-            input: vec![].into(),
-            output: vec![].into(),
-            shell: Some("bwa mem ref.fa reads.fq".to_string()),
-            script: None,
-            threads: Some(8),
-            memory: Some("16G".to_string()),
-            resources: Resources::default(),
-            environment: EnvironmentSpec {
-                modules: vec!["bwa/0.7.17".to_string()],
-                ..EnvironmentSpec::default()
-            },
-            log: None,
-            benchmark: None,
-            params: HashMap::new(),
-            priority: 0,
-            target: false,
-            group: None,
-            description: None,
-            ..Default::default()
-        };
-        let config = ClusterJobConfig {
-            backend: ClusterBackend::Pbs,
-            queue: Some("batch".to_string()),
-            account: None,
-            walltime: None,
-            extra_args: vec![],
-        };
-        let env_resolver = crate::environment::EnvironmentResolver::new();
-        let script = generate_submit_script_with_env(
-            &ClusterBackend::Pbs,
-            &rule,
-            "bwa mem ref.fa reads.fq",
-            &config,
-            &env_resolver,
-        )
-        .unwrap();
-
-        // Module loading is now handled by EnvironmentResolver.wrap_command()
-        assert!(
-            script.contains("module load bwa/0.7.17"),
-            "Expected 'module load bwa/0.7.17' in script, got:\n{}",
-            script
-        );
-    }
-
     // -- Logs directory tests ------------------------------------------------
 
     #[test]
     fn slurm_creates_logs_dir() {
         let rule = make_rule("test", 1, None);
         let config = make_config();
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "echo test", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "echo test", &config).unwrap();
 
         assert!(script.contains("mkdir -p logs"));
     }
@@ -1660,7 +1544,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "echo test", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "echo test", &config).unwrap();
 
         assert!(script.contains("mkdir -p logs"));
     }
@@ -1675,7 +1560,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Sge, &rule, "echo test", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Sge, &rule, "echo test", &config).unwrap();
 
         assert!(script.contains("mkdir -p logs"));
     }
@@ -1690,7 +1576,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Lsf, &rule, "echo test", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "echo test", &config).unwrap();
 
         assert!(script.contains("mkdir -p logs"));
     }
@@ -1763,8 +1650,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
-
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config)
+                .unwrap();
         assert!(script.contains("--gres=gpu:a100:2:40g"));
         assert!(script.contains("--mem-per-gpu=40G"));
     }
@@ -1808,7 +1695,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("gpu=2"));
         // Model request is commented, not a directive
@@ -1854,7 +1742,8 @@ mod tests {
             extra_args: vec![],
         };
         let script =
-            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config);
+            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config)
+                .unwrap();
 
         assert!(script.contains("#$ -l gpu=4"));
     }

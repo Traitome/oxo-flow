@@ -8,37 +8,10 @@
 
 mod common;
 use common::free_port;
-use common::spawn_web_server;
+use common::{api_req, spawn_web_server};
 
-use reqwest::Client;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::time::{Duration, Instant};
-
-async fn req(
-    base: &str,
-    method: &str,
-    path: &str,
-    token: Option<&str>,
-    body: Option<Value>,
-) -> (reqwest::StatusCode, Value) {
-    let client = Client::new();
-    let mut r = match method {
-        "POST" => client.post(format!("{base}{path}")),
-        "PUT" => client.put(format!("{base}{path}")),
-        "GET" => client.get(format!("{base}{path}")),
-        _ => panic!("unsupported method"),
-    };
-    if let Some(t) = token {
-        r = r.bearer_auth(t);
-    }
-    if let Some(b) = body {
-        r = r.json(&b);
-    }
-    let resp = r.send().await.unwrap();
-    let status = resp.status();
-    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
-    (status, value)
-}
 
 #[tokio::test]
 async fn route_authz_and_spawn_budget_gates() {
@@ -59,7 +32,7 @@ async fn route_authz_and_spawn_budget_gates() {
     let base = server.base.clone();
 
     // Provision admin + a user + a viewer.
-    let (status, login) = req(
+    let (status, login) = api_req(
         &base,
         "POST",
         "/api/auth/login",
@@ -70,7 +43,7 @@ async fn route_authz_and_spawn_budget_gates() {
     assert_eq!(status, 200, "admin login: {login}");
     let admin = login["token"].as_str().unwrap().to_string();
     for (name, role) in [("alice", "user"), ("view", "viewer"), ("mallory", "user")] {
-        let (status, body) = req(
+        let (status, body) = api_req(
             &base,
             "POST",
             "/api/users",
@@ -79,7 +52,7 @@ async fn route_authz_and_spawn_budget_gates() {
         )
         .await;
         assert_eq!(status, 200, "create {name}: {body}");
-        let (status, login) = req(
+        let (status, login) = api_req(
             &base,
             "POST",
             "/api/auth/login",
@@ -89,7 +62,7 @@ async fn route_authz_and_spawn_budget_gates() {
         .await;
         assert_eq!(status, 200, "{name} login: {login}");
     }
-    let (_, login) = req(
+    let (_, login) = api_req(
         &base,
         "POST",
         "/api/auth/login",
@@ -98,7 +71,7 @@ async fn route_authz_and_spawn_budget_gates() {
     )
     .await;
     let alice = login["token"].as_str().unwrap().to_string();
-    let (_, login) = req(
+    let (_, login) = api_req(
         &base,
         "POST",
         "/api/auth/login",
@@ -107,7 +80,7 @@ async fn route_authz_and_spawn_budget_gates() {
     )
     .await;
     let viewer = login["token"].as_str().unwrap().to_string();
-    let (_, login) = req(
+    let (_, login) = api_req(
         &base,
         "POST",
         "/api/auth/login",
@@ -119,7 +92,7 @@ async fn route_authz_and_spawn_budget_gates() {
 
     // ── 1. Viewer cannot create runs (documented read-only role) ──
     let toml = "[workflow]\nname = \"authz\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n";
-    let (status, body) = req(
+    let (status, body) = api_req(
         &base,
         "POST",
         "/api/runs",
@@ -130,7 +103,7 @@ async fn route_authz_and_spawn_budget_gates() {
     assert_eq!(status, 403, "viewer create_run must 403: {body}");
 
     // ── 3. create_run cannot execute a foreign PRIVATE pipeline ──
-    let (status, pipeline) = req(
+    let (status, pipeline) = api_req(
         &base,
         "POST",
         "/api/pipelines",
@@ -140,7 +113,7 @@ async fn route_authz_and_spawn_budget_gates() {
     .await;
     assert_eq!(status, 200, "alice pipeline: {pipeline}");
     let pipeline_id = pipeline["id"].as_str().unwrap().to_string();
-    let (status, body) = req(
+    let (status, body) = api_req(
         &base,
         "POST",
         "/api/runs",
@@ -155,7 +128,7 @@ async fn route_authz_and_spawn_budget_gates() {
     assert_eq!(body["code"], "PIPELINE_NOT_FOUND", "{body}");
 
     // ── 4. save_template cannot rewrite another user's template ──
-    let (status, tpl) = req(
+    let (status, tpl) = api_req(
         &base,
         "POST",
         "/api/templates",
@@ -169,7 +142,7 @@ async fn route_authz_and_spawn_budget_gates() {
     .await;
     assert_eq!(status, 200, "alice template create: {tpl}");
     let template_id = tpl["id"].as_str().unwrap().to_string();
-    let (status, body) = req(
+    let (status, body) = api_req(
         &base,
         "POST",
         "/api/templates",
@@ -184,7 +157,7 @@ async fn route_authz_and_spawn_budget_gates() {
     assert_eq!(status, 403, "foreign template upsert must 403: {body}");
 
     // ── 5. license upload is admin-only and size-bounded ──
-    let (status, _) = req(
+    let (status, _) = api_req(
         &base,
         "POST",
         "/api/license/upload",
@@ -194,7 +167,7 @@ async fn route_authz_and_spawn_budget_gates() {
     .await;
     assert_eq!(status, 403, "non-admin license upload must 403");
     let big = "x".repeat(65 * 1024);
-    let (status, body) = req(
+    let (status, body) = api_req(
         &base,
         "POST",
         "/api/license/upload",
@@ -205,15 +178,15 @@ async fn route_authz_and_spawn_budget_gates() {
     assert_eq!(status, 400, "oversized license payload must 400: {body}");
 
     // ── 6. webhook config GET is admin-only ──
-    let (status, _) = req(&base, "GET", "/api/webhook", Some(&alice), None).await;
+    let (status, _) = api_req(&base, "GET", "/api/webhook", Some(&alice), None).await;
     assert_eq!(status, 403, "user webhook GET must 403");
-    let (status, _) = req(&base, "GET", "/api/webhook", Some(&admin), None).await;
+    let (status, _) = api_req(&base, "GET", "/api/webhook", Some(&admin), None).await;
     assert_eq!(status, 200, "admin webhook GET must 200");
 
     // ── 2. retry pays the #213 limiter: rapid loop hits 429 ──
     // (default allowance: 5 runs/min; create below spends one slot)
     let failing = "[workflow]\nname = \"flaky\"\n\n[[rules]]\nname = \"boom\"\noutput = [\"o.txt\"]\nshell = \"false\"\n";
-    let (status, run) = req(
+    let (status, run) = api_req(
         &base,
         "POST",
         "/api/runs",
@@ -226,7 +199,7 @@ async fn route_authz_and_spawn_budget_gates() {
     // Wait for the run to reach a terminal state so retries are accepted.
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let (_, r) = req(
+        let (_, r) = api_req(
             &base,
             "GET",
             &format!("/api/runs/{run_id}"),
@@ -245,7 +218,7 @@ async fn route_authz_and_spawn_budget_gates() {
     // the next retry must answer 429 RUN_RATE_LIMITED.
     let mut saw_limited = false;
     for attempt in 0..8 {
-        let (status, body) = req(
+        let (status, body) = api_req(
             &base,
             "POST",
             &format!("/api/runs/{run_id}/retry"),
@@ -258,9 +231,13 @@ async fn route_authz_and_spawn_budget_gates() {
             saw_limited = true;
             break;
         }
-        assert_eq!(
-            status,
-            reqwest::StatusCode::OK,
+        // Each retry spawns into the SAME workdir; since the workdir claim
+        // was made atomic, a retry whose predecessor has not finished yet
+        // answers 409 RUN_NOT_TERMINAL instead of double-spawning. Both
+        // outcomes consume the spawn budget, so the limiter must still fire.
+        assert!(
+            status == reqwest::StatusCode::OK
+                || (status == reqwest::StatusCode::CONFLICT && body["code"] == "RUN_NOT_TERMINAL"),
             "retry {attempt} unexpected status: {body}"
         );
     }

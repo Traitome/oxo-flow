@@ -39,6 +39,43 @@ pub fn resolve(ext: Option<&Extension<CurrentUser>>) -> CurrentUser {
         .unwrap_or_else(CurrentUser::default_user)
 }
 
+/// Role rank: viewer < user < admin. An unparsable role ranks below viewer
+/// so a corrupted row can never gain privileges.
+fn role_rank(role: &str) -> u8 {
+    match role {
+        "admin" => 2,
+        "user" => 1,
+        "viewer" => 0,
+        _ => 0,
+    }
+}
+
+/// Single home for the role policy (#82 P0-5, #519): outside personal mode
+/// (loopback, single local user — no roles) the acting user must hold at
+/// least `min_role`; the caller supplies the remediation message naming its
+/// surface. Personal mode has no roles, so every gate passes there. This
+/// replaces the six hand-copied `running_mode() != "personal" && …` checks.
+pub fn require_role_outside_personal(
+    user: &CurrentUser,
+    min_role: &str,
+    message: impl Into<String>,
+) -> Result<
+    (),
+    (
+        axum::http::StatusCode,
+        axum::Json<crate::domains::workflow::handlers::ApiError>,
+    ),
+> {
+    if crate::server::running_mode() != "personal" && role_rank(&user.role) < role_rank(min_role) {
+        return Err(crate::domains::workflow::handlers::err(
+            axum::http::StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            message.into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,7 +36,7 @@ export function resolveEditContext(text: string, lineIdx: number, col: number): 
   }
 
   const section = index.sectionBefore(lineIdx);
-  const context = sectionName(section);
+  const context = contextName(section);
 
   const headerTyped = /^\s*\[\[?\s*([A-Za-z0-9_.-]*)$/.exec(before);
   if (headerTyped) return { ctx: { kind: "header", context, typed: headerTyped[1] }, index };
@@ -87,10 +87,6 @@ export function contextName(section: { kind: string; name: string } | null): str
   if (section === null) return "root";
   if (section.kind === "array-of-tables" && section.name === "rules") return "rules";
   return section.name;
-}
-
-function sectionName(section: ReturnType<TomlIndex["sectionBefore"]>): string {
-  return contextName(section);
 }
 
 /** The token the cursor sits in (identifiers, dots, dashes, braces). */

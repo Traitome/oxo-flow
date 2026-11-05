@@ -33,6 +33,16 @@ static IO_INDEXED_PLACEHOLDER_RE: LazyLock<Regex> =
 static IO_NAMED_PLACEHOLDER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(input|output)\.([^{}\s]+)\}").expect("valid io-named regex"));
 
+/// Matches Snakemake-style inline wildcard constraints (`{sample:[A-Z]+}`)
+/// in input/output patterns. The engine's wildcard grammar is
+/// `\{(\w+)\}` only — a `:`-carrying brace group is never parsed as a
+/// wildcard, so it stays literal brace text and the tool fails on a path
+/// that looks valid. Surfaces as diagnostic `E021` (defense-in-depth,
+/// mirroring E004/E020).
+static INLINE_WILDCARD_CONSTRAINT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{(\w+):[^}]+\}").expect("valid inline-wildcard-constraint regex")
+});
+
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -925,31 +935,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // A scatter rule that fans out over zero values produces zero
         // instances — it can never run, so its inputs existing locally is
         // irrelevant (issue #616, same stance as the `when` gate above).
-        // The values resolution mirrors the executor exactly (expand.rs):
-        // declared `values` win, an empty list falls back to
-        // `resolve_config_list(values_from)`. An UNRESOLVABLE
-        // `values_from` (missing key, non-string/array → `None`) is NOT
-        // empty: the executor expands zero instances silently in that
-        // case, so validate keeps the existence check on purpose — a
-        // typo in `values_from` must surface instead of silently
-        // passing (the stricter cousins, `[[values]]` tables and
-        // `transform.split`, reject an unresolvable reference outright).
-        let rule_scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                // No declared values and no fallback source → zero
-                // instances.
-                Option::None => true,
-                // A resolvable list decides emptiness (empty TOML array
-                // → `Some(vec![])` → empty); an unresolvable reference
-                // keeps the rule existence-checked.
-                Some(v_from) => config
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        });
+        // Values-resolution semantics live in the shared predicate
+        // (config `scatter_fan_out_is_empty`): an unresolvable
+        // `values_from` is NOT empty — validate keeps the existence check
+        // so a typo surfaces instead of silently passing.
+        let rule_scatter_empty = config.scatter_fan_out_is_empty(rule);
         // Check for path traversal (..) in inputs
         for input in &rule.input {
             // W020: Warn about non-existent concrete input files (non-wildcard, non-generated)
@@ -1104,7 +1094,25 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     // empty-config build silently missed cycles routed through
     // `{config.*}` outputs, issue #466).
     match WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values()) {
-        Ok(_) => {}
+        Ok(dag) => {
+            if !config.types.is_empty() || config.rules.iter().any(|rule| rule.types.is_some()) {
+                for td in crate::types::check_workflow_types(config, &dag) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "upstream rule '{}' ({} -> {}): {}",
+                            td.producer_rule,
+                            td.producer_channel,
+                            td.consumer_channel,
+                            td.violation.message
+                        ),
+                        rule: Some(td.consumer_rule),
+                        code: td.violation.code,
+                        suggestion: td.violation.suggestion,
+                    });
+                }
+            }
+        }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -1112,6 +1120,72 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 rule: None,
                 code: "E006".to_string(),
                 suggestion: Some("check for circular dependencies between rules".to_string()),
+            });
+        }
+    }
+
+    // E020: `[wildcard_constraints]` entries must compile as regexes.
+    // The constraints are consumed only at expansion/projection time
+    // (`compiled_wildcard_constraints`), so an invalid pattern like
+    // `[z-a]+` used to pass validate/dry-run/lint and surfaced only at
+    // run time as a generic failure. Compilation routes through the SAME
+    // shared helper the engine uses (`compile_wildcard_constraint_map`),
+    // so the validate-time error text is byte-identical to the run-time
+    // one — reuse, never retype.
+    if let Err(e) = crate::wildcard::compile_wildcard_constraint_map(&config.wildcard_constraints) {
+        let crate::error::OxoFlowError::Wildcard { message, .. } = e else {
+            unreachable!("compile_wildcard_constraint_map only raises OxoFlowError::Wildcard")
+        };
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            rule: None,
+            code: "E020".to_string(),
+            suggestion: Some(
+                "fix the regex in [wildcard_constraints] — patterns must be valid Rust regex syntax (see https://docs.rs/regex); a constraint that fails to compile blocks every fan-out that reads the wildcard".to_string(),
+            ),
+        });
+    }
+
+    // E021: input/output patterns must not carry Snakemake-style inline
+    // wildcard constraints (`{sample:[A-Z]+}`). The engine's wildcard
+    // grammar is `\{(\w+)\}` only, so a `:`-carrying group is never bound —
+    // it stays literal brace text and the tool fails on a path that looks
+    // valid. Constraints belong in `[wildcard_constraints]`.
+    for rule in &config.rules {
+        let mut offenders: Vec<&String> = Vec::new();
+        offenders.extend(
+            rule.input
+                .iter()
+                .filter(|p| INLINE_WILDCARD_CONSTRAINT_RE.is_match(p)),
+        );
+        offenders.extend(
+            rule.output
+                .iter()
+                .filter(|p| INLINE_WILDCARD_CONSTRAINT_RE.is_match(p)),
+        );
+        if let Some(pattern) = rule.output_pattern.as_ref()
+            && INLINE_WILDCARD_CONSTRAINT_RE.is_match(pattern)
+        {
+            offenders.push(pattern);
+        }
+        for pattern in offenders {
+            let wildcard = INLINE_WILDCARD_CONSTRAINT_RE
+                .captures(pattern)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str())
+                .unwrap_or("?");
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "rule '{}' uses inline wildcard constraint syntax in pattern '{}' — the engine's wildcard grammar is '{{name}}' only and '{}' will stay literal brace text instead of being expanded",
+                    rule.name, pattern, wildcard
+                ),
+                rule: Some(rule.name.clone()),
+                code: "E021".to_string(),
+                suggestion: Some(
+                    "move the constraint to the [wildcard_constraints] section as `name = \"regex\"` and keep the pattern as a plain '{name}' wildcard".to_string(),
+                ),
             });
         }
     }
@@ -1576,6 +1650,62 @@ pub fn lint_format(
                     "declare output = [...] naming the files this rule produces, or add a depends_on entry for this rule to each rule that consumes its files".to_string(),
                 ),
             });
+        }
+
+        // W035: Shell glob reads outside declared inputs. A glob in a
+        // command (`cat stats/*.count.txt`) is expanded by the shell at run
+        // time — the DAG builder never sees it, so a rule that declares no
+        // inputs gets no edges against the rules that create those files and
+        // can be scheduled before them (the command then fails with e.g.
+        // `cat: 'stats/*.count.txt': No such file or directory`). Glob
+        // inputs declared in `input` are different: the DAG builder
+        // compiles them and links every matching producer output.
+        if rule.input.is_empty()
+            && rule.expand_inputs.is_empty()
+            && rule.input_groups.is_empty()
+            && rule.input_function.is_none()
+            && executes
+            && !can_never_run
+        {
+            let mut glob_reads: std::collections::BTreeSet<String> = Default::default();
+            let cmd_texts = rule
+                .shell
+                .iter()
+                .chain(rule.script.iter())
+                .map(|text| crate::wildcard::strip_shell_comments(text));
+            for text in cmd_texts {
+                for line in text.lines() {
+                    let mut prev = "";
+                    for word in line.split_whitespace() {
+                        let token = word
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .trim_end_matches([';', ',', ')']);
+                        if token.contains('/')
+                            && !word.starts_with('-')
+                            && !prev.starts_with('-')
+                            && prev != "rm"
+                            && (token.contains('*') || token.contains('?') || token.contains('['))
+                        {
+                            glob_reads.insert(token.to_string());
+                        }
+                        prev = word;
+                    }
+                }
+            }
+            for token in glob_reads {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "command reads glob `{token}` but the rule declares no inputs — shell globs create no DAG dependency, so this rule may run before the files it reads exist"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W035".to_string(),
+                    suggestion: Some(
+                        "declare the glob in `input = [...]` (glob inputs are matched against producer outputs and create real DAG edges), or list the files via `expand_inputs` for gather steps"
+                            .to_string(),
+                    ),
+                });
+            }
         }
 
         // W009: Very high thread count (>32) without memory specification
@@ -2155,21 +2285,12 @@ pub fn lint_format(
         // instances (issue #616) — its template colliding with another
         // rule's is noise (9 W033 hits in the enrichment repo came from
         // this), and the "gate one with `when`" suggestion cannot apply.
-        // Same semantics as the E010/W020 gate above: declared `values`
-        // win, and an unresolvable `values_from` conservatively keeps
-        // the rule in the comparison (validate treats it as a typo to
-        // surface, not as an empty fan-out).
-        let scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => config
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        });
+        // Same semantics as the E010/W020 gate above (shared
+        // `scatter_fan_out_is_empty` predicate): declared `values` win,
+        // and an unresolvable `values_from` conservatively keeps the rule
+        // in the comparison (validate treats it as a typo to surface, not
+        // as an empty fan-out).
+        let scatter_empty = config.scatter_fan_out_is_empty(rule);
         if scatter_empty {
             continue;
         }
@@ -2277,7 +2398,11 @@ pub fn lint_format(
             )
             .expect("valid secret-key regex")
         });
-        for key in config.config.keys() {
+        // Sorted: `config` is a HashMap and the diagnostic order must not
+        // wobble between runs (consumer list outputs are diffed).
+        let mut config_keys: Vec<&String> = config.config.keys().collect();
+        config_keys.sort();
+        for key in config_keys {
             let declared_sensitive = config.config_meta.get(key).is_some_and(|def| def.sensitive);
             if declared_sensitive || !SECRET_KEY_RE.is_match(key) {
                 continue;
@@ -2524,49 +2649,6 @@ pub fn check_format_version(version: &str) -> bool {
     version == FORMAT_VERSION || version.starts_with("1.")
 }
 
-/// Known bioinformatics file format extensions.
-pub const KNOWN_BIO_FORMATS: &[&str] = &[
-    ".bam",
-    ".sam",
-    ".cram",
-    ".vcf",
-    ".vcf.gz",
-    ".bcf",
-    ".fastq",
-    ".fastq.gz",
-    ".fq",
-    ".fq.gz",
-    ".bed",
-    ".bed.gz",
-    ".gff",
-    ".gff3",
-    ".gtf",
-    ".fa",
-    ".fasta",
-    ".fa.gz",
-    ".fasta.gz",
-    ".bw",
-    ".bigwig",
-    ".wig",
-    ".tsv",
-    ".csv",
-    ".h5",
-    ".hdf5",
-    ".maf",
-    ".seg",
-    ".bai",
-    ".crai",
-    ".tbi",
-    ".idx",
-];
-
-/// Check if a file path has a known bioinformatics format extension.
-#[must_use]
-pub fn is_known_bio_format(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    KNOWN_BIO_FORMATS.iter().any(|ext| lower.ends_with(ext))
-}
-
 /// Scan text for common secret patterns (API keys, passwords, tokens).
 ///
 /// Returns a list of warnings for any potential secrets found.
@@ -2660,14 +2742,32 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
     // --check` gate built on it — stable across processes. This mirrors
     // `canonical_toml_map` in config_impact.rs, which sorts maps for the
     // same reason when hashing fingerprints.
+    // Round-trip convergence: the parser ALWAYS injects
+    // `config.paired_pairs_list` / `config.paired_pairs_count` at parse time
+    // (config/parse.rs, issue #881) so `when = "config.paired_pairs_count > 0"`
+    // conditions work. They are fully re-derivable from `[[pairs]]`, so
+    // serializing them emits keys the user never wrote — `format` would then
+    // never converge with `format --check` (format → --check still exits 1).
+    // Strip exactly these two keys before serialization. Deliberately NOT
+    // reusing the wider `is_engine_injected_key_with` list (config_impact.rs):
+    // `samples_list` / `pairs_list` are only injected when the corresponding
+    // section is non-empty, but a user may also declare them directly with
+    // entries that exist nowhere else — stripping those would lose data on
+    // round-trip.
     match toml::Value::try_from(config) {
-        Ok(value) => toml::to_string_pretty(&value).unwrap_or_else(|e| {
-            format!(
-                "# Serialization error: {}\n# Falling back to inline format\n{}",
-                e,
-                toml::to_string(&value).unwrap_or_default()
-            )
-        }),
+        Ok(mut value) => {
+            if let Some(cfg) = value.get_mut("config").and_then(|v| v.as_table_mut()) {
+                cfg.remove("paired_pairs_list");
+                cfg.remove("paired_pairs_count");
+            }
+            toml::to_string_pretty(&value).unwrap_or_else(|e| {
+                format!(
+                    "# Serialization error: {}\n# Falling back to inline format\n{}",
+                    e,
+                    toml::to_string(&value).unwrap_or_default()
+                )
+            })
+        }
         // Value conversion only fails if the struct itself is not
         // serializable (should not happen); fall back to direct serialization.
         Err(_) => toml::to_string_pretty(config).unwrap_or_else(|e| {
@@ -3119,6 +3219,127 @@ mod tests {
             "E016 must reject shell metacharacters in environment.docker"
         );
         assert!(result.errors().iter().any(|d| d.code == "E016"));
+    }
+
+    #[test]
+    fn validate_rejects_uncompilable_wildcard_constraint() {
+        // E020: an invalid regex in [wildcard_constraints] must fail
+        // validate. Parse ALREADY rejects such entries for TOML-loaded
+        // configs (`WorkflowConfig::validate`, the same gate since the
+        // constraint loop was introduced), so this test constructs the
+        // config programmatically — the path E020 exists for, mirroring
+        // the E004 defense-in-depth rationale for configs built by code
+        // rather than parsed from disk. `[z-a]+` is the canonical
+        // impossible range — the regex crate rejects it.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config
+            .wildcard_constraints
+            .insert("sample".to_string(), "[z-a]+".to_string());
+        let result = validate_format(&config);
+        assert!(!result.valid, "E020 must fail validation");
+        let errs = result.errors();
+        let err = errs
+            .iter()
+            .find(|d| d.code == "E020")
+            .expect("E020 diagnostic for uncompilable constraint");
+        assert!(
+            err.message
+                .contains("invalid regex constraint '[z-a]+' for wildcard 'sample'"),
+            "E020 message must carry the shared run-time error shape, got: {}",
+            err.message
+        );
+        assert!(err.rule.is_none(), "constraint errors are workflow-level");
+    }
+
+    #[test]
+    fn validate_accepts_valid_wildcard_constraints() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [wildcard_constraints]
+            sample = "[A-Z0-9]+"
+            read = "[12]"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.errors().iter().any(|d| d.code == "E020"),
+            "valid constraints must not trip E020"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inline_wildcard_constraint_syntax() {
+        // E021: a Snakemake-style inline constraint `{sample:[A-Z]+}` in an
+        // input/output pattern is never parsed as a wildcard by the engine
+        // (grammar is `{name}` only), so it stays literal brace text and the
+        // tool fails on a path that looks valid. Validation must catch it up
+        // front and point at [wildcard_constraints].
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample:[A-Z]+}.txt"]
+            output = ["out/{sample:[A-Z]+}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid, "E021 must fail validation");
+        let err = result
+            .errors()
+            .iter()
+            .find(|d| d.code == "E021")
+            .cloned()
+            .expect("inline wildcard constraint must surface as E021");
+        assert!(
+            err.message.contains("'sample'"),
+            "E021 message must name the offending wildcard, got: {}",
+            err.message
+        );
+        assert_eq!(err.rule.as_deref(), Some("r1"), "E021 is rule-level");
+    }
+
+    #[test]
+    fn validate_accepts_plain_wildcards_without_inline_constraints() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [wildcard_constraints]
+            sample = "[A-Z0-9]+"
+
+            [[rules]]
+            name = "r1"
+            input = ["data/{sample}.txt"]
+            output = ["out/{sample}.txt"]
+            shell = "cp {input} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.errors().iter().any(|d| d.code == "E021"),
+            "plain {{name}} wildcards must not trip E021"
+        );
     }
 
     #[test]
@@ -4487,15 +4708,6 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
     }
 
     #[test]
-    fn known_bio_formats() {
-        assert!(is_known_bio_format("sample.bam"));
-        assert!(is_known_bio_format("variants.vcf.gz"));
-        assert!(is_known_bio_format("reads.fastq.gz"));
-        assert!(!is_known_bio_format("readme.txt"));
-        assert!(!is_known_bio_format("config.toml"));
-    }
-
-    #[test]
     fn secret_scanning_detects_aws_key() {
         let diags = scan_for_secrets("aws_access_key = AKIAIOSFODNN7EXAMPLE");
         assert!(!diags.is_empty());
@@ -4560,7 +4772,10 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             extends = "nonexistent"
             shell = "echo hello"
         "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
+        // Bypass WorkflowConfig::parse: load-path resolution rejects this
+        // before validate_format runs. The validator still owns E008 for
+        // callers that construct or deserialize a config directly.
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E008"));
@@ -5008,6 +5223,61 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let config = WorkflowConfig::parse(toml).unwrap();
         let formatted = format_workflow(&config);
         assert!(formatted.contains("depends_on = [\"setup\"]"));
+    }
+
+    #[test]
+    fn format_workflow_converges_with_check() {
+        // F-1 regression: format must be idempotent under parse — formatting
+        // the output of format_workflow again must not change it, otherwise
+        // `format` followed by `format --check` fails forever.
+        let toml = r#"
+            [workflow]
+            name = "pairs"
+            version = "1.0.0"
+
+            [[pairs]]
+            pair_id = "CASE_001"
+            experiment = "EXP_01"
+            control = "CTRL_01"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let once = format_workflow(&config);
+        assert!(
+            !once.contains("paired_pairs_list"),
+            "always-injected derived key must not be emitted: {once}"
+        );
+        assert!(!once.contains("paired_pairs_count"));
+        let reparsed = WorkflowConfig::parse(&once).unwrap();
+        let twice = format_workflow(&reparsed);
+        assert_eq!(once, twice, "format(parse(format(x))) != format(x)");
+    }
+
+    #[test]
+    fn format_workflow_keeps_user_declared_lists() {
+        // `samples_list` is NOT engine-injected-only: users may declare entries
+        // that exist nowhere else, so the formatter must keep it verbatim.
+        let toml = r#"
+            [workflow]
+            name = "lists"
+            version = "1.0.0"
+
+            [config]
+            samples_list = "manual"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(
+            formatted.contains("samples_list = \"manual\""),
+            "user-declared samples_list must survive formatting"
+        );
     }
 
     #[test]
@@ -6044,6 +6314,167 @@ shell = "samtools faidx {{config.reference}}"
             !suggestion.contains("every consumer"),
             "the old suggestion ('add depends_on to every consumer') could not silence \
              the warning once dependents skip it: {suggestion}"
+        );
+    }
+
+    // ---- W035: Shell glob reads outside declared inputs ----
+
+    #[test]
+    fn lint_glob_reads_outside_declared_inputs_fires_w035() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w035: Vec<_> = diagnostics.iter().filter(|d| d.code == "W035").collect();
+        assert_eq!(
+            w035.len(),
+            1,
+            "one glob read must yield exactly one W035: {diagnostics:?}"
+        );
+        assert_eq!(w035[0].rule.as_deref(), Some("merge"));
+        assert!(
+            w035[0].message.contains("stats/*.count.txt"),
+            "the message must name the offending glob, got: {}",
+            w035[0].message
+        );
+        let suggestion = w035[0].suggestion.as_deref().unwrap_or_default();
+        assert!(
+            suggestion.contains("input = [") && suggestion.contains("expand_inputs"),
+            "the suggestion must offer glob inputs and expand_inputs, got: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_glob_inputs_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input = ["stats/*.count.txt"]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "a declared glob input creates real DAG edges — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_condition_is_false() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            when = "false"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "a rule with when = \"false\" can never execute — the glob is moot: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_expand_inputs_declared() {
+        // Inline table must stay on ONE line — TOML inline tables cannot
+        // span lines.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "merge"
+            expand_inputs = [{ pattern = "stats/{sample}.count.txt", variables = { sample = "config.samples_list" } }]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "expand_inputs is the documented fan-in fix for gather steps — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_for_cleanup_and_find_patterns() {
+        // Flag-argument patterns (`-name '*.tmp'`) and cleanup `rm` commands
+        // are not data reads — they must stay silent.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "cleanup"
+            output = ["done.txt"]
+            shell = "rm -rf build/* && find data -name '*.tmp' -delete && touch done.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "rm targets and find -name pattern arguments are not data reads: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_input_groups_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_groups = [{ pattern = "stats/{sample}.count.txt", group_by = "sample" }]
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "input_groups declare where the files come from — no warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w035_when_input_function_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_function = "get_inputs"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W035"),
+            "input_function fills the input list at run time — no warning: {diagnostics:?}"
         );
     }
 

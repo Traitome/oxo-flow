@@ -7,12 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-/// `"1 rule"` / `"2 rules"` — the summary counts read "1 rules" before the
-/// CLI grew pluralisation (audit P4-1d). Now a thin alias for the shared
-/// core helper (reuse-never-retype).
-fn plural(count: usize, singular: &str, plural_form: &str) -> String {
-    oxo_flow_core::plural(count, singular, plural_form)
-}
+use oxo_flow_core::plural;
 
 pub async fn validate_command(
     workflow: PathBuf,
@@ -181,7 +176,11 @@ pub async fn validate_command(
                                 e
                             );
                         }
-                        std::process::exit(1);
+                        // Bail (not process::exit) — same contract as the
+                        // parse-failure path below: `test --json` composes
+                        // steps into ONE aggregate document, and an inner
+                        // exit bypassed emit_test_json entirely (audit #666).
+                        anyhow::bail!("workflow DAG construction failed");
                     }
                 }
             };
@@ -574,6 +573,18 @@ fn print_deep_console(report: &oxo_flow_core::deep_check::DeepCheckReport) {
         finding_lines("D004");
     }
 
+    if report.biological_headers_checked > 0 || has("D005") {
+        eprintln!("{}", "  Biological Headers:".bold());
+        if report.biological_headers_checked > 0 && !has("D005") {
+            eprintln!(
+                "    {} {} biological header(s) verified",
+                "✓".green().bold(),
+                report.biological_headers_checked
+            );
+        }
+        finding_lines("D005");
+    }
+
     eprintln!(
         "\n{} {}, {}",
         "Deep check summary:".bold(),
@@ -610,8 +621,13 @@ pub fn format_command(workflow: PathBuf, output: Option<PathBuf>, check: bool) -
                 std::fs::write(&path, &formatted)?;
                 eprintln!("Formatted workflow written to {}", path.display());
             }
+            // In-place rewrite (rustfmt/black convention): formatting the
+            // file where it stands makes `format` converge with
+            // `format --check` — printing to stdout forced every caller into
+            // shell redirects and left the file untouched.
             None => {
-                print!("{formatted}");
+                std::fs::write(&workflow, &formatted)?;
+                eprintln!("Formatted workflow written to {}", workflow.display());
             }
         }
     }
@@ -807,7 +823,7 @@ pub fn touch_command(
         anyhow::bail!(
             "{} not found in '{}' — nothing was touched for them.\n  \
              Run `oxo-flow dry-run {}` to list the expanded rule names.",
-            oxo_flow_core::plural(
+            plural(
                 unknown_rules.len(),
                 "requested rule name",
                 "requested rule names"
@@ -823,7 +839,7 @@ pub fn touch_command(
     if failed_touched > 0 {
         anyhow::bail!(
             "touch: {} failed to mark in {}",
-            oxo_flow_core::plural(failed_touched, "output path", "output paths"),
+            plural(failed_touched, "output path", "output paths"),
             workflow.display()
         );
     }
@@ -878,17 +894,7 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
         // Same stance for a scatter rule with zero fan-out (issue #616):
         // declared `values` win; an unresolvable `values_from` keeps the
         // rule checked so the typo surfaces instead of passing silently.
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => cfg
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if cfg.scatter_fan_out_is_empty(rule) {
             continue;
         }
         for input in &rule.input {
@@ -945,17 +951,7 @@ fn collect_missing_pixi_manifests(
         }) {
             continue;
         }
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                Option::None => true,
-                Some(v_from) => cfg
-                    .resolve_config_list(v_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if cfg.scatter_fan_out_is_empty(rule) {
             continue;
         }
         let resolved = rule.environment.resolve_relative_paths(Some(workflow_dir));

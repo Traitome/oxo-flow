@@ -1,18 +1,22 @@
 # Reproducibility
 
 Reproducibility is a core design principle of oxo-flow. This document describes
-the mechanisms and methodology that ensure workflows produce identical results
-across runs, machines, and time.
+the mechanisms that record and check execution state, and the conditions that
+must also hold before two results can be compared as reproducible. oxo-flow
+does not make biological results identical merely by rerunning a workflow:
+inputs, reference data, software environments, commands, hardware behavior, and
+external services can all affect outputs.
 
-## Deterministic Execution Guarantees
+## Deterministic Execution Controls
 
-oxo-flow provides the following guarantees for deterministic execution:
+oxo-flow provides the following deterministic controls:
 
 - **Fixed task ordering** — The DAG executor resolves dependencies via
   topological sort and executes tasks in a deterministic order. The DAG
   engine computes parallel execution groups based on dependency depth.
 - **Isolated execution** — Each task runs in its own environment (container,
-  conda env, or venv), preventing cross-task interference.
+  conda env, or venv), reducing tool-version conflicts. This is not an OS
+  security boundary or a guarantee against shared-host interference.
 
 ## Configuration Checksumming
 
@@ -96,13 +100,21 @@ output checksums for later `oxo-flow provenance verify`.
 Provenance records are stored as structured JSON alongside workflow outputs and
 can be used to:
 
-- Audit past executions for regulatory compliance
+- Review past executions and detect file drift
 - Compare runs to identify sources of variability
 - Verify output file integrity against stored checksums
-- Generate compliance reports for clinical and regulated environments
+- Supply evidence to a separately governed validation process
 
 ## Validation
 
-For clinical and regulated environments, oxo-flow's reproducibility mechanisms
-support formal validation protocols. See
-[VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md) for IQ/OQ/PQ templates.
+The repository contains an IQ/OQ/PQ template in
+[VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md). A template is not
+qualification evidence: clinical or regulated use requires an executed,
+site-specific validation plan, traceable requirements and test mappings,
+approved change control, operator training, and independent review.
+
+Recorded checksums, deterministic ordering, and provenance are supporting
+controls, not a claim that a result is biologically valid or clinically
+qualified. See
+[`docs/superpowers/audits/industrial-scientific-audit-ledger.md`](docs/superpowers/audits/industrial-scientific-audit-ledger.md)
+for current release blockers and evidence status.

@@ -6,15 +6,10 @@
 //! with "unknown module" before executing anything.
 
 mod common;
-use common::workspace_bin;
+use common::oxo_flow_cmd;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 /// `test --run -t gen` executes exactly the targeted rule. With the swapped
 /// arguments the command errored with "unknown module 'gen'" and produced

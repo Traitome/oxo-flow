@@ -249,13 +249,6 @@ pub fn collect_software_versions(
     }
 }
 
-/// True when a conda/mamba spec looks like a repository file (has a
-/// directory component or a YAML extension) rather than a bare env name —
-/// same distinction deep_check's `looks_file_like` draws.
-fn looks_file_like(value: &str) -> bool {
-    value.contains('/') || value.ends_with(".yaml") || value.ends_with(".yml")
-}
-
 /// Record a conda/mamba spec: file-backed specs get their path plus a
 /// content hash (the only version identity available statically); bare env
 /// names are recorded honestly with a note instead of a fabricated version.
@@ -266,7 +259,7 @@ fn push_env_file_like(
     specs: &mut Vec<(String, String)>,
     notes: &mut Vec<String>,
 ) {
-    if !looks_file_like(spec) {
+    if !crate::rule::EnvironmentSpec::spec_is_file_backed(spec) {
         specs.push((format!("{field}_env"), spec.to_string()));
         notes.push(format!(
             "{field} is a bare environment name — its package versions are \

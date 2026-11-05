@@ -382,6 +382,10 @@ pub struct ExecutorConfig {
     /// somewhere with room instead of the system default. `None` keeps the
     /// ambient environment untouched.
     pub tmp_dir: Option<PathBuf>,
+    /// Hardware topology for NUMA-aware scheduling and node binding.
+    pub hardware_topology: Option<crate::hardware::HardwareTopology>,
+    /// Multi-tier scratch storage ladder (Tier 0 RAM, Tier 1 NVMe, Tier 2 Shared).
+    pub storage_tiers: Option<crate::hardware::StorageTierLadder>,
 }
 
 impl Default for ExecutorConfig {
@@ -410,6 +414,8 @@ impl Default for ExecutorConfig {
             workflow_root: None,
             output_tail_bytes: super::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
             tmp_dir: None,
+            hardware_topology: None,
+            storage_tiers: None,
         }
     }
 }
@@ -424,6 +430,15 @@ pub const DEFAULT_WAIT_REPORT_INTERVAL: std::time::Duration = std::time::Duratio
 /// How often a task blocked on the in-process env setup lock logs its wait
 /// (issue #685) — same cadence as the resource-wait diagnostics above.
 const SETUP_WAIT_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Scratch-size default when a rule declares no `resources.disk`: small
+/// enough to fit any tier, large enough to keep scratch jobs off the
+/// workdir disk when a tier exists at all.
+const DEFAULT_SCRATCH_REQUIRED_MB: u64 = 1024;
+
+/// RAM-scratch admission gate: only jobs at or under this size may route to
+/// tmpfs — a bigger working set would swap and defeat the purpose of Tier 0.
+const MAX_RAM_SCRATCH_MB: u64 = 2048;
 
 pub struct LocalExecutor {
     config: ExecutorConfig,
@@ -1385,7 +1400,7 @@ impl LocalExecutor {
         let resolved_env = rule
             .environment
             .resolve_relative_paths(self.config.workflow_root.as_deref());
-        match self.env_resolver.wrap_command(
+        let wrapped = match self.env_resolver.wrap_command(
             command,
             &resolved_env,
             Some(&resources),
@@ -1417,6 +1432,32 @@ impl LocalExecutor {
                     rule.environment.kind()
                 ),
             }),
+        }?;
+
+        if rule.resources.numa_pin || rule.resources.numa_node.is_some() {
+            let topo = self
+                .config
+                .hardware_topology
+                .clone()
+                .unwrap_or_else(crate::hardware::HardwareTopology::discover);
+            let node = rule.resources.numa_node.unwrap_or_else(|| {
+                let mem_mb = rule
+                    .resources
+                    .memory
+                    .as_deref()
+                    .and_then(crate::scheduler::parse_memory_mb);
+                topo.select_node_for_job(mem_mb).unwrap_or(0)
+            });
+            // Which node a memory-bound rule pins to is otherwise
+            // invisible in the logs.
+            tracing::debug!(
+                rule = %rule.name,
+                numa_node = node,
+                "command wrapped with numactl"
+            );
+            Ok(topo.wrap_command_with_numa(&wrapped, node))
+        } else {
+            Ok(wrapped)
         }
     }
 
@@ -1599,21 +1640,43 @@ impl LocalExecutor {
     /// and a process-local counter so parallel instances of the same rule
     /// never collide. The directory itself is created only right before the
     /// command spawns — pre-flight failures must not leak empty dirs.
-    fn scratch_dir_for(&self, rule_name: &str) -> PathBuf {
+    fn scratch_dir_for(&self, rule: &Rule) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let subpath = format!("{}-{millis}-{n}", sanitize_dir_component(&rule.name));
+
+        if let Some(ref ladder) = self.config.storage_tiers {
+            let required_mb = rule
+                .resources
+                .disk
+                .as_deref()
+                .and_then(crate::scheduler::parse_memory_mb)
+                .unwrap_or(DEFAULT_SCRATCH_REQUIRED_MB);
+            let allow_ram = required_mb <= MAX_RAM_SCRATCH_MB;
+            if let Some((tier, tier_root)) = ladder.select_tier_for_scratch(required_mb, allow_ram)
+            {
+                // The tier a rule runs on (RAM disk vs NVMe vs shared FS)
+                // is otherwise invisible — say it once per selection.
+                tracing::debug!(
+                    rule = %rule.name,
+                    tier = tier.as_str(),
+                    scratch_root = %tier_root.display(),
+                    required_mb,
+                    "scratch allocated on storage tier"
+                );
+                return tier_root.join(".oxo-flow-scratch").join(subpath);
+            }
+        }
+
         self.config
             .workdir
             .join(".oxo-flow")
             .join("scratch")
-            .join(format!(
-                "{}-{millis}-{n}",
-                sanitize_dir_component(rule_name)
-            ))
+            .join(subpath)
     }
 
     /// Move every declared output that was produced inside the scratch
@@ -1902,7 +1965,7 @@ impl LocalExecutor {
         // upload-stage paths (issue #80 item 2). The substitution lives on
         // a copy of the rule — `config.rules` is never mutated and
         // checkpoints keep recording the original remote URIs.
-        let (rule, uploads) = match super::staging::stage_remote_io(
+        let (rule, uploads, mut stream_guards) = match super::staging::stage_remote_io(
             rule,
             &self.config.workdir,
             wildcard_values,
@@ -1917,9 +1980,9 @@ impl LocalExecutor {
                     record.finished_at = Some(Utc::now());
                     return Ok(record);
                 }
-                (prep.rule, prep.uploads)
+                (prep.rule, prep.uploads, prep.stream_guards)
             }
-            Ok(None) => (rule.clone(), Vec::new()),
+            Ok(None) => (rule.clone(), Vec::new(), Vec::new()),
             Err(e) => {
                 record.status = JobStatus::Failed;
                 record.finished_at = Some(Utc::now());
@@ -2007,11 +2070,7 @@ impl LocalExecutor {
         // both POSIX (TMPDIR) and legacy (TEMP/TMP) readers land on the same
         // scratch volume. Applied to rule.envvars before spawn, which covers
         // reference builds too — they execute as ordinary DAG rules.
-        if let Some(tmp) = self.config.tmp_dir.as_deref() {
-            for var in ["TMPDIR", "TMP", "TEMP"] {
-                rule_envs.insert(var.to_string(), tmp.display().to_string());
-            }
-        }
+        insert_tmpdir_vars(&mut rule_envs, self.config.tmp_dir.as_deref());
 
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
@@ -2101,7 +2160,7 @@ impl LocalExecutor {
         // here (environment wrapping needs it for container mounts) but the
         // directory itself is only created right before the command spawns,
         // so pre-flight failures never leak empty dirs.
-        let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule.name));
+        let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule));
 
         // Pre-execution snapshot of the declared outputs: on failure, only
         // files this attempt creates or modifies are invalidated (issue
@@ -2393,11 +2452,7 @@ impl LocalExecutor {
             // pre_exec runs with the same scratch routing as the rule shell
             // itself (issue #907): a hook that stages temp files must land
             // on the configured volume, not the system default.
-            if let Some(tmp) = self.config.tmp_dir.as_deref() {
-                for var in ["TMPDIR", "TMP", "TEMP"] {
-                    pre_envs.insert(var.to_string(), tmp.display().to_string());
-                }
-            }
+            insert_tmpdir_vars(&mut pre_envs, self.config.tmp_dir.as_deref());
             let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
@@ -2632,9 +2687,8 @@ impl LocalExecutor {
                 break;
             }
 
-            // R1 fix: trigger retries for TimeOut as well if needed.
-            // Original code had `if record.status != JobStatus::TimedOut` before the retry loop logic.
-            // Actually, the Phase 1 says "Fix timeout skipping retries".
+            // Timeouts enter the retry ladder like any other failure —
+            // the shell exits 152 (SIGXCPU) and the classifier tags it.
 
             if attempt + 1 < max_attempts {
                 // Retry visibility (audit #276 P4-3): retries were completely
@@ -2716,6 +2770,42 @@ impl LocalExecutor {
             // (e.g. "tool_a; rm -f temp" — rm succeeds, masking tool_a failure).
             let missing = validate_outputs(&rule, &self.config.workdir, wildcard_values);
             if missing.is_empty() {
+                let mut stream_ok = true;
+                for guard in &mut stream_guards {
+                    if let Err(e) = guard.finish().await {
+                        record.status = JobStatus::Failed;
+                        record.exit_code = Some(-1);
+                        push_stderr_note(
+                            &mut record,
+                            &format!("\n[oxo-flow] streaming FIFO failed: {e}"),
+                        );
+                        stream_ok = false;
+                        break;
+                    }
+                }
+                if !stream_ok {
+                    cleanup_temp_outputs(&rule, &self.config.workdir).await;
+                    super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                    if let Some(ref hook_cmd) = rule.on_failure {
+                        run_hook(
+                            &render_shell_command(
+                                hook_cmd,
+                                &rule,
+                                wildcard_values,
+                                crate::scheduler::ResourceLimits {
+                                    threads: self.system_threads,
+                                    memory_mb: self.system_memory_mb,
+                                },
+                            ),
+                            &rule,
+                            &self.config.workdir,
+                            self.config.shell_prelude.as_deref(),
+                            self.config.tmp_dir.as_deref(),
+                        )
+                        .await;
+                    }
+                    return Ok(record);
+                }
                 record.status = JobStatus::Success;
                 // Remote outputs land in the cloud only after the local
                 // copies passed validation (issue #80 item 2). An upload
@@ -3115,7 +3205,14 @@ fn build_execution_command_inner(
         }
     }
     if !dirs_to_create.is_empty() {
-        let mkdir_cmd = format!("mkdir -p {}", dirs_to_create.join(" "));
+        // Quoted individually: `{config.results_dir}` etc. are not subject
+        // to the wildcard charset gate, so a space in the value used to
+        // split into two bogus mkdir targets.
+        let quoted: Vec<String> = dirs_to_create
+            .iter()
+            .map(|d| format!("'{}'", crate::environment::escape_for_sh_single_quote(d)))
+            .collect();
+        let mkdir_cmd = format!("mkdir -p {}", quoted.join(" "));
         base_cmd = format!("{}\n{}", mkdir_cmd, base_cmd);
     }
 
@@ -3134,7 +3231,10 @@ fn build_execution_command_inner(
                 }
             }
             let expanded_v = super::expand_to_fixed_point(v, &expand_map, render_wildcard_value);
-            let escaped_v = expanded_v.replace('\'', "'\\''");
+            // Single choke point for shell-quoting (`'` → `'\''`): going
+            // through the shared helper keeps this prefix builder in step
+            // with every other `sh -c '…'` embed site.
+            let escaped_v = crate::environment::escape_for_sh_single_quote(&expanded_v);
             env_prefix.push_str(&format!("export {}='{}'\n", k, escaped_v));
         }
         base_cmd = format!("{}{}", env_prefix, base_cmd);
@@ -3796,6 +3896,18 @@ async fn discard_scratch(scratch: Option<&Path>) {
 /// `tmp_dir` is the run's global scratch dir (issue #907) — hooks get the
 /// same TMPDIR/TMP/TEMP routing as the rule shell so tools they invoke
 /// spill to the configured volume too.
+/// Route the global scratch directory (`[engine] tmp_dir`, issue #907) into
+/// `TMPDIR`/`TMP`/`TEMP` like Snakemake's tmpdir resource, so both POSIX
+/// (TMPDIR) and legacy (TEMP/TMP) readers land on the same scratch volume.
+/// `None` leaves `envs` untouched.
+fn insert_tmpdir_vars(envs: &mut HashMap<String, String>, tmp_dir: Option<&std::path::Path>) {
+    if let Some(tmp) = tmp_dir {
+        for var in ["TMPDIR", "TMP", "TEMP"] {
+            envs.insert(var.to_string(), tmp.display().to_string());
+        }
+    }
+}
+
 async fn run_hook(
     cmd: &str,
     rule: &Rule,
@@ -3806,11 +3918,7 @@ async fn run_hook(
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = rule.envvars.clone();
-    if let Some(tmp) = tmp_dir {
-        for var in ["TMPDIR", "TMP", "TEMP"] {
-            envs.insert(var.to_string(), tmp.display().to_string());
-        }
-    }
+    insert_tmpdir_vars(&mut envs, tmp_dir);
     let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {
@@ -3856,11 +3964,7 @@ pub async fn run_workflow_hook(
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = HashMap::new();
-    if let Some(tmp) = tmp_dir {
-        for var in ["TMPDIR", "TMP", "TEMP"] {
-            envs.insert(var.to_string(), tmp.display().to_string());
-        }
-    }
+    insert_tmpdir_vars(&mut envs, tmp_dir);
     let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {
@@ -6431,5 +6535,57 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
             let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
             assert!(hint.contains(expect), "{kind}: {hint} lacks {expect}");
         }
+    }
+
+    #[test]
+    fn resolve_command_wraps_with_numactl_when_numa_pin_enabled() {
+        let ex = LocalExecutor::new(ExecutorConfig::default());
+        let rule = Rule {
+            name: "align".to_string(),
+            resources: crate::rule::Resources {
+                numa_pin: true,
+                numa_node: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let wrapped = ex.resolve_command("echo hello", &rule, None).unwrap();
+        assert_eq!(wrapped, "numactl --cpunodebind=2 --membind=2 -- echo hello");
+    }
+
+    #[test]
+    fn scratch_dir_routes_to_storage_tier_when_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nvme_scratch = tmp.path().join("local_nvme");
+        std::fs::create_dir_all(&nvme_scratch).unwrap();
+
+        let ladder = crate::hardware::StorageTierLadder::new(
+            None::<std::path::PathBuf>,
+            Some(nvme_scratch.clone()),
+            None::<std::path::PathBuf>,
+        );
+
+        let ex = LocalExecutor::new(ExecutorConfig {
+            storage_tiers: Some(ladder),
+            ..Default::default()
+        });
+
+        let rule = Rule {
+            name: "heavy_sort".to_string(),
+            scratch: true,
+            // Sized below any host's free disk: the tier must be selected on
+            // free-space grounds alone, not on the machine's capacity.
+            resources: crate::rule::Resources {
+                disk: Some("64M".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let scratch = ex.scratch_dir_for(&rule);
+        assert!(
+            scratch.starts_with(&nvme_scratch),
+            "expected scratch under nvme: {scratch:?}"
+        );
     }
 }

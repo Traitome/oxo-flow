@@ -1,6 +1,6 @@
 # Create a Workflow
 
-This guide covers the complete process of authoring an `.oxoflow` workflow file, from project scaffolding to production-ready pipelines.
+This guide covers the process of authoring an `.oxoflow` workflow file, from project scaffolding to reviewable, reference-scale pipelines. Production and clinical qualification are separate evidence gates.
 
 ---
 

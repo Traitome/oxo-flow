@@ -1,12 +1,13 @@
 //! Audit schema unification + complete run inserts (B3, B4).
 //!
-//! Production boots `db::init_db` (creates the audit_logs table first) and
-//! then `infra::db::sqlite::init_pool`. The two schemas used to disagree on
-//! columns, so the sqlite backend's `log_action` INSERT failed at runtime.
+//! `db::init_db` used to carry its own second schema; the two boot paths
+//! disagreed on columns and the sqlite backend's `log_action` INSERT failed
+//! at runtime. `db::init_db` now delegates to the canonical sqlite backend —
+//! these tests pin that the unified schema keeps accepting both writers.
 
 use oxo_flow_web::db;
 use oxo_flow_web::infra::db::StorageBackend;
-use oxo_flow_web::infra::db::sqlite::SqliteBackend;
+use oxo_flow_web::infra::db::sqlite::{self, SqliteBackend};
 
 mod common;
 
@@ -24,9 +25,9 @@ fn db_url() -> &'static str {
 #[tokio::test]
 async fn audit_log_action_survives_both_init_paths() {
     let url = db_url();
-    // Production order: the legacy db::init_db creates audit_logs first.
+    // Production order: db::init_db (canonical schema + template seed).
     db::init_db(url).await.expect("db init");
-    // Second init path must no-op cleanly and share the same schema.
+    // A directly-constructed backend must share the same schema.
     let backend = SqliteBackend::new(url).await.expect("backend connect");
 
     backend
@@ -35,13 +36,13 @@ async fn audit_log_action_survives_both_init_paths() {
         .expect("log_action must succeed with the unified schema");
 
     // The row must carry both the result and metadata columns.
-    let pool = db::pool();
+    let pool = sqlite::pool();
     let row: (String, String, Option<String>) = sqlx::query_as(
         "SELECT action, result, metadata FROM audit_logs WHERE action = 'test.action'",
     )
     .fetch_one(pool)
     .await
-    .expect("audit row readable through the db.rs pool");
+    .expect("audit row readable through the canonical sqlite pool");
     assert_eq!(row.0, "test.action");
     assert_eq!(row.1, "success");
     assert!(row.2.is_none());
@@ -76,7 +77,7 @@ async fn runs_schema_accepts_backend_insert() {
         .await
         .expect("create_run");
 
-    let pool = db::pool();
+    let pool = sqlite::pool();
     let row: (String, String, String, Option<String>, Option<String>, String) = sqlx::query_as(
         "SELECT pipeline_snapshot, workflow_name, phase, pid, workdir, created_at FROM runs WHERE id = 'run-fill-1'",
     )

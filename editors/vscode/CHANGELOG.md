@@ -4,6 +4,33 @@ All notable changes to the oxo-flow VS Code extension are documented here.
 The extension version is kept in lockstep with the oxo-flow project version
 (see the project-level `CHANGELOG.md` for engine changes).
 
+## 0.28.0
+
+- Refactor wave: shared `pipelineSlug` / `parseCliVersion` helpers, one
+  output channel (IDE generation no longer forks its own), folder
+  resolution delegated to `resolveFolder`, task definitions keyed by the
+  `TASK_TYPE` constant, and dead-code removal in the schema generator
+  and completion data.
+- Snippet fixes: `sample_groups` emitted as a sequence, env groups carry
+  the environment keys directly, config knobs use `help`.
+- Lint/validate parse failures surface a diagnostic instead of silence;
+  AI repair rounds that yield no TOML block warn.
+- Task and status args use folder-relative paths.
+
+## 0.27.0
+
+- Structural refactors merged with the engine release; no
+  extension-specific user-visible features.
+
+## 0.23.0 – 0.26.0
+
+- **AI generation can use the editor language model** — new
+  `oxo-flow.ai.backend` setting (`auto` | `cli` | `ide`); `ide` runs
+  generation through VS Code's language-model API instead of the CLI
+  binary (#820).
+- Publishing reliability, first-run UX, and Report Issue fixes (#817);
+  the Report Issue URL survives `openExternal` verbatim (#822).
+
 ## 0.22.0
 
 - **Get Started walkthrough** — four-step onboarding (welcome → connect

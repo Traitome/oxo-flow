@@ -60,6 +60,80 @@ impl RuleStatus {
             RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh
         )
     }
+
+    /// Whether this status flags degraded validity — changed inputs or
+    /// missing outputs. The stderr listing styles these loud-yellow (with
+    /// the cascades) so the eye lands on *why* a rule re-runs.
+    pub fn is_warning(&self) -> bool {
+        matches!(
+            self,
+            RuleStatus::InputInvalidated | RuleStatus::OutputsMissing
+        )
+    }
+
+    /// The three renderings every status display derives from:
+    /// `(bracket_word, machine_tag, reason, cascaded_from)`.
+    ///
+    /// - `bracket_word` — the `[run:`/`[skip:`/`[rerun:` word the human
+    ///   stderr listing prints and the JSON plan mirrors 1:1.
+    /// - `machine_tag` — the checkpoint-block tag persisted for issue #66.
+    ///   Carried explicitly because it does NOT decompose from the word:
+    ///   cascades print as `rerun` but persist as `run-cascaded`, and
+    ///   `Skipped` persists as bare `skip` while its siblings carry
+    ///   suffixes.
+    /// - `reason` — the human text after the colon.
+    /// - `cascaded_from` — the rule this cascade originates from.
+    pub fn render_parts(&self) -> (&'static str, &'static str, String, Option<String>) {
+        match self {
+            RuleStatus::NeverCompleted => (
+                "run",
+                "run-never-completed",
+                "never completed".to_string(),
+                None,
+            ),
+            RuleStatus::ConfigInvalidated => (
+                "run",
+                "run-config-changed",
+                "config changed".to_string(),
+                None,
+            ),
+            RuleStatus::InputInvalidated => (
+                "run",
+                "run-input-changed",
+                "input changed".to_string(),
+                None,
+            ),
+            RuleStatus::OutputsMissing => (
+                "run",
+                "run-outputs-missing",
+                "outputs missing".to_string(),
+                None,
+            ),
+            RuleStatus::Cascaded { from } => (
+                "rerun",
+                "run-cascaded",
+                format!("downstream of {from}"),
+                Some(from.clone()),
+            ),
+            RuleStatus::Skipped => ("skip", "skip", "up to date".to_string(), None),
+            RuleStatus::SkippedByWhen => (
+                "skip",
+                "skip-when-condition",
+                "when condition false".to_string(),
+                None,
+            ),
+            RuleStatus::CascadedUpstream { from } => (
+                "rerun",
+                "run-cascaded-upstream",
+                format!("upstream of {from}"),
+                Some(from.clone()),
+            ),
+            RuleStatus::Forced => ("run", "run-forced", "forced (--rerun)".to_string(), None),
+            RuleStatus::SkippedFresh => {
+                ("skip", "skip-fresh", "outputs up-to-date".to_string(), None)
+            }
+        }
+    }
 }
 
 /// One rule in the predicted plan.
@@ -291,14 +365,14 @@ pub fn preview_run_plan(
     let will_run_seeds: HashSet<String> = order
         .iter()
         .filter(|name| {
-            !clone.completed_rules.contains(*name)
-                || (!tombstone_keep.contains(*name)
-                    && !config
-                        .get_rule(name)
-                        .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
-                    && config
-                        .get_rule(name)
-                        .is_some_and(|rule| !rule_outputs_exist(rule, workdir, wildcard_values)))
+            will_run_seed(
+                name,
+                &clone.completed_rules,
+                &tombstone_keep,
+                config,
+                wildcard_values,
+                workdir,
+            )
         })
         .cloned()
         .collect();
@@ -480,6 +554,31 @@ fn dag_path_exists(from: &str, to: &str, dag: &WorkflowDag) -> Option<usize> {
         }
     }
     None
+}
+
+/// The "will execute" seed predicate shared by run's lazy cascade-up and
+/// the dry-run preview's tombstone cascade: a rule re-executes when it
+/// never completed, or when it completed but is not a kept tombstone, is
+/// not when-gated off, and its outputs are gone. One implementation — the
+/// hand mirror in run/mod.rs was the next mirror to drift.
+pub(crate) fn will_run_seed(
+    name: &str,
+    completed_rules: &std::collections::BTreeSet<String>,
+    tombstone_keep: &std::collections::HashSet<String>,
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+    workdir: &Path,
+) -> bool {
+    if !completed_rules.contains(name) {
+        return true;
+    }
+    !tombstone_keep.contains(name)
+        && !config
+            .get_rule(name)
+            .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
+        && config
+            .get_rule(name)
+            .is_some_and(|rule| !rule_outputs_exist(rule, workdir, wildcard_values))
 }
 
 /// Whether every declared output of the rule exists (the same check `run`
@@ -958,6 +1057,21 @@ pub(crate) fn when_condition_false(
     config.when_condition_false(rule, wildcard_values)
 }
 
+/// Every rule whose template `when` evaluates false under the merged
+/// config — the seed set both `run` and `dry-run` prune their plans with
+/// (#882/#883, issue #247).
+pub(crate) fn when_false_rules(
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    config
+        .rules
+        .iter()
+        .filter(|rule| when_condition_false(rule, config, wildcard_values))
+        .map(|rule| rule.name.clone())
+        .collect()
+}
+
 /// The profile names available in `<workflow-dir>/profiles/` — `<NAME>`
 /// from every `<NAME>.toml` / `<NAME>.oxoflow` file, sorted and deduped.
 fn available_profiles(workflow_dir: &Path) -> Vec<String> {
@@ -1164,13 +1278,7 @@ shell = "cat {input[0]} > {output[0]} && echo {config.ref}"
         config.expand_wildcards().unwrap();
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let mut wildcard_values = HashMap::new();
-        for (key, value) in &config.config {
-            wildcard_values.insert(
-                format!("config.{key}"),
-                value.as_str().unwrap_or_default().to_string(),
-            );
-        }
+        let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
         (config, dag, order, wildcard_values)
     }
 
@@ -1258,16 +1366,7 @@ shell = "cp in.txt out.txt"
         config.apply_defaults();
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let wildcard_values = config
-            .config
-            .iter()
-            .map(|(k, v)| {
-                (
-                    format!("config.{k}"),
-                    v.as_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect();
+        let wildcard_values = config.config_placeholder_values();
         (config, dag, order, wildcard_values)
     }
 
@@ -2034,13 +2133,7 @@ shell = "cp {{input[0]}} {{output[0]}}"
         let mut config = WorkflowConfig::parse(&toml).unwrap();
         config.apply_defaults();
         config.expand_wildcards().unwrap();
-        let mut wildcard_values = HashMap::new();
-        for (key, value) in &config.config {
-            wildcard_values.insert(
-                format!("config.{key}"),
-                value.as_str().unwrap_or_default().to_string(),
-            );
-        }
+        let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
         // No DAG/order needed for the drift detector itself — mark the rule
         // completed directly.
         let mut ck = CheckpointState::new();

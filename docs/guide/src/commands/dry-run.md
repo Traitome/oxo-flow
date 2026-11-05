@@ -377,6 +377,11 @@ completed]` marker (see below); with an existing checkpoint the warning is
 replaced by checkpoint status details and completed rules instead show
 `[skipped]`/re-entry markers. The sample-scoped output also includes a
 `Sample readiness:` section.
+When the checkpoint file exists but is **corrupt**, the warning names the
+corruption instead of claiming the checkpoint is missing — the plan then
+degrades to empty state so dry-run stays usable as the recovery tool,
+while `oxo-flow run` refuses to start on the same file until it is fixed
+or removed.
 
 ---
 

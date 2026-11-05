@@ -27,7 +27,6 @@ function usePlaceholders(t: (key: string) => string): Record<ChatContextType, st
 interface ChatUIProps {
   context?: ChatContextType;
   onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
-  onDataReport?: (report: Record<string, unknown>) => void;
 }
 
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
@@ -40,7 +39,6 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const [messages, setMessages] = useState<ChatMessage[]>(() => session.state.chatMessages[context] || []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [agents, setAgents] = useState<Record<string, string>>({});
   const [aiConfigured, setAiConfigured] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -83,7 +81,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   };
 
-  useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages, agents]);
+  useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages]);
 
   const lastPrompt = useRef('');
 
@@ -196,7 +194,6 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       } else {
         setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
       }
-      setAgents({});
     } catch (e: unknown) {
       // Aborted streams (stop button, navigation away, re-entry) are not
       // errors — leave whatever streamed content is already on screen.
@@ -215,7 +212,6 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       // Only clear if we still own the slot — a newer request may have
       // replaced the controller (re-entry case).
       if (abortRef.current === ac) abortRef.current = null;
-      setAgents({});
     }
     setLoading(false);
   };
@@ -360,19 +356,6 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
             </div>
           </div>
         ))}
-
-        {/* Agent status bar */}
-        {Object.keys(agents).length > 0 && (
-          <div className="chat-agents">
-            {Object.entries(agents).map(([agent, status]) => (
-              <div key={agent} className="chat-agent-row">
-                <div className="chat-agent-dot" style={{ background: status === 'done' ? 'var(--color-success)' : 'var(--color-primary)', animation: status !== 'done' ? 'pulse 1.5s infinite' : 'none' }} />
-                <span style={{ fontWeight: 500 }}>{agent}</span>
-                <span style={{ color: 'var(--color-text-tertiary)' }}>{status}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Input */}

@@ -2942,8 +2942,6 @@ dependencies = [
 name = "oxo-flow-ai"
 version = "0.28.0"
 dependencies = [
- "anyhow",
- "async-stream",
  "async-trait",
  "chrono",
  "futures",

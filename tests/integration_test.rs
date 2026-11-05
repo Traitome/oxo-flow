@@ -175,53 +175,16 @@ fn report_generation_lifecycle() {
 
     let mut report = Report::new("Integration Report", "test-pipeline", "1.0.0");
 
-    // Add sample info
-    let sample = SampleInfo {
-        sample_id: "SAMPLE_01".to_string(),
-        patient_id: Some("P001".to_string()),
-        sample_type: "Tumor".to_string(),
-        collection_date: Some("2024-01-15".to_string()),
-        platform: Some("Illumina NovaSeq 6000".to_string()),
-        seq_type: Some("WGS".to_string()),
-    };
-    report.add_section(sample_info_section(&sample));
-
-    // Add QC metrics
-    let metrics = vec![QcMetric {
-        sample: "SAMPLE_01".to_string(),
-        total_reads: 100_000_000,
-        mapped_reads: 98_000_000,
-        mapping_rate: 0.98,
-        mean_coverage: 30.0,
-        duplicate_rate: 0.05,
-    }];
-    report.add_section(qc_metrics_section(&metrics));
-
-    // Add variant summary
-    let variants = vec![VariantSummary {
-        gene: "BRCA1".to_string(),
-        variant: "c.5266dupC".to_string(),
-        classification: "Pathogenic".to_string(),
-        allele_frequency: 0.45,
-        depth: 250,
-        clinical_significance: Some("Associated with hereditary breast cancer".to_string()),
-    }];
-    report.add_section(variant_summary_section(&variants));
-
     // Add disclaimer
     report.add_section(clinical_disclaimer_section());
 
     // Generate HTML
     let html = report.to_html();
-    assert!(html.contains("SAMPLE_01"));
-    assert!(html.contains("BRCA1"));
-    assert!(html.contains("Pathogenic"));
     assert!(html.contains("Clinical Disclaimer"));
 
     // Generate JSON
     let json = report.to_json().unwrap();
-    assert!(json.contains("SAMPLE_01"));
-    assert!(json.contains("BRCA1"));
+    assert!(json.contains("Clinical Disclaimer"));
 
     // Use template engine
     let engine = TemplateEngine::new().unwrap();
@@ -1665,40 +1628,6 @@ fn report_empty_workflow_report() {
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     // JSON should be valid
     assert!(parsed.is_object() || parsed.is_array());
-}
-
-/// Test variant summary section rendering.
-#[test]
-fn report_variant_summary_section() {
-    use oxo_flow_core::report::{Report, VariantSummary, variant_summary_section};
-
-    let mut report = Report::new("Variant Report", "variant-pipeline", "1.0.0");
-
-    let variants = vec![
-        VariantSummary {
-            gene: "KRAS".to_string(),
-            variant: "p.G12D".to_string(),
-            classification: "Pathogenic".to_string(),
-            allele_frequency: 0.32,
-            depth: 450,
-            clinical_significance: Some("Associated with colorectal cancer".to_string()),
-        },
-        VariantSummary {
-            gene: "TP53".to_string(),
-            variant: "p.R175H".to_string(),
-            classification: "Pathogenic".to_string(),
-            allele_frequency: 0.51,
-            depth: 600,
-            clinical_significance: Some("Gain of function mutation".to_string()),
-        },
-    ];
-    report.add_section(variant_summary_section(&variants));
-
-    let html = report.to_html();
-    assert!(html.contains("KRAS") || html.contains("variant") || html.contains("html"));
-
-    let json = report.to_json().unwrap();
-    assert!(json.contains("KRAS") || json.len() > 10);
 }
 
 // ============================================================================

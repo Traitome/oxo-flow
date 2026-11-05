@@ -11,16 +11,11 @@
 //! compiles and links on its own).
 
 mod common;
-use common::workspace_bin;
+use common::oxo_flow_cmd;
 
-use assert_cmd::Command;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 // ─── helpers ───────────────────────────────────────────────────────────
 
@@ -37,23 +32,25 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
 }
 
 /// Whether a process with the given pid currently exists (and is not a
-/// zombie). `ps -p` on Unix; `tasklist` on Windows.
+/// zombie). `ps -p` on Unix; `tasklist` on Windows. A failing probe is an
+/// environment error, not evidence of death — panicking keeps a flaky
+/// `ps` from being misread as "the child exited".
 #[cfg(unix)]
 fn process_alive(pid: u32) -> bool {
-    std::process::Command::new("ps")
+    let status = std::process::Command::new("ps")
         .args(["-p", &pid.to_string()])
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .expect("spawn `ps -p`");
+    status.success()
 }
 
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
-    std::process::Command::new("tasklist")
+    let status = std::process::Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}")])
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .expect("spawn `tasklist`");
+    status.success()
 }
 
 /// Read and parse the background pid file.

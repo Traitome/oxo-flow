@@ -14,7 +14,7 @@
 
 mod common;
 use common::free_port;
-use common::{log_tail, spawn_web_server};
+use common::{log_tail, spawn_web_server, wait_ready};
 
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -72,22 +72,6 @@ fn spawn_slow_consumer(base: String) -> tokio::task::JoinHandle<()> {
     })
 }
 
-async fn wait_ready(base: &str) {
-    let client = Client::new();
-    for _ in 0..60 {
-        if client
-            .get(format!("{base}/api/health"))
-            .send()
-            .await
-            .is_ok()
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    panic!("server never became ready");
-}
-
 async fn post_run(client: &Client, base: &str, toml: &str) -> (String, Instant) {
     let resp = client
         .post(format!("{base}/api/runs"))
@@ -125,7 +109,7 @@ async fn sse_production_scale_stress_profile() {
             ("OXO_FLOW_DISABLE_RATE_LIMIT", "1"),
         ],
     );
-    wait_ready(&server.base).await;
+    wait_ready(&server.base, &server.log_path).await;
 
     // Raise the concurrent-run quota (personal mode allows admin ops
     // without auth): the default tier caps at 10 concurrent runs, which

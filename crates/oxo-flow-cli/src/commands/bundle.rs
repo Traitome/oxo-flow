@@ -70,8 +70,16 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         .tempdir()
         .context("failed to create temporary directory for bundle extraction")?;
 
-    // Auto-detect format from extension and open archive
-    let format = BundleFormat::from_path(&bundle_abs).unwrap_or(BundleFormat::TarZst); // default fallback
+    // Auto-detect format from extension and open archive. An unrecognized
+    // extension must not silently guess zstd — zstd would then reject the
+    // bytes with a confusing frame error instead of naming the actual
+    // problem (wrong/unreadable file).
+    let format = BundleFormat::from_path(&bundle_abs).with_context(|| {
+        format!(
+            "unrecognized bundle extension: {} (expected .tar.zst or .tar.gz)",
+            bundle_abs.display()
+        )
+    })?;
     let file = std::fs::File::open(&bundle_abs)
         .with_context(|| format!("failed to open bundle: {}", bundle_abs.display()))?;
     let reader: Box<dyn Read> = match format {

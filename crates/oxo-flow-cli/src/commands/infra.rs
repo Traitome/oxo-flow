@@ -361,6 +361,7 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
 
     let mut total_freed: u64 = 0;
     let mut deleted = 0usize;
+    let mut failed = 0usize;
     for entry in &entries {
         let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
         // Torn or not, an unreferenced dir waits out the age gate: a freshly
@@ -403,11 +404,21 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
         if eligible {
             if !dry_run && let Err(e) = std::fs::remove_dir_all(&entry.path) {
                 eprintln!("    {} failed to delete: {}", "✗".red(), e);
+                failed += 1;
                 continue;
             }
             deleted += 1;
             total_freed += entry.size;
         }
+    }
+
+    if !dry_run && failed > 0 {
+        // Mirror `clean`: partial collection is an error, not a success with
+        // footnotes — scripts gating on the exit code must see the failure.
+        return Err(anyhow::anyhow!(
+            "env gc: {} failed to delete",
+            oxo_flow_core::plural(failed, "store dir", "store dirs")
+        ));
     }
 
     if dry_run {
@@ -660,6 +671,17 @@ async fn create_env_from_ai(
         }
     }
 
+    // Shared by both prompt variants below — one place to keep in sync.
+    let matched_tools_block = if matched.is_empty() {
+        "(none matched)".to_string()
+    } else {
+        matched
+            .iter()
+            .map(|(n, v, s)| format!("- {n} {v} — {s}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     let system = if is_pixi {
         format!(
             r#"## Role
@@ -692,15 +714,7 @@ Rules:
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
-            if matched.is_empty() {
-                "(none matched)".to_string()
-            } else {
-                matched
-                    .iter()
-                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            matched_tools_block
         )
     } else {
         format!(
@@ -734,15 +748,7 @@ Rules:
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
-            if matched.is_empty() {
-                "(none matched)".to_string()
-            } else {
-                matched
-                    .iter()
-                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            matched_tools_block
         )
     };
 
@@ -803,38 +809,35 @@ Rules:
     Ok(())
 }
 
-/// Extract YAML content from an AI response (```yaml fence or raw).
-fn extract_yaml(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```yaml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            let content = response[start..start + end].trim().to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
-    }
-    if let Some(pos) = response.find("name:") {
-        return Some(response[pos..].trim().to_string());
-    }
-    None
+/// First fenced segment carrying the given info tag, via the shared fence
+/// state machine (`pipeline_gen::fenced_segments`) so stray openers and
+/// unclosed drafts pair exactly as the canonical extractor documents.
+fn first_fenced(response: &str, tag: &str) -> Option<String> {
+    oxo_flow_ai::agent::pipeline_gen::fenced_segments(response)
+        .into_iter()
+        .find(|(t, body)| t.eq_ignore_ascii_case(tag) && !body.trim().is_empty())
+        .map(|(_, body)| body)
 }
 
-/// Extract TOML content from an AI response (```toml fence or raw).
+/// Fenced segment first, else the text from the first raw marker on —
+/// models sometimes emit the spec without any fence at all. One place for
+/// the fallback both spec flavors share.
+fn fenced_or_after(response: &str, tag: &str, raw_marker: &str) -> Option<String> {
+    first_fenced(response, tag).or_else(|| {
+        response
+            .find(raw_marker)
+            .map(|pos| response[pos..].trim().to_string())
+    })
+}
+
+/// Extract YAML content from an AI response (```yaml fence or raw `name:`).
+fn extract_yaml(response: &str) -> Option<String> {
+    fenced_or_after(response, "yaml", "name:")
+}
+
+/// Extract TOML content from an AI response (```toml fence or raw `[project]`).
 fn extract_toml(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```toml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            let content = response[start..start + end].trim().to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
-    }
-    if let Some(pos) = response.find("[project]") {
-        return Some(response[pos..].trim().to_string());
-    }
-    None
+    fenced_or_after(response, "toml", "[project]")
 }
 
 #[cfg(test)]

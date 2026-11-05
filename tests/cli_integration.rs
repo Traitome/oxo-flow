@@ -7,16 +7,12 @@
 //! defined in sub-crates rather than the root package.
 
 mod common;
-use common::workspace_bin;
+use common::{oxo_flow_cmd, workspace_bin};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use std::path::PathBuf;
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 /// Tests assert on the archived log's *default* content (progress narrative +
 /// execution events). A developer shell exporting `RUST_LOG=warn` (or
@@ -3195,11 +3191,16 @@ fn cli_cluster_status() {
 
 #[test]
 fn cli_cluster_cancel_no_ids() {
+    // job_ids is clap-enforced as required, so omitting it is a usage
+    // error (exit code 2), matching `cluster logs` with a missing JOB_ID.
     oxo_flow_cmd()
         .args(["cluster", "cancel", "-b", "slurm"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("No job IDs"));
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "required arguments were not provided",
+        ));
 }
 
 // ─── Status subcommand ───────────────────────────────────────────────────────
@@ -3495,34 +3496,47 @@ fn cli_diff_nonexistent_workflow() {
 
 #[test]
 fn cli_format_outputs_canonical_toml() {
+    // In-place default (rustfmt/black convention): formatting writes the file
+    // and no longer prints canonical TOML to stdout.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("f.oxoflow");
+    fs::write(&src, "[workflow]\nname = \"fmt-e2e\"\nversion = \"0.1.0\"\n\n[[rules]]\nname = \"step1\"\nshell = \"echo hi\"\n").unwrap();
+
     oxo_flow_cmd()
-        .args([
-            "format",
-            "examples/gallery/13_simple_variant_calling.oxoflow",
-        ])
+        .args(["format", src.to_str().unwrap()])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("[workflow]"));
+        .success();
+
+    let content = fs::read_to_string(&src).unwrap();
+    assert!(content.contains("[workflow]"));
+
+    // Convergence: the file now passes `--check` (F-1 — the formatter no
+    // longer emits parser-injected derived keys, so formatting twice is a
+    // fixed point).
+    oxo_flow_cmd()
+        .args(["format", src.to_str().unwrap(), "--check"])
+        .assert()
+        .success();
 }
 
 #[test]
 fn cli_format_save_to_file() {
     let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.oxoflow");
+    fs::write(&src, "[workflow]\nname = \"fmt-e2e\"\nversion = \"0.1.0\"\n\n[[rules]]\nname = \"step1\"\nshell = \"echo hi\"\n").unwrap();
     let out = dir.path().join("formatted.oxoflow");
 
     oxo_flow_cmd()
-        .args([
-            "format",
-            "examples/gallery/13_simple_variant_calling.oxoflow",
-            "-o",
-            out.to_str().unwrap(),
-        ])
+        .args(["format", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
         .assert()
         .success();
 
     assert!(out.exists());
     let content = fs::read_to_string(&out).unwrap();
     assert!(content.contains("[workflow]"));
+    // Input is untouched when `-o` is given.
+    let original = fs::read_to_string(&src).unwrap();
+    assert!(original.contains("name = \"fmt-e2e\""));
 }
 
 // ─── Touch subcommand ────────────────────────────────────────────────────────

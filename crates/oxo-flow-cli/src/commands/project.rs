@@ -299,6 +299,10 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
 /// test compares both lists and contents against that directory).
 const EMBEDDED_GALLERY_AUX: &[(&str, &str)] = &[
     (
+        "scripts/_gallery_common.py",
+        include_str!("../../templates/aux/scripts/_gallery_common.py"),
+    ),
+    (
         "scripts/report.py",
         include_str!("../../templates/aux/scripts/report.py"),
     ),
@@ -764,12 +768,10 @@ pub async fn template_command(
             );
         }
 
-        // `options.team_profile` (CLI flag) wins over `[ai] team_profile`
-        // in the resolved config.
-        let team_profile = match options.team_profile {
-            Some(flag) => Some(flag),
-            None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
-        };
+        // `options.team_profile` (CLI flag) wins over `[ai] team_profile` —
+        // the resolved-config value is merged inside generate_workflow from
+        // the config chain.
+        let team_profile = options.team_profile;
 
         crate::commands::ai_template::generate_workflow(
             &intent,

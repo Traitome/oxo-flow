@@ -6,12 +6,10 @@
 //! re-executing with default configuration.
 //!
 //! This is a dedicated test binary on purpose: the run-creation rate
-//! limiter (#213) is a process-wide sliding window, and the other router
-//! test binaries already spend most of its five-per-minute allowance.
-//! The four create-calls below would spend exactly that ceiling (zero
-//! headroom for any future create-call), so the binary zeroes
-//! `OXO_FLOW_RUNS_RATE_LIMIT` in `ensure_db` — the limiter's own behavior
-//! stays pinned by the `handlers::run_rate_limit` unit tests.
+//! limiter (#213) is a process-wide sliding window. This binary uses the
+//! limiter's atomic test seam without mutating process environment; the
+//! limiter's own behavior stays pinned by the `handlers::run_rate_limit`
+//! unit tests.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -22,11 +20,7 @@ use tower::ServiceExt;
 mod common;
 
 async fn ensure_db() {
-    // The four `POST /api/runs` calls below spend exactly the default
-    // five-per-minute allowance; disable the limiter so this binary never
-    // flakes with 429 RUN_RATE_LIMITED (the limiter itself is pinned by
-    // `handlers::run_rate_limit` unit tests and other router binaries).
-    unsafe { std::env::set_var("OXO_FLOW_RUNS_RATE_LIMIT", "0") };
+    oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
     common::ensure_db().await;
 }
 

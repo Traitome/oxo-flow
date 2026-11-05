@@ -27,6 +27,8 @@ same shared-storage assumption as a real cluster.
 
 - `sge/` — SoGE 8.1.9 image (source build), master/exec setup, runner
 - `pbs/` — OpenPBS 23.06 image (source build), server/MOM setup, runner
+- `matrix-lib.sh` — shared runner helpers (snapshot loop, run-dir seeding,
+  run-dir evidence dump); both runners source it so they cannot drift apart
 - `workflows/` — the two matrix workflows and per-backend profiles
 
 ## Running the SGE matrix
@@ -38,7 +40,7 @@ mkdir -p shared/bin shared/workflows/profiles shared/evidence
 cp <oxo-flow-linux-binary> shared/bin/oxo-flow
 cp ../workflows/*.oxoflow shared/workflows/
 cp ../workflows/profiles/sge*.toml shared/workflows/profiles/
-cp run-sge.sh shared/
+cp run-sge.sh matrix-lib.sh shared/
 docker compose up -d --force-recreate   # master initializes, execs register
 sleep 45
 docker exec sge-master bash /work/run-sge.sh

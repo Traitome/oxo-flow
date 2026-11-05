@@ -220,15 +220,14 @@ pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> 
         };
         // Resolve role from the canonical row; fail closed when the user
         // has vanished since the ticket was minted (#516 policy).
-        let role = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => sqlx::query_as::<_, (String,)>("SELECT role FROM users WHERE id = ?")
-                .bind(&user_id)
-                .fetch_optional(pool)
+        let role = match crate::infra::db::global_backend() {
+            Some(backend) => backend
+                .get_user_by_id(&user_id)
                 .await
                 .ok()
                 .flatten()
-                .map(|r| r.0),
-            Err(_) => None,
+                .map(|u| u.role),
+            None => None,
         };
         let Some(role) = role else {
             return (

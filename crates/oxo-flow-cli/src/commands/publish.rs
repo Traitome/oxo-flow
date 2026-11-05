@@ -558,12 +558,12 @@ fn collect_directory_files(
     prefix: &str,
     referenced_files: &mut Vec<(String, PathBuf)>,
 ) -> Result<()> {
-    for entry in walkdir::WalkDir::new(dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
+    for entry in walkdir::WalkDir::new(dir).follow_links(false) {
+        let entry = entry
+            .with_context(|| format!("failed to read directory entry under {}", dir.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let abs = entry.path().to_path_buf();
         let rel = Path::new(prefix).join(entry.path().strip_prefix(dir).unwrap());
         let rel_str = rel.to_string_lossy().to_string();

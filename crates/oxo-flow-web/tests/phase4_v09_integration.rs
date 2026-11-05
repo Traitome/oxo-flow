@@ -445,19 +445,11 @@ async fn test_ai_config_update_server() {
 #[tokio::test]
 async fn test_ai_translate_endpoint_exists() {
     common::ensure_db().await;
-    let resp = post_json(
-        "/api/ai/translate",
-        &json!({
-            "intent": "RNA-seq alignment"
-        }),
-    )
-    .await;
-    let status = resp.status();
-    // Endpoint exists and responds (may be error if no AI configured)
-    assert!(
-        status == StatusCode::OK || status.is_client_error() || status.is_server_error(),
-        "translate should respond: {status}"
-    );
+    let resp = post_json("/api/ai/translate", &json!({"intent": ""})).await;
+    // Prove route + input boundary without contacting an ambient provider.
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: Value = json_body(resp.into_body()).await;
+    assert_eq!(body["code"], "INVALID_INTENT", "{body}");
 }
 
 #[tokio::test]

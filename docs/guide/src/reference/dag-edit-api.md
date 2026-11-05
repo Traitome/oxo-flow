@@ -336,6 +336,7 @@ builds the DAG with parsed config values on every edit, so a cycle introduced
 via `depends_on` edits surfaces immediately as `success: false` with the
 `DAG error:` (E006) message in `validation_errors` (the edit is rolled back
 atomically). See [DAG Engine](./dag-engine.md).
+
 - **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.
 - **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.
 

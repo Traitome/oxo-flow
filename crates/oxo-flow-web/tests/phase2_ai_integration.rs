@@ -23,22 +23,18 @@ async fn json_body(body: axum::body::Body) -> Value {
 // ── POST /api/ai/translate ──
 
 #[tokio::test]
-async fn test_ai_translate_requires_intent() {
+async fn test_ai_translate_rejects_a_missing_intent_field() {
     common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({"intent": "RNA-seq alignment with STAR"}).to_string(),
-        ))
+        .body(Body::from(json!({}).to_string()))
         .unwrap();
     let resp = app().oneshot(req).await.unwrap();
-    // Without AI configured, should return error (400 or 500) or noop response
-    let status = resp.status();
     assert!(
-        status.is_client_error() || status.is_server_error() || status == StatusCode::OK,
-        "translate should respond (got {status})"
+        resp.status().is_client_error(),
+        "a missing required intent must fail before any provider I/O"
     );
 }
 
@@ -187,35 +183,31 @@ async fn test_ai_optimize_accepts_constraints() {
 // ── POST /api/ai/translate/stream (SSE) ──
 
 #[tokio::test]
-async fn test_ai_translate_sse_endpoint_exists() {
+async fn test_ai_translate_sse_rejects_an_empty_intent_without_provider_io() {
     common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate/stream")
         .header("content-type", "application/json")
         .header("accept", "text/event-stream")
-        .body(Body::from(
-            json!({"intent": "RNA-seq analysis"}).to_string(),
-        ))
+        .body(Body::from(json!({"intent": ""}).to_string()))
         .unwrap();
     let resp = app().oneshot(req).await.unwrap();
-    // SSE should return 200 with text/event-stream content type
-    let status = resp.status();
     let is_sse = resp
         .headers()
         .get("content-type")
         .map(|v| v.to_str().unwrap_or("").contains("text/event-stream"))
         .unwrap_or(false);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(is_sse, "SSE response should be text/event-stream");
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes);
     assert!(
-        status == StatusCode::OK || status.is_client_error() || status.is_server_error(),
-        "SSE endpoint should respond (got {status})"
+        body.contains("INVALID_INTENT"),
+        "empty intent must produce the structured error event: {body}"
     );
-    if status == StatusCode::OK {
-        assert!(
-            is_sse,
-            "SSE response should have text/event-stream content type"
-        );
-    }
 }
 
 // ── GET /api/ai/config ──

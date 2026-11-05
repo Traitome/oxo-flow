@@ -12,10 +12,6 @@ use super::*;
 use crate::error::Result;
 use std::collections::HashMap;
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
     /// Derive standard reference paths from `reference_dir`.
     ///

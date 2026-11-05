@@ -289,6 +289,90 @@
       ]
     },
     {
+      "id": "spatial-visium",
+      "tier": "hard",
+      "domain": "spatial-transcriptomics",
+      "intent": "Spatial transcriptomics: Space Ranger count for 10x Visium, Seurat spatial data normalization, and cell-type deconvolution with RCTD",
+      "requires": [
+        "spaceranger",
+        "seurat",
+        "rctd"
+      ]
+    },
+    {
+      "id": "single-cell-multiome",
+      "tier": "hard",
+      "domain": "single-cell",
+      "intent": "Single-cell multiome ATAC and Gene Expression: Cell Ranger ARC count, Signac peak matrix processing, and Seurat weighted nearest neighbor multimodal integration",
+      "requires": [
+        "cellranger-arc",
+        "signac",
+        "seurat"
+      ]
+    },
+    {
+      "id": "metagenome-humann-pathways",
+      "tier": "hard",
+      "domain": "metagenomics",
+      "intent": "Metagenomic functional profiling: fastp read quality control, Bowtie2 human host genome depletion, Kraken2 taxonomic profiling, and HUMAnN3 metabolic pathway abundance estimation",
+      "requires": [
+        "fastp",
+        "bowtie2",
+        "kraken2",
+        "humann"
+      ]
+    },
+    {
+      "id": "longread-structural-variants",
+      "tier": "hard",
+      "domain": "long-read",
+      "intent": "Long-read structural variant discovery: NanoPlot read QC, Minimap2 alignment against GRCh38 with MD and CIGAR tags, samtools sort and index, Sniffles2 SV calling, and Clair3 germline small variant calling",
+      "requires": [
+        "nanoplot",
+        "minimap2",
+        "samtools",
+        "sniffles2",
+        "clair3"
+      ]
+    },
+    {
+      "id": "gatk-cohort-joint-genotyping",
+      "tier": "hard",
+      "domain": "variant-calling",
+      "intent": "Large-cohort germline variant discovery: GATK HaplotypeCaller in per-sample GVCF mode, GenomicsDBImport workspace aggregation across targeted intervals, GenotypeGVCFs joint calling, and VQSR variant quality score recalibration",
+      "requires": [
+        "gatk",
+        "samtools",
+        "bcftools"
+      ]
+    },
+    {
+      "id": "cutandtag-epigenomics",
+      "tier": "medium",
+      "domain": "epigenomics",
+      "intent": "CUT&Tag chromatin profiling: fastp adapter trimming, Bowtie2 end-to-end alignment with dovetail mode, Picard MarkDuplicates, MACS3 and SEACR peak calling, and deepTools bamCoverage bigWig generation",
+      "requires": [
+        "fastp",
+        "bowtie2",
+        "picard",
+        "macs3",
+        "seacr",
+        "deeptools"
+      ]
+    },
+    {
+      "id": "rnaseq-star-salmon-quant",
+      "tier": "medium",
+      "domain": "rna-seq",
+      "intent": "Stranded paired-end RNA-seq: fastp adapter trimming, STAR 2-pass genomic alignment, Salmon transcript-level abundance quantification, and featureCounts stranded gene-level read summarization",
+      "requires": [
+        "fastp",
+        "star",
+        "salmon",
+        "subread"
+      ]
+    },
+    {
       "id": "qc-vague",
       "tier": "easy",
       "domain": "qc",

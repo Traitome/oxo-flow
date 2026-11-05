@@ -41,12 +41,117 @@ pub fn workspace_bin(name: &str) -> PathBuf {
     );
 }
 
+/// An `oxo-flow` command builder (assert_cmd): the canonical way every
+/// integration test spawns the CLI. Tests needing raw `std::process::Command`
+/// (stdio piping, abort signalling) construct it from `workspace_bin`.
+pub fn oxo_flow_cmd() -> assert_cmd::Command {
+    assert_cmd::Command::new(workspace_bin("oxo-flow"))
+}
+
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
         .port()
+}
+
+// ─── Shared HTTP helpers for web-server tests ────────────────────────────
+
+/// Read the response body as JSON, failing loudly when the server did not
+/// answer with JSON (e.g. an HTML 500 error page or an empty body). The
+/// per-file copies this replaces swallowed parse failures into
+/// `Value::Null`, turning a non-JSON response into confusing downstream
+/// assertion failures (or a silent 120 s poll timeout).
+async fn read_json(
+    status: reqwest::StatusCode,
+    resp: reqwest::Response,
+    context: &str,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let text = resp.text().await.unwrap_or_default();
+    match serde_json::from_str(&text) {
+        Ok(value) => (status, value),
+        Err(e) => panic!("{context}: non-JSON response ({e}); status {status}; body: {text}"),
+    }
+}
+
+/// One authenticated JSON API round-trip for any method — the single
+/// definition the per-file `req`/`post`/`get`/`put` copies delegate to.
+pub async fn api_req(
+    base: &str,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let client = reqwest::Client::new();
+    let mut r = match method {
+        "POST" => client.post(format!("{base}{path}")),
+        "PUT" => client.put(format!("{base}{path}")),
+        "GET" => client.get(format!("{base}{path}")),
+        "DELETE" => client.delete(format!("{base}{path}")),
+        other => panic!("unsupported method: {other}"),
+    };
+    if let Some(t) = token {
+        r = r.bearer_auth(t);
+    }
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let context = format!("{method} {base}{path}");
+    let resp = r.send().await.unwrap_or_else(|e| panic!("{context}: {e}"));
+    read_json(resp.status(), resp, &context).await
+}
+
+pub async fn api_get(
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "GET", path, token, None).await
+}
+
+pub async fn api_post(
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "POST", path, token, Some(body)).await
+}
+
+pub async fn api_put(
+    base: &str,
+    path: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    api_req(base, "PUT", path, Some(token), Some(body)).await
+}
+
+/// Poll `/api/health` until the server answers, then return. The panic
+/// carries the log tail so a timeout is diagnosable (bind failure vs.
+/// slow start vs. wrong port). Tests that need blocking semantics
+/// (web_sse_shutdown) keep their own sync copy — this one is async.
+pub async fn wait_ready(base: &str, log_path: &std::path::Path) {
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "server did not become ready at {base}\n{}",
+            std::fs::read_to_string(log_path).unwrap_or_else(|_| "(no server log)".into())
+        );
+        if client
+            .get(format!("{base}/api/health"))
+            .send()
+            .await
+            .is_ok()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 pub struct WebServer {

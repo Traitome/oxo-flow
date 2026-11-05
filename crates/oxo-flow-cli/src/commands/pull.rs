@@ -441,12 +441,20 @@ async fn pull_bundle(
 
     eprintln!("{} Pulling bundle from {}", "→".cyan().bold(), original_url);
 
+    // Fail with guidance before downloading anything if -o points at a
+    // directory — fs::write would surface a raw "Is a directory (os error 21)".
+    if bundle_path.is_dir() {
+        anyhow::bail!(
+            "output path {} is a directory — pass a file path, e.g. -o {}/bundle.tar.zst",
+            bundle_path.display(),
+            bundle_path.display()
+        );
+    }
+
     let data = match source {
         PullSource::BundleGithub { .. } => pull_github_release(original_url).await?,
         PullSource::BundleHttp(u) => pull_http(u).await?,
-        PullSource::FileLocal(path) => {
-            std::fs::read(path).with_context(|| format!("failed to read local bundle: {path}"))?
-        }
+        PullSource::FileLocal(path) => read_local_bundle_bounded(Path::new(path))?,
         PullSource::RepoGit { .. } => unreachable!("repo mode handled by caller"),
     };
 
@@ -515,12 +523,73 @@ async fn pull_bundle(
 /// via `OXO_FLOW_PULL_MAX_BYTES`.
 const DEFAULT_MAX_PULL_BYTES: u64 = 1 << 30;
 
-/// Stream `response` into memory with a hard size cap.
-async fn download_bounded(mut response: reqwest::Response, what: &str) -> Result<Vec<u8>> {
-    let max = std::env::var("OXO_FLOW_PULL_MAX_BYTES")
+/// Effective bundle byte cap: `OXO_FLOW_PULL_MAX_BYTES` override or the
+/// 1 GiB default. Shared by network reads and the local-file source so
+/// every buffered bundle honors the same limit.
+fn pull_max_bytes() -> u64 {
+    std::env::var("OXO_FLOW_PULL_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MAX_PULL_BYTES);
+        .unwrap_or(DEFAULT_MAX_PULL_BYTES)
+}
+
+/// Read a local bundle file under the same byte cap as network downloads:
+/// the whole file is buffered before verification, so an oversized source
+/// would exhaust memory before the checksum check ever runs. The size is
+/// taken from the file's metadata first (no full read needed to reject),
+/// then the read itself is chunked so a file that grows mid-read (or sits
+/// on a pathological FS where metadata lies) still cannot exceed the cap.
+fn read_local_bundle_bounded(path: &std::path::Path) -> Result<Vec<u8>> {
+    // A directory can't be a bundle — fail with guidance instead of the raw
+    // OS error 21 (EISDIR) File::open would surface.
+    if path.is_dir() {
+        anyhow::bail!(
+            "local bundle path {} is a directory — pass a bundle file \
+             (.tar.zst/.tar.gz), or omit -o and let pull derive the name",
+            path.display()
+        );
+    }
+    read_local_bounded_with_cap(path, pull_max_bytes())
+}
+
+/// Pure inner half of [`read_local_bundle_bounded`]: the cap is injected so
+/// tests never touch process-global env state (unsafe in Edition 2024).
+fn read_local_bounded_with_cap(path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
+    let display = path.display();
+    let len = std::fs::metadata(path)
+        .with_context(|| format!("failed to read local bundle: {display}"))?
+        .len();
+    if len > max {
+        anyhow::bail!(
+            "local bundle {display} exceeds the {max}-byte download limit \
+             (raise it with OXO_FLOW_PULL_MAX_BYTES)"
+        );
+    }
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to read local bundle: {display}"))?;
+    let mut reader = std::io::BufReader::with_capacity(64 * 1024, file);
+    let mut data: Vec<u8> = Vec::new();
+    loop {
+        let mut chunk = [0u8; 64 * 1024];
+        let n = std::io::Read::read(&mut reader, &mut chunk)
+            .with_context(|| format!("failed to read local bundle: {display}"))?;
+        if n == 0 {
+            break;
+        }
+        if data.len() as u64 + n as u64 > max {
+            anyhow::bail!(
+                "local bundle {display} exceeds the {max}-byte download limit \
+                 (raise it with OXO_FLOW_PULL_MAX_BYTES)"
+            );
+        }
+        data.extend_from_slice(&chunk[..n]);
+    }
+    Ok(data)
+}
+
+/// Stream `response` into memory with a hard size cap.
+async fn download_bounded(mut response: reqwest::Response, what: &str) -> Result<Vec<u8>> {
+    let max = pull_max_bytes();
     let mut data: Vec<u8> = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -610,6 +679,38 @@ async fn pull_http(url: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_bundle_bounded_respects_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let big = dir.path().join("big.tar.zst");
+        std::fs::write(&big, vec![0u8; 4096]).expect("write bundle");
+
+        // Cap is injected directly (no env mutation — unsafe in Edition 2024
+        // and racy across test threads).
+        let err = read_local_bounded_with_cap(&big, 1024)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("exceeds the 1024-byte download limit"),
+            "{err}"
+        );
+        assert!(err.contains("OXO_FLOW_PULL_MAX_BYTES"), "{err}");
+
+        // Under the cap the read succeeds byte-for-byte.
+        let data = read_local_bounded_with_cap(&big, u64::MAX).expect("bounded read");
+        assert_eq!(data.len(), 4096);
+    }
+
+    #[test]
+    fn local_bundle_directory_gets_guidance_not_eisdir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = read_local_bundle_bounded(dir.path())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is a directory"), "{err}");
+        assert!(!err.contains("os error 21"), "{err}");
+    }
 
     #[test]
     fn mirror_candidates_prefix_github_urls_only() {

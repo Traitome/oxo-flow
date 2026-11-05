@@ -15,6 +15,17 @@ pub(crate) fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
         .collect()
 }
 
+/// The NAMES of the sensitive config keys — the snapshot-drift warning and
+/// config-change detection compare keys, not values (issue #99 B1).
+pub(crate) fn sensitive_keys_of(config: &WorkflowConfig) -> std::collections::HashSet<String> {
+    config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
 /// Adopt a loaded checkpoint for the workflow about to run (audit B8).
 ///
 /// A checkpoint lives at `<workdir>/.oxo-flow/checkpoint.json`, so two
@@ -48,6 +59,384 @@ pub(crate) fn adopt_checkpoint_for_workflow(
                  path/mtime/fingerprint based"
             );
         }
+    }
+}
+
+/// How the loading command consumes a possibly-broken checkpoint.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CheckpointLoadMode {
+    /// `run`: a corrupt file refuses to start (issue #432(a) — silent
+    /// degradation would re-execute every completed rule, which costs
+    /// hours on real data), and cleanup side effects are persisted.
+    Execute,
+    /// Read-only previews: never persist; a corrupt file degrades to an
+    /// empty state with a warning that names the corruption — dry-run
+    /// stays usable as the recovery tool, but the old catch-all "no
+    /// checkpoint" message must not mislabel a corrupt file as absent.
+    ReadOnlyPreview,
+}
+
+/// The checkpoint-load phase `run` and `dry-run` share: load from `path`,
+/// adopt for `workflow` (audit B8), and clear stale `running` entries
+/// (issue #685 — the previous run died between spawn and any terminal
+/// state, so no task is executing those rules now). Returns the state and
+/// the names cleared so the caller can narrate them. Under [`CheckpointLoadMode::Execute`]
+/// the corruption check fails loudly and the cleanup is persisted; under
+/// [`CheckpointLoadMode::ReadOnlyPreview`] nothing is written. `run_log`
+/// receives the adoption notes only in Execute mode.
+pub(crate) fn load_checkpoint_for_command(
+    checkpoint_path: &Path,
+    workflow: &Path,
+    mode: CheckpointLoadMode,
+    run_log: Option<&SharedRunLog>,
+) -> anyhow::Result<(CheckpointState, Vec<String>)> {
+    let mut state = if checkpoint_path.exists() {
+        match CheckpointState::load_from_file(checkpoint_path) {
+            Ok(ck) => ck,
+            Err(e) => match mode {
+                CheckpointLoadMode::Execute => {
+                    return Err(anyhow::anyhow!(
+                        "checkpoint at {} is corrupt and cannot be loaded ({}); \
+                         refusing to start — every completed rule would silently re-run. \
+                         Fix or remove the file, then retry.",
+                        checkpoint_path.display(),
+                        e
+                    ));
+                }
+                CheckpointLoadMode::ReadOnlyPreview => {
+                    eprintln!(
+                        "{} checkpoint at {} is corrupt and cannot be loaded ({}) — \
+                         planning as if every rule never completed; fix or remove the \
+                         file for an accurate plan",
+                        "⚠".yellow(),
+                        checkpoint_path.display(),
+                        e
+                    );
+                    CheckpointState::default()
+                }
+            },
+        }
+    } else {
+        if matches!(mode, CheckpointLoadMode::ReadOnlyPreview) {
+            eprintln!(
+                "{} no checkpoint at {} — treating every rule as never completed",
+                "⚠".yellow(),
+                checkpoint_path.display()
+            );
+        }
+        CheckpointState::default()
+    };
+    match mode {
+        CheckpointLoadMode::Execute => {
+            adopt_checkpoint_for_workflow(&mut state, workflow, run_log);
+        }
+        CheckpointLoadMode::ReadOnlyPreview => {
+            adopt_checkpoint_for_workflow(&mut state, workflow, None);
+        }
+    }
+    let stale_running: Vec<String> = state.running_rules().iter().cloned().collect();
+    if !stale_running.is_empty() {
+        for rule in &stale_running {
+            state.clear_running(rule);
+        }
+        if matches!(mode, CheckpointLoadMode::Execute) {
+            // Persist the cleanup so reuse and resume accounting stay
+            // honest even if this invocation dies right after.
+            if let Err(e) = state.save_to_file(checkpoint_path) {
+                tracing::warn!("Failed to persist cleaned checkpoint: {e}");
+            }
+        }
+    }
+    Ok((state, stale_running))
+}
+
+/// Snapshot drift warning (issue #243) — the checkpoint records the
+/// EFFECTIVE config of the original run (workflow defaults + its CLI
+/// overrides). This invocation re-parsed the workflow with THIS
+/// invocation's overrides — `resume` passes none, so plan-time gates
+/// (pair/instance `when`, `{meta.*}` baking) re-judge on defaults and the
+/// instance set can drift from the original run before any invalidation
+/// machinery sees it. Invalidation covers shell interpolation and gate
+/// flips; it cannot resurrect instances expansion already dropped. Warn
+/// loudly, naming every key that differs — the operator decides whether
+/// to re-pass the overrides. Returns the drifted keys (engine-injected
+/// keys excluded; empty when the checkpoint has no completed rules to
+/// drift against, so a fresh run never warns).
+pub(crate) fn config_snapshot_drift(
+    ck: &CheckpointState,
+    config: &WorkflowConfig,
+    sensitive_keys: &HashSet<String>,
+) -> Vec<String> {
+    let drifted: Vec<String> = ck
+        .config_snapshot
+        .keys()
+        .filter(|key| {
+            !oxo_flow_core::config_impact::is_engine_injected_key(key)
+                && match config.config.get(key.as_str()) {
+                    Some(value) => {
+                        let new = oxo_flow_core::config_impact::snapshot_value(
+                            value,
+                            sensitive_keys.contains(key.as_str()),
+                        );
+                        &new != ck.config_snapshot.get(*key).unwrap()
+                    }
+                    None => true,
+                }
+        })
+        .cloned()
+        .collect();
+    if drifted.is_empty() || ck.completed_rules.is_empty() {
+        return Vec::new();
+    }
+    eprintln!(
+        "{} effective config differs from the original run's snapshot — \
+         plan-time gated instances (pair/sample `when`, `{{meta.*}}`) may \
+         drift from the recorded run. Re-pass the original overrides to \
+         resume the same instance set:",
+        "Config drift:".bold().yellow()
+    );
+    for key in &drifted {
+        match config.config.get(key.as_str()) {
+            Some(value) => {
+                let new = oxo_flow_core::config_impact::snapshot_value(
+                    value,
+                    sensitive_keys.contains(key.as_str()),
+                );
+                let old = ck.config_snapshot.get(key.as_str()).unwrap();
+                let (old, new) = mask_snapshot_pair(old, &new);
+                eprintln!("  {key}: {old} → {new}");
+            }
+            None => eprintln!("  {key}: (removed from this invocation)"),
+        }
+    }
+    drifted
+}
+
+/// Recorded vs current snapshot values are content hashes for keys whose
+/// raw values never print (issue #99 B1 family): a `sha256:` on either
+/// side means the pair is masked — printing the hash of a secret is
+/// still a leak.
+fn mask_snapshot_pair(old: &str, new: &str) -> (String, String) {
+    if old.starts_with("sha256:") || new.starts_with("sha256:") {
+        ("****".to_string(), "****".to_string())
+    } else {
+        (old.to_string(), new.to_string())
+    }
+}
+
+/// What the input-manifest phase hands back to the run loop: the rules to
+/// force on the next plan and the protected-tree drift evidence the
+/// fail-gate after the phase reads.
+pub(crate) struct InputManifestPhase {
+    pub force_rules: Vec<String>,
+    pub protected_drift_lines: Vec<String>,
+    pub protected_drift: bool,
+}
+
+/// The input-manifest comparison phase (issue #72): a completed rule is
+/// reused only when the file set its inputs resolved to at completion time
+/// (paths + size + mtime) still matches. Globs and Dir inputs detect
+/// added/removed files; plain files detect edits. A mismatch invalidates
+/// the rule and its DAG downstream (the same cascade as config changes);
+/// legacy checkpoints (no manifest recorded) adopt the current set as a
+/// one-time baseline — the same policy as the config snapshot (issue #62).
+/// Detection is shared with dry-run's read-only preview (issue #66); this
+/// side MUTATES the checkpoint (cascades, baselines) and narrates every
+/// category, then persists both detections' side effects in one save
+/// (issue #72 + #935 P1). Protected-tree drift state (issue #935 P1) is
+/// returned so the fail-gate in the caller can read it.
+#[allow(clippy::too_many_arguments)] // phase plumbing: detection inputs + persistence + narration target
+pub(crate) fn apply_input_manifest_phase(
+    ck: &mut CheckpointState,
+    config: &WorkflowConfig,
+    dag: &WorkflowDag,
+    order: &[String],
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    checkpoint_path: &Path,
+    run_log: Option<&SharedRunLog>,
+) -> InputManifestPhase {
+    let mut force_rules: Vec<String> = Vec::new();
+    let (
+        mismatched,
+        missing_inputs,
+        baselined,
+        sample_selection_driven,
+        input_diffs,
+        symlink_notices,
+    ) = crate::commands::run_preview::detect_input_manifest_invalidations(
+        ck,
+        config,
+        dag,
+        order,
+        workdir,
+        wildcard_values,
+    );
+    // Issue #142 M1: a rule whose only input-manifest change is the
+    // engine-injected sample list is NOT invalidated — toggling --samples
+    // must not overwrite cohort-level gather outputs with a subset table.
+    // Emit the documented warning; the detection function already proved
+    // (re-expansion + content-identity) the change is sample-selection-only.
+    if !sample_selection_driven.is_empty() {
+        let names: Vec<&str> = sample_selection_driven.iter().map(String::as_str).collect();
+        diagnostic_narrate(
+            format_args!(
+                "  {} skipped {} whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                "⚠".yellow(),
+                oxo_flow_core::plural(names.len(), "rule", "rules"),
+                names.join(", ")
+            ),
+            run_log,
+        );
+    }
+    // Cascade-up: missing inputs (tombstoned temporaries) re-run their
+    // completed producers first — the same semantics the preview shows.
+    // Empty upstream means NO completed producer exists for the missing
+    // inputs (e.g. a deleted external source file with no producer rule
+    // at all) — re-running "0 producers" silently and exiting 0 would
+    // claim success from stale outputs, so surface each affected rule's
+    // missing patterns loudly instead (never "re-running 0 producer(s)").
+    if !missing_inputs.is_empty() {
+        let upstream = crate::commands::run_preview::cascade_up(ck, dag, &missing_inputs);
+        force_rules.extend(upstream.iter().cloned());
+        if upstream.is_empty() {
+            let lines = missing_source_lines(&missing_inputs, config, workdir, wildcard_values);
+            diagnostic_narrate(
+                format_args!(
+                    "  {} {} missing and cannot be regenerated in this run — affected rule{}:\n{}",
+                    "⚠".yellow(),
+                    oxo_flow_core::plural(
+                        missing_inputs.len(),
+                        "required input",
+                        "required inputs"
+                    ),
+                    if missing_inputs.len() == 1 { ":" } else { "s:" },
+                    lines.join("\n")
+                ),
+                run_log,
+            );
+        } else {
+            diagnostic_narrate(
+                format_args!(
+                    "  {} missing intermediate inputs — re-running {}: {}",
+                    "↻".yellow(),
+                    oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
+                    upstream.join(", ")
+                ),
+                run_log,
+            );
+        }
+    }
+    if !mismatched.is_empty() {
+        let invalidated =
+            crate::commands::run_preview::invalidate_with_downstream(ck, dag, &mismatched);
+        force_rules.extend(invalidated.iter().cloned());
+        // Issue #432(a): say WHY completed credit was lost when the
+        // likely cause is a prior failed run's side effects — the issue
+        // reports users reading this as "restarts lose credit" when it
+        // is deterministic invalidation (shared-dir side effects shift
+        // glob/dir input sets, which cascades downstream).
+        let prior_failures = !ck.failed_rules.is_empty();
+        diagnostic_narrate(
+            format_args!(
+                "  {} input changes invalidated {}: {}{}",
+                "↻".yellow(),
+                oxo_flow_core::plural(invalidated.len(), "rule", "rules"),
+                invalidated.join(", "),
+                if prior_failures {
+                    " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
+                } else {
+                    ""
+                }
+            ),
+            run_log,
+        );
+        // Issue #926 P0: say WHAT changed — one describe() line per
+        // affected file, so a size collapse to 0 B shows `(TRUNCATED)`
+        // and symlink churn shows `[symlink]` instead of a bare rule
+        // name. The diff map only carries invalidated seeds (not their
+        // cascaded dependents, whose inputs did not change on disk).
+        let mut diff_names: Vec<&String> = mismatched.iter().collect();
+        diff_names.sort();
+        for name in diff_names {
+            if let Some(lines) = input_diffs.get(name) {
+                for line in lines {
+                    diagnostic_narrate(format_args!("    {} {}", "·".yellow(), line), run_log);
+                }
+            }
+        }
+    }
+    // Issue #926 P0 item 3: first-seen symlink notice — regardless of
+    // invalidation (a same-content rewrite through a symlink leaves the
+    // manifests matching, which is exactly the incident #926 documents),
+    // every first-seen symlinked input is named once per run.
+    if !symlink_notices.is_empty() {
+        for line in &symlink_notices {
+            diagnostic_narrate(format_args!("  {} {}", "ℹ".cyan(), line), run_log);
+        }
+    }
+    if baselined > 0 {
+        diagnostic_narrate(
+            format_args!(
+                "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed; future input changes will invalidate them automatically",
+                oxo_flow_core::plural(baselined, "rule", "rules")
+            ),
+            run_log,
+        );
+    }
+    // ── Protected-tree drift (issue #935 P1) ─────────────────────────
+    // Whole-tree baselines opt-in via [engine] protected_data_trees:
+    // first observation adopts, later observations diff and report one
+    // describe() line per drifted file. Run FAILS on drift unless
+    // --allow-protected-drift — this is the fast, loud out-of-band
+    // damage detector (a truncated vendor FASTQ surfaces here within
+    // minutes, not one rule at a time).
+    let (protected_drift_lines, protected_baselined, protected_warnings) =
+        crate::commands::run_preview::detect_protected_tree_drift(ck, config, workdir);
+    let protected_drift = !protected_drift_lines.is_empty();
+    for line in &protected_warnings {
+        diagnostic_narrate(format_args!("  {} {}", "⚠".yellow(), line), run_log);
+    }
+    if protected_baselined > 0 {
+        diagnostic_narrate(
+            format_args!(
+                "  Note: {} — future changes will be flagged by plan/dry-run/run",
+                oxo_flow_core::plural(
+                    protected_baselined,
+                    "baseline recorded for protected tree",
+                    "baselines recorded for protected trees"
+                )
+            ),
+            run_log,
+        );
+    }
+    if protected_drift {
+        diagnostic_narrate(
+            format_args!(
+                "  {} PROTECTED TREE DRIFT detected in {} file(s):",
+                "✗".red().bold(),
+                protected_drift_lines.len()
+            ),
+            run_log,
+        );
+        for line in &protected_drift_lines {
+            diagnostic_narrate(format_args!("    {} {}", "·".red(), line), run_log);
+        }
+    }
+    // One save covers both detections (issue #72 + #935 P1): manifest
+    // baselines/diffs and protected-tree baselines must both persist.
+    if (!mismatched.is_empty() || baselined > 0 || protected_baselined > 0 || protected_drift)
+        && let Err(e) = ck.save_to_file(checkpoint_path)
+    {
+        tracing::warn!(
+            error = %e,
+            "failed to save checkpoint after input-manifest/protected-tree detection"
+        );
+    }
+    InputManifestPhase {
+        force_rules,
+        protected_drift_lines,
+        protected_drift,
     }
 }
 
@@ -363,17 +752,7 @@ pub(crate) fn missing_source_findings(
             continue;
         }
         // A scatter rule with zero fan-out never instantiates (issue #616).
-        if rule.scatter.as_ref().is_some_and(|scatter| {
-            if !scatter.values.is_empty() {
-                return false;
-            }
-            match scatter.values_from.as_deref() {
-                None => true,
-                Some(values_from) => config
-                    .resolve_config_list(values_from)
-                    .is_some_and(|values| values.is_empty()),
-            }
-        }) {
+        if config.scatter_fan_out_is_empty(rule) {
             continue;
         }
         // Optional rules may be absent by design.
@@ -453,4 +832,583 @@ pub(crate) fn missing_source_lines(
             format!("    {name} — missing: {listing}")
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxo_flow_core::dag::WorkflowDag;
+    use std::collections::{HashMap, HashSet};
+
+    fn workflow_config_with(toml_body: &str) -> WorkflowConfig {
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+{toml_body}
+"#
+        );
+        WorkflowConfig::parse(&toml).expect("test workflow config parses")
+    }
+
+    #[test]
+    fn snapshot_drift_names_changed_and_removed_keys_only() {
+        // issue #243: changed and removed keys drift; untouched keys and
+        // engine-injected keys (samples churn) never warn.
+        let mut ck = CheckpointState::default();
+        ck.completed_rules.insert("gen".to_string());
+        ck.config_snapshot
+            .insert("threads".to_string(), "4".to_string());
+        ck.config_snapshot
+            .insert("same".to_string(), "keep".to_string());
+        ck.config_snapshot
+            .insert("samples_list".to_string(), "old".to_string());
+        ck.config_snapshot
+            .insert("gone".to_string(), "x".to_string());
+        let config = workflow_config_with(
+            r#"
+[config]
+threads = "8"
+same = "keep"
+samples_list = "new"
+"#,
+        );
+        let sensitive = std::collections::HashSet::new();
+        let drifted = config_snapshot_drift(&ck, &config, &sensitive);
+        assert_eq!(drifted, vec!["gone".to_string(), "threads".to_string()]);
+    }
+
+    #[test]
+    fn snapshot_drift_stays_silent_without_completed_rules() {
+        // A fresh checkpoint has nothing to drift against — a fresh run
+        // with different defaults is not drift, it is the first run.
+        let ck = CheckpointState::default();
+        let config = workflow_config_with("[config]\nthreads = \"8\"\n");
+        let sensitive = std::collections::HashSet::new();
+        assert!(config_snapshot_drift(&ck, &config, &sensitive).is_empty());
+    }
+
+    #[test]
+    fn snapshot_pair_hash_is_masked_on_either_side() {
+        // Printing the hash of a secret is still a leak (issue #99 B1
+        // family): a sha256: prefix on the recorded OR the current value
+        // masks the whole pair.
+        assert_eq!(
+            mask_snapshot_pair("sha256:abc", "sha256:def"),
+            ("****".to_string(), "****".to_string())
+        );
+        assert_eq!(
+            mask_snapshot_pair("plain", "sha256:def"),
+            ("****".to_string(), "****".to_string())
+        );
+        assert_eq!(
+            mask_snapshot_pair("plain", "other"),
+            ("plain".to_string(), "other".to_string())
+        );
+    }
+
+    fn corrupt_checkpoint(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join(".oxo-flow");
+        std::fs::create_dir_all(&path).unwrap();
+        let file = path.join("checkpoint.json");
+        std::fs::write(&file, "{ not json at all").unwrap();
+        file
+    }
+
+    #[test]
+    fn execute_mode_refuses_to_start_on_a_corrupt_checkpoint() {
+        // issue #432(a): silent degradation would re-execute every
+        // completed rule — run must fail loudly instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = corrupt_checkpoint(tmp.path());
+        let err = load_checkpoint_for_command(
+            &path,
+            std::path::Path::new("t.oxoflow"),
+            CheckpointLoadMode::Execute,
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("refusing to start"), "{err}");
+    }
+
+    #[test]
+    fn preview_mode_degrades_on_corruption_and_stays_read_only() {
+        // Dry-run is the recovery tool: a corrupt file degrades to empty
+        // state with a warning that names the corruption (not "no
+        // checkpoint"), and the file on disk is left untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = corrupt_checkpoint(tmp.path());
+        let before = std::fs::read_to_string(&path).unwrap();
+        let (state, stale) = load_checkpoint_for_command(
+            &path,
+            std::path::Path::new("t.oxoflow"),
+            CheckpointLoadMode::ReadOnlyPreview,
+            None,
+        )
+        .unwrap();
+        assert!(state.completed_rules.is_empty());
+        assert!(stale.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn stale_running_entries_are_cleared_once_per_mode() {
+        // issue #685: persisted `running` entries mean the previous run
+        // died between spawn and any terminal state. Execute persists the
+        // cleanup; the read-only preview clears only its in-memory copy.
+        for mode in [
+            CheckpointLoadMode::Execute,
+            CheckpointLoadMode::ReadOnlyPreview,
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join(".oxo-flow");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("checkpoint.json");
+            let mut seeded = CheckpointState::default();
+            seeded.mark_running("gen");
+            seeded.save_to_file(&path).unwrap();
+
+            let (state, stale) =
+                load_checkpoint_for_command(&path, std::path::Path::new("t.oxoflow"), mode, None)
+                    .unwrap();
+            assert_eq!(stale, vec!["gen".to_string()]);
+            assert!(state.running_rules().is_empty());
+
+            let on_disk = CheckpointState::load_from_file(&path).unwrap();
+            match mode {
+                CheckpointLoadMode::Execute => {
+                    assert!(on_disk.running_rules().is_empty());
+                }
+                CheckpointLoadMode::ReadOnlyPreview => {
+                    assert!(on_disk.running_rules().contains("gen"));
+                }
+            }
+        }
+    }
+
+    fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
+        oxo_flow_core::config::WorkflowConfig::parse(rules_toml).unwrap()
+    }
+
+    fn source_gate_fixture(
+        dir: &std::path::Path,
+    ) -> (
+        oxo_flow_core::config::WorkflowConfig,
+        WorkflowDag,
+        Vec<String>,
+        HashMap<String, String>,
+    ) {
+        let toml = r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threshold = 5
+empty = []
+
+[[rules]]
+name = "gen"
+input = []
+output = ["out.txt"]
+shell = "echo x > {output[0]}"
+
+[[rules]]
+name = "use"
+input = ["out.txt", "ext.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "gated"
+input = ["gated_missing.txt"]
+output = ["gated.txt"]
+when = "config.threshold >= 10"
+shell = "true"
+
+[[rules]]
+name = "scatter_zero"
+input = ["scatter_missing.txt"]
+output = ["scatter.txt"]
+scatter = { variable = "chunk", values_from = "config.empty" }
+shell = "true"
+
+[[rules]]
+name = "opt"
+input = ["optional_missing.txt"]
+output = ["opt.txt"]
+optional = true
+shell = "true"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        std::fs::create_dir_all(dir).unwrap();
+        (config, dag, order, wildcard_values)
+    }
+
+    fn source_gate_call(
+        config: &oxo_flow_core::config::WorkflowConfig,
+        dag: &WorkflowDag,
+        order: &[String],
+        workdir: &std::path::Path,
+        workflow_dir: &std::path::Path,
+        wildcard_values: &HashMap<String, String>,
+    ) -> Vec<String> {
+        missing_source_findings(config, dag, order, workdir, workflow_dir, wildcard_values)
+    }
+
+    #[test]
+    fn missing_source_gate_flags_only_unproduced_required_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert_eq!(
+            findings,
+            vec!["rule 'use': input 'ext.txt' does not exist and no rule produces it".to_string()],
+            "'out.txt' has a producer (gen) and belongs to the cascade path; when-false, \
+             zero-fan-out scatter, and optional rules are all skipped"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_passes_when_sources_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        std::fs::write(dir.path().join("ext.txt"), b"data").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn missing_source_gate_silent_with_full_checkpoint_is_the_regressed_scenario() {
+        // The reported bug: every rule completed, raw/ deleted, re-run exited
+        // 0. At gate time (pre-checkpoint) the completed state is irrelevant
+        // — the missing external source must be flagged regardless.
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
+        std::fs::write(dir.path().join("out.txt"), b"stale").unwrap();
+        std::fs::write(dir.path().join("final.txt"), b"stale").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(!findings.is_empty(), "missing ext.txt must gate the run");
+    }
+
+    #[test]
+    fn missing_source_gate_skips_reference_outputs() {
+        // [[references]] outputs are built by the reference machinery after
+        // this gate and are not DAG nodes — a missing one must not gate.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "refgate"
+
+[[references]]
+name = "idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat genome.fa > genome.idx"
+
+[[rules]]
+name = "use_ref"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        std::fs::write(dir.path().join("genome.fa"), b"ACGT").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "reference-built output must not gate the run: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_accepts_sample_pattern_dir_inputs() {
+        // Bare relative input whose data lives in the sample_pattern
+        // discovery directory (absolute pattern, sibling of the workdir) —
+        // the web instance-table shape.
+        let dir = tempfile::tempdir().unwrap(); // workflow dir
+        let data = tempfile::tempdir().unwrap(); // sample_pattern root
+        let toml = format!(
+            r#"
+[workflow]
+name = "samplegate"
+sample_pattern = "{root}/data/{{{{sample}}}}.fq"
+
+[[rules]]
+name = "qc"
+input = ["{{{{sample}}}}.fq"]
+output = ["qc_{{{{sample}}}}.txt"]
+shell = "cat {{{{input}}}} > {{{{output}}}}"
+"#,
+            root = data.path().display(),
+        );
+        let mut config = config_with_rules(&toml);
+        config.apply_defaults();
+        std::fs::create_dir_all(data.path().join("data")).unwrap();
+        std::fs::write(data.path().join("data").join("S1.fq"), b"read").unwrap();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "input present in the sample_pattern dir must not gate: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_input_of_when_false_shared_output_producer() {
+        // Issue #915 Bug 3 (complementary when gates on one shared output):
+        // in a tumor-only cohort the fanned paired instance is vetoed by its
+        // `when` at expansion, so `shared.txt` has NO producer in the DAG and
+        // no declaring rule survives in config.rules. The preflight gate must
+        // still not flag inputs that belong to the dead side of the
+        // complementary pair: expansion recorded the vetoed outputs in
+        // `when_skipped_outputs` (#882), and that exemption alone resolves
+        // this — mutation-detectable (deleting the clause fails the test).
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "sharedout"
+version = "1.0"
+
+[config]
+mode = "tumoronly"
+
+[[rules]]
+name = "consumer"
+input = ["shared.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Production-faithful post-expansion state: the paired instance was
+        // fully vetoed at fan-out — expansion removed it from config.rules
+        // AND recorded its outputs (so no DAG producer for shared.txt).
+        config.when_skipped_outputs.insert("shared.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("shared.txt").is_none(),
+            "fixture precondition: the vetoed side must leave shared.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "the gated-off producer's input must not gate the satisfiable consumer: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_pattern_recorded_in_when_skipped_outputs() {
+        // Issue #915 (expansion half): an instance vetoed at fan-out
+        // records its would-be outputs in when_skipped_outputs (#882).
+        // A consumer missing such a pattern must not gate — the producer
+        // never existed for this cohort by design.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "skipped"
+version = "1.0"
+
+[config]
+mode = "off"
+
+[[rules]]
+name = "consumer"
+input = ["morphed.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        config
+            .when_skipped_outputs
+            .insert("morphed.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        // The vetoed morph rule is gone from config.rules entirely (as a
+        // fully-vetoed fan-out leaves nothing behind), so the DAG has no
+        // producer for morphed.txt and the when_skipped_outputs exemption
+        // is the only path to an empty gate.
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("morphed.txt").is_none(),
+            "fixture precondition: the vetoed producer must leave morphed.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a when_skipped_outputs pattern must not gate its consumers: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_expands_config_tokens_in_when_skipped_outputs() {
+        // Issue #915 review NIT-1: the record site (#882) expands only `\w+`
+        // wildcards and `{values.*}`, so a `{config.*}`-bearing vetoed output
+        // stays RAW in when_skipped_outputs while the gate's patterns are
+        // config-expanded. The compare-time expansion must bridge that gap.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "cfgtoken"
+version = "1.0"
+
+[config]
+genome = "hg38"
+
+[[rules]]
+name = "consumer"
+input = ["ref_hg38.fai"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Recorded exactly as expand_rule_patterns leaves it: raw token.
+        config
+            .when_skipped_outputs
+            .insert("ref_{config.genome}.fai".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a raw {{config.*}} recorded entry must match after compare-time expansion: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_lines_lists_rule_names_and_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, _dag, _order, wildcard_values) = source_gate_fixture(dir.path());
+        let mut missing = HashSet::new();
+        missing.insert("use".to_string());
+        let lines = missing_source_lines(&missing, &config, dir.path(), &wildcard_values);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("use"), "{:?}", lines[0]);
+        assert!(lines[0].contains("ext.txt"), "{:?}", lines[0]);
+    }
+
+    #[test]
+    fn source_placeholder_quotes_paths_with_spaces() {
+        // A `{source}` path containing spaces must survive the reference
+        // build as ONE shell argument (issue #136 tier-2 audit — the raw
+        // splice broke on spaces/metacharacters).
+        let rendered =
+            substitute_source_placeholder("STAR --genomeDir {source}", "refs/genome data/hg38");
+        assert_eq!(rendered, "STAR --genomeDir 'refs/genome data/hg38'");
+    }
+
+    #[test]
+    fn source_placeholder_escapes_embedded_quotes() {
+        // POSIX-safe: an embedded quote closes and reopens the quoting
+        // (the `'\''` idiom the environment wrapper also uses).
+        let rendered = substitute_source_placeholder("--in {source}", "dir/we'ird");
+        assert_eq!(rendered, "--in 'dir/we'\\''ird'");
+    }
+
+    #[test]
+    fn source_placeholder_without_placeholder_is_unchanged() {
+        let rendered = substitute_source_placeholder("echo built", "ignored");
+        assert_eq!(rendered, "echo built");
+    }
+
+    #[test]
+    fn known_modules_hint_names_the_empty_case() {
+        // Dry-run must print the same explicit "(none — no [[include]]
+        // modules)" hint `run` does instead of a trailing empty list
+        // (issue #136 tier-2 audit).
+        let empty: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        assert_eq!(
+            known_modules_hint(&empty),
+            "(none — no [[include]] modules)"
+        );
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        map.insert("qc".to_string(), vec!["qc".to_string()]);
+        assert_eq!(known_modules_hint(&map), "qc");
+    }
 }

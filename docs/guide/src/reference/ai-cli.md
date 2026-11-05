@@ -177,10 +177,11 @@ oxo-flow ai explain workflow.oxoflow --json       # machine-readable output
 execute), **explain shows the principle** (why each step exists). Every fact
 in the explanation is computed deterministically from the workflow definition
 plus the embedded knowledge bases (tool table, bioSkills, pipeline graph,
-scientific preflight) — the model only writes prose over those verified
-facts, so it cannot invent parameters, versions, or caveats. The deterministic
-findings are always printed separately (stderr, or the `review` array in
-`--json`), so nothing critical is silently dropped even if the model omits it.
+scientific preflight). Model prose is advisory and can omit or misstate a
+detail; the deterministic skeleton and findings are authoritative. The
+deterministic findings are always printed separately (stderr, or the `review`
+array in `--json`), so consumers must not treat model prose as the evidence
+surface.
 
 `--json` emits the deterministic skeleton (rule metadata, I/O, resources,
 matched knowledge, findings) with model-written prose in dedicated fields —
@@ -233,12 +234,17 @@ explicit disable:
 
 ## Provider failure handling
 
-The provider layer treats model failures explicitly — nothing is silently dropped:
+The provider layer classifies common model failures; tool-argument handling
+is fail-closed end to end:
 
-- **Broken tool-call arguments are repaired**: if a model (e.g. DeepSeek under
-  load) truncates a tool call's arguments JSON, it is repaired to `{}` and the
-  call still executes; structurally broken calls (missing id/name) raise a
-  `ToolError` instead of being ignored.
+- **Malformed tool-call arguments fail closed**: if a model truncates or
+  mangles a tool call's arguments JSON, the parser passes the payload
+  through raw and the orchestrator rejects the call before any tool runs —
+  the model receives a tool-result message carrying the parse error and a
+  re-emit instruction. Arguments are never "repaired" to `{}` behind the
+  caller's back. Wire-format echoes (Anthropic `tool_use.input`, Ollama
+  `arguments`) keep a protocol-valid object fallback, but such a call can no
+  longer execute.
 - **Context overflows are classified and recovered**: HTTP 400/413 responses
   with context-window markers map to `ContextOverflow`; the transcript is
   compressed (system + recent turns kept, middle turns replaced by a marker)
@@ -279,10 +285,15 @@ The provider layer treats model failures explicitly — nothing is silently drop
 [ai]
 enabled = true
 max_retries = 5
-auto_fix = "ask"    # "ask" | "always" | "never"
+auto_fix = "ask"    # parsed but not enforced by the current recovery path
 model = "deepseek-v4-flash"
 team_profile = "compact"    # "compact" | "full"
 ```
+
+> **Current safety limitation**: `auto_fix` is parsed but has no runtime consumer in the repair
+> path. Workflow-level provider/model selection is also not guaranteed to reconfigure the CLI
+> runtime. Do not treat either setting as an authorization or data-governance control until the
+> audit gates for AI remediation are closed.
 
 ### Generation team profiles
 
@@ -309,11 +320,12 @@ repository.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama` | `disabled` |
+| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama`, or `disabled` | unset: auto-detect from credentials; `disabled` only when none resolve |
 | `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
 | `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced | `16384` |
+| `OXO_FLOW_AI_CONTEXT_TOKENS` | Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. `131072`). The Claude backend clamps `max_tokens` per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side) | unset |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints | `300` |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |
@@ -334,13 +346,19 @@ repository.
 
 ## How It Works
 
-The AI agent combines five embedded knowledge sources (all compiled into the binary at build time):
+The AI agent combines several embedded knowledge sources, all compiled into
+the binary at build time. Exact current record counts are exposed by
+`oxo-flow ai` and by `knowledge_meta.json`; do not hard-code a catalog count
+in a manuscript or release claim.
 
-1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
-2. **Bioconda Tool Database**: 6,525 curated CLI tools with current versions and descriptions (`knowledge_meta.json`: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via `lookup_tool`
-3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
-4. **Pipeline Knowledge Graph**: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
-5. **Skill Protocol Docs**: the full SKILL.md document for every documented pipeline-graph skill (77 of 78 nodes; the `shared` pseudo-node has none) — fetched one at a time via `lookup_doc` by skill id, display name, or unique substring; each doc carries Required Tools, the canonical Workflow, and caveats
+1. **Tool reference data** with resource guidance for common bioinformatics tools.
+2. **Bioconda tool records** with versions and descriptions, queried on demand
+   through `lookup_tool`.
+3. **bioSkills records** with domain procedures, commands, and caveats,
+   matched by assay type or queried through `lookup_skill`.
+4. **Pipeline graph transitions** queried through `lookup_pipeline` for
+   multi-step topology design.
+5. **Skill protocol documents** fetched one at a time through `lookup_doc`.
 
 Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed. The one deliberate exception is `lookup_doc`, whose full-protocol response is larger by design (roughly 2-5K tokens per fetched doc) and is still strictly on demand — one skill at a time.
 
@@ -504,15 +522,21 @@ oxo-flow run workflow.oxoflow --ai-recover
 
 1. Rule fails → capture error signature
 2. AI matches against known error patterns (OOM, segfault, missing files, etc.)
-3. AI proposes root cause + specific fix
-4. If safe to auto-apply: original archived, fix applied
-5. Run can be retried with corrected workflow
+3. AI proposes a root cause and bounded patch
+4. Current behavior may display or apply a proposal, but `auto_fix` is not yet
+   an enforced authorization control and a partial replacement block can
+   overwrite a complete workflow
+5. A repair is not described as fixed until the complete workflow validates,
+   the applied diff is reviewed, and a rerun verifies its outputs
+
+See the CLI/AI blockers in
+`docs/superpowers/audits/industrial-scientific-audit-ledger.md`.
 
 ---
 
 ## Embedded Knowledge Freshness
 
-The four knowledge sources are compiled into the binary at build time, so
+The knowledge sources are compiled into the binary at build time, so
 they only change when the binary is rebuilt. Every data file is documented
 by `crates/oxo-flow-ai/src/knowledge/knowledge_meta.json` — a plain JSON
 document listing each source's record count, generation timestamp, and
@@ -599,12 +623,12 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 
 | Phase | Features | Status |
 |-------|----------|--------|
-| Phase 1 | AI template generation | ✅ Complete |
-| Phase 2 | AI dry-run + validate analysis | ✅ Complete |
-| Phase 3 | AI error recovery (`--ai-recover`) | ✅ Complete |
-| Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | ✅ Complete |
-| Phase 5 | MCP/Skill ecosystem | ✅ Complete |
-| Phase 6 | Workflow explanation (`ai explain`) | ✅ Complete |
-| Phase 7 | Provider failure handling (tool-call repair, overflow recovery, bounded results) | ✅ Complete |
+| Phase 1 | AI template generation | Implemented but unproven |
+| Phase 2 | AI dry-run + validate analysis | Implemented but unproven |
+| Phase 3 | AI error recovery (`--ai-recover`) | Prototype / blocked by partial-file replacement and unverified rerun |
+| Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | Prototype / workflow-scoped policy is not fully enforced |
+| Phase 5 | MCP/Skill ecosystem | Prototype / security trust-boundary work remains |
+| Phase 6 | Workflow explanation (`ai explain`) | Implemented but unproven |
+| Phase 7 | Provider failure handling | Implemented but unproven; malformed tool arguments are fail-closed (AI-07) |
 
 See the full design spec at `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` (repository root, not included in the published docs) for architecture details.

@@ -81,6 +81,17 @@ fn multipart_plan(len: u64) -> Option<(u64, usize)> {
 // Lazily-initialised default client
 // ---------------------------------------------------------------------------
 
+/// The process-wide default client used by [`S3Storage::new`].
+///
+/// The AWS SDK's HTTP connector binds to the tokio runtime it first serves a
+/// request on, so this singleton is only safe when the process runs one
+/// long-lived runtime (the CLI does). Multi-runtime hosts — test suites that
+/// spin a runtime per case, embedded servers — must construct a client per
+/// runtime instead:
+///
+/// ```rust,ignore
+/// let backend = S3Storage::with_client(S3Storage::build_client());
+/// ```
 fn default_client() -> &'static S3Client {
     static CLIENT: OnceLock<S3Client> = OnceLock::new();
     CLIENT.get_or_init(S3Storage::build_client)
@@ -324,6 +335,43 @@ impl StorageBackend for S3Storage {
         String::from_utf8(bytes.to_vec()).map_err(|e| OxoFlowError::Config {
             message: format!("S3 content is not valid UTF-8: {e}"),
         })
+    }
+
+    /// Read at most `len` bytes starting at `offset` without staging the full object.
+    async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let bucket = require_bucket(path)?;
+        let stat = self.head(path).await?.ok_or_else(|| {
+            s3_error(format!(
+                "cannot read_range {}: object does not exist",
+                path.raw
+            ))
+        })?;
+        if offset >= stat.size {
+            return Ok(Vec::new());
+        }
+        let end = (offset + len as u64 - 1).min(stat.size.saturating_sub(1));
+        let range_header = format!("bytes={offset}-{end}");
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(&path.key)
+            .range(range_header)
+            .send()
+            .await
+            .map_err(|e| s3_error(format!("S3 get_object range error: {}", s3_display(&e))))?;
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| s3_error(format!("S3 read body range error: {e}")))?
+            .into_bytes();
+
+        Ok(bytes.to_vec())
     }
 
     /// Write bytes to an object, replacing it if it already exists.

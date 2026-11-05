@@ -9,14 +9,9 @@
 //! consumers from the full-run plan.
 
 mod common;
-use common::workspace_bin;
+use common::oxo_flow_cmd;
 
-use assert_cmd::Command;
 use std::fs;
-
-fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
 
 const PRODUCER_MODULE: &str = r#"[workflow]
 name = "repro"

@@ -67,3 +67,74 @@ shell = "wc -l data/local.fq > out.txt"
         "second run should skip: {stderr2}"
     );
 }
+
+#[test]
+fn staging_mode_passthrough_workflow_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = r#"
+[workflow]
+name = "remote-passthrough"
+
+[[rules]]
+name = "native_tool"
+staging_mode = "passthrough"
+input = ["s3://bucket/reads.fastq", "data/ref.fa"]
+output = ["out.bam"]
+shell = "echo input0={input[0]} input1={input[1]} > out.bam"
+"#;
+    std::fs::write(dir.path().join("wf.oxoflow"), workflow).unwrap();
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data/ref.fa"), ">chr1\nACGT\n").unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["run", "wf.oxoflow"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let content = std::fs::read_to_string(dir.path().join("out.bam")).unwrap();
+    assert!(content.contains("input0=s3://bucket/reads.fastq"));
+    assert!(content.contains("input1=data/ref.fa"));
+}
+
+#[test]
+fn staging_mode_stream_workflow_degrades_gracefully_without_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = r#"
+[workflow]
+name = "remote-stream-degrade"
+
+[[rules]]
+name = "stream_rule"
+staging_mode = "stream"
+input = ["s3://bucket/huge.bam", "data/local.txt"]
+output = ["count.txt"]
+shell = "wc -l data/local.txt > count.txt"
+"#;
+    std::fs::write(dir.path().join("wf.oxoflow"), workflow).unwrap();
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data/local.txt"), "line1\nline2\n").unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["run", "wf.oxoflow"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no storage backend registered"),
+        "expected degradation warning, got: {stderr}"
+    );
+    assert!(dir.path().join("count.txt").exists());
+}

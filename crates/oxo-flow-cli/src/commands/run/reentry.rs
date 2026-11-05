@@ -10,6 +10,163 @@ pub(crate) const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
 /// beyond this threshold the human output switches to a warning.
 pub(crate) const SNAPSHOT_STALE_SECS: i64 = 300;
 
+/// Mutable plan state carried through a recorded-replay rebuild. This is the
+/// deliberate shared-state boundary between run and dry-run: both replay
+/// against the same config/DAG/order triple, while their caller-specific
+/// valid-rule, ordering, and narration policies stay explicit.
+pub(crate) struct ReplayPlan<'a> {
+    pub(crate) config: &'a mut WorkflowConfig,
+    pub(crate) dag: &'a mut WorkflowDag,
+    pub(crate) order: &'a mut Vec<String>,
+    pub(crate) target: &'a [String],
+    pub(crate) when_false_rules: &'a std::collections::HashSet<String>,
+    pub(crate) workdir: &'a std::path::Path,
+    pub(crate) run_log: Option<&'a SharedRunLog>,
+}
+
+/// Which deterministic order a replayed plan uses. Run executes in raw
+/// dependency order; dry-run groups independent rules for readability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayPlanOrdering {
+    ExecutionOrder,
+    ParallelDisplay,
+}
+
+fn rebuild_replay_plan(
+    plan: &mut ReplayPlan<'_>,
+    ordering: ReplayPlanOrdering,
+    print_notes: bool,
+    context: &str,
+) -> anyhow::Result<()> {
+    (|| -> anyhow::Result<()> {
+        *plan.dag = WorkflowDag::from_rules_with_config(
+            &plan.config.rules,
+            &config_placeholder_values(&plan.config.config),
+        )
+        .context("failed to rebuild workflow DAG")?;
+        *plan.order = match ordering {
+            ReplayPlanOrdering::ExecutionOrder => execution_order_skipping_with_notes(
+                plan.dag,
+                plan.target,
+                plan.when_false_rules,
+                plan.workdir,
+                plan.run_log,
+                print_notes,
+            )?,
+            ReplayPlanOrdering::ParallelDisplay if plan.target.is_empty() => {
+                parallel_display_order(
+                    plan.dag,
+                    plan.target,
+                    plan.when_false_rules,
+                    plan.workdir,
+                    plan.run_log,
+                    print_notes,
+                )?
+            }
+            ReplayPlanOrdering::ParallelDisplay => execution_order_skipping_with_notes(
+                plan.dag,
+                plan.target,
+                plan.when_false_rules,
+                plan.workdir,
+                plan.run_log,
+                print_notes,
+            )?,
+        };
+        Ok(())
+    })()
+    .context(context.to_string())
+}
+
+/// Replay checkpoint-recorded re-entries and rebuild the static plan when any
+/// survive. `valid` encodes the caller's freshness policy (run checks output
+/// existence and tombstones; dry-run reuses its preview classification), so
+/// the two surfaces cannot drift on the replay mechanics while keeping their
+/// intentional semantic differences visible.
+pub(crate) fn replay_checkpoint_reentries(
+    plan: &mut ReplayPlan<'_>,
+    reentries: &[oxo_flow_core::reentry::ReentryRecord],
+    valid: &std::collections::HashSet<String>,
+    ordering: ReplayPlanOrdering,
+    source_label: &str,
+    narrate_growth: bool,
+) -> anyhow::Result<usize> {
+    let replayed = oxo_flow_core::reentry::replay_valid_reentries(plan.config, reentries, valid)?;
+    if replayed.is_empty() {
+        return Ok(0);
+    }
+    tracing::info!(
+        count = replayed.len(),
+        source = source_label,
+        "replayed checkpoint re-entries"
+    );
+    let old_order_len = plan.order.len();
+    rebuild_replay_plan(
+        plan,
+        ordering,
+        matches!(ordering, ReplayPlanOrdering::ExecutionOrder),
+        "after re-entry replay",
+    )?;
+    if narrate_growth && plan.order.len() != old_order_len {
+        narrate_console_line(format_args!(
+            "  {} re-entry replay: plan grew from {} to {} rules",
+            "Replay:".bold().cyan(),
+            old_order_len,
+            plan.order.len()
+        ));
+    }
+    Ok(replayed.len())
+}
+
+/// Replay persisted runtime-discovered output_pattern domains on resume
+/// (issue #227 item 5): consumers instantiate from the recorded domain
+/// without re-running completed producers.
+pub(crate) fn replay_output_pattern_domains(
+    plan: &mut ReplayPlan<'_>,
+    checkpoint: &CheckpointState,
+    rerun: bool,
+    ordering: ReplayPlanOrdering,
+) -> anyhow::Result<usize> {
+    if checkpoint.output_pattern_domains.is_empty() || rerun {
+        return Ok(0);
+    }
+    plan.config.discovered_output_patterns = checkpoint.output_pattern_domains.clone();
+    let all_producers_complete = checkpoint.output_pattern_domains.keys().all(|template| {
+        plan.config.rules.iter().all(|r| {
+            r.output_pattern.is_none()
+                || (plan
+                    .config
+                    .expansion_templates
+                    .get(&r.name)
+                    .map(String::as_str)
+                    != Some(template.as_str())
+                    && r.name != *template)
+                || checkpoint.completed_rules.contains(&r.name)
+        })
+    });
+    let replayed = if all_producers_complete {
+        plan.config.expand_output_pattern_consumers()?
+    } else {
+        tracing::info!(
+            "deferred output_pattern consumers stay pending: a producer instance \
+             is not completed yet — the runtime discovery pass will instantiate them"
+        );
+        Vec::new()
+    };
+    tracing::info!(
+        count = replayed.len(),
+        "replayed runtime-discovered output_pattern domains"
+    );
+    if !replayed.is_empty() {
+        rebuild_replay_plan(
+            plan,
+            ordering,
+            matches!(ordering, ReplayPlanOrdering::ExecutionOrder),
+            "after output_pattern replay",
+        )?;
+    }
+    Ok(replayed.len())
+}
+
 /// Process a checkpoint rule's re-entry manifest after it completes
 /// (issue #78 P3): merge new samples, re-expand from templates, extend the
 /// plan, and record the re-entry in the checkpoint. Errors fail the rule.
@@ -38,13 +195,18 @@ pub(crate) async fn process_reentry(
             full.display()
         )
     })?;
-    let (group, samples, pairs) = oxo_flow_core::reentry::parse_manifest(&content)
+    let manifest = oxo_flow_core::reentry::parse_manifest(&content)
         .map_err(|e| anyhow::anyhow!("checkpoint rule '{}': {e}", rule.name))?;
-    if samples.is_empty() && pairs.is_empty() {
+    if manifest.samples.is_empty() && manifest.pairs.is_empty() && manifest.values.is_empty() {
         return Ok(()); // empty manifest = valid no-op
     }
-    let new_names =
-        oxo_flow_core::reentry::apply_reentry(config, group.as_deref(), &samples, &pairs)?;
+    let new_names = oxo_flow_core::reentry::apply_reentry_ext(
+        config,
+        manifest.group.as_deref(),
+        &manifest.samples,
+        &manifest.pairs,
+        &manifest.values,
+    )?;
     if new_names.is_empty() {
         return Ok(()); // everything already present
     }
@@ -61,9 +223,10 @@ pub(crate) async fn process_reentry(
         ck.record_reentry(oxo_flow_core::reentry::ReentryRecord {
             round,
             rule: rule.name.clone(),
-            group,
-            samples,
-            pairs,
+            group: manifest.group,
+            samples: manifest.samples,
+            pairs: manifest.pairs,
+            values: manifest.values,
         });
         round
     };
@@ -206,4 +369,136 @@ pub(crate) async fn process_output_pattern_discovery(
         "output_pattern discovery expanded the plan"
     );
     Ok(new_names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_output_pattern_domains_noop_on_empty_or_rerun() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "wf"
+
+[[rules]]
+name = "step1"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let mut dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let mut order = vec!["step1".to_string()];
+        let when_false = HashSet::new();
+        let workdir = std::path::PathBuf::from(".");
+        let mut plan = ReplayPlan {
+            config: &mut config,
+            dag: &mut dag,
+            order: &mut order,
+            target: &[],
+            when_false_rules: &when_false,
+            workdir: &workdir,
+            run_log: None,
+        };
+        let mut ck = CheckpointState::new();
+        assert_eq!(
+            replay_output_pattern_domains(
+                &mut plan,
+                &ck,
+                false,
+                ReplayPlanOrdering::ExecutionOrder,
+            )
+            .unwrap(),
+            0
+        );
+        let mut combo = HashMap::new();
+        combo.insert("part".to_string(), "1".to_string());
+        ck.record_output_pattern_domain("split", vec![combo]);
+        assert_eq!(
+            replay_output_pattern_domains(
+                &mut plan,
+                &ck,
+                true,
+                ReplayPlanOrdering::ExecutionOrder,
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn replay_output_pattern_domains_replays_deferred_consumers_when_producers_completed() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "fanout"
+
+[[rules]]
+name = "split"
+output_pattern = "results/chunks/{part}.txt"
+shell = "true"
+
+[[rules]]
+name = "collect"
+input = ["results/chunks/{part}.txt"]
+output = ["results/merged/{part}.txt"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let mut dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let mut order = vec!["split".to_string()];
+        let when_false = HashSet::new();
+        let workdir = std::path::PathBuf::from(".");
+        let mut plan = ReplayPlan {
+            config: &mut config,
+            dag: &mut dag,
+            order: &mut order,
+            target: &[],
+            when_false_rules: &when_false,
+            workdir: &workdir,
+            run_log: None,
+        };
+        let mut ck = CheckpointState::new();
+        let mut combo = HashMap::new();
+        combo.insert("part".to_string(), "1".to_string());
+        ck.record_output_pattern_domain("split", vec![combo]);
+
+        // Producer incomplete -> stays pending.
+        let replayed = replay_output_pattern_domains(
+            &mut plan,
+            &ck,
+            false,
+            ReplayPlanOrdering::ExecutionOrder,
+        )
+        .unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(plan.order, &["split"]);
+
+        // Producer complete -> expands consumer.
+        ck.mark_completed_quiet("split");
+        let replayed = replay_output_pattern_domains(
+            &mut plan,
+            &ck,
+            false,
+            ReplayPlanOrdering::ExecutionOrder,
+        )
+        .unwrap();
+        assert_eq!(replayed, 1);
+        assert_eq!(plan.order.len(), 2);
+        assert!(plan.order.contains(&"split".to_string()));
+        assert!(plan.order.contains(&"collect_1".to_string()));
+        assert!(plan.config.get_rule("collect_1").is_some());
+    }
 }

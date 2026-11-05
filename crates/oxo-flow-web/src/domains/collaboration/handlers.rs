@@ -7,7 +7,9 @@ use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
+use crate::domains::workflow::handlers::{
+    ApiError, can_read_pipeline, can_write_pipeline, db_err, err, get_backend, now_iso,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -26,37 +28,33 @@ pub async fn fork_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<ForkResponse> {
-    let pool = get_pool()?;
+    let backend = get_backend()?;
     // Ownership comes from the session, never from the request body
     // (issue #82 P0-4: client-supplied user ids were trusted before).
     let user = resolve(authenticated.as_ref());
 
     // Fetch the source pipeline
-    let source: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching source pipeline {id} for fork: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let source = source.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Pipeline {id} not found"),
-        )
-    })?;
+    let source = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| {
+            db_err(format!(
+                "DB error fetching source pipeline {id} for fork: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                format!("Pipeline {id} not found"),
+            )
+        })?;
 
     // Read permission applies to forking too: owners, admins, and
-    // workspace-visible pipelines may be forked.
-    if !(user.is_admin() || source.user_id == user.id || source.visibility == "workspace") {
+    // workspace-visible pipelines may be forked. Shared helper — never
+    // retype the admin/owner/visibility rule inline (fork used to have its
+    // own copy; the share endpoint still has its own and it drifts).
+    if !can_read_pipeline(&user, &source) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -82,42 +80,23 @@ pub async fn fork_pipeline(
         updated_at: now.clone(),
     };
 
-    sqlx::query(
-        "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&new_pipeline.id)
-    .bind(&new_pipeline.user_id)
-    .bind(&new_pipeline.name)
-    .bind(&new_pipeline.version)
-    .bind(&new_pipeline.toml_content)
-    .bind(new_pipeline.rules_count)
-    .bind(&new_pipeline.forked_from)
-    .bind(&new_pipeline.visibility)
-    .bind(&new_pipeline.created_at)
-    .bind(&new_pipeline.updated_at)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error creating forked pipeline: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .save_pipeline(&new_pipeline)
+        .await
+        .map_err(|e| db_err(format!("DB error creating forked pipeline: {e}")))?;
 
     // Log the fork action
-    let _ = sqlx::query(
-        "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&user.id)
-    .bind("fork_pipeline")
-    .bind(&forked_id)
-    .bind(Some(format!("{{\"forked_from\": \"{id}\"}}")))
-    .bind(&now)
-    .execute(pool)
-    .await;
+    if let Err(error) = backend
+        .log_action(&user.id, "fork_pipeline", &forked_id)
+        .await
+    {
+        tracing::error!(
+            user_id = %user.id,
+            forked_id,
+            error = %error,
+            "fork succeeded but its audit record could not be persisted"
+        );
+    }
 
     Ok(Json(ForkResponse { forked_id, name }))
 }
@@ -137,32 +116,23 @@ pub async fn share_pipeline(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ShareRequest>,
 ) -> ApiResult<ShareResponse> {
-    let pool = get_pool()?;
+    let backend = get_backend()?;
     let user = resolve(authenticated.as_ref());
 
     // Verify pipeline exists and the caller may share it (owner or admin).
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching pipeline {id} to share: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let pipeline = backend
+        .get_pipeline(&id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching pipeline {id} to share: {e}")))?
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                format!("Pipeline {id} not found"),
+            )
+        })?;
 
-    let pipeline = pipeline.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Pipeline {id} not found"),
-        )
-    })?;
-    if !(user.is_admin() || pipeline.user_id == user.id) {
+    if !can_write_pipeline(&user, &pipeline) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -181,7 +151,7 @@ pub async fn share_pipeline(
             "UNSUPPORTED_VISIBILITY",
             format!(
                 "visibility must be \"link\" (alias \"public\") — a share token grants \
-                 anonymous read access to anyone holding it; got '{}'",
+                 anonymous read access to anyone holding it; got \x27{}\x27",
                 body.visibility
             ),
         ));
@@ -218,25 +188,10 @@ pub async fn share_pipeline(
         created_at: now,
     };
 
-    sqlx::query(
-        "INSERT INTO shares (id, pipeline_id, owner_id, token, visibility, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&share.id)
-    .bind(&share.pipeline_id)
-    .bind(&share.owner_id)
-    .bind(&share.token)
-    .bind(&share.visibility)
-    .bind(&share.expires_at)
-    .bind(&share.created_at)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error creating share link for pipeline {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
+    backend.create_share(&share).await.map_err(|e| {
+        db_err(format!(
+            "DB error creating share link for pipeline {id}: {e}"
+        ))
     })?;
 
     Ok(Json(ShareResponse {
@@ -278,30 +233,21 @@ pub async fn import_pipeline(
     // oxo+http://host[:port]/share/{token}
     let token = body.url.rsplit('/').next().unwrap_or("").to_string();
 
-    let pool = get_pool()?;
+    let backend = get_backend()?;
     let user = resolve(authenticated.as_ref());
 
     // Look up the share by token
-    let share: Option<models::ShareRow> = sqlx::query_as("SELECT * FROM shares WHERE token = ?")
-        .bind(&token)
-        .fetch_optional(pool)
+    let share = backend
+        .get_share_by_token(&token)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up share by token: {e}");
+        .map_err(|e| db_err(format!("DB error looking up share by token: {e}")))?
+        .ok_or_else(|| {
             err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Share not found or expired".into(),
             )
         })?;
-
-    let share = share.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Share not found or expired".into(),
-        )
-    })?;
 
     // Check expiration
     if let Some(ref expires) = share.expires_at
@@ -316,55 +262,39 @@ pub async fn import_pipeline(
     }
 
     // Fetch the shared pipeline and import as a copy
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&share.pipeline_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching source pipeline for import: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let pipeline = pipeline.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Source pipeline no longer exists".into(),
-        )
-    })?;
+    let pipeline = backend
+        .get_pipeline(&share.pipeline_id)
+        .await
+        .map_err(|e| db_err(format!("DB error fetching source pipeline for import: {e}")))?
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Source pipeline no longer exists".into(),
+            )
+        })?;
 
     // Create imported copy, attributed to the acting user (issue #82 P0-4).
     let import_id = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
 
-    sqlx::query(
-        "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&import_id)
-    .bind(&user.id)
-    .bind(format!("{} (imported)", pipeline.name))
-    .bind(&pipeline.version)
-    .bind(&pipeline.toml_content)
-    .bind(pipeline.rules_count)
-    .bind(Some(share.pipeline_id))
-    .bind("private")
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error creating imported pipeline: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    let imported_pipeline = models::PipelineRow {
+        id: import_id.clone(),
+        user_id: user.id.clone(),
+        name: format!("{} (imported)", pipeline.name),
+        version: pipeline.version.clone(),
+        toml_content: pipeline.toml_content.clone(),
+        rules_count: pipeline.rules_count,
+        forked_from: Some(share.pipeline_id),
+        visibility: "private".to_string(),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+
+    backend
+        .save_pipeline(&imported_pipeline)
+        .await
+        .map_err(|e| db_err(format!("DB error creating imported pipeline: {e}")))?;
 
     Ok(Json(ImportResponse {
         pipeline_id: import_id,
@@ -386,27 +316,20 @@ pub async fn import_pipeline(
 /// this endpoint deliberately sits on the anonymous whitelist so a share
 /// URL opens without a session.
 pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_json::Value> {
-    let pool = get_pool()?;
+    let backend = get_backend()?;
 
-    let share: Option<models::ShareRow> = sqlx::query_as("SELECT * FROM shares WHERE token = ?")
-        .bind(&token)
-        .fetch_optional(pool)
+    let share = backend
+        .get_share_by_token(&token)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error looking up share by token: {e}");
+        .map_err(|e| db_err(format!("DB error looking up share by token: {e}")))?
+        .ok_or_else(|| {
             err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Share not found or expired".into(),
             )
         })?;
-    let share = share.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Share not found or expired".into(),
-        )
-    })?;
+
     if let Some(ref expires) = share.expires_at
         && let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires)
         && chrono::Utc::now() > exp
@@ -418,25 +341,21 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
         ));
     }
 
-    let pipeline: Option<models::PipelineRow> =
-        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-            .bind(&share.pipeline_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|_| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-    let pipeline = pipeline.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Source pipeline no longer exists".into(),
-        )
-    })?;
+    let pipeline = backend
+        .get_pipeline(&share.pipeline_id)
+        .await
+        .map_err(|e| {
+            db_err(format!(
+                "DB error fetching source pipeline for share landing: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Source pipeline no longer exists".into(),
+            )
+        })?;
 
     // DAG summary: rule names in execution order (no full layout — the
     // landing page shows the shape, the importer gets the TOML).
@@ -455,22 +374,17 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
         .unwrap_or_default();
 
     // Most recent terminal run as provenance evidence.
-    let recent: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT status, finished_at FROM runs WHERE pipeline_id = ? \
-         AND status IN ('completed', 'failed', 'cancelled') \
-         ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(&share.pipeline_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let recent: Option<(String, Option<String>)> = backend
+        .get_latest_terminal_run_for_pipeline(&share.pipeline_id)
+        .await
+        .unwrap_or(None);
 
-    let owner_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
-            .bind(&share.owner_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let owner_username: Option<String> = backend
+        .get_user_by_id(&share.owner_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|u| u.username);
 
     Ok(Json(serde_json::json!({
         "pipeline": {

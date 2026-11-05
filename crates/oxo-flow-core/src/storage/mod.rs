@@ -114,6 +114,32 @@ impl StoragePath {
     }
 }
 
+/// Remote input staging mode for workflow rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StagingMode {
+    /// Download the full object to local scratch disk before rule execution (default).
+    #[default]
+    Eager,
+    /// Stream the remote object on demand via a FIFO pipe without buffering to disk.
+    #[serde(alias = "stream", alias = "fifo")]
+    StreamFifo,
+    /// Leave raw remote URI untouched for tools with native cloud storage I/O.
+    #[serde(alias = "pass_through")]
+    Passthrough,
+}
+
+impl StagingMode {
+    /// Canonical lowercase name.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Eager => "eager",
+            Self::StreamFifo => "stream",
+            Self::Passthrough => "passthrough",
+        }
+    }
+}
+
 /// Metadata of a remote object, used for content-addressed invalidation
 /// (issue #78 P2). Local files have no `RemoteStat` — local invalidation
 /// keeps the size+mtime+sha256 policy.
@@ -431,6 +457,29 @@ pub trait StorageBackend: Send + Sync {
     /// Read the entire file at `path` into a UTF-8 string.
     async fn read_to_string(&self, path: &StoragePath) -> Result<String>;
 
+    /// Read at most `len` bytes starting at `offset` without staging the full object.
+    async fn read_range(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>>;
+
+    /// Synchronous wrapper around [`StorageBackend::read_range`].
+    fn read_range_blocking(&self, path: &StoragePath, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let path = path.clone();
+        std::thread::scope(|scope| {
+            let fut = async { self.read_range(&path, offset, len).await };
+            scope
+                .spawn(move || {
+                    tokio::runtime::Runtime::new()
+                        .map_err(|e| OxoFlowError::Config {
+                            message: format!("cannot create runtime for remote read_range: {e}"),
+                        })
+                        .and_then(|runtime| runtime.block_on(fut))
+                })
+                .join()
+                .map_err(|_| OxoFlowError::Config {
+                    message: "remote read_range thread panicked".to_string(),
+                })?
+        })
+    }
+
     /// Write `data` to the given path (creating parents if needed).
     async fn write(&self, path: &StoragePath, data: &[u8]) -> Result<()>;
 
@@ -530,6 +579,14 @@ mod tests {
         }
         async fn read_to_string(&self, _path: &StoragePath) -> Result<String> {
             unreachable!("read_to_string")
+        }
+        async fn read_range(
+            &self,
+            _path: &StoragePath,
+            _offset: u64,
+            _len: usize,
+        ) -> Result<Vec<u8>> {
+            unreachable!("read_range")
         }
         async fn write(&self, _path: &StoragePath, _data: &[u8]) -> Result<()> {
             unreachable!("write")

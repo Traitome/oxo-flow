@@ -56,38 +56,13 @@ pub fn get_tool(name: &str) -> Option<&'static BiocondaTool> {
 /// Fuzzy search: name substring OR summary keyword match.
 /// Returns up to `limit` tools ranked by name-prefix match first.
 pub fn search_tools(query: &str, limit: usize) -> Vec<&'static BiocondaTool> {
-    let q = query.to_lowercase();
-    let mut exact: Vec<&BiocondaTool> = Vec::new();
-    let mut prefix: Vec<&BiocondaTool> = Vec::new();
-    let mut substring: Vec<&BiocondaTool> = Vec::new();
-    let mut summary_hits: Vec<&BiocondaTool> = Vec::new();
-
-    for tool in BIOCONDA_DB.iter() {
-        let name = tool.name.to_lowercase();
-        if name == q {
-            exact.push(tool);
-        } else if name.starts_with(&q) {
-            prefix.push(tool);
-        } else if name.contains(&q) {
-            substring.push(tool);
-        } else if tool.summary.to_lowercase().contains(&q) {
-            summary_hits.push(tool);
-        }
-    }
-
-    let mut results = Vec::with_capacity(limit);
-    for tool in exact
-        .into_iter()
-        .chain(prefix)
-        .chain(substring)
-        .chain(summary_hits)
-    {
-        if results.len() >= limit {
-            break;
-        }
-        results.push(tool);
-    }
-    results
+    super::ranked_name_search(
+        BIOCONDA_DB.iter(),
+        query,
+        limit,
+        |tool| &tool.name,
+        |tool| &tool.summary,
+    )
 }
 
 /// Format search results as a compact text block for AI prompts.

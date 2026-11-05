@@ -4,8 +4,9 @@ use crate::extract::ApiJson;
 use axum::extract::Path;
 use axum::{Extension, Json, http::StatusCode};
 
+use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
+use crate::domains::workflow::handlers::{ApiError, db_err, err, get_backend, now_iso};
 use crate::infra::db::models;
 
 use super::service;
@@ -14,18 +15,15 @@ use super::types::{ClusterInfo, ClusterProbeResult, ClusterUpsertRequest};
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
 /// Cluster connections hold SSH credentials shared by the whole platform.
-/// Managing them (upsert/delete) is admin-only outside personal mode
-/// (issue #82 P0-5); listing and probing stay available to any
-/// authenticated user so they can pick a cluster for their runs.
+/// Managing and probing them (upsert/delete/probe) is admin-only outside
+/// personal mode (issues #82 P0-5, #517); listing stays available to any
+/// authenticated user so they can see what a run could target.
 fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to manage cluster connections".into(),
-        ));
-    }
-    Ok(())
+    current_user::require_role_outside_personal(
+        user,
+        "admin",
+        "Admin role required to manage cluster connections",
+    )
 }
 
 #[utoipa::path(
@@ -39,18 +37,11 @@ fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<Api
 )]
 /// GET /api/clusters — list configured cluster connections.
 pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
-    let pool = get_pool()?;
-    let rows: Vec<models::ClusterRow> = sqlx::query_as("SELECT * FROM clusters ORDER BY name")
-        .fetch_all(pool)
+    let backend = get_backend()?;
+    let rows = backend
+        .list_clusters()
         .await
-        .map_err(|e| {
-            tracing::error!("DB error listing clusters: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error listing clusters: {e}")))?;
     Ok(Json(rows.into_iter().map(cluster_from_row).collect()))
 }
 
@@ -71,53 +62,24 @@ pub async fn upsert_cluster(
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;
     service::validate(&req).map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_CLUSTER", e))?;
-    let pool = get_pool()?;
+    let backend = get_backend()?;
     let now = now_iso();
-    sqlx::query(
-        "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, ssh_host = excluded.ssh_host, \
-         ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user, ssh_key = excluded.ssh_key, \
-         scheduler = excluded.scheduler, remote_dir = excluded.remote_dir, enabled = excluded.enabled",
-    )
-    .bind(&req.id)
-    .bind(&req.name)
-    .bind(&req.ssh_host)
-    .bind(req.ssh_port as i64)
-    .bind(req.ssh_user.as_deref())
-    .bind(
-            req.ssh_key
-                .as_deref()
-                .map(crate::infra::crypto::seal)
-                .as_deref(),
-        )
-    .bind(req.scheduler.as_deref())
-    .bind(req.remote_dir.as_deref())
-    .bind(req.enabled)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error upserting cluster {}: {e}", req.id);
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
-
-    let row: models::ClusterRow = sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
-        .bind(&req.id)
-        .fetch_one(pool)
+    let row = models::ClusterRow {
+        id: req.id.clone(),
+        name: req.name.clone(),
+        ssh_host: req.ssh_host.clone(),
+        ssh_port: req.ssh_port as i64,
+        ssh_user: req.ssh_user.clone(),
+        ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
+        scheduler: req.scheduler.clone(),
+        remote_dir: req.remote_dir.clone(),
+        enabled: req.enabled,
+        created_at: now,
+    };
+    backend
+        .save_cluster(&row)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error re-reading cluster {}: {e}", req.id);
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error upserting cluster {}: {e}", req.id)))?;
     Ok(Json(cluster_from_row(row)))
 }
 
@@ -137,21 +99,12 @@ pub async fn delete_cluster(
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;
-    let pool = get_pool()?;
-    let deleted = sqlx::query("DELETE FROM clusters WHERE id = ?")
-        .bind(&id)
-        .execute(pool)
+    let backend = get_backend()?;
+    let deleted = backend
+        .delete_cluster(&id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error deleting cluster {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?
-        .rows_affected();
-    if deleted == 0 {
+        .map_err(|e| db_err(format!("DB error deleting cluster {id}: {e}")))?;
+    if !deleted {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -180,26 +133,18 @@ pub async fn probe_cluster(
 ) -> ApiResult<ClusterProbeResult> {
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;
-    let pool = get_pool()?;
-    let row: Option<models::ClusterRow> = sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
+    let backend = get_backend()?;
+    let row = backend
+        .get_cluster(&id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching cluster {id} for probe: {e}");
+        .map_err(|e| db_err(format!("DB error fetching cluster {id} for probe: {e}")))?
+        .ok_or_else(|| {
             err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                format!("Cluster {id} not found"),
             )
         })?;
-    let row = row.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Cluster {id} not found"),
-        )
-    })?;
     Ok(Json(service::probe(&cluster_from_row(row)).await))
 }
 
@@ -242,39 +187,40 @@ pub async fn import_from_config(definitions: &[crate::config::ClusterDefinition]
             tracing::warn!("platform config cluster '{}' is invalid — skipped", def.id);
             continue;
         }
-        let pool = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
         let now = now_iso();
-        // INSERT OR IGNORE: existing rows win over the config file.
-        let result = sqlx::query(
-            "INSERT OR IGNORE INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&req.id)
-        .bind(&req.name)
-        .bind(&req.ssh_host)
-        .bind(req.ssh_port as i64)
-        .bind(req.ssh_user.as_deref())
-        .bind(
-            req.ssh_key
-                .as_deref()
-                .map(crate::infra::crypto::seal)
-                .as_deref(),
-        )
-        .bind(req.scheduler.as_deref())
-        .bind(req.remote_dir.as_deref())
-        .bind(req.enabled)
-        .bind(&now)
-        .execute(pool)
-        .await;
-        match result {
-            Ok(r) if r.rows_affected() > 0 => {
-                tracing::info!("Imported cluster '{}' from platform config", req.id);
+        let Some(backend) = crate::infra::db::global_backend() else {
+            continue;
+        };
+        match backend.get_cluster(&req.id).await {
+            Ok(None) => {
+                let row = models::ClusterRow {
+                    id: req.id.clone(),
+                    name: req.name.clone(),
+                    ssh_host: req.ssh_host.clone(),
+                    ssh_port: req.ssh_port as i64,
+                    ssh_user: req.ssh_user.clone(),
+                    ssh_key: req.ssh_key.as_deref().map(crate::infra::crypto::seal),
+                    scheduler: req.scheduler.clone(),
+                    remote_dir: req.remote_dir.clone(),
+                    enabled: req.enabled,
+                    created_at: now,
+                };
+                if let Err(error) = backend.save_cluster(&row).await {
+                    tracing::warn!(
+                        cluster_id = %req.id,
+                        error = %error,
+                        "failed to import cluster from platform config"
+                    );
+                }
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Failed to import cluster '{}': {e}", req.id),
+            Ok(Some(_)) => {}
+            Err(error) => {
+                tracing::warn!(
+                    cluster_id = %req.id,
+                    error = %error,
+                    "could not check for an existing cluster; config import skipped"
+                );
+            }
         }
     }
 }

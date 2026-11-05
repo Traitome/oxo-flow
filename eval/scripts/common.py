@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -49,6 +50,14 @@ def sha256_file(path):
 
 def gold_csv_path(layer, override=None):
     return os.path.abspath(override or os.path.join(GOLD_DIR, f"{layer}.csv"))
+
+
+def parse_trial(value, default=1):
+    """Trial column values are '1', '2', … but tolerate blank/malformed cells."""
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def manifest_path(out_path):
@@ -791,3 +800,23 @@ def run(cmd, cwd=None, timeout=300):
 
 def oxo_flow_cmd(bin_path, args, cwd=None):
     return run([bin_path] + args, cwd=cwd)
+
+
+def find_engine_binary():
+    """Locate the oxo-flow CLI binary.
+
+    Precedence: $OXO_FLOW_BIN override, then <repo>/target/release/oxo-flow,
+    <repo>/target/debug/oxo-flow, and finally `oxo-flow` on PATH.
+    Raises FileNotFoundError when nothing resolves.
+    """
+    override = os.environ.get("OXO_FLOW_BIN", "")
+    if override and os.path.isfile(override) and os.access(override, os.X_OK):
+        return override
+    for profile in ("release", "debug"):
+        candidate = os.path.join(REPO_ROOT, "target", profile, "oxo-flow")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which("oxo-flow")
+    if found:
+        return found
+    raise FileNotFoundError("oxo-flow binary not found. Build target first.")

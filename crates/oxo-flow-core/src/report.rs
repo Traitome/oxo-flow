@@ -5,10 +5,9 @@
 //! with full traceability and provenance.
 
 use crate::error::{OxoFlowError, Result};
-use crate::executor::JobRecord;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// A section in a report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,23 +218,6 @@ impl Report {
     /// Add metadata to the report.
     pub fn add_metadata(&mut self, key: &str, value: &str) {
         self.metadata.insert(key.to_string(), value.to_string());
-    }
-
-    /// Add a provenance section to the report with execution metadata.
-    pub fn add_provenance(&mut self, version: &str, checksum: &str, timestamp: &str) {
-        let section = ReportSection {
-            title: "Execution Provenance".to_string(),
-            id: "provenance".to_string(),
-            content: ReportContent::KeyValue {
-                pairs: vec![
-                    ("oxo-flow Version".to_string(), version.to_string()),
-                    ("Config Checksum".to_string(), checksum.to_string()),
-                    ("Execution Time".to_string(), timestamp.to_string()),
-                ],
-            },
-            subsections: vec![],
-        };
-        self.add_section(section);
     }
 
     /// Render the report as a JSON string.
@@ -473,39 +455,6 @@ impl Report {
         }
     }
 
-    /// Generate an execution summary section from job records.
-    pub fn execution_summary(records: &HashMap<String, JobRecord>) -> ReportSection {
-        let mut rows = Vec::new();
-        for (name, record) in records {
-            rows.push(vec![
-                name.clone(),
-                record.status.to_string(),
-                record.exit_code.map(|c| c.to_string()).unwrap_or_default(),
-                record.started_at.map(|t| t.to_string()).unwrap_or_default(),
-                record
-                    .finished_at
-                    .map(|t| t.to_string())
-                    .unwrap_or_default(),
-            ]);
-        }
-
-        ReportSection {
-            title: "Execution Summary".to_string(),
-            id: "execution-summary".to_string(),
-            content: ReportContent::Table {
-                headers: vec![
-                    "Rule".to_string(),
-                    "Status".to_string(),
-                    "Exit Code".to_string(),
-                    "Started".to_string(),
-                    "Finished".to_string(),
-                ],
-                rows,
-            },
-            subsections: Vec::new(),
-        }
-    }
-
     /// Render the report as Markdown with GFM tables — git-friendly and
     /// doc-embeddable (issue #83 P1-9). A projection of the same model as
     /// HTML/JSON, never a separate data path.
@@ -526,449 +475,6 @@ impl Report {
             render_section_markdown(&mut md, section, 2);
         }
         md
-    }
-}
-
-/// Quality-control metric for a single sample.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QcMetric {
-    /// Sample identifier.
-    pub sample: String,
-    /// Total number of reads.
-    pub total_reads: u64,
-    /// Number of reads that mapped to the reference.
-    pub mapped_reads: u64,
-    /// Fraction of reads that mapped (0.0–1.0).
-    pub mapping_rate: f64,
-    /// Mean sequencing coverage depth.
-    pub mean_coverage: f64,
-    /// Fraction of reads marked as duplicates (0.0–1.0).
-    pub duplicate_rate: f64,
-}
-
-/// Summary of a single variant call.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VariantSummary {
-    /// Gene symbol.
-    pub gene: String,
-    /// HGVS or similar variant notation.
-    pub variant: String,
-    /// ACMG classification (e.g., "Pathogenic", "Likely Pathogenic", "VUS").
-    pub classification: String,
-    /// Variant allele frequency (0.0–1.0).
-    pub allele_frequency: f64,
-    /// Read depth at the variant site.
-    pub depth: u32,
-    /// Optional free-text clinical significance note.
-    pub clinical_significance: Option<String>,
-}
-
-/// Create a QC metrics section with sample-level quality data.
-pub fn qc_metrics_section(metrics: &[QcMetric]) -> ReportSection {
-    let headers = vec![
-        "Sample".to_string(),
-        "Total Reads".to_string(),
-        "Mapped Reads".to_string(),
-        "Mapping Rate".to_string(),
-        "Mean Coverage".to_string(),
-        "Duplicate Rate".to_string(),
-    ];
-
-    let rows: Vec<Vec<String>> = metrics
-        .iter()
-        .map(|m| {
-            vec![
-                m.sample.clone(),
-                m.total_reads.to_string(),
-                m.mapped_reads.to_string(),
-                format!("{:.2}%", m.mapping_rate * 100.0),
-                format!("{:.1}x", m.mean_coverage),
-                format!("{:.2}%", m.duplicate_rate * 100.0),
-            ]
-        })
-        .collect();
-
-    ReportSection {
-        title: "QC Metrics".to_string(),
-        id: "qc-metrics".to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    }
-}
-
-/// Create a variant summary section.
-pub fn variant_summary_section(variants: &[VariantSummary]) -> ReportSection {
-    let headers = vec![
-        "Gene".to_string(),
-        "Variant".to_string(),
-        "Classification".to_string(),
-        "Allele Frequency".to_string(),
-        "Depth".to_string(),
-        "Clinical Significance".to_string(),
-    ];
-
-    let rows: Vec<Vec<String>> = variants
-        .iter()
-        .map(|v| {
-            vec![
-                v.gene.clone(),
-                v.variant.clone(),
-                v.classification.clone(),
-                format!("{:.4}", v.allele_frequency),
-                v.depth.to_string(),
-                v.clinical_significance.clone().unwrap_or_default(),
-            ]
-        })
-        .collect();
-
-    ReportSection {
-        title: "Variant Summary".to_string(),
-        id: "variant-summary".to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    }
-}
-
-/// Create a provenance section recording execution details.
-pub fn provenance_section(
-    workflow_name: &str,
-    workflow_version: &str,
-    start_time: DateTime<Utc>,
-    end_time: DateTime<Utc>,
-    software_versions: &[(String, String)],
-) -> ReportSection {
-    let duration = end_time.signed_duration_since(start_time);
-    let mut pairs = vec![
-        ("Workflow".to_string(), workflow_name.to_string()),
-        ("Version".to_string(), workflow_version.to_string()),
-        ("Start Time".to_string(), start_time.to_rfc3339()),
-        ("End Time".to_string(), end_time.to_rfc3339()),
-        (
-            "Duration".to_string(),
-            format!("{}s", duration.num_seconds()),
-        ),
-    ];
-
-    for (name, version) in software_versions {
-        pairs.push((name.clone(), version.clone()));
-    }
-
-    ReportSection {
-        title: "Provenance".to_string(),
-        id: "provenance".to_string(),
-        content: ReportContent::KeyValue { pairs },
-        subsections: Vec::new(),
-    }
-}
-
-/// Create an execution time chart section from job records.
-///
-/// Generates an inline SVG bar chart showing the wall-clock time
-/// for each rule, sorted by duration (longest first).
-pub fn execution_time_chart(records: &HashMap<String, JobRecord>) -> ReportSection {
-    let mut entries: Vec<(String, f64)> = records
-        .iter()
-        .filter_map(
-            |(name, record)| match (record.started_at, record.finished_at) {
-                (Some(start), Some(end)) => {
-                    let duration = end.signed_duration_since(start);
-                    Some((name.clone(), duration.num_milliseconds() as f64 / 1000.0))
-                }
-                _ => None,
-            },
-        )
-        .collect();
-
-    // Sort by duration descending
-    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let labels: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
-    let values: Vec<f64> = entries.iter().map(|(_, dur)| *dur).collect();
-
-    ReportSection {
-        title: "Execution Time".to_string(),
-        id: "execution-time-chart".to_string(),
-        content: ReportContent::Chart {
-            title: "Rule Execution Time".to_string(),
-            labels,
-            values,
-            unit: "s".to_string(),
-        },
-        subsections: Vec::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Alignment statistics section
-// ---------------------------------------------------------------------------
-
-/// Alignment statistics for a single sample.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlignmentStats {
-    pub sample: String,
-    pub total_reads: u64,
-    pub mapped_reads: u64,
-    pub properly_paired: u64,
-    pub singletons: u64,
-    pub duplicates: u64,
-    pub mapping_rate: f64,
-    pub mean_coverage: Option<f64>,
-    pub mean_insert_size: Option<f64>,
-    pub gc_content: Option<f64>,
-}
-
-/// Create an alignment statistics section from per-sample alignment data.
-pub fn alignment_stats_section(stats: &[AlignmentStats]) -> ReportSection {
-    let headers = vec![
-        "Sample",
-        "Total Reads",
-        "Mapped Reads",
-        "Mapping Rate",
-        "Properly Paired",
-        "Duplicates",
-        "Mean Coverage",
-        "GC%",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-
-    // `total_reads == 0` is real (an empty FASTQ, an unparsed flagstat):
-    // 0/0 is NaN and x/0 is inf, and "NaN%" / "inf%" in a QC table reads
-    // as data. Percentages of an empty sample are unknown, not zero.
-    let ratio_pct = |numerator: u64, denominator: u64| -> String {
-        if denominator == 0 {
-            "N/A".to_string()
-        } else {
-            format!("{:.2}%", numerator as f64 / denominator as f64 * 100.0)
-        }
-    };
-    let rows: Vec<Vec<String>> = stats
-        .iter()
-        .map(|s| {
-            let mapping_rate = if s.mapping_rate.is_finite() {
-                format!("{:.2}%", s.mapping_rate * 100.0)
-            } else {
-                "N/A".to_string()
-            };
-            vec![
-                s.sample.clone(),
-                s.total_reads.to_string(),
-                s.mapped_reads.to_string(),
-                mapping_rate,
-                ratio_pct(s.properly_paired, s.total_reads),
-                ratio_pct(s.duplicates, s.total_reads),
-                s.mean_coverage
-                    .filter(|c| c.is_finite())
-                    .map_or("N/A".into(), |c| format!("{:.1}x", c)),
-                s.gc_content
-                    .filter(|g| g.is_finite())
-                    .map_or("N/A".into(), |g| format!("{:.1}%", g * 100.0)),
-            ]
-        })
-        .collect();
-
-    ReportSection {
-        title: "Alignment Statistics".to_string(),
-        id: "alignment-stats".to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// RNA-seq expression summary section
-// ---------------------------------------------------------------------------
-
-/// Expression data for a single gene across samples.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExpressionRecord {
-    pub gene: String,
-    pub sample: String,
-    pub tpm: f64,
-    pub count: u64,
-}
-
-/// Create an RNA-seq expression summary with top expressed genes.
-pub fn expression_summary_section(records: &[ExpressionRecord], top_n: usize) -> ReportSection {
-    // Aggregate by gene: average TPM across SAMPLES. Counting records
-    // instead (the previous behavior) skewed the mean toward whichever
-    // sample had the most records for that gene.
-    let mut gene_tpm: HashMap<String, (f64, std::collections::HashSet<String>)> = HashMap::new();
-    for r in records {
-        let entry = gene_tpm.entry(r.gene.clone()).or_default();
-        entry.0 += r.tpm;
-        entry.1.insert(r.sample.clone());
-    }
-    let mut genes: Vec<(String, f64)> = gene_tpm
-        .into_iter()
-        .map(|(g, (sum, samples))| (g, sum / samples.len().max(1) as f64))
-        .collect();
-    genes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    genes.truncate(top_n);
-
-    let headers = vec!["Rank", "Gene", "Mean TPM"]
-        .into_iter()
-        .map(String::from)
-        .collect();
-    let rows: Vec<Vec<String>> = genes
-        .iter()
-        .enumerate()
-        .map(|(i, (gene, tpm))| vec![(i + 1).to_string(), gene.clone(), format!("{:.2}", tpm)])
-        .collect();
-
-    ReportSection {
-        title: format!("Top {} Expressed Genes", top_n),
-        id: "expression-summary".to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Multi-sample comparison section
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Resource usage summary
-// ---------------------------------------------------------------------------
-
-/// Per-rule resource usage for reporting.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceUsage {
-    pub rule: String,
-    pub wall_time_secs: f64,
-    pub max_memory_mb: Option<u64>,
-    pub cpu_seconds: Option<f64>,
-    pub threads: u32,
-    pub status: String,
-}
-
-// ---------------------------------------------------------------------------
-// Dashboard / overview section
-// ---------------------------------------------------------------------------
-
-/// Key metrics for the dashboard overview at the top of reports.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DashboardMetrics {
-    pub pipeline_name: String,
-    pub total_samples: usize,
-    pub total_rules: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub total_reads_processed: Option<u64>,
-    pub mean_mapping_rate: Option<f64>,
-    pub variants_detected: Option<usize>,
-    pub actionable_variants: Option<usize>,
-    pub differentially_expressed_genes: Option<usize>,
-    pub total_runtime_secs: Option<f64>,
-}
-
-/// Create a dashboard overview section with key QC indicators.
-pub fn dashboard_section(metrics: &DashboardMetrics) -> ReportSection {
-    let mut status_items = Vec::new();
-
-    // Pipeline success status
-    let status = if metrics.failed == 0 {
-        QcStatusLevel::Pass
-    } else {
-        QcStatusLevel::Warn
-    };
-    let desc = if metrics.failed == 0 {
-        "All rules completed successfully".to_string()
-    } else {
-        format!("{} failed", crate::plural(metrics.failed, "rule", "rules"))
-    };
-    status_items.push(QcIndicator {
-        label: "Pipeline Status".into(),
-        value: format!("{}/{} succeeded", metrics.succeeded, metrics.total_rules),
-        status,
-        description: desc,
-    });
-
-    // Sample count
-    status_items.push(QcIndicator {
-        label: "Samples Processed".into(),
-        value: metrics.total_samples.to_string(),
-        status: QcStatusLevel::Info,
-        description: "Total samples in cohort".into(),
-    });
-
-    // Mapping rate
-    if let Some(rate) = metrics.mean_mapping_rate {
-        let (s, d) = if rate > 0.90 {
-            (QcStatusLevel::Pass, "Excellent mapping rate")
-        } else if rate > 0.70 {
-            (QcStatusLevel::Warn, "Below expected mapping rate")
-        } else {
-            (
-                QcStatusLevel::Fail,
-                "Poor mapping rate — check sample quality",
-            )
-        };
-        status_items.push(QcIndicator {
-            label: "Mean Mapping Rate".into(),
-            value: format!("{:.1}%", rate * 100.0),
-            status: s,
-            description: d.into(),
-        });
-    }
-
-    // Variants
-    if let Some(v) = metrics.variants_detected {
-        status_items.push(QcIndicator {
-            label: "Variants Detected".into(),
-            value: v.to_string(),
-            status: QcStatusLevel::Info,
-            description: "Total variants called".into(),
-        });
-    }
-    if let Some(av) = metrics.actionable_variants {
-        status_items.push(QcIndicator {
-            label: "Actionable Variants".into(),
-            value: av.to_string(),
-            status: if av > 0 {
-                QcStatusLevel::Warn
-            } else {
-                QcStatusLevel::Pass
-            },
-            description: "Clinically actionable findings".into(),
-        });
-    }
-
-    // DEGs
-    if let Some(deg) = metrics.differentially_expressed_genes {
-        status_items.push(QcIndicator {
-            label: "Differentially Expressed Genes".into(),
-            value: deg.to_string(),
-            status: QcStatusLevel::Info,
-            description: "Genes with |log2FC| > 1 and adj.p < 0.05".into(),
-        });
-    }
-
-    // Runtime
-    if let Some(runtime) = metrics.total_runtime_secs {
-        status_items.push(QcIndicator {
-            label: "Total Runtime".into(),
-            value: if runtime > 3600.0 {
-                format!("{:.1}h", runtime / 3600.0)
-            } else if runtime > 60.0 {
-                format!("{:.1}min", runtime / 60.0)
-            } else {
-                format!("{:.0}s", runtime)
-            },
-            status: QcStatusLevel::Info,
-            description: "Total wall clock time".into(),
-        });
-    }
-
-    ReportSection {
-        title: "Dashboard".to_string(),
-        id: "dashboard".to_string(),
-        content: ReportContent::QcIndicatorGroup {
-            items: status_items,
-        },
-        subsections: Vec::new(),
     }
 }
 
@@ -995,51 +501,6 @@ impl ReportBuilder {
 
     pub fn section(mut self, section: ReportSection) -> Self {
         self.report.add_section(section);
-        self
-    }
-
-    pub fn dashboard(mut self, metrics: &DashboardMetrics) -> Self {
-        self.report.add_section(dashboard_section(metrics));
-        self
-    }
-
-    pub fn qc_metrics(mut self, metrics: &[QcMetric]) -> Self {
-        self.report.add_section(qc_metrics_section(metrics));
-        self
-    }
-
-    pub fn alignment_stats(mut self, stats: &[AlignmentStats]) -> Self {
-        self.report.add_section(alignment_stats_section(stats));
-        self
-    }
-
-    pub fn expression(mut self, records: &[ExpressionRecord], top_n: usize) -> Self {
-        self.report
-            .add_section(expression_summary_section(records, top_n));
-        self
-    }
-
-    pub fn variants(mut self, variants: &[VariantSummary]) -> Self {
-        self.report.add_section(variant_summary_section(variants));
-        self
-    }
-
-    pub fn provenance(
-        mut self,
-        wf_name: &str,
-        wf_version: &str,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-        sw: &[(String, String)],
-    ) -> Self {
-        self.report
-            .add_section(provenance_section(wf_name, wf_version, start, end, sw));
-        self
-    }
-
-    /// Add a task summary section showing all rules with their shell commands.
-    pub fn task_summary(mut self, rules: &[crate::rule::Rule]) -> Self {
-        self.report.add_section(task_summary_section(rules));
         self
     }
 
@@ -1455,49 +916,6 @@ impl ReportLanguage {
             "zh" | "cn" | "chinese" | "zh-cn" | "zh_cn" => Self::Chinese,
             _ => Self::English,
         }
-    }
-}
-
-/// Sample metadata for clinical report headers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SampleInfo {
-    /// Sample identifier.
-    pub sample_id: String,
-    /// Patient identifier (anonymized).
-    pub patient_id: Option<String>,
-    /// Sample type (e.g., "Experiment", "Control", "Tumor", "Normal", "Blood").
-    pub sample_type: String,
-    /// Collection date.
-    pub collection_date: Option<String>,
-    /// Sequencing platform (e.g., "Illumina NovaSeq 6000").
-    pub platform: Option<String>,
-    /// Sequencing type (e.g., "WGS", "WES", "Panel").
-    pub seq_type: Option<String>,
-}
-
-/// Create a sample information section for clinical reports.
-pub fn sample_info_section(info: &SampleInfo) -> ReportSection {
-    let mut pairs = vec![
-        ("Sample ID".to_string(), info.sample_id.clone()),
-        ("Sample Type".to_string(), info.sample_type.clone()),
-    ];
-    if let Some(ref pid) = info.patient_id {
-        pairs.push(("Patient ID".to_string(), pid.clone()));
-    }
-    if let Some(ref date) = info.collection_date {
-        pairs.push(("Collection Date".to_string(), date.clone()));
-    }
-    if let Some(ref platform) = info.platform {
-        pairs.push(("Platform".to_string(), platform.clone()));
-    }
-    if let Some(ref st) = info.seq_type {
-        pairs.push(("Sequencing Type".to_string(), st.clone()));
-    }
-    ReportSection {
-        title: "Sample Information".to_string(),
-        id: "sample-info".to_string(),
-        content: ReportContent::KeyValue { pairs },
-        subsections: Vec::new(),
     }
 }
 
@@ -1926,8 +1344,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
 // ===========================================================================
 //
 // Report sections are generated by registered `ReportSectionGenerator`
-// implementations — similar to how `ResultExtractor` plugins work for
-// output file parsing.  Users can filter which sections appear via the
+// implementations. Users can filter which sections appear via the
 // `[report].sections` config in their .oxoflow file.
 //
 // Built-in generators cover: universal (dashboard, metadata), execution
@@ -2012,7 +1429,7 @@ pub trait ReportSectionGenerator: Send + Sync {
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection>;
 }
 
-/// Registry of report section generators — pluggable like ResultExtractorRegistry.
+/// Registry of report section generators.
 pub struct SectionRegistry {
     generators: Vec<Box<dyn ReportSectionGenerator>>,
 }
@@ -3764,40 +3181,6 @@ mod tests {
         assert!(html.contains("<table>"));
     }
 
-    #[test]
-    fn execution_summary_section() {
-        let mut records = HashMap::new();
-        records.insert(
-            "step1".to_string(),
-            JobRecord {
-                signal: None,
-                rule: "step1".to_string(),
-                status: crate::executor::JobStatus::Success,
-                enqueued_at: None,
-                started_at: Some(Utc::now()),
-                finished_at: Some(Utc::now()),
-                exit_code: Some(0),
-                stdout: None,
-                stderr: None,
-                command: Some("echo hello".to_string()),
-                retries: 0,
-                skip_reason: None,
-                max_rss_mb: None,
-                cpu_seconds: None,
-                caption: None,
-            },
-        );
-
-        let section = Report::execution_summary(&records);
-        assert_eq!(section.title, "Execution Summary");
-        if let ReportContent::Table { headers, rows } = &section.content {
-            assert_eq!(headers.len(), 5);
-            assert_eq!(rows.len(), 1);
-        } else {
-            panic!("Expected Table content");
-        }
-    }
-
     // --- TemplateEngine tests ---
 
     #[test]
@@ -4077,152 +3460,6 @@ mod tests {
     // --- Clinical section tests ---
 
     #[test]
-    fn qc_metrics_section_generation() {
-        let metrics = vec![
-            QcMetric {
-                sample: "S1".to_string(),
-                total_reads: 1_000_000,
-                mapped_reads: 950_000,
-                mapping_rate: 0.95,
-                mean_coverage: 30.5,
-                duplicate_rate: 0.12,
-            },
-            QcMetric {
-                sample: "S2".to_string(),
-                total_reads: 2_000_000,
-                mapped_reads: 1_800_000,
-                mapping_rate: 0.90,
-                mean_coverage: 45.0,
-                duplicate_rate: 0.08,
-            },
-        ];
-
-        let section = qc_metrics_section(&metrics);
-        assert_eq!(section.title, "QC Metrics");
-        assert_eq!(section.id, "qc-metrics");
-        if let ReportContent::Table { headers, rows } = &section.content {
-            assert_eq!(headers.len(), 6);
-            assert_eq!(rows.len(), 2);
-            assert_eq!(rows[0][0], "S1");
-            assert!(rows[0][3].contains("95.00%"));
-            assert!(rows[0][4].contains("30.5x"));
-        } else {
-            panic!("Expected Table content");
-        }
-    }
-
-    #[test]
-    fn variant_summary_section_generation() {
-        let variants = vec![VariantSummary {
-            gene: "BRCA1".to_string(),
-            variant: "c.5266dupC".to_string(),
-            classification: "Pathogenic".to_string(),
-            allele_frequency: 0.4532,
-            depth: 250,
-            clinical_significance: Some("Associated with breast cancer".to_string()),
-        }];
-
-        let section = variant_summary_section(&variants);
-        assert_eq!(section.title, "Variant Summary");
-        assert_eq!(section.id, "variant-summary");
-        if let ReportContent::Table { headers, rows } = &section.content {
-            assert_eq!(headers.len(), 6);
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0][0], "BRCA1");
-            assert_eq!(rows[0][2], "Pathogenic");
-            assert!(rows[0][5].contains("breast cancer"));
-        } else {
-            panic!("Expected Table content");
-        }
-    }
-
-    #[test]
-    fn variant_summary_none_significance() {
-        let variants = vec![VariantSummary {
-            gene: "TP53".to_string(),
-            variant: "p.R175H".to_string(),
-            classification: "VUS".to_string(),
-            allele_frequency: 0.12,
-            depth: 100,
-            clinical_significance: None,
-        }];
-
-        let section = variant_summary_section(&variants);
-        if let ReportContent::Table { rows, .. } = &section.content {
-            assert_eq!(rows[0][5], "");
-        } else {
-            panic!("Expected Table content");
-        }
-    }
-
-    #[test]
-    fn provenance_section_generation() {
-        let start = Utc::now() - chrono::Duration::seconds(120);
-        let end = Utc::now();
-        let sw = vec![
-            ("bwa".to_string(), "0.7.17".to_string()),
-            ("samtools".to_string(), "1.18".to_string()),
-        ];
-
-        let section = provenance_section("venus", "2.0.0", start, end, &sw);
-        assert_eq!(section.title, "Provenance");
-        assert_eq!(section.id, "provenance");
-        if let ReportContent::KeyValue { pairs } = &section.content {
-            assert!(pairs.len() >= 7); // 5 base + 2 software
-            assert_eq!(pairs[0].0, "Workflow");
-            assert_eq!(pairs[0].1, "venus");
-            assert_eq!(pairs[1].1, "2.0.0");
-            assert_eq!(pairs[5].0, "bwa");
-        } else {
-            panic!("Expected KeyValue content");
-        }
-    }
-
-    #[test]
-    fn qc_metric_serialization() {
-        let metric = QcMetric {
-            sample: "S1".to_string(),
-            total_reads: 500_000,
-            mapped_reads: 480_000,
-            mapping_rate: 0.96,
-            mean_coverage: 25.0,
-            duplicate_rate: 0.05,
-        };
-
-        let json = serde_json::to_string(&metric).unwrap();
-        assert!(json.contains("\"sample\":\"S1\""));
-        assert!(json.contains("\"total_reads\":500000"));
-
-        let deser: QcMetric = serde_json::from_str(&json).unwrap();
-        assert_eq!(deser.sample, "S1");
-        assert_eq!(deser.total_reads, 500_000);
-    }
-
-    #[test]
-    fn variant_summary_serialization() {
-        let variant = VariantSummary {
-            gene: "EGFR".to_string(),
-            variant: "p.T790M".to_string(),
-            classification: "Pathogenic".to_string(),
-            allele_frequency: 0.35,
-            depth: 300,
-            clinical_significance: Some("Resistance mutation".to_string()),
-        };
-
-        let json = serde_json::to_string(&variant).unwrap();
-        assert!(json.contains("\"gene\":\"EGFR\""));
-        assert!(json.contains("Resistance mutation"));
-
-        let deser: VariantSummary = serde_json::from_str(&json).unwrap();
-        assert_eq!(deser.gene, "EGFR");
-        assert_eq!(deser.depth, 300);
-        assert_eq!(
-            deser.clinical_significance.as_deref(),
-            Some("Resistance mutation")
-        );
-    }
-
-    #[test]
     fn clinical_disclaimer_section_generation() {
         let section = clinical_disclaimer_section();
         assert_eq!(section.title, "Clinical Disclaimer");
@@ -4234,65 +3471,6 @@ mod tests {
         } else {
             panic!("Expected Html content");
         }
-    }
-
-    #[test]
-    fn sample_info_section_generation() {
-        let info = SampleInfo {
-            sample_id: "S001".to_string(),
-            patient_id: Some("P001".to_string()),
-            sample_type: "Experiment".to_string(),
-            collection_date: Some("2024-01-15".to_string()),
-            platform: Some("Illumina NovaSeq 6000".to_string()),
-            seq_type: Some("WGS".to_string()),
-        };
-        let section = sample_info_section(&info);
-        assert_eq!(section.title, "Sample Information");
-        assert_eq!(section.id, "sample-info");
-        if let ReportContent::KeyValue { pairs } = &section.content {
-            assert_eq!(pairs[0], ("Sample ID".to_string(), "S001".to_string()));
-            assert_eq!(
-                pairs[1],
-                ("Sample Type".to_string(), "Experiment".to_string())
-            );
-            assert!(pairs.iter().any(|(k, v)| k == "Patient ID" && v == "P001"));
-            assert!(
-                pairs
-                    .iter()
-                    .any(|(k, v)| k == "Platform" && v == "Illumina NovaSeq 6000")
-            );
-            assert!(pairs.len() >= 6);
-        } else {
-            panic!("Expected KeyValue content");
-        }
-    }
-
-    #[test]
-    fn sample_info_serialization() {
-        let info = SampleInfo {
-            sample_id: "S001".to_string(),
-            patient_id: Some("P001".to_string()),
-            sample_type: "Experiment".to_string(),
-            collection_date: None,
-            platform: None,
-            seq_type: None,
-        };
-        let json = serde_json::to_string(&info).unwrap();
-        assert!(json.contains("\"sample_id\":\"S001\""));
-        assert!(json.contains("\"sample_type\":\"Experiment\""));
-        let deser: SampleInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(deser.sample_id, "S001");
-        assert_eq!(deser.patient_id.as_deref(), Some("P001"));
-        assert!(deser.collection_date.is_none());
-    }
-
-    #[test]
-    fn report_provenance_section() {
-        let mut report = Report::new("Test Report", "test-pipeline", "1.0.0");
-        report.add_provenance("0.1.0", "abc123", "2026-04-05T10:00:00Z");
-        let html = report.to_html();
-        assert!(html.contains("Execution Provenance"));
-        assert!(html.contains("abc123"));
     }
 
     #[test]
@@ -4340,40 +3518,6 @@ mod tests {
         assert!(html.contains("<svg"));
         assert!(html.contains("step1"));
         assert!(html.contains("step2"));
-    }
-
-    #[test]
-    fn execution_time_chart_from_records() {
-        let mut records = std::collections::HashMap::new();
-        records.insert(
-            "align".to_string(),
-            crate::executor::JobRecord {
-                signal: None,
-                rule: "align".to_string(),
-                status: crate::executor::JobStatus::Success,
-                enqueued_at: None,
-                started_at: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
-                finished_at: Some(chrono::Utc::now()),
-                exit_code: Some(0),
-                stdout: None,
-                stderr: None,
-                command: None,
-                retries: 0,
-                skip_reason: None,
-                max_rss_mb: None,
-                cpu_seconds: None,
-                caption: None,
-            },
-        );
-        let section = execution_time_chart(&records);
-        assert_eq!(section.id, "execution-time-chart");
-        match &section.content {
-            ReportContent::Chart { labels, values, .. } => {
-                assert_eq!(labels.len(), 1);
-                assert!(values[0] > 0.0);
-            }
-            _ => panic!("expected Chart content"),
-        }
     }
 
     // ── Issue #83: honesty, execution truth, determinism, XSS ──────────────
@@ -5766,35 +4910,6 @@ shell = "call"
     }
 
     #[test]
-    fn alignment_stats_section_no_nan_for_empty_sample() {
-        let stats = vec![AlignmentStats {
-            sample: "empty".into(),
-            total_reads: 0,
-            mapped_reads: 0,
-            properly_paired: 0,
-            singletons: 0,
-            duplicates: 0,
-            mapping_rate: f64::NAN,
-            mean_coverage: Some(f64::NAN),
-            mean_insert_size: None,
-            gc_content: Some(f64::INFINITY),
-        }];
-        let section = alignment_stats_section(&stats);
-        let ReportContent::Table { rows, .. } = &section.content else {
-            panic!("expected table");
-        };
-        let rendered = rows[0].join(" | ");
-        assert!(
-            !rendered.contains("NaN") && !rendered.contains("inf"),
-            "empty samples must not render NaN/inf: {rendered}"
-        );
-        assert!(
-            rendered.contains("N/A"),
-            "unknown values render N/A: {rendered}"
-        );
-    }
-
-    #[test]
     fn human_size_rounds_into_next_unit() {
         // 1_048_575 B is 1023.999 KiB — one decimal must not render it as
         // "1024.0 KiB".
@@ -5802,37 +4917,6 @@ shell = "call"
         assert_eq!(human_size(1_048_576), "1.0 MiB");
         assert_eq!(human_size(1_048_000), "1023.4 KiB");
         assert_eq!(human_size(1023), "1023 B");
-    }
-
-    #[test]
-    fn expression_summary_mean_tpm_divides_by_sample_count() {
-        // Sample B contributes two records for the gene; the mean is
-        // (10 + 20 + 20) / 2 samples = 25, not / 3 records.
-        let records = vec![
-            ExpressionRecord {
-                gene: "G".into(),
-                sample: "A".into(),
-                tpm: 10.0,
-                count: 1,
-            },
-            ExpressionRecord {
-                gene: "G".into(),
-                sample: "B".into(),
-                tpm: 20.0,
-                count: 1,
-            },
-            ExpressionRecord {
-                gene: "G".into(),
-                sample: "B".into(),
-                tpm: 20.0,
-                count: 1,
-            },
-        ];
-        let section = expression_summary_section(&records, 10);
-        let ReportContent::Table { rows, .. } = &section.content else {
-            panic!("expected table");
-        };
-        assert_eq!(rows[0][2], "25.00");
     }
 
     #[test]

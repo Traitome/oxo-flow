@@ -15,32 +15,43 @@ use crate::extract::ApiQuery;
 use super::checkpoint_status;
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, can_read_pipeline, err, now_iso};
+use crate::domains::workflow::handlers::{
+    ApiError, can_read_pipeline, db_err, err, get_backend, now_iso,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
+
+/// Run a synchronous checkpoint/file-I/O block on the blocking pool
+/// (#268 item 4, web minor): `load_node_statuses` / `load_metrics_bounded` /
+/// `read_tail_bounded` fully parse checkpoint.json through `std::fs`, and
+/// the polling endpoints call them on every request. A `JoinError` here can
+/// only mean the closure panicked — resume the original panic instead of
+/// fabricating an empty result.
+async fn blocking_checkpoint_io<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(value) => value,
+        Err(join_err) => std::panic::resume_unwind(join_err.into_panic()),
+    }
+}
 
 /// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
 /// address any run, everyone else only their own. Foreign and unknown runs
 /// both 404 — the resource set itself is private, so existence must not
 /// leak through a 403.
 pub(crate) async fn load_owned_run(
-    pool: &sqlx::SqlitePool,
+    backend: &dyn crate::infra::db::StorageBackend,
     user: &CurrentUser,
     id: &str,
 ) -> Result<models::RunRow, (StatusCode, Json<ApiError>)> {
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
+    let run = backend
+        .get_run(id)
         .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error fetching run {id}: {e}")))?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -65,14 +76,11 @@ pub(crate) async fn load_owned_run(
 pub(crate) fn require_run_mutator(
     user: &current_user::CurrentUser,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if crate::server::running_mode() != "personal" && user.role == "viewer" {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Viewer role is read-only — the user role (or admin) is required to mutate runs".into(),
-        ));
-    }
-    Ok(())
+    current_user::require_role_outside_personal(
+        user,
+        "user",
+        "Viewer role is read-only — the user role (or admin) is required to mutate runs",
+    )
 }
 
 /// Pre-flight quota usage (threads, memory MB) for a pipeline TOML — the
@@ -211,28 +219,32 @@ memory = \"64G\"
 /// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
 /// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
 /// real run, so all of them must respect the same budgets, #519).
+fn rate_limited_error(wait_secs: u64) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiError {
+            code: "RUN_RATE_LIMITED".into(),
+            message: format!("Too many runs created recently; retry in {wait_secs}s."),
+            detail: Some(format!(
+                "Default allowance: {} runs per minute (override with \
+                 OXO_FLOW_RUNS_RATE_LIMIT).",
+                run_rate_limit::DEFAULT_LIMIT
+            )),
+            suggestion: Some(
+                "Wait for the window to reset, or batch work via `oxo-flow batch` \
+                 instead of many small runs."
+                    .into(),
+            ),
+        }),
+    )
+}
+
 fn check_spawn_budget(
     user_id: &str,
     usage: (u32, u64),
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     if let Err(wait_secs) = run_rate_limit::check(user_id) {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiError {
-                code: "RUN_RATE_LIMITED".into(),
-                message: format!("Too many runs created recently; retry in {wait_secs}s."),
-                detail: Some(format!(
-                    "Default allowance: {} runs per minute (override with \
-                     OXO_FLOW_RUNS_RATE_LIMIT).",
-                    run_rate_limit::DEFAULT_LIMIT
-                )),
-                suggestion: Some(
-                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
-                     instead of many small runs."
-                        .into(),
-                ),
-            }),
-        ));
+        return Err(rate_limited_error(wait_secs));
     }
     let quota = crate::infra::quota::global_quota_tracker().check(user_id, usage.0, usage.1);
     if !quota.allowed {
@@ -248,23 +260,54 @@ fn check_spawn_budget(
     Ok(())
 }
 
+/// Override the run-creation limiter without mutating process environment.
+///
+/// Integration tests use this to isolate router contract coverage from the
+/// process-wide sliding window. The limiter's enforcement remains covered by
+/// its dedicated unit test. Debug builds expose this seam for integration
+/// tests; release builds omit both the function and its override state.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn set_run_rate_limit_for_tests(limit: u32) {
+    run_rate_limit::set_limit_for_tests(limit);
+}
+
 /// Per-identity sliding-window rate limit for run creation (issue #213).
 /// Expensive spawns must not share the global request limiter's budget with
 /// health checks and reads. Configurable via `OXO_FLOW_RUNS_RATE_LIMIT`
 /// (allowed runs per minute, default 5; 0 disables the limiter entirely).
 mod run_rate_limit {
     use std::collections::HashMap;
+    #[cfg(debug_assertions)]
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{LazyLock, Mutex};
     use std::time::{Duration, Instant};
 
     const WINDOW: Duration = Duration::from_secs(60);
+    #[cfg(debug_assertions)]
+    const NO_TEST_OVERRIDE: u64 = u64::MAX;
     pub const DEFAULT_LIMIT: u32 = 5;
 
+    #[cfg(debug_assertions)]
+    static TEST_LIMIT: AtomicU64 = AtomicU64::new(NO_TEST_OVERRIDE);
+
     fn limit() -> u32 {
+        #[cfg(debug_assertions)]
+        {
+            let test_limit = TEST_LIMIT.load(Ordering::Relaxed);
+            if test_limit != NO_TEST_OVERRIDE {
+                return test_limit as u32;
+            }
+        }
         std::env::var("OXO_FLOW_RUNS_RATE_LIMIT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_LIMIT)
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn set_limit_for_tests(limit: u32) {
+        TEST_LIMIT.store(u64::from(limit), Ordering::Relaxed);
     }
 
     static HITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
@@ -352,43 +395,22 @@ pub async fn create_run(
             )
         }
     })?;
-    // Issue #213: dedicated budget for expensive run creation — separate
-    // from the global per-minute request limiter so health checks / reads
-    // cannot crowd it out (and vice versa).
-    if let Err(wait_secs) = run_rate_limit::check(
-        authenticated
-            .as_ref()
-            .map(|e| e.0.id.as_str())
-            .unwrap_or("anonymous"),
-    ) {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiError {
-                code: "RUN_RATE_LIMITED".into(),
-                message: format!("Too many runs created recently; retry in {wait_secs}s."),
-                detail: Some(format!(
-                    "Default allowance: {} runs per minute (override with \
-                     OXO_FLOW_RUNS_RATE_LIMIT).",
-                    run_rate_limit::DEFAULT_LIMIT
-                )),
-                suggestion: Some(
-                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
-                     instead of many small runs."
-                        .into(),
-                ),
-            }),
-        ));
-    }
-
     let user = current_user::resolve(authenticated.as_ref());
     require_run_mutator(&user)?;
     let toml = req.toml_content.as_str();
+    // Issue #213: dedicated budget for expensive run creation — separate
+    // from the global per-minute request limiter so health checks / reads
+    // cannot crowd it out (and vice versa). Checked through the same
+    // `check_spawn_budget` the retry/resume paths use: a hand-rolled copy
+    // here keyed every personal-mode call into an "anonymous" bucket while
+    // retry/resume keyed the user id, so the per-minute limits stacked.
+    let quota_usage = quota_usage_for(toml);
+    check_spawn_budget(&user.id, quota_usage)?;
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
         max_jobs: Some(max_jobs),
         dry_run: req.dry_run,
         keep_going: req.keep_going,
-        resource_budget: None,
     };
 
     // Optional remote execution: a configured SSH cluster connection makes
@@ -421,49 +443,66 @@ pub async fn create_run(
         ));
     }
 
-    // Quota enforcement (issue #82 P1-9): the tracker was fully
-    // implemented but never consulted — every run must pre-flight its
-    // resource reservation.
-    let quota_usage = quota_usage_for(toml);
-    let quota =
-        crate::infra::quota::global_quota_tracker().check(&user.id, quota_usage.0, quota_usage.1);
-    if !quota.allowed {
-        return Err(err(
-            StatusCode::TOO_MANY_REQUESTS,
-            "QUOTA_EXCEEDED",
-            format!(
-                "Quota exceeded: {} — see /api/quota for limits",
-                quota.violations.join("; ")
-            ),
-        ));
-    }
+    // Quota enforcement (issue #82 P1-9) rides the shared check_spawn_budget
+    // above; the hand-rolled copy that lived here is gone.
 
     // Validate BEFORE anything is persisted: `validate_config_overrides`
     // and the two pure include-key gates below answer 400s, and a 400 must
     // never leave a ghost `queued` runs row behind (PR #930 NIT-3). IO
     // staging (mkdir/write) still happens after the row exists.
     let validated_overrides = validate_config_overrides(&req)?;
-    let include_paths: Vec<(String, String)> = req
-        .include_files
-        .iter()
-        .flat_map(|m| m.iter())
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    for (rel, _) in &include_paths {
-        if rel == "workflow.oxoflow" {
+    let mut include_paths = Vec::new();
+    let mut canonical_keys = std::collections::BTreeSet::new();
+    for (raw, content) in req.include_files.iter().flat_map(|files| files.iter()) {
+        let rel = crate::workspace::canonicalize_relative_path(raw).map_err(|reason| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_INCLUDE_PATH",
+                format!("include_files key '{raw}' is not a valid relative path: {reason}"),
+            )
+        })?;
+        if rel.eq_ignore_ascii_case("workflow.oxoflow") {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "INVALID_INCLUDE_PATH",
-                "include_files key 'workflow.oxoflow' would overwrite the main workflow".into(),
+                format!(
+                    "include_files key '{raw}' resolves to 'workflow.oxoflow' and would overwrite the main workflow"
+                ),
             ));
         }
-        if let Err(reason) = crate::workspace::check_relative_path(rel) {
+        if !canonical_keys.insert(rel.to_ascii_lowercase()) {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "INVALID_INCLUDE_PATH",
-                format!("include_files key '{rel}' is not a valid relative path: {reason}"),
+                format!(
+                    "include_files contains multiple keys that resolve to the same path or case-insensitive path alias '{rel}'"
+                ),
             ));
         }
+        include_paths.push((rel, content.clone()));
+    }
+
+    // BioTypes can be declared in the host workflow or an included module,
+    // and config overrides can change the graph that the checker evaluates.
+    // Full include/override resolution is not yet available in the web
+    // admission layer, so typed inputs must fail closed instead of claiming
+    // parity with the CLI's resolved-workflow preflight.
+    let admission_sources = service::scan_admission_sources(
+        toml,
+        include_paths
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str())),
+    );
+    let needs_resolved_admission = admission_sources.unresolved_include
+        || admission_sources.included_source_declares_type_contracts
+        || (admission_sources.host_declares_type_contracts
+            && (admission_sources.host_has_include_graph || !validated_overrides.is_empty()));
+    if needs_resolved_admission {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "TYPED_ADMISSION_UNSUPPORTED",
+            "Typed or uninspectable workflow includes, or direct typed workflows with includes or config_overrides, require the CLI's resolved-workflow admission path".into(),
+        ));
     }
 
     let resp = service::create_run(toml, &config, None)
@@ -471,7 +510,7 @@ pub async fn create_run(
 
     // Persist run to database. Ad-hoc runs (no pipeline_id) keep a NULL
     // pipeline_id (the column is an FK only when a pipeline exists).
-    if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
+    if let Some(backend) = crate::infra::db::global_backend() {
         let workflow_name = oxo_flow_core::config::WorkflowConfig::parse(toml)
             .map(|c| c.workflow.name)
             .unwrap_or_else(|_| "unnamed".to_string());
@@ -483,20 +522,11 @@ pub async fn create_run(
                 // private pipeline by id exposes its name/DAG/products
                 // through the run's own status endpoints. Foreign and
                 // unknown ids both answer PIPELINE_NOT_FOUND (no oracle).
-                let row: Option<models::PipelineRow> =
-                    sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
-                        .bind(pid)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!("DB error checking pipeline {pid}: {e}");
-                            err(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "DB_ERROR",
-                                "Internal database error".into(),
-                            )
-                        })?;
-                if !row.is_some_and(|p| can_read_pipeline(&user, &p)) {
+                let row = backend
+                    .get_pipeline(pid)
+                    .await
+                    .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
+                if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
                     return Err(err(
                         StatusCode::NOT_FOUND,
                         "PIPELINE_NOT_FOUND",
@@ -509,47 +539,6 @@ pub async fn create_run(
             None => crate::workspace::setup_run_directory(&user.id, &resp.run_id)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
         };
-
-        let run = models::RunRow {
-            id: resp.run_id.clone(),
-            user_id: user.id.clone(),
-            pipeline_id: pipeline_id.clone(),
-            pipeline_snapshot: toml.to_string(),
-            status: "queued".to_string(),
-            phase: "parsing".to_string(),
-            dry_run: config.dry_run.unwrap_or(false),
-            pid: None,
-            workdir: Some(run_dir.to_string_lossy().to_string()),
-            // Order-preserving JSON array (serde_json Vec serialization)
-            // so retry can replay the exact argv the client sent.
-            config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
-            started_at: None,
-            finished_at: None,
-            created_at: now_iso(),
-            workflow_name: Some(workflow_name),
-        };
-        if let Err(e) = sqlx::query(
-            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&run.id)
-        .bind(&run.user_id)
-        .bind(&run.pipeline_id)
-        .bind(&run.pipeline_snapshot)
-        .bind(&run.status)
-        .bind(&run.phase)
-        .bind(run.dry_run)
-        .bind(run.pid)
-        .bind(&run.workdir)
-        .bind(&run.config_overrides)
-        .bind(&run.started_at)
-        .bind(&run.finished_at)
-        .bind(&run.created_at)
-        .bind(&run.workflow_name)
-        .execute(pool)
-        .await
-        {
-            tracing::error!("Failed to persist run {} to database: {e}", run.id);
-        }
 
         // Save pipeline TOML to the working directory so the executor (CLI
         // subprocess) can read it. `tokio::fs` keeps the small write off
@@ -599,6 +588,55 @@ pub async fn create_run(
             );
         }
 
+        let run = models::RunRow {
+            id: resp.run_id.clone(),
+            user_id: user.id.clone(),
+            pipeline_id: pipeline_id.clone(),
+            pipeline_snapshot: toml.to_string(),
+            status: "queued".to_string(),
+            phase: "parsing".to_string(),
+            dry_run: config.dry_run.unwrap_or(false),
+            pid: None,
+            workdir: Some(run_dir.to_string_lossy().to_string()),
+            // Order-preserving JSON array (serde_json Vec serialization)
+            // so retry can replay the exact argv the client sent.
+            config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
+            started_at: None,
+            finished_at: None,
+            created_at: now_iso(),
+            workflow_name: Some(workflow_name),
+        };
+        // The guarded insert is the atomic workdir claim (same contract as
+        // retry/resume-checkpoint): a saved pipeline reuses its persistent
+        // workdir, so two concurrent "run again" clicks used to produce two
+        // `queued` rows and two CLIs on one checkpoint. The loser answers
+        // 409. An insert failure also stops the spawn here — swallowing it
+        // (the old behavior) launched a ghost run the list endpoints could
+        // never see or cancel.
+        let claim = backend.create_run_if_workdir_idle(&run).await;
+        match claim {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "RUN_NOT_TERMINAL",
+                    format!(
+                        "another run is already active in this workdir — wait for it to \
+                         finish (or cancel it) before starting pipeline run {}",
+                        run.id
+                    ),
+                ));
+            }
+            Err(e) => {
+                tracing::error!("DB error inserting run {}: {e}", run.id);
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                ));
+            }
+        }
+
         // Stage the acting user's uploaded inputs into the run workspace
         // (issue #276 L1): `POST /api/files` writes to
         // `workspace/users/<u>/inputs/`, but the CLI executes in
@@ -609,7 +647,19 @@ pub async fn create_run(
         // a user with no uploads (or an IO hiccup on a stale upload) must
         // not block the run; a genuinely needed missing file still fails
         // loudly inside the CLI with its normal diagnostics.
-        let staged = crate::workspace::stage_user_inputs(&user.id, &run_dir);
+        // The whole-tree mirror can walk a large uploads volume; keep the
+        // blocking IO off the async worker.
+        let staging_user = user.id.clone();
+        let staging_dir = run_dir.clone();
+        let staged = tokio::task::spawn_blocking(move || {
+            crate::workspace::stage_user_inputs(&staging_user, &staging_dir)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            Err(anyhow::Error::msg(format!(
+                "input staging task failed: {e}"
+            )))
+        });
         match staged {
             Ok(0) => {}
             Ok(n) => tracing::info!(
@@ -632,19 +682,11 @@ pub async fn create_run(
         // Remote execution: the local workdir is the staging area; the
         // remote host runs the CLI and its results are pulled back.
         if let Some(cid) = cluster_id.as_deref() {
-            let cluster_row: Option<models::ClusterRow> =
-                sqlx::query_as("SELECT * FROM clusters WHERE id = ? AND enabled = 1")
-                    .bind(cid)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("DB error loading cluster {cid}: {e}");
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "DB_ERROR",
-                            "Internal database error".to_string(),
-                        )
-                    })?;
+            let cluster_row: Option<models::ClusterRow> = backend
+                .get_cluster(cid)
+                .await
+                .map_err(|e| db_err(format!("DB error loading cluster {cid}: {e}")))?
+                .filter(|c| c.enabled);
             let cluster_row = cluster_row.ok_or_else(|| {
                 err(
                     StatusCode::NOT_FOUND,
@@ -739,20 +781,12 @@ pub async fn list_runs(
         ));
     }
     let user = current_user::resolve(authenticated.as_ref());
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let limit = params.limit.unwrap_or(100).clamp(1, 500) as i64;
 
     // Ownership scoping (issue #82 P0-4): non-admins see their own runs
-    // only; admins see the whole fleet. Filters compose on top. Query
-    // assembly lives in service.rs (#948 P2-6) so the pagination/filter
-    // semantics are unit-testable without HTTP plumbing.
-    let filters = service::RunListFilters {
+    // only; admins see the whole fleet. Filters compose on top.
+    let filters = models::RunFilters {
         user_id: if user.is_admin() {
             None
         } else {
@@ -763,60 +797,21 @@ pub async fn list_runs(
         cursor: params.cursor.clone(),
         limit,
     };
-    let assembled = service::assemble_run_list_query(&filters);
+    let page = backend
+        .list_runs_cursor(&filters)
+        .await
+        .map_err(|e| db_err(format!("DB error listing runs: {e}")))?;
 
-    // `page_where_sql` only ever contains static fragments pushed inside
-    // `assemble_run_list_query` (column names and `?` placeholders) — all
-    // user input rides in the binds. Fetch limit+1 to detect a next page
-    // without a COUNT(*).
-    let sql = format!(
-        "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
-        assembled.page_where_sql,
-        limit + 1
-    );
-    let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
-    for bind in &assembled.page_binds {
-        query = query.bind(bind);
-    }
-    let rows: Vec<models::RunRow> = query.fetch_all(pool).await.map_err(|e| {
-        tracing::error!("DB error listing runs: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
-
-    let has_more = rows.len() as i64 > limit;
-    let rows = if has_more {
-        &rows[..limit as usize]
-    } else {
-        &rows[..]
-    };
-    // `next_cursor: null` means "last page" (the documented contract, and
-    // what the frontend Load More relies on) — only emit it when another
-    // page actually exists (audit #651).
-    let next_cursor = if has_more {
-        rows.last().map(|r| r.created_at.clone())
-    } else {
-        None
-    };
-
-    // Total = number of rows matching the FILTERS (no LIMIT, no cursor).
-    // Bounded by SQLite's rowid; fine for a per-deployment run log.
-    let count_sql = format!("SELECT COUNT(*) FROM runs{}", assembled.filter_where_sql);
-    let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
-    for bind in &assembled.filter_binds {
-        count_query = count_query.bind(bind);
-    }
-    let total: i64 = count_query.fetch_one(pool).await.unwrap_or(0);
-
-    let items: Vec<serde_json::Value> = rows.iter().map(service::run_row_to_list_item).collect();
+    let items: Vec<serde_json::Value> = page
+        .items
+        .iter()
+        .map(service::run_row_to_list_item)
+        .collect();
 
     Ok(Json(serde_json::json!({
         "items": items,
-        "next_cursor": next_cursor,
-        "total": total,
+        "next_cursor": page.next_cursor,
+        "total": page.total as i64,
     })))
 }
 
@@ -834,15 +829,9 @@ pub async fn get_run(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     Ok(Json(serde_json::json!({
         "id": run.id,
@@ -875,40 +864,43 @@ pub async fn get_run_status(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<RunStatusResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Node status comes from the engine's checkpoint state (single source of
     // truth), merged with the full rule list so unrun rules show as pending.
     // Config expansion matches `run` (issue #707): {config.*}-routed
     // producer/consumer pairs only match after placeholder expansion.
-    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
-        .ok()
-        .and_then(|wf| {
-            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &wf.rules,
-                &wf.config_placeholder_values(),
-            )
+    // The checkpoint reads are synchronous file I/O and this endpoint is
+    // polled — run the combined block on the blocking pool (#268 item 4).
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let snapshot = run.pipeline_snapshot.clone();
+    let (node_items, metrics) = blocking_checkpoint_io(move || {
+        let dag = oxo_flow_core::WorkflowConfig::parse(&snapshot)
             .ok()
-        });
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
-    let node_items = match &dag {
-        Some(d) => {
-            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
-        }
-        None => node_items,
-    };
+            .and_then(|wf| {
+                oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                    &wf.rules,
+                    &wf.config_placeholder_values(),
+                )
+                .ok()
+            });
+        let node_items =
+            checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running);
+        let node_items = match &dag {
+            Some(d) => checkpoint_status::with_all_rules(
+                node_items,
+                &d.execution_order().unwrap_or_default(),
+            ),
+            None => node_items,
+        };
+        let metrics =
+            checkpoint_status::load_metrics_bounded(std::path::Path::new(&workdir), 256 * 1024);
+        (node_items, metrics)
+    })
+    .await;
 
     let overall = service::compute_overall_status(&node_items, Some(&run.status));
 
@@ -916,8 +908,6 @@ pub async fn get_run_status(
     // sampler appends to workdir/metrics.jsonl; an absent file yields an
     // empty timeline (never fabricated numbers). Bounded read: this
     // endpoint is polled, so only the newest window is returned.
-    let workdir = std::path::Path::new(run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
     let last = metrics.last();
     let resources = ResourceSnapshot {
         cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
@@ -961,16 +951,9 @@ pub async fn get_dag_status(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<DagStatusResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Parse the pipeline snapshot to build DAG (config-expanded, issue #707).
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
@@ -984,11 +967,16 @@ pub async fn get_dag_status(
         });
 
     // Node status comes from the engine's checkpoint state, merged with the
-    // full rule list so unrun rules show as pending.
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
+    // full rule list so unrun rules show as pending. The checkpoint read is
+    // synchronous file I/O and this endpoint is polled — run it on the
+    // blocking pool (#268 item 4). The DAG parse itself only consumes the
+    // in-memory snapshot string, so it stays on the async path.
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let node_items = blocking_checkpoint_io(move || {
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+    })
+    .await;
     let node_items = match &dag {
         Some(d) => {
             checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
@@ -1108,21 +1096,18 @@ pub async fn get_run_instances(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<Vec<serde_json::Value>> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let workdir = run.workdir.as_deref().unwrap_or("");
-    let items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(workdir),
-        run.status == "running",
-    );
+    // The checkpoint read is synchronous file I/O and this endpoint is
+    // polled — run it on the blocking pool (#268 item 4).
+    let workdir = run.workdir.clone().unwrap_or_default();
+    let running = run.status == "running";
+    let items = blocking_checkpoint_io(move || {
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+    })
+    .await;
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
         .and_then(|wf| {
@@ -1192,37 +1177,34 @@ pub async fn get_diagnostics(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<DiagnosticsResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let node_items = checkpoint_status::load_node_statuses(
-        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
-    );
+    // The checkpoint/log reads are synchronous file I/O — run the combined
+    // block on the blocking pool (#268 item 4, web minor).
+    let workdir = run.workdir.clone();
+    let running = run.status == "running";
+    let (node_items, log_output, benchmarks) = blocking_checkpoint_io(move || {
+        let dir = workdir.clone().unwrap_or_default();
+        let node_items = checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running);
 
-    // Try to read log output from workdir — the newest 256 KiB only:
-    // execution.log is the run's full unbounded log, and diagnosis keys
-    // off trailing error context, so buffering the whole file per request
-    // is pure memory amplification (issue #710).
-    let log_output = match run.workdir.as_ref() {
-        Some(wd) => checkpoint_status::read_tail_bounded(
-            std::path::Path::new(&format!("{wd}/execution.log")),
-            256 * 1024,
-        ),
-        None => String::new(),
-    };
+        // Try to read log output from workdir — the newest 256 KiB only:
+        // execution.log is the run's full unbounded log, and diagnosis keys
+        // off trailing error context, so buffering the whole file per request
+        // is pure memory amplification (issue #710).
+        let log_output = match workdir.as_deref() {
+            Some(wd) => checkpoint_status::read_tail_bounded(
+                std::path::Path::new(&format!("{wd}/execution.log")),
+                256 * 1024,
+            ),
+            None => String::new(),
+        };
 
-    let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(
-        run.workdir.as_deref().unwrap_or(""),
-    ));
+        let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(&dir));
+        (node_items, log_output, benchmarks)
+    })
+    .await;
 
     let diagnostics = service::diagnose_run(&node_items, &log_output, &benchmarks);
     Ok(Json(diagnostics))
@@ -1242,16 +1224,9 @@ pub async fn get_run_logs(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<String> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Bounded tail (issue #734): the endpoint's contract is the log text,
     // but buffering a multi-GB log per request is a memory-amplification
@@ -1260,22 +1235,28 @@ pub async fn get_run_logs(
     const MAX_LOG_ENDPOINT_BYTES: u64 = 8 * 1024 * 1024;
     let log_content = match run.workdir.as_ref() {
         Some(wd) => {
-            let log_path = format!("{wd}/execution.log");
-            let path = std::path::Path::new(&log_path);
-            match std::fs::metadata(path)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len())
-            {
-                Some(len) if len > MAX_LOG_ENDPOINT_BYTES => {
-                    let tail = checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES);
-                    format!(
-                        "[log truncated — showing the newest {MAX_LOG_ENDPOINT_BYTES} of {len} bytes; read the full file from the run workdir]\n{tail}"
-                    )
+            let log_path = std::path::PathBuf::from(wd).join("execution.log");
+            tokio::task::spawn_blocking(move || {
+                match std::fs::metadata(&log_path)
+                    .ok()
+                    .filter(|m| m.is_file())
+                    .map(|m| m.len())
+                {
+                    Some(len) if len > MAX_LOG_ENDPOINT_BYTES => {
+                        let tail =
+                            checkpoint_status::read_tail_bounded(&log_path, MAX_LOG_ENDPOINT_BYTES);
+                        format!(
+                            "[log truncated — showing the newest {MAX_LOG_ENDPOINT_BYTES} of {len} bytes; read the full file from the run workdir]\n{tail}"
+                        )
+                    }
+                    Some(_) => {
+                        checkpoint_status::read_tail_bounded(&log_path, MAX_LOG_ENDPOINT_BYTES)
+                    }
+                    None => "No execution log available.".to_string(),
                 }
-                Some(_) => checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES),
-                None => "No execution log available.".to_string(),
-            }
+            })
+            .await
+            .unwrap_or_else(|e| format!("Log read failed: {e}"))
         }
         None => "No execution log available.".to_string(),
     };
@@ -1297,16 +1278,9 @@ pub async fn get_run_results(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<Vec<serde_json::Value>> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // List files in the workdir recursively so nested products (e.g.
     // results/sample1/peaks.bed) are visible (issue #79 P1-08). The walk
@@ -1352,17 +1326,12 @@ pub async fn retry_run(
     Path(id): Path<String>,
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<RetryResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
+    // A retry spawns a real run, so it mutates the run surface — gate it like
+    // create/cancel/resume/delete (viewers are read-only).
     require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // A retry spawns a REAL run — it pays the same limiter + quota
     // pre-flight as create_run (#519); looping retry on a cheap failed run
@@ -1478,33 +1447,31 @@ pub async fn retry_run(
         finished_at: None,
         created_at: now.clone(),
     };
-    sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&new_run.id)
-    .bind(&new_run.user_id)
-    .bind(&new_run.pipeline_id)
-    .bind(&new_run.pipeline_snapshot)
-    .bind(&new_run.workflow_name)
-    .bind(&new_run.status)
-    .bind(&new_run.phase)
-    .bind(new_run.dry_run)
-    .bind(new_run.pid)
-    .bind(&new_run.workdir)
-    .bind(&new_run.config_overrides)
-    .bind(&new_run.started_at)
-    .bind(&new_run.finished_at)
-    .bind(&new_run.created_at)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error inserting retry run {new_run_id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    // The terminal-state check above is TOCTOU: two concurrent retries both
+    // read the old row as terminal and both spawn into the same workdir.
+    // The guarded insert makes the claim atomic — the loser gets 409.
+    let claim = backend.create_run_if_workdir_idle(&new_run).await;
+    match claim {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_NOT_TERMINAL",
+                format!(
+                    "another run is already active in this workdir — wait for it to \
+                     finish (or cancel it) before retrying run {id}"
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::error!("DB error inserting retry run {new_run_id}: {e}");
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            ));
+        }
+    }
 
     crate::infra::quota::global_quota_tracker().record_start(
         &user.id,
@@ -1556,17 +1523,10 @@ pub async fn cancel_run(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
     require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Terminal states are final — cancelling a finished run would silently
     // rewrite its result.
@@ -1584,25 +1544,12 @@ pub async fn cancel_run(
     // kill fallout can never flip the status back to completed/failed.
     // The quota reservation is released here — the executor's finalize path
     // early-returns for cancelled runs and never reaches its own release.
-    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(&id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
-    }
+    crate::infra::quota::release_and_complete(&id);
     let now = now_iso();
-    sqlx::query(
-        "UPDATE runs SET status = 'cancelled', phase = 'cancelled', finished_at = ? WHERE id = ?",
-    )
-    .bind(&now)
-    .bind(&id)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error cancelling run {id}: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
+    backend
+        .record_run_terminal(&id, "cancelled", "cancelled", &now)
+        .await
+        .map_err(|e| db_err(format!("DB error cancelling run {id}: {e}")))?;
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
@@ -1627,13 +1574,7 @@ pub async fn cancel_run(
     let pgid = match crate::process_control::pgid(&id) {
         Some(pgid) => Some(pgid),
         None => {
-            // fetch_one is safe — load_owned_run above proved the row exists;
-            // the pid column itself is nullable (never spawned / cleaned up).
-            let db_pid: Option<i64> = sqlx::query_scalar("SELECT pid FROM runs WHERE id = ?")
-                .bind(&id)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(None);
+            let db_pid: Option<i64> = backend.get_run_pid(&id).await.unwrap_or(None);
             db_pid.and_then(|pid| {
                 let pid = pid as i32;
                 if pid <= 0 {
@@ -1693,11 +1634,7 @@ pub async fn cancel_run(
     } else if let Some(cluster_id) = crate::domains::clusters::remote::remote_cluster_of(&id) {
         // Remote run: signal the remote wrapper script.
         let cluster_row: Option<models::ClusterRow> =
-            sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
-                .bind(&cluster_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
+            backend.get_cluster(&cluster_id).await.unwrap_or(None);
         if let Some(cluster_row) = cluster_row
             && let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
         {
@@ -1740,17 +1677,10 @@ pub async fn pause_run(
     // from the JSON content-type demand (issue #324 F-6).
     _body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
     require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     // Terminal states are final — pausing a finished run would leave a
     // 'paused' row nothing ever finalizes again (ghost run).
     if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
@@ -1790,19 +1720,10 @@ pub async fn pause_run(
     }
 
     let now = now_iso();
-    sqlx::query("UPDATE runs SET status = 'paused', phase = ? WHERE id = ?")
-        .bind(format!("paused: {reason}"))
-        .bind(&id)
-        .execute(pool)
+    backend
+        .update_run_status(&id, "paused", &format!("paused: {reason}"))
         .await
-        .map_err(|e| {
-            tracing::error!("DB error pausing run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error pausing run {id}: {e}")))?;
 
     crate::broadcast_event_for(
         "run_paused",
@@ -1835,17 +1756,10 @@ pub async fn resume_run(
     // (issue #324 F-6); the only consumed key is the optional from_rule.
     body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
     require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     // Only a paused run can be resumed; anything else would fabricate a
     // 'running' row with no process behind it (ghost run).
     if run.status != "paused" {
@@ -1888,18 +1802,10 @@ pub async fn resume_run(
     }
 
     let _now = now_iso();
-    sqlx::query("UPDATE runs SET status = 'running', phase = 'executing' WHERE id = ?")
-        .bind(&id)
-        .execute(pool)
+    backend
+        .update_run_status(&id, "running", "executing")
         .await
-        .map_err(|e| {
-            tracing::error!("DB error resuming run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+        .map_err(|e| db_err(format!("DB error resuming run {id}: {e}")))?;
 
     crate::broadcast_event_for(
         "run_resumed",
@@ -1930,15 +1836,9 @@ pub async fn get_run_preview(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("");
     // The workdir is rule-writable: gate the preview read on a regular
     // file (a planted FIFO would hang the open) and cap it (the preview is
@@ -2026,15 +1926,9 @@ pub async fn get_run_protected_drift(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<ProtectedDriftResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("").to_string();
 
     // The protected trees are declared in the workflow's [engine] section —
@@ -2172,39 +2066,39 @@ pub async fn get_ai_status(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let _run = load_owned_run(pool, &user, &id).await?;
+    let _run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
-        std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
-        _run.status == "running",
-    )
-    .iter()
-    .map(|n| NodeExecutionStatus {
-        rule: n.rule.clone(),
-        status: n.status.to_string(),
-        duration_ms: n.duration_ms.map(|d| d as i64),
-        exit_code: n.exit_code,
-        started_at: n.started_at.clone(),
-        stderr_tail: n.stderr_tail.clone(),
-        stdout_tail: n.stdout_tail.clone(),
+    // The checkpoint reads are synchronous file I/O and this endpoint is
+    // polled every 5s while the monitor tab is visible — run the combined
+    // block on the blocking pool (#268 item 4).
+    let workdir = _run.workdir.clone();
+    let running = _run.status == "running";
+    let (exec_nodes, metrics) = blocking_checkpoint_io(move || {
+        let dir = workdir.clone().unwrap_or_default();
+        let exec_nodes: Vec<NodeExecutionStatus> =
+            checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running)
+                .iter()
+                .map(|n| NodeExecutionStatus {
+                    rule: n.rule.clone(),
+                    status: n.status.to_string(),
+                    duration_ms: n.duration_ms.map(|d| d as i64),
+                    exit_code: n.exit_code,
+                    started_at: n.started_at.clone(),
+                    stderr_tail: n.stderr_tail.clone(),
+                    stdout_tail: n.stdout_tail.clone(),
+                })
+                .collect();
+
+        // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
+        // tree, sampled by the executor; the trend timeline travels in the
+        // response alongside the derived analysis.
+        let metrics =
+            checkpoint_status::load_metrics_bounded(std::path::Path::new(&dir), 256 * 1024);
+        (exec_nodes, metrics)
     })
-    .collect();
-
-    // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
-    // tree, sampled by the executor; the trend timeline travels in the
-    // response alongside the derived analysis. Bounded read: this endpoint
-    // is polled every 5s while the monitor tab is visible.
-    let workdir = std::path::Path::new(_run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
+    .await;
     let last = metrics.last();
     let host = crate::sys::get_host_resources();
     let resources = ResourceUsage {
@@ -2372,16 +2266,9 @@ pub async fn get_run_report(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     let report = build_report_for_run(&run).await;
 
@@ -2407,16 +2294,9 @@ pub async fn ask_report_question(
         .get("question")
         .and_then(|v| v.as_str())
         .unwrap_or("what are the results");
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Answer from the same deterministic report the report page shows.
     let report = build_report_for_run(&run).await;
@@ -2443,17 +2323,9 @@ pub async fn visualize_report(
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("volcano");
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Real data sources: the run's file tree, or per-rule timings from the
     // engine's checkpoint. No canned rows.
@@ -2526,14 +2398,11 @@ pub async fn clean_run(
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let user = current_user::resolve(authenticated.as_ref());
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    // Clean deletes files in the run workdir — mutator-gate it like
+    // cancel/delete; a viewer must never reach `clean --force`.
+    require_run_mutator(&user)?;
+    let backend = get_backend()?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     let workdir = run.workdir.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -2873,15 +2742,9 @@ pub async fn verify_run_provenance(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
 ) -> ApiResult<ProvenanceVerifyResponse> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     let workdir = run.workdir.clone().ok_or_else(|| {
         err(
@@ -3046,15 +2909,9 @@ pub async fn resume_checkpoint(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = current_user::resolve(authenticated.as_ref());
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
+    let backend = get_backend()?;
     require_run_mutator(&user)?;
-    let run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // A checkpoint resume spawns a REAL run — same budgets as create_run
     // and retry (#519).
@@ -3118,32 +2975,29 @@ pub async fn resume_checkpoint(
         finished_at: None,
         created_at: now.clone(),
     };
-    sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&new_run.id)
-    .bind(&new_run.user_id)
-    .bind(&new_run.pipeline_id)
-    .bind(&new_run.pipeline_snapshot)
-    .bind(&new_run.workflow_name)
-    .bind(&new_run.status)
-    .bind(&new_run.phase)
-    .bind(new_run.dry_run)
-    .bind(new_run.pid)
-    .bind(&new_run.workdir)
-    .bind(&new_run.config_overrides)
-    .bind(&new_run.started_at)
-    .bind(&new_run.finished_at)
-    .bind(&new_run.created_at)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error inserting resume run: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".to_string(),        )
-    })?;
+    // Same TOCTOU as retry_run: claim the workdir atomically at insert.
+    let claim = backend.create_run_if_workdir_idle(&new_run).await;
+    match claim {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_NOT_TERMINAL",
+                format!(
+                    "another run is already active in this workdir — wait for it to \
+                     finish (or cancel it) before resuming run {id}"
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::error!("DB error inserting resume run: {e}");
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            ));
+        }
+    }
 
     let args: Vec<std::ffi::OsString> = vec![
         "resume".into(),

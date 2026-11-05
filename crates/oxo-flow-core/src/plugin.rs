@@ -12,9 +12,12 @@
 //!
 //! ## Signature Verification
 //!
-//! Each plugin config must include an HMAC-SHA256 signature in its `[signature]`
-//! section. The signature is verified against a trusted key to ensure plugin
-//! authenticity and integrity.
+//! Each plugin config must include a keyed SHA-256 digest in its
+//! `[signature]` section (SHA256(key ‖ message) — NOT RFC 2104 HMAC; see
+//! the NOTE on `compute_keyed_sha256`). It detects accidental corruption
+//! and discourages casual tampering, but plain concatenation is
+//! length-extendable: for an adversarial supply chain, verify plugins out
+//! of band.
 //!
 //! ## TOML Integration (parsed, not executed)
 //!
@@ -98,12 +101,13 @@ pub struct PluginManifest {
     pub signature: Option<PluginSignature>,
 }
 
-/// HMAC-SHA256 signature for plugin verification.
+/// Keyed SHA-256 digest for plugin verification (see the module docs —
+/// plain concatenation, not RFC 2104 HMAC).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSignature {
     /// Key identifier (which trusted key to verify against).
     pub key_id: String,
-    /// Hex-encoded HMAC-SHA256 signature of the plugin manifest content.
+    /// Hex-encoded keyed SHA-256 digest of the plugin manifest content.
     pub value: String,
 }
 
@@ -134,7 +138,7 @@ impl PluginManifest {
         payload
     }
 
-    /// Verify the HMAC-SHA256 signature against a trusted key.
+    /// Verify the keyed digest against a trusted key.
     pub fn verify_signature(&self, trusted_keys: &HashMap<String, String>) -> Result<bool> {
         let sig = self
             .signature

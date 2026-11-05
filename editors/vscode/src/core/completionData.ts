@@ -11,7 +11,6 @@ export interface PropInfo {
   type?: string;
   /** Sorted allowed values when the schema constrains them. */
   enums?: string[];
-  itemsType?: string;
   ref?: string;
 }
 
@@ -53,7 +52,7 @@ export function insertionFor(info: PropInfo): string {
   if (info.key === "rules") return "[[rules]]";
   if (info.type === "object" || info.ref) return `[${info.key}]`;
   if (info.type === "array") return `${info.key} = [\n\t"$1"\n]`;
-  if (info.type === "boolean") return `${info.key} = ${info.enums?.length === 2 ? "false" : "false"}`;
+  if (info.type === "boolean") return `${info.key} = false`;
   if (info.type === "number" || info.type === "integer") return `${info.key} = $1`;
   return `${info.key} = "$1"`;
 }

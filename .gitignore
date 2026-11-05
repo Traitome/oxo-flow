@@ -101,4 +101,10 @@ benches/macro/results/*.json
 eval/frontier/results/
 /results/
 eval/interpretation/results/
+
+# Eval capture/judging artifacts (default paths documented in eval/README.md)
+outputs/
+eval/results.csv
+eval/results.items.csv
+eval/results.summary.json
 /package-lock.json

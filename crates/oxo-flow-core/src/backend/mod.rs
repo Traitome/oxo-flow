@@ -13,8 +13,64 @@ use crate::rule::Rule;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub mod aws_batch;
 pub mod cluster;
 pub mod driver;
+pub mod gcp_batch;
+pub mod k8s;
+
+/// Sanitize a free-form name into a DNS-1123 / RFC-1035 compatible label.
+///
+/// Shared by the Kubernetes and GCP Batch generators (both enforce a 63-char
+/// lowercase alphanumeric-plus-dash label). Pass `max_len` to relax the cap
+/// (AWS Batch allows 128) and `lowercase = false` to preserve case.
+/// `extra_allowed` may contain additional characters that are passed through
+/// verbatim (e.g. `'_'` for AWS Batch job names).
+pub fn sanitize_cloud_name(
+    name: &str,
+    max_len: usize,
+    lowercase: bool,
+    extra_allowed: &str,
+) -> String {
+    let mut s = if lowercase {
+        name.to_lowercase()
+    } else {
+        name.to_string()
+    };
+    s = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || extra_allowed.contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    s = s.trim_matches('-').to_string();
+    if s.len() > max_len {
+        s.truncate(max_len);
+        s = s.trim_matches('-').to_string();
+    }
+    if s.is_empty() {
+        s = "job".to_string();
+    }
+    s
+}
+
+/// Scheduler-facing resource sizing shared by the cloud job generators
+/// (Kubernetes, AWS Batch, GCP Batch): at least one thread, and memory from
+/// the rule's effective declaration with the scheduler-default 1024 MiB
+/// fallback floored at 256 MiB.
+pub fn scheduled_resources(rule: &Rule) -> (u32, u64) {
+    (
+        rule.resources.threads.max(1),
+        crate::scheduler::effective_memory_mb(rule, 1024).max(256),
+    )
+}
 
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

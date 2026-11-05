@@ -188,7 +188,11 @@ async fn spa_fallback() -> impl IntoResponse {
 
 /// JSON 404 for unknown API paths — API clients must never receive HTML.
 async fn api_not_found() -> impl IntoResponse {
-    crate::ApiError::not_found("API endpoint not found", None)
+    crate::domains::workflow::handlers::err(
+        StatusCode::NOT_FOUND,
+        "NOT_FOUND",
+        "API endpoint not found".to_string(),
+    )
 }
 
 /// `GET /api/openapi.json` — the code-generated OpenAPI 3.1 specification
@@ -491,20 +495,25 @@ pub fn build_router(mode: &str) -> Router {
             post(execution::handlers::visualize_report),
         )
         .route("/api/runs/{id}/files", get(execution::files::get_run_file))
-        .route_layer(axum::middleware::from_fn(require_sqlite_for_runs));
+        .route_layer(axum::middleware::from_fn(require_storage_backend_for_runs));
 
-    /// Structured capability boundary for PostgreSQL deployments (issue #207).
+    /// Structured capability boundary for deployments without an initialized
+    /// storage backend (issue #207).
     ///
-    /// Run lifecycle bookkeeping reads and writes through the embedded SQLite
-    /// pool, which postgres-mode servers never initialize. Gating the whole
-    /// `/api/runs*` domain at the router layer gives every run endpoint one
-    /// explicit, actionable answer instead of silent empty reads or spawn-task
-    /// degradations discovered mid-flight.
-    async fn require_sqlite_for_runs(
+    /// Run lifecycle bookkeeping reads and writes through the global
+    /// `StorageBackend` (embedded SQLite pool or PostgreSQL). Gating the
+    /// whole `/api/runs*` domain at the router layer gives every run endpoint
+    /// one explicit, actionable answer instead of silent empty reads or
+    /// spawn-task degradations discovered mid-flight. The check itself is
+    /// backend-agnostic — any initialized backend passes; only execution is
+    /// SQLite-only (live-verified against postgres:16, 2026-11-05).
+    async fn require_storage_backend_for_runs(
         req: axum::extract::Request,
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, (StatusCode, axum::Json<ApiError>)> {
-        match runs_gate_verdict(crate::infra::db::sqlite::try_pool().is_ok()) {
+        let backend_ready = crate::infra::db::global_backend().is_some()
+            || crate::infra::db::sqlite::try_pool().is_ok();
+        match runs_gate_verdict(backend_ready) {
             Ok(()) => Ok(next.run(req).await),
             Err(response) => Err(response),
         }
@@ -762,6 +771,7 @@ pub fn build_router(mode: &str) -> Router {
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
                     axum::http::header::AUTHORIZATION,
+                    axum::http::HeaderName::from_static("x-api-key"),
                 ])
         } else {
             // User-specified origins (comma-separated)
@@ -780,6 +790,7 @@ pub fn build_router(mode: &str) -> Router {
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
                     axum::http::header::AUTHORIZATION,
+                    axum::http::HeaderName::from_static("x-api-key"),
                 ])
         }
     };
@@ -1165,21 +1176,18 @@ async fn require_auth(
     };
 
     // Validate the token against the sessions table
-    let session = match crate::infra::db::sqlite::try_pool() {
-        Ok(pool) => {
-            let now = chrono::Utc::now().to_rfc3339();
-            sqlx::query_as::<_, crate::infra::db::models::SessionRow>(
-                "SELECT * FROM sessions WHERE token = ? AND expires_at > ?",
-            )
-            .bind(&token)
-            .bind(&now)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
-        }
-        Err(_) => {
+    let backend = crate::infra::db::global_backend();
+    let session = match &backend {
+        Some(backend) => match backend.get_session(&token).await {
+            Ok(session) => session,
+            Err(e) => {
+                tracing::error!("require_auth: failed to query session: {e}");
+                None
+            }
+        },
+        None => {
             // DB not available — reject all tokens (fail-secure)
-            tracing::error!("require_auth: DB pool not available, rejecting request");
+            tracing::error!("require_auth: DB backend not available, rejecting request");
             None
         }
     };
@@ -1199,37 +1207,41 @@ async fn require_auth(
         // pre-upgrade username-keyed session) is rejected fail-closed; the
         // old `user_id == "admin"` literal fallback is gone for the same
         // reason.
-        let (user_id, role) = match crate::infra::db::sqlite::try_pool() {
-            Ok(pool) => {
-                let row: Option<(String, String)> =
-                    sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
-                        .bind(&session.user_id)
-                        .fetch_optional(pool)
-                        .await
-                        .unwrap_or(None);
-                match row {
-                    Some((id, role)) => (id, role),
-                    None => {
-                        tracing::warn!(
-                            "require_auth: session references unknown user '{}'; rejecting",
-                            session.user_id
-                        );
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            [(axum::http::header::CONTENT_TYPE, "application/json")],
-                            axum::Json(serde_json::json!({
-                                "code": "INVALID_TOKEN",
-                                "message": "Session is no longer valid; sign in again",
-                                "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
-                            })),
-                        )
-                            .into_response();
-                    }
+        let (user_id, role) = match &backend {
+            Some(backend) => match backend.get_user_by_id(&session.user_id).await {
+                Ok(Some(user)) => (user.id, user.role),
+                Ok(None) => {
+                    tracing::warn!(
+                        "require_auth: session references unknown user '{}'; rejecting",
+                        session.user_id
+                    );
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        axum::Json(serde_json::json!({
+                            "code": "INVALID_TOKEN",
+                            "message": "Session is no longer valid; sign in again",
+                            "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
+                        })),
+                    )
+                        .into_response();
                 }
-            }
+                Err(e) => {
+                    tracing::error!("require_auth: failed to query user: {e}");
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        axum::Json(serde_json::json!({
+                            "code": "AUTH_REQUIRED",
+                            "message": "Authentication required in team/hpc mode",
+                        })),
+                    )
+                        .into_response();
+                }
+            },
             // DB unavailable — reject everything (fail-secure).
-            Err(_) => {
-                tracing::error!("require_auth: DB pool not available, rejecting request");
+            None => {
+                tracing::error!("require_auth: DB backend not available, rejecting request");
                 return (
                     axum::http::StatusCode::UNAUTHORIZED,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -1262,23 +1274,25 @@ async fn require_auth(
 /// Pure decision for the #207 runs gate — extracted so the 503 contract
 /// (code + status) is unit-testable without a database (issue #554): the
 /// middleware above is the only caller.
-fn runs_gate_verdict(sqlite_ready: bool) -> Result<(), (StatusCode, axum::Json<ApiError>)> {
-    if sqlite_ready {
+fn runs_gate_verdict(backend_ready: bool) -> Result<(), (StatusCode, axum::Json<ApiError>)> {
+    if backend_ready {
         return Ok(());
     }
     Err((
         StatusCode::SERVICE_UNAVAILABLE,
         axum::Json(ApiError {
-            code: "RUNS_REQUIRE_SQLITE".into(),
+            code: "RUNS_REQUIRE_STORAGE_BACKEND".into(),
             message: "Workflow run execution is not available on this deployment.".into(),
             detail: Some(
-                "Run lifecycle bookkeeping uses the embedded SQLite store; \
-                 PostgreSQL servers serve library/AI/auth features only."
+                "Run lifecycle bookkeeping requires an initialized storage backend \
+                 (embedded SQLite, or PostgreSQL with the `postgres` feature); \
+                 run *execution* itself remains SQLite-only."
                     .into(),
             ),
             suggestion: Some(
-                "Execute via `oxo-flow run` from the CLI, or use a personal-mode \
-                 server backed by SQLite."
+                "Start the server in personal mode (default SQLite), or deploy with \
+                 `DATABASE_URL=sqlite://…`; for PostgreSQL deployments execute via \
+                 `oxo-flow run` from the CLI."
                     .into(),
             ),
         }),
@@ -1291,11 +1305,11 @@ mod runs_gate_tests {
 
     #[test]
     fn runs_gate_503_contract() {
-        // #554: the PG-mode 503 contract pinned without a database —
-        // status SERVICE_UNAVAILABLE + code RUNS_REQUIRE_SQLITE.
+        // #554: the no-backend 503 contract pinned without a database —
+        // status SERVICE_UNAVAILABLE + code RUNS_REQUIRE_STORAGE_BACKEND.
         let err = runs_gate_verdict(false).unwrap_err();
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(err.1.code, "RUNS_REQUIRE_SQLITE");
+        assert_eq!(err.1.code, "RUNS_REQUIRE_STORAGE_BACKEND");
         assert!(runs_gate_verdict(true).is_ok());
     }
 }

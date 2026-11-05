@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { dryRunArgs, graphArgs, resumeArgs, runArgs, type GraphFormat } from "../core/cliArgs";
+import { dryRunArgs, graphArgs, resumeArgs, runArgs, templateArgs, type GraphFormat } from "../core/cliArgs";
 
 export const TASK_TYPE = "oxo-flow";
 
@@ -66,14 +66,21 @@ export class OxoflowTaskProvider implements vscode.TaskProvider {
   }
 }
 
-function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+export function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
 }
 
 export function relativeWorkflow(folder: vscode.WorkspaceFolder, file: vscode.Uri): string {
   const folderPath = folder.uri.fsPath;
   const filePath = file.fsPath;
-  if (filePath.startsWith(folderPath)) {
+  // A bare prefix match treats sibling folders sharing a name prefix
+  // ("proj" vs "proj-archive") as inside the workspace — require a path
+  // separator after the folder (a trailing separator in folderPath counts).
+  const endsWithSep = folderPath.endsWith("/") || folderPath.endsWith("\\");
+  const inside = endsWithSep
+    ? filePath.startsWith(folderPath)
+    : filePath.startsWith(`${folderPath}/`) || filePath.startsWith(`${folderPath}\\`);
+  if (inside) {
     const rel = filePath.slice(folderPath.length).replace(/^[/\\]/, "");
     return rel.length > 0 ? rel : filePath;
   }
@@ -101,10 +108,18 @@ export function createTask(
     (kind === "run"
       ? runArgs(runOpts)
       : kind === "dry-run"
+        // CLI dry-run takes neither `-j` nor `-k` (see dryRunArgs) — jobs and
+        // keepGoing on the shared task definition are honored for `run` only.
         ? dryRunArgs(runOpts)
         : kind === "resume"
           ? resumeArgs(def.workflow, def.extraArgs)
-          : graphArgs(def.workflow, def.format));
+          : kind === "generate"
+            // Documented contract (vscode-extension.md): a tasks.json
+            // `generate` task runs AI template generation with extraArgs[0]
+            // as the description — without this branch it fell through to
+            // `graph` and silently produced a DAG instead.
+            ? templateArgs(def.extraArgs?.[0] ?? "", def.workflow)
+            : graphArgs(def.workflow, def.format));
   // ShellQuotedString is a plain object interface, not a constructor: pass
   // {value, quoting} literals so no shell metacharacter in paths/args breaks.
   const strong = (value: string) => ({ value, quoting: vscode.ShellQuoting.Strong });

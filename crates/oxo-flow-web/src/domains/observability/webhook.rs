@@ -7,14 +7,30 @@ use oxo_flow_core::webhook::{
     HttpMethod, SignatureScheme, WebhookClient, WebhookConfig, WebhookEvent, WebhookPayload,
 };
 
-/// The runs row fields notify_terminal needs (workflow name, timestamps,
-/// workdir).
-type RunSummaryRow = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+/// Secure default for newly configured web endpoints.
+pub const DEFAULT_SIGNATURE_SCHEME: &str = "hmac-sha256";
+
+/// Frozen compatibility scheme used by pre-existing webhook rows.
+pub const LEGACY_SIGNATURE_SCHEME: &str = "sha256-keyed";
+
+/// Parse a persisted/API signature scheme without silently coercing typos.
+#[must_use]
+pub fn signature_scheme(value: &str) -> Option<SignatureScheme> {
+    match value.trim() {
+        "hmac-sha256" => Some(SignatureScheme::HmacSha256),
+        "sha256-keyed" => Some(SignatureScheme::Sha256Keyed),
+        _ => None,
+    }
+}
+
+/// Return the canonical stored spelling accepted by this API.
+#[must_use]
+pub fn canonical_signature_scheme(value: &str) -> Option<&'static str> {
+    match signature_scheme(value)? {
+        SignatureScheme::HmacSha256 => Some(DEFAULT_SIGNATURE_SCHEME),
+        SignatureScheme::Sha256Keyed => Some(LEGACY_SIGNATURE_SCHEME),
+    }
+}
 
 /// One config row (id=1) persisted by PUT /api/webhook.
 pub struct WebhookSettings {
@@ -22,7 +38,7 @@ pub struct WebhookSettings {
     pub url: String,
     pub secret: Option<String>,
     pub events: Vec<String>,
-    /// "sha256-keyed" (legacy v0.10 default) or "hmac-sha256".
+    /// "hmac-sha256" or the frozen legacy "sha256-keyed".
     pub signature_scheme: String,
 }
 
@@ -33,29 +49,31 @@ impl Default for WebhookSettings {
             url: String::new(),
             secret: None,
             events: Vec::new(),
-            signature_scheme: "sha256-keyed".into(),
+            signature_scheme: DEFAULT_SIGNATURE_SCHEME.into(),
         }
     }
 }
 
 pub async fn load_settings() -> Option<WebhookSettings> {
-    let pool = crate::infra::db::sqlite::try_pool().ok()?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
-        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()?;
-    let events: Vec<String> = serde_json::from_str(&row.3).unwrap_or_default();
+    // The trait is the only read path — `global_backend()` itself falls back
+    // to the SQLite pool, so the raw-SQL twin that lived below this comment
+    // was unreachable duplicate semantics (the StorageBackend docs forbid
+    // adding raw-SQL paths beside it).
+    let backend = crate::infra::db::global_backend()?;
+    let row = backend
+        .get_webhook_config()
+        .await
+        .map_err(|e| tracing::warn!("webhook config read failed: {e}"))
+        .ok()??;
+    let events: Vec<String> = serde_json::from_str(&row.events).unwrap_or_default();
     Some(WebhookSettings {
-        url: row.0,
+        url: row.url,
         // `open` transparently passes legacy plaintext through (pre-sealing
         // rows, or deployments without OXO_FLOW_MASTER_KEY).
-        secret: row.1.map(|s| crate::infra::crypto::open(&s)),
-        enabled: row.2 != 0,
+        secret: row.secret.map(|s| crate::infra::crypto::open(&s)),
+        enabled: row.enabled != 0,
         events,
-        signature_scheme: row.4,
+        signature_scheme: row.signature_scheme,
     })
 }
 
@@ -84,20 +102,18 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         WebhookEvent::WorkflowFailed
     };
 
-    let pool = match crate::infra::db::sqlite::try_pool() {
-        Ok(p) => p,
-        Err(_) => return,
+    let backend = match crate::infra::db::global_backend() {
+        Some(b) => b,
+        None => return,
     };
-    let row: Option<RunSummaryRow> = sqlx::query_as(
-        "SELECT workflow_name, started_at, finished_at, workdir FROM runs WHERE id = ?",
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-    let Some((workflow_name, started_at, finished_at, workdir)) = row else {
-        return;
+    let run = match backend.get_run(run_id).await {
+        Ok(Some(r)) => r,
+        _ => return,
     };
+    let workflow_name = run.workflow_name;
+    let started_at = run.started_at;
+    let finished_at = run.finished_at;
+    let workdir = run.workdir;
     let workflow_name = workflow_name.unwrap_or_else(|| "pipeline".to_string());
 
     // Rule counts from the engine's checkpoint (single source of truth).
@@ -150,20 +166,20 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
+    let Some(scheme) = signature_scheme(&settings.signature_scheme) else {
+        tracing::error!(
+            "webhook delivery disabled for run {run_id}: unsupported signature scheme '{}'",
+            settings.signature_scheme
+        );
+        return;
+    };
     let config = WebhookConfig {
         url: settings.url,
         method: HttpMethod::Post,
         headers: Default::default(),
         events: vec![event],
         secret: settings.secret,
-        // The configured scheme decides: legacy consumers keep verifying
-        // 'sha256-keyed' signatures after an upgrade; opting into the
-        // RFC-2104 scheme is an explicit setting change.
-        signature_scheme: if settings.signature_scheme == "hmac-sha256" {
-            SignatureScheme::HmacSha256
-        } else {
-            SignatureScheme::Sha256Keyed
-        },
+        signature_scheme: scheme,
         timeout_secs: 10,
         max_retries: 1,
     };

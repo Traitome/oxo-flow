@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "a30d5585f7d9122c9800d0b9ee6d5e54513cd3bd0f9571d19163c8cc113fbbfb",
+  "schemaSha256": "05add9b9c3505f1f85ce8b2cbdb70867877fe9cda76c362a0351f54460c5b908",
   "contexts": {
     "root": {
       "keys": [
@@ -98,6 +98,11 @@
           "key": "sample_groups",
           "description": "Named sample groups for cohort-level analysis",
           "type": "array"
+        },
+        {
+          "key": "types",
+          "description": "Biological semantic type specifications ([types.<name>])",
+          "type": "object"
         },
         {
           "key": "values",
@@ -219,6 +224,19 @@
           "description": "Schema synced from config whitelist (see known_keys.rs)"
         },
         {
+          "key": "staging_mode",
+          "description": "Default remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
+        },
+        {
           "key": "threads",
           "description": "",
           "type": "integer"
@@ -276,6 +294,11 @@
           "type": "string"
         },
         {
+          "key": "numa_aware",
+          "description": "Enable NUMA-aware node allocation and affinity wrapping.",
+          "type": "boolean"
+        },
+        {
           "key": "protected_data_trees",
           "description": "Directory trees (relative to the workdir) whose contents are baseline-manifested (size + mtime + content hash for files under the manifest hash ceiling) and diffed on every plan/dry-run/run preflight. Drift prints a loud PROTECTED TREE DRIFT: section; run fails on drift unless --allow-protected-drift is passed.",
           "type": "array"
@@ -283,6 +306,34 @@
         {
           "key": "reclaim_free_disk",
           "description": "Reclaim threshold (>= min_free_disk). Below it new submissions hold while regenerable outputs of completed temporary rules are tombstoned and deleted; the run aborts if space stays below min_free_disk afterward.",
+          "type": "string"
+        },
+        {
+          "key": "staging_mode",
+          "description": "Global remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
+        },
+        {
+          "key": "tier0_ram_scratch",
+          "description": "Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. /dev/shm).",
+          "type": "string"
+        },
+        {
+          "key": "tier1_nvme_scratch",
+          "description": "Tier 1 local fast scratch directory (local NVMe SSD, e.g. /mnt/nvme/scratch).",
+          "type": "string"
+        },
+        {
+          "key": "tier2_shared_scratch",
+          "description": "Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS).",
           "type": "string"
         },
         {
@@ -700,6 +751,19 @@
           "type": "string"
         },
         {
+          "key": "staging_mode",
+          "description": "Remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)",
+          "type": "string",
+          "enums": [
+            "eager",
+            "fifo",
+            "pass_through",
+            "passthrough",
+            "stream",
+            "stream_fifo"
+          ]
+        },
+        {
           "key": "tags",
           "description": "Categorization tags",
           "type": "array"
@@ -729,6 +793,12 @@
           "description": "",
           "type": "object",
           "ref": "#/$defs/transformConfig"
+        },
+        {
+          "key": "types",
+          "description": "Rule-level semantic biological type contracts for input and output channels",
+          "type": "object",
+          "ref": "#/$defs/ruleTypesSpec"
         },
         {
           "key": "when",
@@ -764,6 +834,16 @@
           "key": "memory",
           "description": "",
           "type": "string"
+        },
+        {
+          "key": "numa_node",
+          "description": "Explicit NUMA node index to bind execution to.",
+          "type": "integer"
+        },
+        {
+          "key": "numa_pin",
+          "description": "Pin rule execution to an optimal NUMA node via numactl.",
+          "type": "boolean"
         },
         {
           "key": "partition",
@@ -933,6 +1013,20 @@
             "medium",
             "slow"
           ]
+        }
+      ]
+    },
+    "rules.types": {
+      "keys": [
+        {
+          "key": "inputs",
+          "description": "Input channel to biological type mapping",
+          "type": "object"
+        },
+        {
+          "key": "outputs",
+          "description": "Output channel to biological type mapping",
+          "type": "object"
         }
       ]
     }

@@ -26,9 +26,10 @@ pub struct ScriptedTurn {
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Error replayed instead of a response, as a tag:
-    /// `context_overflow[:msg]`, `output_limit[:msg]`, `rate_limited`,
-    /// `auth[:msg]`, `provider[:msg]`. Unknown tags replay as a provider
-    /// error carrying the tag — fail loud, never silently.
+    /// `context_overflow[:msg]`, `output_limit[:msg]`,
+    /// `rate_limited[:secs]`, `auth[:msg]`, `provider[:msg]`. Unknown tags
+    /// replay as a provider error carrying the tag — fail loud, never
+    /// silently.
     #[serde(default)]
     pub error: Option<String>,
     /// Artificial latency in milliseconds before the turn is replayed.
@@ -149,7 +150,10 @@ fn scripted_error(tag: &str) -> AiError {
         "output_limit" => AiError::OutputLimit { provider, message },
         "rate_limited" => AiError::RateLimited {
             provider,
-            retry_after: None,
+            // `rate_limited:<secs>` scripts a Retry-After in whole seconds;
+            // a bare `rate_limited` (or a non-numeric suffix) reports no
+            // header, like a 429 that arrived without one.
+            retry_after: message.parse::<u64>().ok(),
         },
         "auth" => AiError::Auth { provider, message },
         _ => AiError::Provider {

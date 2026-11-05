@@ -6,6 +6,7 @@ import {
   findingsFromValidate,
   parseReport,
   ReportParseError,
+  type Finding,
   type LintReport,
   type ValidateReport,
 } from "../../core/jsonReport";
@@ -100,4 +101,22 @@ test("dedupeFindings keeps validate/lint overlap once", () => {
   const lint = findingsFromLint(lintFixture());
   const merged = dedupeFindings([...validate, ...lint, ...lint]);
   assert.equal(merged.length, validate.length + lint.length);
+});
+
+test("dedupeFindings merges the same finding across validate and lint", () => {
+  // The same code/message/rule emitted by both commands (lint re-runs the
+  // format checks) must collapse to one — source is not part of identity.
+  const shared: Finding = {
+    severity: "error",
+    code: "E002",
+    message: "rule has no output",
+    rule: "qc",
+    suggestion: null,
+    source: "validate",
+  };
+  const lintCopy: Finding = { ...shared, source: "lint" };
+  const merged = dedupeFindings([shared, lintCopy]);
+  assert.equal(merged.length, 1);
+  // The provider feeds validate findings first, so the validate copy wins.
+  assert.equal(merged[0].source, "validate");
 });

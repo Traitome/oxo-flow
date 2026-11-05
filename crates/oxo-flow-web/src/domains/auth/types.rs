@@ -1,13 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub token: String,
-    pub user_id: String,
-    pub created_at: String,
-    pub expires_at: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     pub username: String,

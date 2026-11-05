@@ -166,11 +166,21 @@ fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
             continue;
         }
         let skill_md = path.join("SKILL.md");
-        let Ok(content) = std::fs::read_to_string(&skill_md) else {
-            continue;
+        let content = match std::fs::read_to_string(&skill_md) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("skipping unreadable skill file {}: {e}", skill_md.display());
+                continue;
+            }
         };
-        if let Some(manifest) = parse_skill_md(&content) {
-            manifests.push(manifest);
+        match parse_skill_md(&content).filter(|m| m.validate().is_ok()) {
+            Some(manifest) => manifests.push(manifest),
+            // A skill the user dropped in that silently never loads is a
+            // support ticket generator — say why it was skipped.
+            None => tracing::warn!(
+                "skipping skill {}: malformed SKILL.md or failed validation",
+                skill_md.display()
+            ),
         }
     }
     manifests
@@ -180,8 +190,23 @@ fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
 /// followed by a markdown body. Returns None if the frontmatter lacks the
 /// required `name`/`description` fields.
 pub fn parse_skill_md(content: &str) -> Option<SkillManifest> {
-    let body = content.strip_prefix("---")?;
-    let (frontmatter, markdown) = body.split_once("---")?;
+    // Fence split must be line-anchored: a `---` inside a frontmatter
+    // value (e.g. `description: A --- B`) is content, not the closing
+    // fence — splitting on the first substring truncates the header.
+    // Tolerate CRLF: a SKILL.md edited on Windows opens with "---\r\n",
+    // and a silent parse failure there meant the skill never loaded.
+    let rest = content
+        .strip_prefix("---\r\n")
+        .or_else(|| content.strip_prefix("---\n"))?;
+    // Closing fence must be a whole line: a `---` inside a frontmatter
+    // value is content, not the terminator. The degenerate `---\n---`
+    // (empty header, no trailing newline) has no body either — treat both
+    // sides as empty rather than slicing past the end.
+    let (frontmatter, markdown) = match rest.find("\n---\n") {
+        Some(i) => (&rest[..i + 1], &rest[i + 5..]),
+        None if rest == "---" => ("", ""),
+        None => return None,
+    };
 
     let mut name = None;
     let mut description = None;
@@ -364,6 +389,16 @@ prompt_additions = [
         assert!(parse_skill_md("---\ndescription: d\n---\nbody").is_none());
         assert!(parse_skill_md("no frontmatter here").is_none());
         assert!(parse_skill_md("---\nname: x\ndescription: d\n---\n").is_none());
+    }
+
+    #[test]
+    fn parse_skill_md_degenerate_fences_rejected_without_panic() {
+        // An empty frontmatter (closing fence hard on the opening one's
+        // heels) has no required fields — must reject, never slice out of
+        // bounds.
+        assert!(parse_skill_md("---\n---").is_none());
+        assert!(parse_skill_md("---\n---\n").is_none());
+        assert!(parse_skill_md("---\n---\nbody").is_none());
     }
 
     #[test]

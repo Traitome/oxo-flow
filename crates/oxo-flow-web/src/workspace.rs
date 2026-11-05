@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Base workspace directory for the Web UI (uploaded inputs, run sandboxes).
 ///
@@ -84,7 +84,40 @@ pub fn check_relative_path(raw: &str) -> Result<(), String> {
     if raw == "." || raw.starts_with("./") && raw[2..].trim_matches('/').is_empty() {
         return Err(format!("path '{raw}' does not name a file"));
     }
+    // NUL is never a legal filename byte: `Path` components carry it
+    // through untouched, so without this gate the rejection would only
+    // surface as a confusing InvalidInput at the syscall (audit finding —
+    // the old sandbox sanitizer stripped it, the canonicalizer did not).
+    if raw.contains('\0') {
+        return Err(format!("path '{raw}' contains a NUL byte"));
+    }
     Ok(())
+}
+
+/// Canonicalize a validated client path into the workflow-relative key used
+/// for admission checks and staging.
+///
+/// `.` components are removed and repeated separators collapse through
+/// `Path::components`; `..`, absolute paths, and degenerate forms remain
+/// rejected by [`check_relative_path`]. Canonicalization prevents aliases
+/// such as `./workflow.oxoflow` from bypassing reserved-key checks or
+/// naming a different scanner/staging target.
+pub fn canonicalize_relative_path(raw: &str) -> Result<String, String> {
+    check_relative_path(raw)?;
+    let mut parts = Vec::new();
+    for component in Path::new(raw).components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("path '{raw}' cannot be canonicalized safely"));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!("path '{raw}' does not name a file"));
+    }
+    Ok(parts.join("/"))
 }
 
 /// Resolve a client-supplied path against the user's workspace root.
@@ -331,6 +364,24 @@ mod tests {
         assert!(check_relative_path("/etc/passwd").is_err());
         assert!(check_relative_path("../secret").is_err());
         assert!(check_relative_path("a/../b").is_err());
+    }
+
+    #[test]
+    fn canonicalize_relative_path_removes_dot_and_repeated_separator_aliases() {
+        assert_eq!(
+            canonicalize_relative_path("./workflow.oxoflow").unwrap(),
+            "workflow.oxoflow"
+        );
+        assert_eq!(
+            canonicalize_relative_path("modules//typed.oxoflow").unwrap(),
+            "modules/typed.oxoflow"
+        );
+        assert_eq!(
+            canonicalize_relative_path("./modules/./typed.oxoflow").unwrap(),
+            "modules/typed.oxoflow"
+        );
+        assert!(canonicalize_relative_path("../workflow.oxoflow").is_err());
+        assert!(canonicalize_relative_path("/workflow.oxoflow").is_err());
     }
 
     #[test]

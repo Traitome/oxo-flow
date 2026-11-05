@@ -2,8 +2,7 @@
 //!
 //! The web chat forwards these over SSE; the CLI passes `None` and sees no
 //! behavior change. Text events carry complete round responses (the agent
-//! loop is full-response; token-level streaming is available separately via
-//! `AiProvider::chat_stream` for single-shot calls).
+//! loop is full-response; token-level streaming is not implemented).
 
 use serde::Serialize;
 

@@ -42,6 +42,11 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
     api.listClusters().then((c) => setClusters(c.filter((x) => x.enabled))).catch(() => setClusters([]));
   }, []);
 
+  // Entries without a "=" never reach the run — surface them instead of
+  // letting the filter silently swallow a typo.
+  const overrideEntries = configOverrides.split(',').map((kv) => kv.trim()).filter((kv) => kv !== '');
+  const invalidOverrides = overrideEntries.filter((kv) => !kv.includes('='));
+
   const options = (): RunOptions => ({
     maxJobs: Number(maxJobs) || 4,
     keepGoing,
@@ -50,10 +55,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
     clusterId: clusterId || undefined,
     provenance,
     allowProtectedDrift,
-    configOverrides: configOverrides
-      .split(',')
-      .map((kv) => kv.trim())
-      .filter((kv) => kv.includes('=')),
+    configOverrides: overrideEntries.filter((kv) => kv.includes('=')),
   });
 
   return (
@@ -128,6 +130,13 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
             onChange={(e) => setConfigOverrides(e.target.value)}
           />
         </label>
+        {invalidOverrides.length > 0 && (
+          <p className="run-dialog-hint" style={{ color: 'var(--color-warning)', margin: 0 }} role="alert">
+            {t('run.configOverridesInvalid')
+              .replace('{{count}}', String(invalidOverrides.length))
+              .replace('{{entries}}', invalidOverrides.join(', '))}
+          </p>
+        )}
         {clusters.length > 0 && (
           <label className="inspector-field">
             <span>{t('run.cluster')}</span>

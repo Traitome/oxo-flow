@@ -582,9 +582,9 @@ pub async fn get_run_file(
     headers: axum::http::HeaderMap,
 ) -> Response {
     let user = resolve(authenticated.as_ref());
-    let pool = match crate::infra::db::sqlite::try_pool() {
-        Ok(p) => p,
-        Err(_) => {
+    let backend = match crate::infra::db::global_backend() {
+        Some(b) => b,
+        None => {
             return err(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "DB_ERROR",
@@ -593,7 +593,7 @@ pub async fn get_run_file(
             .into_response();
         }
     };
-    let run = match super::handlers::load_owned_run(pool, &user, &id).await {
+    let run = match super::handlers::load_owned_run(backend.as_ref(), &user, &id).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -626,7 +626,13 @@ pub async fn get_run_file(
         .into_response();
     }
     if target.is_dir() {
-        match collect_zip_entries(&target) {
+        // collect_zip_entries walks the whole tree and CRC32s every file
+        // (up to MAX_ZIP_TOTAL_BYTES) — blocking IO that must not park the
+        // async worker (same #268 item 4 discipline as the 500-entry walk).
+        let zip_target = target.clone();
+        let zipped = tokio::task::spawn_blocking(move || collect_zip_entries(&zip_target)).await;
+        let zipped = zipped.unwrap_or_else(|e| Err(format!("zip task failed: {e}")));
+        match zipped {
             Ok(entries) => {
                 let dir_name = if q.path == "." {
                     workdir

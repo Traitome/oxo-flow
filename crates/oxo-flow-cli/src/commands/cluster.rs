@@ -6,7 +6,6 @@ use oxo_flow_core::backend::cluster::elementwise_aftercorr;
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -19,7 +18,10 @@ use crate::commands::print_banner;
 /// `-b pbs-torque`) submitted real jobs to, or queried, the wrong scheduler.
 fn parse_backend(name: &str) -> Result<ClusterBackend> {
     ClusterBackend::from_str(name).map_err(|_| {
-        anyhow::anyhow!("unknown cluster backend '{name}' — expected slurm, pbs, sge, or lsf")
+        anyhow::anyhow!(
+            "unknown cluster backend '{name}' — expected slurm, pbs, sge, lsf, kubernetes (k8s), \
+             aws-batch, or gcp-batch"
+        )
     })
 }
 
@@ -151,6 +153,15 @@ fn generate_submit_helper(backend: &ClusterBackend) -> String {
         ClusterBackend::Lsf => {
             "  out=$(bsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Job <[0-9]+>' | grep -oE '[0-9]+')\n"
         }
+        ClusterBackend::Kubernetes => {
+            "  out=$(kubectl create -f \"$@\" -o jsonpath='{.metadata.name}') || return $?\n  id=\"$out\"\n"
+        }
+        ClusterBackend::AwsBatch => {
+            "  out=$(aws batch submit-job --cli-input-json file://\"$@\" --query 'jobId' --output text) || return $?\n  id=\"$out\"\n"
+        }
+        ClusterBackend::GcpBatch => {
+            "  out=$(gcloud batch jobs submit \"$@\" --query 'name' --format='value(name)') || return $?\n  id=\"$out\"\n"
+        }
     };
 
     let mut helper = String::new();
@@ -273,6 +284,15 @@ fn generate_submit_wrapper(
                         script_path.display()
                     ));
                 }
+                ClusterBackend::Kubernetes
+                | ClusterBackend::AwsBatch
+                | ClusterBackend::GcpBatch => {
+                    script.push_str(&format!(
+                        "JOB_IDS[{}]=\"$(oxo_submit {})\"\n",
+                        rule_name,
+                        script_path.display()
+                    ));
+                }
             }
         } else {
             // No dependencies
@@ -335,11 +355,12 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             // the plain constructor left `{config.x}` unexpanded, so edges
             // between a producer's declared output and a consumer's concrete
             // input were lost and the generated scripts had no dependencies).
-            let dag = WorkflowDag::from_rules_with_config(
-                &config.rules,
-                &crate::commands::run::config_placeholder_values(&config.config),
-            )
-            .context("failed to build workflow DAG")?;
+            // One map serves the whole command (DAG edges, when-gating, and
+            // script rendering below) — computing it once keeps the three
+            // consumers in sync by construction.
+            let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
+            let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values)
+                .context("failed to build workflow DAG")?;
 
             // --module partial runs (issue #112 elasticity) — the same
             // resolution `run` and `dry-run` use: each module name resolves
@@ -372,17 +393,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
                 std::collections::HashSet::new()
             } else {
-                let wildcard_values: std::collections::HashMap<String, String> = config
-                    .config
-                    .iter()
-                    .map(|(key, value)| {
-                        let string_val = match value {
-                            toml::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        (format!("config.{key}"), string_val)
-                    })
-                    .collect();
                 config
                     .rules
                     .iter()
@@ -504,16 +514,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            // Build config variable map for placeholder expansion
-            let mut wildcard_values: HashMap<String, String> = HashMap::new();
-            for (key, value) in &config.config {
-                let string_val = match value {
-                    toml::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                wildcard_values.insert(format!("config.{key}"), string_val);
-            }
-
             for rule_name in &order {
                 let rule = config
                     .get_rule(rule_name)
@@ -589,9 +589,11 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 );
                 eprintln!("  Submit with: bash {}", submit_path.display());
                 eprintln!(
-                    "  Or manually: {} {}/*.sh",
-                    oxo_flow_core::cluster::submit_command(&cluster_backend),
-                    output.display()
+                    "  Or manually: {}",
+                    oxo_flow_core::cluster::submit_invocation_hint(
+                        &cluster_backend,
+                        &output.display().to_string()
+                    )
                 );
             } else {
                 eprintln!(
@@ -603,15 +605,19 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 if dry_run {
                     eprintln!("  DRY-RUN: review the scripts, then submit with:");
                     eprintln!(
-                        "    {} {}/*.sh",
-                        oxo_flow_core::cluster::submit_command(&cluster_backend),
-                        output.display()
+                        "    {}",
+                        oxo_flow_core::cluster::submit_invocation_hint(
+                            &cluster_backend,
+                            &output.display().to_string()
+                        )
                     );
                 } else {
                     eprintln!(
-                        "  Submit with: {} {}/*.sh",
-                        oxo_flow_core::cluster::submit_command(&cluster_backend),
-                        output.display()
+                        "  Submit with: {}",
+                        oxo_flow_core::cluster::submit_invocation_hint(
+                            &cluster_backend,
+                            &output.display().to_string()
+                        )
                     );
                 }
             }
@@ -746,36 +752,32 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 backend.as_deref(),
             )?);
 
-            if job_ids.is_empty() {
-                eprintln!(
-                    "{} No job IDs provided. Usage: oxo-flow cluster cancel <JOB_ID>...",
-                    "Warning:".bold().yellow()
-                );
-            } else {
-                eprintln!(
-                    "{} Canceling {}...",
-                    "Cluster:".bold().cyan(),
-                    oxo_flow_core::plural(job_ids.len(), "job", "jobs")
-                );
+            // job_ids is clap-enforced as required, so the empty case never
+            // reaches here — usage errors surface at argument parsing with
+            // exit code 2, matching `cluster logs` (missing JOB_ID).
+            eprintln!(
+                "{} Canceling {}...",
+                "Cluster:".bold().cyan(),
+                oxo_flow_core::plural(job_ids.len(), "job", "jobs")
+            );
 
-                match std::process::Command::new(cancel_cmd)
-                    .args(&job_ids)
-                    .status()
-                {
-                    Ok(status) => {
-                        if status.success() {
-                            eprintln!("{} Successfully canceled jobs.", "✓".green());
-                        } else {
-                            anyhow::bail!(
-                                "Command failed with exit code: {}",
-                                status.code().unwrap_or(-1)
-                            );
-                        }
+            match std::process::Command::new(cancel_cmd)
+                .args(&job_ids)
+                .status()
+            {
+                Ok(status) => {
+                    if status.success() {
+                        eprintln!("{} Successfully canceled jobs.", "✓".green());
+                    } else {
+                        anyhow::bail!(
+                            "Command failed with exit code: {}",
+                            status.code().unwrap_or(-1)
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("  Is {} installed on this system?", cancel_cmd);
-                        anyhow::bail!("Failed to execute cancel command: {}", e);
-                    }
+                }
+                Err(e) => {
+                    eprintln!("  Is {} installed on this system?", cancel_cmd);
+                    anyhow::bail!("Failed to execute cancel command: {}", e);
                 }
             }
         }
@@ -915,7 +917,9 @@ mod tests {
                 "must name the offending backend: {msg}"
             );
             assert!(
-                msg.contains("expected slurm, pbs, sge, or lsf"),
+                msg.contains(
+                    "expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch"
+                ),
                 "must list the accepted values: {msg}"
             );
         }

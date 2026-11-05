@@ -23,6 +23,7 @@ Hard checks
                  gallery references are read in place; community references
                  (`oxo-flow-community/...`) are fetched from
                  raw.githubusercontent.com (disable with --no-fetch-community;
+                 set OXO_GITHUB_MIRROR to route fetches through a mirror;
                  fetch failures are warnings, not hard failures)
 
 Warnings
@@ -200,11 +201,27 @@ def reference_graph(path, oxo_flow_bin):
 
 
 def _fetch(url, dest):
+    """Fetch order: explicit $OXO_GITHUB_MIRROR first, then direct GitHub."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        data = resp.read()
-    with open(dest, "wb") as fh:
-        fh.write(data)
+    mirror_prefix = os.environ.get("OXO_GITHUB_MIRROR", "")
+    candidates = []
+    if mirror_prefix and url.startswith("https://"):
+        candidates.append(f"{mirror_prefix.rstrip('/')}/{url}")
+    candidates.append(url)
+
+    last_exc = None
+    for target in candidates:
+        try:
+            timeout = 5 if target == url and ("raw.githubusercontent.com" in url) else 15
+            with urllib.request.urlopen(target, timeout=timeout) as resp:
+                data = resp.read()
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            return
+        except Exception as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
 
 
 def materialize_community_reference(ref_repo, ref_file, workdir):

@@ -187,6 +187,12 @@ pub async fn generate_workflow(
         crate::commands::ai_runtime::AiRuntime::new(None, project_dir.as_deref(), ai_max_retries)
             .await?;
     let provider = &runtime.provider;
+    // CLI flag wins over the resolved config chain — `[ai] team_profile` in
+    // `.oxo-flow/ai.toml` reaches `runtime.config` via `AiConfig::resolve_chain`.
+    // (The previous fallback read the web crate's global registry, which the
+    // CLI never initializes, so the documented project setting silently
+    // no-op'd.)
+    let team_profile = team_profile.or(runtime.config.team_profile);
 
     println!("{}", "AI Template Generator".bold().green());
     println!(
@@ -526,15 +532,11 @@ pub async fn generate_workflow(
             if let Ok(mut s) = sessions.lock() {
                 s.push(o.session.clone());
             }
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             (o.content.unwrap(), false)
         }
         Ok(o) => {
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             archive_session(&o.session);
             anyhow::bail!(
                 "pipeline generation did not produce a valid workflow: {}",
@@ -545,9 +547,7 @@ pub async fn generate_workflow(
             // Round-cap or provider failure: the orchestrator archived the
             // failed session (with usage). Deliver the generated TOML from
             // the transcript rather than losing the paid-for artifact.
-            for session in sessions.lock().unwrap().iter() {
-                archive_session(session);
-            }
+            archive_sessions(&sessions);
             let text = text_buf.lock().map(|b| b.clone()).unwrap_or_default();
             let toml = pipeline_gen::extract_toml(&text)
                 .ok_or_else(|| anyhow::anyhow!("AI generation failed: {e}"))?;
@@ -724,21 +724,28 @@ fn archive_session(session: &AiSession) {
     }
 }
 
-/// Basic structural validation before passing to core engine.
+/// Archive every accumulated team session. `sessions.lock().unwrap()` is
+/// poison-tolerant by construction here: a panicking agent thread must not
+/// take the archive path down with it (the locked vec is still readable),
+/// so a broken lock degrades to skipping those sessions instead of panicking.
+fn archive_sessions(sessions: &std::sync::Mutex<Vec<AiSession>>) {
+    if let Ok(queued) = sessions.lock() {
+        for session in queued.iter() {
+            archive_session(session);
+        }
+    }
+}
+
+/// Basic structural validation before passing to the core engine — the
+/// same floor the pipeline_gen agent enforces, so the two can never drift
+/// (the local copy used to reject valid script/transform-only pipelines).
 fn validate_basic_structure(toml: &str) -> Result<()> {
-    if !toml.contains("[workflow]") {
-        anyhow::bail!("Generated TOML missing [workflow] section");
+    let errors = oxo_flow_ai::agent::pipeline_gen::basic_structure_errors(toml);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
     }
-    if !toml.contains("[[rules]]") {
-        anyhow::bail!("Generated TOML has no [[rules]] sections");
-    }
-    if !toml.contains("shell") {
-        anyhow::bail!("Generated TOML rules missing 'shell' field");
-    }
-    if !toml.contains("name") {
-        anyhow::bail!("Generated TOML missing 'name' field");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -813,6 +820,14 @@ mod tests {
     fn validate_basic_structure_missing_shell() {
         let toml = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"";
         assert!(validate_basic_structure(toml).is_err());
+    }
+
+    #[test]
+    fn validate_basic_structure_accepts_script_only_rules() {
+        // `shell`-only substring matching used to reject these even though
+        // the engine runs them.
+        let toml = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"\noutput = [\"o.txt\"]\nscript = \"analysis.py\"";
+        assert!(validate_basic_structure(toml).is_ok());
     }
 
     #[test]

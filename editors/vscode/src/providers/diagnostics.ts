@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { runCli } from "../core/exec";
+import { DEFAULT_EXECUTABLE, runCli } from "../core/exec";
 import {
   dedupeFindings,
   findingsFromLint,
@@ -57,7 +57,7 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     this.killCurrent.set(uriKey, undefined);
 
     const cfg = vscode.workspace.getConfiguration("oxo-flow", doc.uri);
-    const executable = cfg.get<string>("executablePath", "oxo-flow");
+    const executable = cfg.get<string>("executablePath", DEFAULT_EXECUTABLE);
     const includeLint = cfg.get<boolean>("enableLintDiagnostics", true);
     const trace = cfg.get<boolean>("trace", false);
     const cwd = dirname(doc.uri);
@@ -68,15 +68,14 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     };
     log(`[diagnostics] ${executable} validate ${doc.uri.fsPath}${includeLint ? " + lint" : ""}`);
 
+    const onSpawn = (kill: () => void) => {
+      if (this.generations.get(uriKey) === generation) this.killCurrent.set(uriKey, kill);
+    };
+
     const [validateRes, lintRes] = await Promise.allSettled([
-      runCli(executable, validateArgs(doc.uri.fsPath), {
-        cwd,
-        onSpawn: (kill) => {
-          if (this.generations.get(uriKey) === generation) this.killCurrent.set(uriKey, kill);
-        },
-      }),
+      runCli(executable, validateArgs(doc.uri.fsPath), { cwd, onSpawn }),
       includeLint
-        ? runCli(executable, lintArgs(doc.uri.fsPath), { cwd })
+        ? runCli(executable, lintArgs(doc.uri.fsPath), { cwd, onSpawn })
         : Promise.resolve(null),
     ]);
 
@@ -104,12 +103,15 @@ export class OxoflowDiagnostics implements vscode.Disposable {
 
     if (lintRes.status === "fulfilled" && lintRes.value) {
       const res = lintRes.value;
-      if (!res.spawnError) {
+      if (res.spawnError) {
+        log(`[diagnostics] cannot run ${executable} (lint): ${res.spawnError}`);
+      } else {
         try {
           const report = parseReport(res.stdout);
           if (report.command === "lint") findings.push(...findingsFromLint(report));
         } catch (e) {
           log(`[diagnostics] lint parse failure: ${e instanceof Error ? e.message : String(e)}`);
+          findings.push(unparseable("lint", res));
         }
       }
     }
@@ -134,8 +136,14 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     const uriKey = doc.uri.toString();
     if (trigger === "change" && mode !== "type") return;
     if (trigger === "save" && mode === "type") return; // already ran while typing
-    if (trigger === "open" || trigger === "config" || mode === "save") {
-      // save/open/config run immediately; "type" mode runs debounced below.
+    if (
+      trigger === "open" ||
+      trigger === "config" ||
+      mode === "save" ||
+      (trigger === "change" && mode === "type")
+    ) {
+      // open/config/save run immediately; a change in "type" mode runs
+      // debounced below.
       if (mode === "type" && trigger === "change") {
         const prev = this.timers.get(uriKey);
         if (prev) clearTimeout(prev);
@@ -174,7 +182,7 @@ function unparseable(command: string, res: { stderr: string; exitCode: number | 
     code: "CLI_OUTPUT",
     message: `could not parse oxo-flow ${command} output (exit ${res?.exitCode ?? "?"}): ${detail}`,
     rule: null,
-    suggestion: "Run `oxo-flow validate --json` in a terminal to see the raw output; also check oxo-flow.executablePath.",
+    suggestion: `Run \`oxo-flow ${command} --json\` in a terminal to see the raw output; also check oxo-flow.executablePath.`,
     source: "validate",
   };
 }

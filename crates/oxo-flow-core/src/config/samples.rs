@@ -31,10 +31,6 @@ pub struct OwnerCollision {
     pub path: String,
 }
 
-/// Matches the namespaced `{values.name}` wildcard form.
-///
-/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
-/// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
     /// Reject user-declared sample groups named `auto-discovered` — the
     /// engine's own group for `sample_pattern` discovery results
@@ -302,8 +298,6 @@ impl WorkflowConfig {
             wildcard_combinations_from_pairs,
         };
 
-        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
-
         let duplicates = self.duplicate_sample_owners();
         if duplicates.is_empty() {
             return Ok(Vec::new());
@@ -347,6 +341,7 @@ impl WorkflowConfig {
         // produce owner-instantiated output paths; input_groups rules fan
         // out in the post-loop pass and are out of scope here.
         let pair_wildcards = self.pair_fanout_wildcards();
+        let group_wildcards = self.group_fanout_wildcards();
 
         // Instantiations of one duplicate sample under one of its owners:
         // a group owner fans out (group, sample) combos containing S; a pair
@@ -493,7 +488,7 @@ impl WorkflowConfig {
                     }
                     t
                 };
-                let mentions = |wildcards: &[&str]| -> bool {
+                let mentions = |wildcards: &[String]| -> bool {
                     trigger_text.iter().any(|t| {
                         wildcards.iter().any(|w| {
                             t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
@@ -505,15 +500,9 @@ impl WorkflowConfig {
                 // when-gated out, rules mentioning that vocabulary fall
                 // through to the other domain — keeping them classified as
                 // pair-rules would silently miss a group↔group duplicate.
-                let is_pair_rule = !pair_combos.is_empty()
-                    && mentions(
-                        &pair_wildcards
-                            .iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>(),
-                    );
+                let is_pair_rule = !pair_combos.is_empty() && mentions(&pair_wildcards);
                 let is_group_rule =
-                    !is_pair_rule && !group_combos.is_empty() && mentions(GROUP_WILDCARDS);
+                    !is_pair_rule && !group_combos.is_empty() && mentions(&group_wildcards);
                 let domain_matches = if wants_group_rules {
                     is_group_rule
                 } else {

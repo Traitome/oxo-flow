@@ -25,9 +25,10 @@ Six commitments shape every subsystem:
 2. **Plan fully, then execute.** Wildcard expansion, DAG construction,
    cycle detection, and target selection all happen before the first job
    starts. What can be decided statically is decided statically.
-3. **Hermetic per-rule environments.** Every rule names its software
+3. **Isolated per-rule environments.** Every rule names its software
    environment (conda, docker, …); the engine resolves, builds, caches,
-   and wraps it — tool versions never leak between steps.
+   and wraps it to reduce tool-version leaks between steps. This is not a
+   complete host, credential, or tenant security boundary.
 4. **Resources as first-class constraints.** Threads, memory, GPU, and
    custom pools are declared per rule and enforced by a scheduler that
    waits instead of over-subscribing.
@@ -55,7 +56,7 @@ flowchart LR
     end
 
     subgraph surfaces["oxo-flow surfaces"]
-        cli["oxo-flow CLI<br/>32 subcommands"]
+        cli["oxo-flow CLI<br/>33 subcommands"]
         web["Web server<br/>axum + REST + SSE"]
         ai["AI layer<br/>orchestrator + tools"]
     end
@@ -63,7 +64,7 @@ flowchart LR
     subgraph world["Execution substrate"]
         fs["Working directory<br/>inputs / outputs / logs"]
         env["Environment engines<br/>conda · mamba · pixi<br/>docker · singularity<br/>venv · modules · system"]
-        hpc["HPC schedulers<br/>SLURM · PBS · SGE · LSF"]
+        hpc["HPC schedulers<br/>SLURM · PBS · SGE · LSF<br/>k8s · AWS Batch · GCP Batch"]
         obj["Object storage<br/>S3 · GCS"]
         llm["LLM providers<br/>DeepSeek · Claude<br/>OpenAI-compatible · Ollama"]
         git["Git remotes<br/>workflow repositories"]
@@ -104,7 +105,7 @@ compiled, licensed, and audited in isolation.
 | `oxo-flow-core` | library | — | The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting |
 | `oxo-flow-ai` | library | — | AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system |
 | `oxo-flow-web` | library | core, ai | REST/SSE server: 9 domains, storage backends, SSE broadcast, OpenAPI |
-| `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 32 subcommands, run loop, human rendering |
+| `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 33 subcommands, run loop, human rendering |
 | `oxo-flow-desktop` | binary (excluded from the workspace) | web | Native desktop shell (wry + tao) around the embedded server; built by a separate cargo invocation, version kept in lockstep by `scripts/bump-version.sh` |
 
 ```mermaid
@@ -171,7 +172,7 @@ flowchart TB
         direction LR
         envm["environment.rs<br/>8 backends"]
         storm["storage/<br/>local · s3 · gcs"]
-        clum["cluster.rs<br/>SLURM · PBS · SGE · LSF"]
+        clum["cluster.rs<br/>7 backends: SLURM · PBS · SGE · LSF<br/>k8s · AWS Batch · GCP Batch"]
         misc["report · container<br/>webhook · git · format"]
     end
 
@@ -189,7 +190,7 @@ flowchart TB
 | `rule.rs` | The rule record: inputs/outputs (list, map, dir patterns), shell/script, `when` gates, `[[transform]]` split→map→combine, `EnvironmentSpec`, `Resources` |
 | `wildcard.rs` | Pattern grammar (`{sample}`, `{values.name}`, `{config.x}`, `{meta.col}`), pattern→regex compilation, discovery walkers, Cartesian combination |
 | `references.rs` | `@reference` resolution against known databases |
-| `deep_check.rs` | Static consistency checks beyond `validate` (D001–D004 codes) |
+| `deep_check.rs` | Static consistency checks beyond `validate` (D001–D005 codes) |
 | `config_impact.rs` | Config-key → rule reference graph; fingerprints decide precise checkpoint invalidation |
 
 ### Layer 3 — Planning
@@ -604,7 +605,17 @@ draft) and
 `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 — non-thinking generations run
 12–20 s, but a single thinking round routinely passes two minutes; a
 measured GLM round took 145 s, which the old 120 s default killed
-mid-round). Below the orchestrator, the
+mid-round). A third knob covers third-party Anthropic-compatible proxies
+fronting a *smaller* model: `OXO_FLOW_AI_CONTEXT_TOKENS` declares the
+endpoint's full context window (e.g. 131072 for a GLM/DeepSeek relay that
+rejects overflow with HTTP 400), and the Claude backend then clamps
+`max_tokens` per request — estimated input size (UTF-16-weighted chars/4
+with a 1.5× safety factor and 4096-token margin) is subtracted from the
+window before the configured output budget is sent, floored at 1024 so a
+hopelessly oversized request still reaches the server and its 400 drives
+the transcript-compression retry. Unset, the budget is sent as configured
+(real Anthropic models size their window server-side). Below the
+orchestrator, the
 provider backends retry transient transport failures (dropped or
 reset connections, response bodies that fail to decode), plus the
 gateway-outage signature — a transient HTTP status (408, 502, 503,

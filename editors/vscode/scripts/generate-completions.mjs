@@ -40,18 +40,15 @@ function resolveRef(node) {
 function propInfo(key, rawProp) {
   const prop = resolveRef(rawProp);
   const info = { key, description: prop.description ?? "" };
+  // `type` is always a plain string in this schema ("array" included); the
+  // old per-item branch (item enums / itemsType) never fired on any schema
+  // version so far, and nothing downstream consumes itemsType.
   if (typeof prop.type === "string") info.type = prop.type;
-  else if (prop.type === "array" && prop.items) {
-    const item = resolveRef(prop.items);
-    info.type = "array";
-    if (item.enum) info.enums = [...item.enum].sort();
-    else if (typeof item.type === "string") info.itemsType = item.type;
-  } else if (rawProp && typeof rawProp === "object" && rawProp.$ref) {
+  else if (rawProp && typeof rawProp === "object" && rawProp.$ref) {
     info.type = info.type ?? "object";
   }
   if (prop.enum) {
     info.enums = [...prop.enum].sort();
-    delete info.itemsType;
   }
   if (prop.$ref === undefined && rawProp && typeof rawProp === "object" && rawProp.$ref) {
     info.ref = rawProp.$ref;

@@ -85,14 +85,14 @@
       "[config.${1:key}]",
       "type = \"${2|string,int,float,bool,path|}\"",
       "default = \"${3:value}\"",
-      "description = \"${4:Meaning of this knob}\""
+      "help = \"${4:Meaning of this knob}\""
     ],
     "description": "Typed config knob with default"
   },
   "Sample groups": {
     "prefix": "sample-groups",
     "body": [
-      "[sample_groups.${1:cohort}]",
+      "[[sample_groups.${1:cohort}]]",
       "samples = [\"${2:S1}\", \"${3:S2}\"]"
     ],
     "description": "Named cohort of samples"
@@ -101,7 +101,7 @@
     "prefix": "env-groups",
     "body": [
       "[env_groups.${1:rnaseq}]",
-      "environment = { conda = \"${2:envs/rnaseq.yaml}\" }"
+      "conda = \"${2:envs/rnaseq.yaml}\""
     ],
     "description": "Reusable environment group"
   },

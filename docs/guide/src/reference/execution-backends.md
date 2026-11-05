@@ -51,7 +51,8 @@ pub trait ExecutorBackend: Send + Sync {
 }
 ```
 
-The first implementation, `ClusterExecutor` (SLURM/PBS/SGE/LSF), renders
+The first implementation, `ClusterExecutor` (SLURM/PBS/SGE/LSF, extended
+by k8s and the AWS/GCP Batch backends), renders
 scripts with the existing directive generator (`core/cluster.rs`, unchanged)
 and performs real submission and tracking:
 
@@ -86,7 +87,9 @@ dry-run preview uses). The driver:
   dynamically discovered instances execute in the same run (see
   [Checkpoint re-entry](#checkpoint-re-entry) below).
 
-`DriverConfig` supplies the knobs, with these defaults:
+`DriverConfig` supplies the knobs, with these defaults (this table is the
+single source for driver defaults — other pages link here instead of
+restating it):
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -130,15 +133,17 @@ run's `force_rules` — the same bypass set the local executor receives, since
 the cluster path runs. `tests/cluster_run_profile.rs` pins that combination to
 what the local executor actually executes from identical state.
 
-Real-scheduler validation: SLURM is live-verified end-to-end (including
-GPU). SGE (Son of Grid Engine 8.1.9) and OpenPBS 23.06 are verified on
-containerized real schedulers — master + 2 exec hosts built from source —
-with the chain and array matrices passing 6/6 and 20/20 per backend
-(issue #356). The harness, workflows, and runners live in
-`scripts/real-cluster-matrix/`. LSF cannot be stood up the same way (the
-community edition is IBMid-gated); its directive and status semantics are
-cross-checked against IBM's bsub reference and the jokergoo/bsub client.
-Re-attach to in-flight jobs is a follow-up.
+Historical scheduler evidence includes containerized SLURM, SGE (Son of
+Grid Engine 8.1.9), and OpenPBS 23.06 runs from the harness in
+`scripts/real-cluster-matrix/`. Those artifacts demonstrate that parts of
+the adapter paths executed; they are not a current commit-bound campaign,
+a designated-host qualification, or proof of production behavior. LSF
+cannot be stood up the same way (the community edition is IBMid-gated);
+its directive and status semantics are cross-checked against IBM's bsub
+reference and the jokergoo/bsub client. Re-attach to in-flight jobs,
+cancellation reconciliation, per-element accounting, and crash recovery
+remain evidence gaps. See the audit ledger before describing any backend
+as production-ready.
 
 Accounting is read once per job as it settles, not once per poll, and feeds
 both the run directory and the checkpoint benchmarks — see
@@ -161,6 +166,8 @@ reports state alone.
 See [Workflow Format](workflow-format.md#checkpoint-re-entry) for the config
 surface. A `checkpoint = true` rule writes a re-entry manifest at runtime;
 when it completes, the engine merges the new values, re-expands the rule
-templates, and executes the new instances in the same run — on the local
-path (`run`) and on the driver path alike. Every round is still a static
-plan, so previews stay deterministic and resumes reconstruct the same plan.
+templates, and executes the new instances in the same run. This works on the
+local path (`oxo-flow run`); cluster submissions reject `checkpoint = true`
+rules at plan time instead of silently skipping the dynamically discovered
+instances. Every round is still a static plan, so previews stay deterministic
+and resumes reconstruct the same plan.

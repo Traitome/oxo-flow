@@ -110,6 +110,10 @@ impl SchedulerState {
                 .collect();
 
             if !pending.is_empty() {
+                // Sorted before take(5): `statuses` iterates in HashMap order,
+                // and the deadlock hint must list the same names every run.
+                let mut pending = pending;
+                pending.sort();
                 let rule_list: Vec<String> = pending.iter().take(5).cloned().collect();
                 let suffix = if pending.len() > 5 {
                     format!(" (and {} more)", pending.len() - 5)
@@ -918,11 +922,11 @@ pub fn validate_resources_against_system(
 /// Warn about rules whose declared `resources.disk` exceeds the free space
 /// in the working directory (issue #75). Warning-only: the run proceeds,
 /// but the user knows before committing hours of compute.
-pub fn validate_disk_requirements(rules: &[Rule], workdir: &std::path::Path) -> Vec<String> {
+pub fn validate_disk_requirements(rules: &[&Rule], workdir: &std::path::Path) -> Vec<String> {
     let mut warnings = Vec::new();
     let available_mb = check_available_disk_mb(workdir).unwrap_or(u64::MAX);
 
-    for rule in rules {
+    for rule in rules.iter().copied() {
         if let Some(ref disk) = rule.resources.disk
             && let Some(req_mb) = parse_memory_mb(disk)
             && req_mb > available_mb
@@ -1591,12 +1595,16 @@ impl ResourcePool {
         for (group_name, &required) in &rule.resources.groups {
             let available = self.groups.get(group_name).copied().unwrap_or(0);
             if available < required {
-                let holders: Vec<&str> = self
+                let mut holders: Vec<&str> = self
                     .active
                     .iter()
                     .filter(|(_, r)| r.groups.get(group_name).copied().unwrap_or(0) > 0)
                     .map(|(name, _)| name.as_str())
                     .collect();
+                // HashMap order would render a different holder list every
+                // run — sort like `running_rules()` does (running_rules sorts;
+                // the old test even pinned the NONdeterminism in).
+                holders.sort_unstable();
                 let holder_note = if holders.is_empty() {
                     "(none active)".to_string()
                 } else {
@@ -1638,13 +1646,15 @@ impl ResourcePool {
             .iter()
             .map(|(n, r)| (n.as_str(), r.threads))
             .collect();
-        by_threads.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        // Deterministic tie order: equal holders otherwise render in
+        // HashMap iteration order.
+        by_threads.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let mut by_memory: Vec<(&str, u64)> = self
             .active
             .iter()
             .map(|(n, r)| (n.as_str(), r.memory_mb))
             .collect();
-        by_memory.sort_by_key(|(_, m)| std::cmp::Reverse(*m));
+        by_memory.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let top_threads: Vec<String> = by_threads
             .iter()
             .take(3)

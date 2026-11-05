@@ -80,60 +80,6 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
     Err("Invalid credentials".into())
 }
 
-/// Validate session token. Returns user info if valid.
-pub fn validate_session(token: &str, sessions: &[Session]) -> Result<AuthMeResponse, String> {
-    if token.is_empty() {
-        return Ok(AuthMeResponse {
-            authenticated: false,
-            username: None,
-            role: None,
-        });
-    }
-
-    // Check if token exists in the session list and is not expired
-    let now = chrono::Utc::now().to_rfc3339();
-    for session in sessions {
-        if session.token == token {
-            if session.expires_at > now {
-                // Map user_id to username — in production this queries the DB
-                let username = if session.user_id.is_empty() {
-                    "user".to_string()
-                } else {
-                    session.user_id.clone()
-                };
-                return Ok(AuthMeResponse {
-                    authenticated: true,
-                    username: Some(username),
-                    role: Some("user".into()),
-                });
-            }
-            // Token expired
-            return Ok(AuthMeResponse {
-                authenticated: false,
-                username: None,
-                role: None,
-            });
-        }
-    }
-
-    // Token not found in sessions — authentication failed.
-    // In production, every token MUST be in the sessions table.
-    Ok(AuthMeResponse {
-        authenticated: false,
-        username: None,
-        role: None,
-    })
-}
-
-/// Check if user has required role.
-pub fn check_role(role: &str, required: &str) -> bool {
-    match required {
-        "admin" => role == "admin",
-        "user" => role == "admin" || role == "user",
-        _ => true, // viewer can access anything viewer-level
-    }
-}
-
 /// Get license status from existing OXO_FLOW_CONFIG.
 pub fn license_status() -> LicenseResponse {
     LicenseResponse {
@@ -233,31 +179,32 @@ pub fn oauth_config_from_env(
 
 /// Persist a pending OAuth CSRF state so the callback can verify it.
 pub async fn store_pending_state(state: &str) -> Result<(), String> {
-    let pool =
-        crate::infra::db::sqlite::try_pool().map_err(|_| "Database unavailable".to_string())?;
+    let backend =
+        crate::infra::db::global_backend().ok_or_else(|| "Database unavailable".to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
-        .bind(state)
-        .bind(now)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to store OAuth state: {e}"))?;
-    Ok(())
+    backend.store_oauth_state(state, &now).await
 }
 
-/// Verify a callback's CSRF state was issued by this server and consume it
-/// (single use).
+/// A CSRF state is short-lived by design: the daily cleanup prunes the
+/// table, but without a consumption-time freshness check a leaked state
+/// would stay replayable for up to that full 24h window.
+const OAUTH_STATE_TTL_MINS: i64 = 10;
+
+/// Verify a callback's CSRF state was issued by this server, is fresh, and
+/// consume it (single use).
 pub async fn verify_and_consume_state(state: &str) -> Result<(), String> {
-    let pool =
-        crate::infra::db::sqlite::try_pool().map_err(|_| "Database unavailable".to_string())?;
-    let deleted = sqlx::query("DELETE FROM oauth_states WHERE state = ?")
-        .bind(state)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("State verification failed: {e}"))?
-        .rows_affected();
-    if deleted == 0 {
+    let backend =
+        crate::infra::db::global_backend().ok_or_else(|| "Database unavailable".to_string())?;
+    let created = backend.consume_oauth_state(state).await?;
+    let Some(created) = created else {
         return Err("Invalid or expired CSRF state".into());
+    };
+    let created_ts = chrono::DateTime::parse_from_rfc3339(&created)
+        .map_err(|_| "Invalid or expired CSRF state".to_string())?;
+    if chrono::Utc::now() - created_ts.with_timezone(&chrono::Utc)
+        > chrono::Duration::minutes(OAUTH_STATE_TTL_MINS)
+    {
+        return Err("OAuth state expired — restart the sign-in flow".into());
     }
     Ok(())
 }
@@ -323,62 +270,20 @@ pub async fn handle_oauth_callback(
 /// role resolution reads the row by id and fails closed (#516), so a skipped
 /// insert meant every subsequent request answered 401.
 pub async fn ensure_oauth_user(
-    pool: &sqlx::SqlitePool,
+    backend: &dyn crate::infra::db::StorageBackend,
     oauth_user_id: &str,
     oauth_username: &str,
     fallback_username: &str,
 ) -> Result<String, String> {
-    if oauth_user_id.is_empty() || fallback_username.is_empty() {
-        return Err("OAuth identity is missing its unique id".into());
-    }
-
-    // Re-login: the row already exists, reuse it untouched.
-    let existing = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
-        .bind(oauth_user_id)
-        .fetch_optional(pool)
+    backend
+        .ensure_oauth_user(oauth_user_id, oauth_username, fallback_username)
         .await
-        .map_err(|e| format!("OAuth user lookup failed: {e}"))?;
-    if let Some(name) = existing {
-        return Ok(name);
-    }
-
-    let insert = |username: &str| {
-        sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) \
-             VALUES (?, ?, 'user', 'oauth', '', ?)",
-        )
-        .bind(oauth_user_id)
-        .bind(username)
-        .bind(chrono::Utc::now().to_rfc3339())
-    };
-
-    match insert(oauth_username).execute(pool).await {
-        Ok(_) => Ok(oauth_username.to_string()),
-        Err(first_err) => {
-            // Not a username collision (DB down, schema drift, …): surface it.
-            let retry =
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
-                    .bind(oauth_username)
-                    .fetch_one(pool)
-                    .await
-                    .map(|n| n > 0)
-                    .unwrap_or(false);
-            if !retry {
-                return Err(format!("Failed to create OAuth user record: {first_err}"));
-            }
-            // Collision on the display name: retry with the unique fallback.
-            insert(fallback_username)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to create OAuth user record: {e}"))?;
-            Ok(fallback_username.to_string())
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::db::StorageBackend;
 
     #[test]
     fn test_dev_mode_login_role_matches_account() {
@@ -436,57 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_session_empty() {
-        let sessions = vec![];
-        let result = validate_session("", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_validate_session_unknown_token_rejected() {
-        // Unknown tokens are rejected — no more dev-mode fallback
-        let sessions = vec![];
-        let result = validate_session("some-token", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_validate_session_valid_token() {
-        let sessions = vec![Session {
-            token: "valid-token".into(),
-            user_id: "admin".into(),
-            created_at: "2024-01-01T00:00:00Z".into(),
-            expires_at: "2099-12-31T23:59:59Z".into(),
-        }];
-        let result = validate_session("valid-token", &sessions).unwrap();
-        assert!(result.authenticated);
-        assert_eq!(result.username, Some("admin".into()));
-    }
-
-    #[test]
-    fn test_validate_session_expired_token() {
-        let sessions = vec![Session {
-            token: "expired-token".into(),
-            user_id: "admin".into(),
-            created_at: "2020-01-01T00:00:00Z".into(),
-            expires_at: "2020-01-02T00:00:00Z".into(),
-        }];
-        let result = validate_session("expired-token", &sessions).unwrap();
-        assert!(!result.authenticated);
-    }
-
-    #[test]
-    fn test_check_role_admin() {
-        assert!(check_role("admin", "admin"));
-        assert!(check_role("admin", "user"));
-        assert!(check_role("admin", "viewer"));
-        assert!(!check_role("user", "admin"));
-        assert!(check_role("user", "user"));
-        assert!(check_role("user", "viewer"));
-        assert!(check_role("viewer", "viewer"));
-    }
-
-    #[test]
     fn test_license_status() {
         let status = license_status();
         assert!(status.valid);
@@ -509,34 +363,32 @@ mod tests {
         assert!(!verify_db_password("wrong", &hash));
     }
 
-    /// A one-connection in-memory users table (per-connection `sqlite::memory:`).
-    async fn users_pool() -> sqlx::SqlitePool {
+    /// A one-connection in-memory backend (per-connection `sqlite::memory:`).
+    async fn users_backend() -> crate::infra::db::sqlite::SqliteBackend {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .expect("in-memory pool");
         sqlx::query(
-            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, \
-             role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, \
-             password_hash TEXT, created_at TEXT NOT NULL)",
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,              role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT,              password_hash TEXT, created_at TEXT NOT NULL)",
         )
         .execute(&pool)
         .await
         .unwrap();
-        pool
+        crate::infra::db::sqlite::SqliteBackend::from_pool(pool)
     }
 
     #[tokio::test]
     async fn test_ensure_oauth_user_creates_and_reuses_row() {
-        let pool = users_pool().await;
-        let name = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Alice", "orcid:id-A")
+        let backend = users_backend().await;
+        let name = ensure_oauth_user(&backend, "oauth:orcid:id-A", "orcid:Alice", "orcid:id-A")
             .await
             .expect("first insert succeeds");
         assert_eq!(name, "orcid:Alice");
 
         // Re-login: same id, untouched — even with a different display name.
-        let name = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Renamed", "orcid:id-A")
+        let name = ensure_oauth_user(&backend, "oauth:orcid:id-A", "orcid:Renamed", "orcid:id-A")
             .await
             .expect("re-login reuses the existing row");
         assert_eq!(name, "orcid:Alice");
@@ -546,11 +398,12 @@ mod tests {
     async fn test_ensure_oauth_user_same_display_name_both_rows_exist() {
         // The reported bug: two provider accounts sharing a given name. Both
         // must end up with a users row; neither may be silently skipped.
-        let pool = users_pool().await;
-        let first = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Wei", "orcid:id-A")
+        let backend = users_backend().await;
+        let first = ensure_oauth_user(&backend, "oauth:orcid:id-A", "orcid:Wei", "orcid:id-A")
             .await
             .expect("first account inserts");
-        let second = ensure_oauth_user(&pool, "oauth:orcid:id-B", "orcid:Wei", "orcid:id-B")
+        assert_eq!(first, "orcid:Wei");
+        let second = ensure_oauth_user(&backend, "oauth:orcid:id-B", "orcid:Wei", "orcid:id-B")
             .await
             .expect("second account falls back to its unique id");
         assert_eq!(first, "orcid:Wei");
@@ -562,7 +415,7 @@ mod tests {
         let rows = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM users WHERE username = 'orcid:Wei' OR username = 'orcid:id-B'",
         )
-        .fetch_one(&pool)
+        .fetch_one(backend.inner_pool())
         .await
         .unwrap();
         assert_eq!(rows, 2, "both identities have a persisted row");
@@ -570,8 +423,47 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_oauth_user_missing_id_rejected() {
-        let pool = users_pool().await;
-        let result = ensure_oauth_user(&pool, "", "orcid:Wei", "orcid:").await;
+        let backend = users_backend().await;
+        let result = ensure_oauth_user(&backend, "", "orcid:Wei", "orcid:").await;
         assert!(result.is_err(), "empty id must fail closed");
+    }
+
+    #[tokio::test]
+    async fn test_oauth_state_single_use_and_freshness() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        sqlx::query("CREATE TABLE oauth_states (state TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let backend = std::sync::Arc::new(crate::infra::db::sqlite::SqliteBackend::from_pool(pool));
+        crate::infra::db::set_global_backend(backend.clone());
+
+        store_pending_state("state-fresh")
+            .await
+            .expect("store fresh");
+        verify_and_consume_state("state-fresh")
+            .await
+            .expect("a fresh state verifies");
+        // Single use: the row is gone.
+        assert!(
+            verify_and_consume_state("state-fresh").await.is_err(),
+            "a consumed state must not verify twice"
+        );
+
+        // A leaked state does not stay replayable until the daily purge:
+        // consumption rejects anything older than the TTL.
+        let stale_time = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+        backend
+            .store_oauth_state("state-stale", &stale_time)
+            .await
+            .unwrap();
+        let err = verify_and_consume_state("state-stale")
+            .await
+            .expect_err("a stale state must be rejected");
+        assert!(err.contains("expired"), "unexpected error: {err}");
     }
 }

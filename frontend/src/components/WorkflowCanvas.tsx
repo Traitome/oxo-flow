@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -18,9 +18,10 @@ import {
 } from '@xyflow/react';
 import { graphStratify, sugiyama } from 'd3-dag';
 import '@xyflow/react/dist/style.css';
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, TrainTrack } from 'lucide-react';
 import type { DagJson } from '../api/types';
 import { useI18n } from '../context/I18n';
+import { MetroCanvas } from './MetroCanvas';
 
 // ── Node card: a terminal snippet, because the subject's vernacular is code ──
 
@@ -178,6 +179,7 @@ export default function WorkflowCanvas({
   context = 'editor',
 }: WorkflowCanvasProps) {
   const { t } = useI18n();
+  const [viewMode, setViewMode] = useState<'standard' | 'metro'>('standard');
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RuleNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastNodeSet = useRef('');
@@ -340,6 +342,9 @@ export default function WorkflowCanvas({
 
   const handleDeleteKey = useCallback(
     (event: KeyboardEvent) => {
+      // Metro view keeps its own selection state; acting on the standard
+      // view's stale selected set here deleted nodes the user could not see.
+      if (viewMode !== 'standard') return;
       if (!editable || (event.key !== 'Delete' && event.key !== 'Backspace')) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
@@ -355,7 +360,7 @@ export default function WorkflowCanvas({
         if (selectedEdges.length > 0) onDisconnectRules?.(selectedEdges);
       }
     },
-    [editable, nodes, edges, onRemoveRules, onDisconnectRules],
+    [viewMode, editable, nodes, edges, onRemoveRules, onDisconnectRules],
   );
 
   useEffect(() => {
@@ -372,6 +377,34 @@ export default function WorkflowCanvas({
 
   if (!dag || dag.nodes.length === 0) {
     return <div className="empty-state">{t('canvas.empty')}</div>;
+  }
+
+  if (viewMode === 'metro') {
+    return (
+      <div className="workflow-canvas" data-editable={editable} style={{ position: 'relative' }}>
+        <MetroCanvas
+          dag={dag}
+          editable={editable}
+          onEditRule={onEditRule}
+          onConnectRules={onConnectRules}
+          statuses={statusById}
+        />
+        <div
+          className="rf-metro-view-toggle"
+          style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: 6 }}
+        >
+          <button
+            type="button"
+            className="rf-metro-btn"
+            style={{ background: 'var(--color-primary, #4F7DF9)', color: '#ffffff' }}
+            onClick={() => setViewMode('standard')}
+            title={t('canvas.dagViewTitle')}
+          >
+            <LayoutGrid size={14} /> {t('canvas.dagView')}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -407,11 +440,24 @@ export default function WorkflowCanvas({
             editor-canvas). minZoom 0.5 keeps large DAGs readable instead. */}
         {!editable && <MiniMap pannable zoomable className="rf-minimap" />}
       </ReactFlow>
-      {context === 'editor' && (
-        <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>
-          <LayoutGrid size={14} /> {t('canvas.autoLayout')}
+      <div
+        className="rf-metro-view-toggle"
+        style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: 6 }}
+      >
+        <button
+          type="button"
+          className="rf-metro-btn"
+          onClick={() => setViewMode('metro')}
+          title={t('canvas.metroViewTitle')}
+        >
+          <TrainTrack size={14} /> {t('canvas.metroView')}
         </button>
-      )}
+        {context === 'editor' && (
+          <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>
+            <LayoutGrid size={14} /> {t('canvas.autoLayout')}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

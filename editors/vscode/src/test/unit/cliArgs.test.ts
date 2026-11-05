@@ -38,8 +38,14 @@ test("runArgs maps jobs/keepGoing/targets/extraArgs in stable order", () => {
   );
 });
 
-test("dryRunArgs shares the run surface without --json (terminal view)", () => {
-  assert.deepEqual(dryRunArgs({ file: "p.oxoflow", jobs: 2 }), ["dry-run", "p.oxoflow", "-j", "2"]);
+test("dryRunArgs shares run's targets/extraArgs surface without -j/-k (CLI dry-run takes neither)", () => {
+  assert.deepEqual(dryRunArgs({ file: "p.oxoflow", jobs: 2 }), ["dry-run", "p.oxoflow"]);
+  assert.deepEqual(dryRunArgs({ file: "p.oxoflow", targets: ["align"] }), [
+    "dry-run",
+    "p.oxoflow",
+    "-t",
+    "align",
+  ]);
 });
 
 test("graph/resume/template/format/schema args", () => {

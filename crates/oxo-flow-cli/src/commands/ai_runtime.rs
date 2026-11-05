@@ -36,7 +36,7 @@ impl AiRuntime {
         let provider = super::ai_template::resolve_ai_provider()?;
 
         // Resolve config chain
-        let global = load_global_config();
+        let global = AiConfig::from_global_file();
         let project = project_dir.and_then(AiConfig::from_project_file);
         let workflow = workflow_path.and_then(|p| {
             std::fs::read_to_string(p).ok().and_then(|c| {
@@ -77,11 +77,9 @@ impl AiRuntime {
                 tool_registry.register(Box::new(builtin::ReadFileTool::new()));
             }
         }
-        tool_registry.register(Box::new(builtin::FetchUrlTool::new()));
-        tool_registry.register(Box::new(builtin::LookupTool::new()));
-        tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
-        tool_registry.register(Box::new(builtin::LookupPipelineTool::new()));
-        tool_registry.register(Box::new(builtin::LookupDocTool::new()));
+        // Knowledge tools come from the single canonical registry
+        // (oxo-flow-ai); CLI extras (read_file, MCP bridges) sit on top.
+        tool_registry.merge(builtin::knowledge_tool_registry());
 
         let skill_context = activated_skill_context(project, &config);
 
@@ -106,8 +104,17 @@ impl AiRuntime {
                 );
                 continue;
             };
-            match oxo_flow_ai::mcp::McpHttpClient::new(url) {
-                Ok(client) => {
+            // McpHttpClient::new screens the endpoint with a blocking
+            // getaddrinfo hop — run it on the blocking pool so skill
+            // loading never stalls an async worker on DNS (#268-family
+            // discipline; the redirect loop already screens asynchronously).
+            let screen_url = url.clone();
+            match tokio::task::spawn_blocking(move || {
+                oxo_flow_ai::mcp::McpHttpClient::new(&screen_url)
+            })
+            .await
+            {
+                Ok(Ok(client)) => {
                     match oxo_flow_ai::mcp::McpToolBridge::discover(std::sync::Arc::new(client))
                         .await
                     {
@@ -128,6 +135,9 @@ impl AiRuntime {
                             skill.name
                         ),
                     }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("skill '{}': MCP endpoint {url} rejected: {e}", skill.name)
                 }
                 Err(e) => tracing::warn!("skill '{}': {e}", skill.name),
             }
@@ -150,21 +160,6 @@ impl AiRuntime {
             skill_context,
         })
     }
-}
-
-fn load_global_config() -> Option<AiConfig> {
-    let path = oxo_flow_ai::provider::ai_config_path();
-    let content = std::fs::read_to_string(&path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let provider_str = json["provider"].as_str().unwrap_or("");
-    let provider: oxo_flow_ai::provider::ProviderKind = provider_str.parse().ok()?;
-    Some(AiConfig {
-        enabled: true,
-        provider,
-        model: json["model"].as_str().map(String::from),
-        api_url: json["api_url"].as_str().map(String::from),
-        ..Default::default()
-    })
 }
 
 /// Discover user-defined skills (home + project level) and return the
@@ -209,5 +204,28 @@ pub fn prompt_tool_approval_blocking(tool_name: &str, arguments: &str) -> bool {
         trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drift guard: the CLI runtime must register at least the canonical
+    /// embedded-knowledge tool set from oxo-flow-ai (single source of
+    /// truth). CLI extras (scoped read_file, MCP bridges) come on top.
+    #[test]
+    fn cli_registry_covers_knowledge_tools() {
+        let base = oxo_flow_ai::tools::builtin::knowledge_tool_registry();
+        let names = base.names();
+        let mut merged = ToolRegistry::new();
+        merged.merge(base);
+        for name in names {
+            assert!(
+                merged.get(&name).is_some(),
+                "CLI tool registry lost knowledge tool '{name}' — re-sync with \
+                 oxo_flow_ai::tools::builtin::knowledge_tool_registry"
+            );
+        }
     }
 }

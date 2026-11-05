@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -54,6 +55,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
 
 # USD per 1M tokens. Defaults mirror the repo's own cost constant
 # (crates/oxo-flow-ai/src/types.rs: deepseek-v4-pro 0.28 in / 1.10 out,
@@ -117,19 +121,11 @@ def load_credentials() -> dict[str, str]:
 
 
 def find_binary() -> str:
-    for cand in (REPO / "target/debug/oxo-flow", "oxo-flow"):
-        p = Path(cand)
-        if p.is_file() or which(cand):
-            return str(p)
-    sys.exit("oxo-flow binary not found (build with: cargo build -p oxo-flow-cli)")
-
-
-def which(name: str) -> str | None:
-    for d in os.environ.get("PATH", "").split(os.pathsep):
-        p = Path(d) / name
-        if p.is_file() and os.access(p, os.X_OK):
-            return str(p)
-    return None
+    """Shared discovery (common.find_engine_binary); kept as an alias for rejudge.py."""
+    try:
+        return common.find_engine_binary()
+    except FileNotFoundError as exc:
+        sys.exit(str(exc))
 
 
 def extract_toml(text: str) -> str | None:
@@ -322,10 +318,82 @@ def cost_usd(model: str, tin: int, tout: int) -> float:
     return tin * pin / 1e6 + tout * pout / 1e6
 
 
+def aggregate_report(runs: list[dict], profile: str, stamp: str, binary: str) -> str:
+    """Render the campaign report.md from result rows.
+
+    Shared by the live campaign and `--report-only` so a re-aggregation can
+    never drift from the run-time one. Rows whose generation timed out carry
+    `wall_s = None`; they count as 0 s here instead of poisoning the sum.
+    """
+    lines = ["# AI generation benchmark report", "",
+             f"Stamp: `{stamp}` · binary: `{binary}` · success = all three gates exit 0", ""]
+    groups: dict[tuple, list] = {}
+    for r in runs:
+        groups.setdefault((r["model"], r["variant"]), []).append(r)
+    for (model, variant), rs in sorted(groups.items()):
+        n = len(rs)
+        gen_n = sum(r["generated"] for r in rs)
+        v = sum(r["gates"].get("validate", {}).get("pass", False) for r in rs)
+        d = sum(r["gates"].get("dry-run", {}).get("pass", False) for r in rs)
+        l = sum(r["gates"].get("lint", {}).get("pass", False) for r in rs)
+        allp = sum(r["all_gates_pass"] for r in rs)
+        fid = sum(r["fidelity_pass"] for r in rs)
+        ok = sum(r["success"] for r in rs)
+        tok_in = sum(r["input_tokens"] for r in rs)
+        tok_out = sum(r["output_tokens"] for r in rs)
+        wall = [r.get("wall_s") or 0 for r in rs]
+        cost = sum(r["est_cost_usd"] for r in rs)
+        lines += [
+            f"## {model} / {variant} / profile={profile}", "",
+            f"- runs: {n}, generated: {gen_n}",
+            f"- gate pass@1: validate {v}/{n}, dry-run {d}/{n}, lint {l}/{n}, "
+            f"**all-gates {allp}/{n}** ({allp / n:.0%})",
+            f"- fidelity (named tools present): {fid}/{n} — "
+            f"**success (gates ∧ fidelity) {ok}/{n}** ({ok / n:.0%})",
+            f"- tokens: in {tok_in:,} / out {tok_out:,} "
+            f"(mean {tok_in // max(n, 1):,}/{tok_out // max(n, 1):,} per run)",
+            f"- est. cost: ${cost:.4f} (price table {PRICE_PER_MTOK.get(model, PRICE_PER_MTOK['*'])}/Mtok)",
+            f"- wall: mean {sum(wall) / max(n, 1):.0f}s, max {max(wall or [0]):.0f}s",
+            "",
+            "| tier | success (gates ∧ fidelity) | runs |",
+            "|---|---|---|",
+        ]
+        for tier in ("easy", "medium", "hard"):
+            trs = [r for r in rs if r["tier"] == tier]
+            if trs:
+                tp = sum(r["success"] for r in trs)
+                lines.append(f"| {tier} | {tp}/{len(trs)} | {len(trs)} |")
+        vague = [r for r in rs if r.get("vague")]
+        if vague:
+            vp = sum(r["success"] for r in vague)
+            lines.append(f"| vague | {vp}/{len(vague)} | {len(vague)} |")
+        lines += [
+            "",
+            "| intent | tier | gates | fidelity | tok in | tok out | wall s | note |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for r in rs:
+            note = r.get("error") or ""
+            if r["missing_required_tools"]:
+                note = (note + " missing:" + ",".join(r["missing_required_tools"])).strip()
+            lines.append(
+                f"| {r['intent_id']} | {r['tier']} | "
+                f"{'✅' if r['all_gates_pass'] else '❌'} | "
+                f"{'✅' if r['fidelity_pass'] else '❌'} | "
+                f"{r['input_tokens']:,} | {r['output_tokens']:,} | "
+                f"{r.get('wall_s', '')} | {note[:60]} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--intents", default=str(Path(__file__).parent / "intents.json"))
     ap.add_argument("--out", default=None, help="results directory (default: results/<stamp>)")
+    ap.add_argument("--report-only", default=None, metavar="RESULTS_JSON",
+                    help="rebuild report.md from an existing results.json "
+                         "without calling any provider (reuses the campaign "
+                         "aggregation; nothing else runs)")
     ap.add_argument("--variants", default="naive-prompt,cli")
     ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
@@ -349,9 +417,24 @@ def main() -> None:
     ap.add_argument("--sleep", type=float, default=1.0, help="pause between runs (s)")
     args = ap.parse_args()
 
+    if args.report_only:
+        # Re-aggregate an existing campaign without a provider call: repairs
+        # a report lost to a mid-run crash or left stale by rejudge.py.
+        src = Path(args.report_only)
+        payload = json.loads(src.read_text())
+        dst = src.parent / "report.md"
+        dst.write_text(aggregate_report(
+            payload["runs"],
+            profile=payload.get("profile", "compact"),
+            stamp=payload.get("stamp", src.parent.name),
+            binary=payload.get("binary", "unknown"),
+        ))
+        print(f"report rebuilt: {dst}")
+        return
+
     creds = load_credentials()
     binary = args.binary or find_binary()
-    if not (Path(binary).is_file() or which(binary)):
+    if not (Path(binary).is_file() or shutil.which(binary)):
         sys.exit(f"--binary {binary} does not exist")
     default_model = creds["ANTHROPIC_MODEL"]
     models = [m for m in args.models.split(",") if m] or [default_model]
@@ -448,66 +531,8 @@ def main() -> None:
         "runs": runs,
     }, indent=2))
 
-    # Aggregate report
-    lines = ["# AI generation benchmark report", "",
-             f"Stamp: `{stamp}` · binary: `{binary}` · success = all three gates exit 0", ""]
-    groups: dict[tuple, list] = {}
-    for r in runs:
-        groups.setdefault((r["model"], r["variant"]), []).append(r)
-    for (model, variant), rs in sorted(groups.items()):
-        n = len(rs)
-        gen_n = sum(r["generated"] for r in rs)
-        v = sum(r["gates"].get("validate", {}).get("pass", False) for r in rs)
-        d = sum(r["gates"].get("dry-run", {}).get("pass", False) for r in rs)
-        l = sum(r["gates"].get("lint", {}).get("pass", False) for r in rs)
-        allp = sum(r["all_gates_pass"] for r in rs)
-        fid = sum(r["fidelity_pass"] for r in rs)
-        ok = sum(r["success"] for r in rs)
-        tok_in = sum(r["input_tokens"] for r in rs)
-        tok_out = sum(r["output_tokens"] for r in rs)
-        wall = [r.get("wall_s", 0) for r in rs]
-        cost = sum(r["est_cost_usd"] for r in rs)
-        lines += [
-            f"## {model} / {variant} / profile={args.profile}", "",
-            f"- runs: {n}, generated: {gen_n}",
-            f"- gate pass@1: validate {v}/{n}, dry-run {d}/{n}, lint {l}/{n}, "
-            f"**all-gates {allp}/{n}** ({allp / n:.0%})",
-            f"- fidelity (named tools present): {fid}/{n} — "
-            f"**success (gates ∧ fidelity) {ok}/{n}** ({ok / n:.0%})",
-            f"- tokens: in {tok_in:,} / out {tok_out:,} "
-            f"(mean {tok_in // max(n, 1):,}/{tok_out // max(n, 1):,} per run)",
-            f"- est. cost: ${cost:.4f} (price table {PRICE_PER_MTOK.get(model, PRICE_PER_MTOK['*'])}/Mtok)",
-            f"- wall: mean {sum(wall) / max(n, 1):.0f}s, max {max(wall or [0]):.0f}s",
-            "",
-            "| tier | success (gates ∧ fidelity) | runs |",
-            "|---|---|---|",
-        ]
-        for tier in ("easy", "medium", "hard"):
-            trs = [r for r in rs if r["tier"] == tier]
-            if trs:
-                tp = sum(r["success"] for r in trs)
-                lines.append(f"| {tier} | {tp}/{len(trs)} | {len(trs)} |")
-        vague = [r for r in rs if r.get("vague")]
-        if vague:
-            vp = sum(r["success"] for r in vague)
-            lines.append(f"| vague | {vp}/{len(vague)} | {len(vague)} |")
-        lines += [
-            "",
-            "| intent | tier | gates | fidelity | tok in | tok out | wall s | note |",
-            "|---|---|---|---|---|---|---|---|",
-        ]
-        for r in rs:
-            note = r.get("error") or ""
-            if r["missing_required_tools"]:
-                note = (note + " missing:" + ",".join(r["missing_required_tools"])).strip()
-            lines.append(
-                f"| {r['intent_id']} | {r['tier']} | "
-                f"{'✅' if r['all_gates_pass'] else '❌'} | "
-                f"{'✅' if r['fidelity_pass'] else '❌'} | "
-                f"{r['input_tokens']:,} | {r['output_tokens']:,} | "
-                f"{r.get('wall_s', '')} | {note[:60]} |")
-        lines.append("")
-    (out_dir / "report.md").write_text("\n".join(lines))
+    (out_dir / "report.md").write_text(
+        aggregate_report(runs, profile=args.profile, stamp=stamp, binary=binary))
     print(f"\ndone: {out_dir / 'report.md'}")
 
 

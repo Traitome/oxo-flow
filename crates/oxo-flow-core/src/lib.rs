@@ -46,11 +46,13 @@ pub mod config_impact;
 pub mod container;
 pub mod dag;
 pub mod deep_check;
+pub mod diagnostics;
 pub mod environment;
 pub mod error;
 pub mod executor;
 pub mod format;
 pub mod git;
+pub mod hardware;
 pub mod plugin;
 pub mod readiness;
 pub mod reentry;
@@ -65,6 +67,8 @@ pub mod scientific_preflight;
 pub mod software_versions;
 pub mod stage;
 pub mod storage;
+pub mod transpile;
+pub mod types;
 pub mod webhook;
 pub mod wildcard;
 
@@ -77,11 +81,6 @@ pub use config::{
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
 pub use executor::{CheckpointState, ExecutionEvent, JobStatus};
-// Re-export result types
-pub use result::{
-    FastQcExtractor, GenericTextExtractor, MultiQcExtractor, OutputRecord, ResultExtractor,
-    ResultExtractorRegistry, scan_run_outputs,
-};
 pub use rule::Rule;
 pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};

@@ -3,7 +3,9 @@
 use super::*;
 
 /// Long-form names of `oxo-flow run` flags (plus clap's global --help/
-/// --version). Keep in sync with the `Run` variant in main.rs.
+/// --version), derived from the `Run` subcommand definition itself so the
+/// list cannot drift from main.rs — the hand-maintained copy had already
+/// missed `--allow-protected-drift` (#935).
 ///
 /// clap's trailing `config_overrides` positional (`allow_hyphen_values`)
 /// cannot distinguish `--json` the run flag from `--json` a hyphen-value
@@ -11,53 +13,80 @@ use super::*;
 /// in the override list (issue #71). Matching them here turns a confusing
 /// "invalid config flag" error — or a silently wrong override — into
 /// actionable guidance.
-pub(crate) const RUN_FLAG_NAMES: &[&str] = &[
-    "jobs",
-    "keep-going",
-    "workdir",
-    "target",
-    "module",
-    "retry",
-    "timeout",
-    "log-file",
-    "resume-failed",
-    "profile",
-    "max-threads",
-    "max-memory",
-    "max-submitted",
-    "skip-env-setup",
-    "skip-ref-build",
-    "cache-dir",
-    "provenance",
-    "bundle",
-    "yes",
-    "arg",
-    "ai-recover",
-    "ai-max-retries",
-    "samples",
-    "rerun",
-    "no-report-snapshot",
-    "background",
-    "json",
-    "quiet",
-    "verbose",
-    "no-color",
-    "help",
-    "version",
-];
+pub(crate) fn run_long_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| run_subcommand_flags().0)
+}
 
-/// Short-form run flag names (same contract as [`RUN_FLAG_NAMES`]).
-pub(crate) const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
+/// Short-form run flag names (same contract as [`run_long_flags`]).
+pub(crate) fn run_short_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| run_subcommand_flags().1)
+}
 
-/// Run flags that `dry-run` also accepts as real command flags (issue
-/// #441: `--cache-dir` was added for run→dry-run transcription parity).
-/// When the swallowed-flag parser runs under `dry-run`, these names read
-/// as a misordered command flag, not "not supported".
-pub(crate) const DRY_RUN_SHARED_FLAGS: &[&str] = &["cache-dir"];
+/// One clap introspection pass backing both flag sets. `build()` first so
+/// clap's implicit `--help`/`--version` flags are part of the result.
+fn run_subcommand_flags() -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    use clap::CommandFactory;
+    let mut cmd = <crate::Cli as CommandFactory>::command();
+    cmd.build();
+    let run = cmd
+        .find_subcommand("run")
+        .expect("the Cli enum must keep a `run` subcommand");
+    let mut longs: std::collections::BTreeSet<String> = run
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .map(String::from)
+        .collect();
+    // clap adds --version/-V only to the top-level command; subcommands
+    // inherit it at parse time, so keep both classifiable here.
+    longs.insert("version".to_string());
+    let mut shorts = run
+        .get_arguments()
+        .filter_map(|arg| arg.get_short())
+        .map(String::from)
+        .collect::<std::collections::BTreeSet<String>>();
+    shorts.insert("V".to_string());
+    (longs, shorts)
+}
+
+/// Run flags that `dry-run` also accepts as real command flags — derived
+/// by intersecting the two clap subcommand definitions so the set cannot
+/// drift from main.rs (the hand-maintained copy had already fallen behind:
+/// it claimed `--profile`/`--samples` were run-only while dry-run accepts
+/// both). When the swallowed-flag parser runs under `dry-run`, these names
+/// read as a misordered command flag, not "not supported".
+pub(crate) fn dry_run_shared_flags() -> &'static std::collections::BTreeSet<String> {
+    static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| {
+        use clap::CommandFactory;
+        let mut cmd = <crate::Cli as CommandFactory>::command();
+        cmd.build();
+        let longs_of = |name: &str| -> std::collections::BTreeSet<String> {
+            cmd.find_subcommand(name)
+                .map(|sub| {
+                    sub.get_arguments()
+                        .filter_map(|arg| arg.get_long())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let run = longs_of("run");
+        let dry = longs_of("dry-run");
+        run.intersection(&dry).cloned().collect()
+    })
+}
 
 /// Flags removed from `run`, mapped to their replacement.
 ///
-/// They must NOT live in [`RUN_FLAG_NAMES`]: that list names real command
+/// They must NOT live in [`run_long_flags`]: that list names real command
 /// flags, and a workflow declaring a config key with one of these names
 /// (`sample = {...}`) would have its `--sample VALUE` override rejected as a
 /// command flag (audit finding). Reaching the unknown-argument path instead
@@ -256,14 +285,14 @@ pub(crate) fn parse_cli_overrides(
         let swallowed_flag = arg_str
             .strip_prefix("--")
             .map(|flag| flag.split('=').next().unwrap_or(flag))
-            .filter(|name| RUN_FLAG_NAMES.contains(name))
+            .filter(|name| run_long_flags().contains(*name))
             .map(|name| format!("--{name}"))
             .or_else(|| {
                 arg_str
                     .strip_prefix('-')
                     .filter(|rest| !rest.starts_with('-'))
                     .map(|flag| flag.split('=').next().unwrap_or(flag))
-                    .filter(|name| RUN_SHORT_FLAGS.contains(name))
+                    .filter(|name| run_short_flags().contains(*name))
                     .map(|name| format!("-{name}"))
             });
         if let Some(flag) = swallowed_flag {
@@ -273,8 +302,8 @@ pub(crate) fn parse_cli_overrides(
             // command does not support at all, so the message is
             // command-aware.
             let flag_name = flag.trim_start_matches('-');
-            let is_run_flag = RUN_FLAG_NAMES.contains(&flag_name)
-                || (flag_name.len() == 2 && RUN_SHORT_FLAGS.contains(&&flag_name[1..]));
+            let is_run_flag = run_long_flags().contains(flag_name)
+                || (flag_name.len() == 2 && run_short_flags().contains(&flag_name[1..]));
             let hint = if command == "run" {
                 format!(
                     "'{flag}' is a command flag, not a config override.\n  \
@@ -287,7 +316,7 @@ pub(crate) fn parse_cli_overrides(
                 // Issue #441: dry-run shares some run flags for real
                 // (`--cache-dir`) — for those, a swallowed token is a
                 // misordered command flag, not an unsupported one.
-                let shared = command == "dry-run" && DRY_RUN_SHARED_FLAGS.contains(&flag_name);
+                let shared = command == "dry-run" && dry_run_shared_flags().contains(flag_name);
                 if shared {
                     format!(
                         "'{flag}' is a command flag, not a config override.\n  \
@@ -533,8 +562,31 @@ pub(crate) fn warn_unknown_override_keys(
     }
 }
 
-/// Nearest declared config key within a two-edit typo of `key` (the same
-/// heuristic `oxo-flow-core`'s unknown-key check applies).
+/// The CLI-override phase both `run` and `dry-run` apply in the same
+/// order (issue #77): parse `--KEY VALUE` tokens against the workflow's
+/// own `[config]` keys — unknown `--` tokens are rejected as typos
+/// instead of silently swallowed (issue #71) — merge them into the
+/// config, then warn when a key is neither declared nor referenced
+/// anywhere in the workflow. `config.config` covers both plain values
+/// (`key = "v"`) and declarative entries (`key = { default = ... }`);
+/// `config_meta` alone only sees the latter. `command` labels the parse
+/// errors ("run" / "dry-run").
+pub(crate) fn apply_cli_override_phase(
+    config: &mut WorkflowConfig,
+    workflow: &Path,
+    cli_args: Vec<String>,
+    command: &str,
+) -> anyhow::Result<()> {
+    let declared_config_keys: HashSet<String> = config.config.keys().cloned().collect();
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, command)?;
+    apply_cli_overrides(config, &cli_arg_values)?;
+    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, workflow);
+    Ok(())
+}
+
+/// Nearest declared config key within a two-edit typo of `key` — the same
+/// heuristic `oxo-flow-core`'s unknown-key check applies, via the core's
+/// exported `edit_distance` (shared, never retyped).
 pub(crate) fn closest_declared_key<'a>(
     key: &str,
     declared: &'a HashSet<String>,
@@ -544,33 +596,13 @@ pub(crate) fn closest_declared_key<'a>(
         .iter()
         .map(|candidate| {
             (
-                edit_distance(&lowered, &candidate.to_ascii_lowercase(), 2),
+                oxo_flow_core::config::edit_distance(&lowered, &candidate.to_ascii_lowercase(), 2),
                 candidate,
             )
         })
         .filter(|(distance, _)| *distance <= 2)
         .min_by_key(|(distance, candidate)| (*distance, candidate.as_str()))
         .map(|(_, candidate)| candidate.as_str())
-}
-
-/// Levenshtein edit distance, capped so unrelated pairs exit early.
-pub(crate) fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    if a.len().abs_diff(b.len()) > cap {
-        return cap + 1;
-    }
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 /// Nearest rule names to a typo'd `--rule` value (issue #862): a typo of an
@@ -587,7 +619,7 @@ pub(crate) fn nearest_rule_names(name: &str, candidates: &[&str], limit: usize) 
             if cand.starts_with(&lowered) || lowered.starts_with(&cand) {
                 Some((0, *candidate))
             } else {
-                let d = edit_distance(&lowered, &cand, 3);
+                let d = oxo_flow_core::config::edit_distance(&lowered, &cand, 3);
                 (d <= 3).then_some((d, *candidate))
             }
         })
@@ -598,4 +630,464 @@ pub(crate) fn nearest_rule_names(name: &str, candidates: &[&str], limit: usize) 
         .into_iter()
         .map(|(_, name)| name.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxo_flow_core::config::WorkflowConfig;
+    use std::collections::HashSet;
+
+    fn config_with_rules(rules_toml: &str) -> WorkflowConfig {
+        WorkflowConfig::parse(rules_toml).unwrap()
+    }
+
+    fn declared(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn derived_run_flags_track_the_clap_definition() {
+        // The hand-maintained copy of this list drifted: `run` gained
+        // --allow-protected-drift (#935) but the list was never updated,
+        // so the swallowed-flag guidance rejected it as an unknown
+        // argument. Derivation closes that sync point permanently.
+        let flags = run_long_flags();
+        for name in [
+            "jobs",
+            "arg",
+            "samples",
+            "allow-protected-drift",
+            "help",
+            "version",
+        ] {
+            assert!(flags.contains(name), "run flags must contain --{name}");
+        }
+        let shorts = run_short_flags();
+        for name in ["j", "k", "d", "t", "r", "h", "V"] {
+            assert!(shorts.contains(name), "run shorts must contain -{name}");
+        }
+    }
+
+    #[test]
+    fn removed_flags_stay_out_of_the_derived_run_flags() {
+        // `--sample` is retired (replacement --samples): it must not be
+        // classified as a live command flag, or a config key named
+        // `sample` would have its override rejected as a command flag.
+        assert!(!run_long_flags().contains("sample"));
+    }
+
+    #[test]
+    fn accepts_equals_forms_for_any_key() {
+        let map = parse_cli_overrides(
+            vec![
+                "threads=8".to_string(),
+                "--mode=protein".to_string(),
+                "--new_key=1".to_string(), // undeclared injection via '=' stays legal
+            ],
+            &declared(&["threads", "mode"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["threads"], "8");
+        assert_eq!(map["mode"], "protein");
+        assert_eq!(map["new_key"], "1");
+    }
+
+    #[test]
+    fn accepts_space_form_for_declared_keys() {
+        let map = parse_cli_overrides(
+            vec!["--min_quality".to_string(), "45".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["min_quality"], "45");
+    }
+
+    #[test]
+    fn canonicalizes_hyphen_spelled_override_to_declared_key() {
+        // issue #794: `--api-token=x` names the declared key `api_token`.
+        // Without canonicalization the override is stored under the dashed
+        // alias: the declared key keeps its default and the value bypasses
+        // sensitive masking in the checkpoint snapshot.
+        let map = parse_cli_overrides(
+            vec![
+                "--api-token=sk-OVERRIDE-123".to_string(),
+                "min-quality=45".to_string(),
+            ],
+            &declared(&["api_token", "min_quality"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["api_token"], "sk-OVERRIDE-123");
+        assert_eq!(map["min_quality"], "45");
+        assert!(!map.contains_key("api-token"), "{map:?}");
+        assert!(!map.contains_key("min-quality"), "{map:?}");
+    }
+
+    #[test]
+    fn canonicalizes_space_form_for_hyphen_spelled_declared_key() {
+        // issue #794: `--api-token VALUE` must be accepted when only the
+        // underscore-spelled `api_token` is declared.
+        let map = parse_cli_overrides(
+            vec!["--api-token".to_string(), "sk-OVERRIDE-123".to_string()],
+            &declared(&["api_token"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["api_token"], "sk-OVERRIDE-123");
+    }
+
+    #[test]
+    fn canonicalization_wins_on_exact_match_and_stays_silent_on_ambiguity() {
+        // Exact declared match beats normalization: `mode` declared plus
+        // `sub-mode` hyphen-spelled keeps its literal key.
+        let map = parse_cli_overrides(
+            vec!["--sub-mode=2".to_string()],
+            &declared(&["sub_mode"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["sub_mode"], "2");
+
+        // Two declared keys normalizing to the same form is pathological but
+        // must not crash or silently pick one: the literal spelling is kept
+        // and the usual undeclared-injection / unknown-token rules apply.
+        let map = parse_cli_overrides(
+            vec!["--a-b=1".to_string()],
+            &declared(&["a_b", "a-b"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["a-b"], "1");
+
+        // Nothing declared matches → literal key, issue #62 injection.
+        let map = parse_cli_overrides(
+            vec!["--totally-unknown=7".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["totally-unknown"], "7");
+
+        // Space form for an unresolvable dashed token stays rejected (#71).
+        let err = parse_cli_overrides(
+            vec!["--totally-unknown".to_string(), "7".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("unknown argument"), "{err:?}");
+    }
+
+    #[test]
+    fn apply_cli_overrides_puts_override_on_declared_sensitive_key() {
+        // issue #794 end-to-end at the apply layer: the canonicalized
+        // override must win over the declarative default (precedence
+        // CLI > default) instead of leaving the default in place.
+        let mut config = config_with_rules(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+api_token = { default = "sk-DEFAULT-abc", sensitive = true, help = "API token" }
+
+[[rules]]
+name = "r"
+shell = "true"
+"#,
+        );
+        let overrides = parse_cli_overrides(
+            vec!["--api-token=sk-OVERRIDE-123".to_string()],
+            &declared(&["api_token"]),
+            "run",
+        )
+        .unwrap();
+        apply_cli_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.config["api_token"].as_str(), Some("sk-OVERRIDE-123"));
+    }
+
+    #[test]
+    fn override_phase_wires_parse_apply_and_command_label() {
+        // Composition pin for apply_cli_override_phase: one call performs
+        // the parse → apply → warn sequence both run and dry-run rely on,
+        // and the command label reaches the parse errors (issue #77
+        // parity — the preview must reject what execution rejects).
+        let mut config = config_with_rules(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threads = { default = "4", help = "thread count" }
+
+[[rules]]
+name = "r"
+shell = "true"
+"#,
+        );
+        apply_cli_override_phase(
+            &mut config,
+            std::path::Path::new("t.oxoflow"),
+            vec!["--threads=8".to_string()],
+            "run",
+        )
+        .unwrap();
+        assert_eq!(config.config["threads"].as_str(), Some("8"));
+
+        let err = apply_cli_override_phase(
+            &mut config,
+            std::path::Path::new("t.oxoflow"),
+            vec!["--config".to_string(), "config/x.toml".to_string()],
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("dry-run"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_unknown_dash_token() {
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "config/x.toml".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown argument"), "{msg}");
+        assert!(msg.contains("--config"), "{msg}");
+        assert!(msg.contains("KEY=VALUE"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_known_flag_after_positional_with_flag_error() {
+        // issue #71 contract: real flags swallowed by the trailing
+        // positional get the "command flag, not a config override" error.
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--json".to_string()],
+            &declared(&["threads"]),
+            "run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("--json"), "{msg}");
+    }
+
+    #[test]
+    fn dry_run_treats_shared_run_flags_as_misordered_not_unsupported() {
+        // issue #441: dry-run accepts `--cache-dir` as a real flag now, so a
+        // swallowed one must read as misordered, not "not supported by
+        // dry-run".
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--cache-dir=x".to_string()],
+            &declared(&["threads"]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("must come before"), "{msg}");
+
+        // Other run flags stay "not supported" under dry-run.
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--provenance".to_string()],
+            &declared(&["threads"]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not supported by dry-run"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_space_form_for_undeclared_key_even_via_arg() {
+        // `--arg --config x` lands in the same override list.
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "x".to_string()],
+            &declared(&[]),
+            "run",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("unknown argument"));
+    }
+
+    #[test]
+    fn rejects_declared_key_without_value() {
+        let err = parse_cli_overrides(
+            vec!["--min_quality".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("invalid config flag"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_space_form_that_would_swallow_a_command_flag() {
+        // Audit finding: `dry-run wf --mode --json` consumed `--json` as the
+        // value of the declared key `mode`, so the run silently dropped its
+        // JSON output. The `=` form already errors; the space form must too.
+        let err = parse_cli_overrides(
+            vec!["--mode".to_string(), "--json".to_string()],
+            &declared(&["mode"]),
+            "run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("--mode"), "{msg}");
+        assert!(msg.contains("--json"), "{msg}");
+        assert!(msg.contains("--mode=<value>"), "{msg}");
+    }
+
+    #[test]
+    fn ai_attempts_defaults_to_one_and_never_zero() {
+        // Audit finding: the flag was accepted and discarded. It now bounds
+        // the recovery/analysis attempts; absent → the pre-flag single try,
+        // and an explicit 0 still means one attempt (never none).
+        assert_eq!(ai_attempts(None), 1);
+        assert_eq!(ai_attempts(Some(0)), 1);
+        assert_eq!(ai_attempts(Some(3)), 3);
+    }
+
+    #[test]
+    fn failure_exit_code_parses_recorded_reasons() {
+        // The failure summary format from the executor path.
+        assert_eq!(
+            failure_exit_code("exit code 3 — ERROR: unknown reference genome hg999"),
+            3
+        );
+        assert_eq!(failure_exit_code("exit code 137"), 137);
+        assert_eq!(failure_exit_code("exit code 137\nstderr: ..."), 137);
+        // Panics/aborts carry no code in the reason → keep -1.
+        assert_eq!(failure_exit_code("task panicked: boom"), -1);
+        assert_eq!(failure_exit_code(""), -1);
+        assert_eq!(failure_exit_code("exit code notanumber"), -1);
+    }
+
+    #[test]
+    fn closest_declared_key_names_a_typo_but_not_an_unrelated_key() {
+        // Audit finding: `samplename=world` was silently accepted.
+        let keys = declared(&["sample_name", "threads", "min_quality"]);
+        assert_eq!(
+            closest_declared_key("samplename", &keys),
+            Some("sample_name")
+        );
+        assert_eq!(closest_declared_key("threds", &keys), Some("threads"));
+        assert_eq!(closest_declared_key("completely_different", &keys), None);
+    }
+
+    #[test]
+    fn rejects_bare_non_key_value_positional() {
+        let err =
+            parse_cli_overrides(vec!["naked".to_string()], &declared(&[]), "run").unwrap_err();
+        assert!(format!("{err}").contains("KEY=VALUE"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_empty_value_overrides() {
+        // issue #430: `KEY=` and `--KEY ""` are legitimate derive-if-empty
+        // overrides (rnaseq gene_bed/chrom_sizes/transcript_fasta branch on
+        // `[ -n "{config.x}" ]`).
+        let map = parse_cli_overrides(
+            vec![
+                "gene_bed=".to_string(),
+                "--chrom_sizes".to_string(),
+                String::new(),
+                "--transcript_fasta=".to_string(),
+            ],
+            &declared(&["gene_bed", "chrom_sizes", "transcript_fasta"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["gene_bed"], "");
+        assert_eq!(map["chrom_sizes"], "");
+        assert_eq!(map["transcript_fasta"], "");
+    }
+
+    #[test]
+    fn rejects_empty_key_but_accepts_empty_value() {
+        // "=value" trims to an empty KEY — still a syntax error.
+        let err = parse_cli_overrides(vec!["=v".to_string()], &declared(&[]), "run").unwrap_err();
+        assert!(
+            format!("{err}").contains("KEY must be non-empty"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn dry_run_flag_error_is_command_aware() {
+        // issue #430: `-j` under dry-run is not a misordered run flag — the
+        // command does not support it at all. The message must say so
+        // instead of implying a flag-ordering problem.
+        let err = parse_cli_overrides(
+            vec!["-j".to_string(), "12".to_string()],
+            &declared(&[]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not supported by dry-run"), "{msg}");
+        assert!(
+            !msg.contains("command flag, not a config override"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn run_flag_error_under_run_keeps_ordering_hint() {
+        // `run` itself keeps the original ordering guidance (issue #71).
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "-j".to_string()],
+            &declared(&["threads"]),
+            "run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("before KEY=VALUE"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_token_under_dry_run_stays_command_aware() {
+        // An unknown --token under a non-run command points at the command,
+        // not at run's ordering rule.
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "x".to_string()],
+            &declared(&[]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown argument"), "{msg}");
+        assert!(msg.contains("dry-run"), "{msg}");
+    }
+
+    #[test]
+    fn dry_run_shared_flags_match_the_clap_intersection() {
+        // The shared set is the Run∩DryRun clap intersection; pin the
+        // members the hand-maintained copy got wrong (`--profile`/
+        // `--samples` were reported "not supported" while dry-run accepts
+        // both) and one genuinely run-only flag.
+        let shared = dry_run_shared_flags();
+        for flag in [
+            "profile",
+            "samples",
+            "target",
+            "cache-dir",
+            "module",
+            "skip-ref-build",
+        ] {
+            assert!(shared.contains(flag), "--{flag} must be shared: {shared:?}");
+        }
+        assert!(
+            !shared.contains("allow-protected-drift"),
+            "run-only flags must stay out: {shared:?}"
+        );
+    }
 }

@@ -181,7 +181,10 @@ See the [Git (GitHub)](#git-github) section below for more proxy options and SSH
 **Built-in fallback**: when oxo-flow clones a `github.com` repository itself
 (`oxo-flow pull gh:owner/repo`, `oxo-flow run gh:owner/repo[@ref]`), it tries
 the official URL first and then falls back to the `ghfast.top` and
-`gh-proxy.com` mirrors automatically — no configuration needed.
+`gh-proxy.com` mirrors automatically — no configuration needed. The same
+applies to community-reference fetches in the eval tooling: set
+`OXO_GITHUB_MIRROR=https://ghfast.top/` (trailing slash optional) to route
+them through a mirror; unset, they go to GitHub directly.
 
 For your own manual `git clone` commands, when HTTPS-based GitHub proxies
 (like `ghfast.top`) are slow or unreliable, try using SSH as a first

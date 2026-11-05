@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
@@ -119,16 +118,22 @@ pub fn clean_command(
             return Ok(());
         }
 
-        // Collect orphan chunk directories
-        let mut orphan_dirs: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&chunks_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    orphan_dirs.push(path);
-                }
-            }
-        }
+        // Collect orphan chunk directories. A failing read_dir must not
+        // fall through to "No orphan chunks found" — that masquerades an
+        // unreadable directory as a clean one and would also delete
+        // nothing silently.
+        let orphan_dirs: Vec<PathBuf> = match std::fs::read_dir(&chunks_dir) {
+            Ok(entries) => entries
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    path.is_dir().then_some(path)
+                })
+                .collect(),
+            Err(e) => anyhow::bail!(
+                "failed to read chunk directory {}: {e}",
+                chunks_dir.display()
+            ),
+        };
 
         if orphan_dirs.is_empty() {
             eprintln!("{} No orphan chunks found", "Clean:".bold());
@@ -205,14 +210,7 @@ pub fn clean_command(
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // Build config variable map so {config.key} paths can be expanded
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
+    let wildcard_values = crate::commands::run::config_placeholder_values(&config.config);
 
     // Collect unique output paths, expanding config variable placeholders
     let mut outputs: Vec<String> = Vec::new();

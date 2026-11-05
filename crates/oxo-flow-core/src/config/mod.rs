@@ -11,6 +11,7 @@ mod samples;
 mod tests;
 
 pub(crate) use known_keys::TOP_LEVEL_KEYS;
+pub use known_keys::edit_distance;
 pub use model::*;
 pub(crate) use model::{
     expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,
@@ -513,25 +514,28 @@ impl WorkflowConfig {
         )
     }
 
-    /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.
-    ///
-    /// The checksum is computed from a deterministic hash of the config,
-    /// ensuring consistent results regardless of field ordering.
-    pub fn checksum(&self) -> String {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = std::hash::DefaultHasher::new();
-        self.workflow.name.hash(&mut hasher);
-        self.workflow.version.hash(&mut hasher);
-        self.rules.len().hash(&mut hasher);
-        for rule in &self.rules {
-            rule.name.hash(&mut hasher);
-            rule.input.hash(&mut hasher);
-            rule.output.hash(&mut hasher);
-            rule.shell.hash(&mut hasher);
-            rule.script.hash(&mut hasher);
-        }
-        format!("{:016x}", hasher.finish())
+    /// Whether the rule's `scatter` fans out over zero values (issue #616):
+    /// declared `values` win (non-empty → never empty); with no declared
+    /// values, a missing `values_from` means zero instances and a
+    /// resolvable list decides emptiness. An UNRESOLVABLE `values_from`
+    /// (missing key, non-string/array → `None`) is NOT empty: the executor
+    /// expands zero instances silently in that case, so callers keep the
+    /// rule checked on purpose — a typo in `values_from` must surface
+    /// instead of silently passing. One place for the predicate the
+    /// executor expansion (expand.rs), validate/lint (format.rs), and the
+    /// CLI input-source scans share.
+    pub fn scatter_fan_out_is_empty(&self, rule: &Rule) -> bool {
+        rule.scatter.as_ref().is_some_and(|scatter| {
+            if !scatter.values.is_empty() {
+                return false;
+            }
+            match scatter.values_from.as_deref() {
+                None => true,
+                Some(values_from) => self
+                    .resolve_config_list(values_from)
+                    .is_some_and(|values| values.is_empty()),
+            }
+        })
     }
 }
 

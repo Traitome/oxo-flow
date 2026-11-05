@@ -23,11 +23,7 @@ pub(crate) async fn run_terminal_hook(
     let Some(hook_cmd) = hook_cmd else {
         return;
     };
-    let mut values: std::collections::HashMap<String, String> = config
-        .config
-        .iter()
-        .map(|(k, v)| (format!("config.{k}"), config_value_string(v)))
-        .collect();
+    let mut values = config.config_placeholder_values();
     values.insert("succeeded".to_string(), succeeded.to_string());
     values.insert("failed".to_string(), failed.to_string());
     values.insert("skipped".to_string(), skipped.to_string());

@@ -45,16 +45,16 @@ Every action accepts `--backend` / `-b`:
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) — on a SLURM site you never need to type it |
+| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`) — on a SLURM site you never need to type it |
 
 An **explicit** value is always validated — `-b slrm` fails with
-`unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf` rather
+`unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch` rather
 than silently querying SLURM. The default applies only when the flag is
 omitted entirely. On a non-SLURM site set the default once in your shell
 profile:
 
 ```bash
-export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf
+export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf / kubernetes / aws-batch / gcp-batch
 ```
 
 ---
@@ -260,12 +260,15 @@ Done: 6 scripts written to cluster_scripts
 For a workflow rule with conda environment, different backends produce different scripts
 (threads/memory come from the rule's resources; the `-q`/`-a` flags add queue/account
 directives; `--walltime` — or a rule's `time_limit`, which wins — adds a time directive,
-`#SBATCH --time=` on SLURM and `walltime=` on PBS):
+`#SBATCH --time=` on SLURM and `walltime=` on PBS; every script is also pinned to the
+run directory so relative output paths stay inside it — `#SBATCH --chdir` on SLURM,
+a body `cd` on PBS, `#$ -wd` on SGE, `#BSUB -cwd` on LSF):
 
 ### SLURM Script
 
 ```bash
 #!/bin/bash
+#SBATCH --chdir='/abs/path/to/workdir'
 #SBATCH --job-name=bwa_align
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
@@ -287,6 +290,7 @@ conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin
 #PBS -l nodes=1:ppn=16,mem=32G
 #PBS -o logs/bwa_align.out
 #PBS -e logs/bwa_align.err
+cd '/abs/path/to/workdir' || exit 1
 
 set -e
 
@@ -298,6 +302,7 @@ conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin
 
 ```bash
 #!/bin/bash
+#$ -wd '/abs/path/to/workdir'
 #$ -N bwa_align
 #$ -pe smp 16
 #$ -l h_vmem=32G
@@ -314,6 +319,7 @@ conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin
 
 ```bash
 #!/bin/bash
+#BSUB -cwd '/abs/path/to/workdir'
 #BSUB -J bwa_align
 #BSUB -n 16
 #BSUB -R 'rusage[mem=33554432] span[hosts=1]'
@@ -334,12 +340,11 @@ internally is not a valid mem_spec. The `rusage` is what actually places
 the job on a host with room; multi-threaded rules also carry
 `span[hosts=1]` inside the same `-R` string.
 
-Environment wrapping is applied automatically: conda rules are wrapped in
-`conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'`, docker rules in
-`docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '<bash shim>' sh '...'`, singularity/apptainer rules in
-`<apptainer|singularity> exec --bind <workdir>:<workdir> ... <image> sh -c '<bash shim>' sh '...'`, and rules
-without an environment run the command directly. The shim re-execs the
-command under `bash` when the image ships it — see
+Environment wrapping is applied automatically — conda, docker, and
+singularity/apptainer rules (plus pixi, venv, and module environments) each
+get their resolver's wrapper, and rules without an environment run the
+command directly. The exact per-backend wrapping forms, the bash shim, and
+the read-only mount rules are specified once in
 [Environment Wrapping](../how-to/run-on-cluster.md#environment-wrapping).
 
 ### Dependency-Aware Submit Script

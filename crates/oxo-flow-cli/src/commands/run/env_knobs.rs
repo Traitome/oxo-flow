@@ -211,11 +211,12 @@ pub(crate) fn normalize_dots(path: PathBuf) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tmp_dir_tests {
+mod tests {
     //! `[engine] tmp_dir` resolution (issue #907): env override wins,
     //! relative values anchor to the workflow dir, unset stays unset.
 
-    use super::tmp_dir_resolved;
+    use super::EndOfRunPruneDecision as Prune;
+    use super::*;
 
     #[test]
     fn unset_everywhere_is_none() {
@@ -257,5 +258,139 @@ mod tmp_dir_tests {
         let resolved =
             tmp_dir_resolved(Some("   ".to_string()), std::path::Path::new("/wf")).unwrap();
         assert!(resolved.is_none(), "empty/whitespace tmp_dir = None");
+    }
+
+    #[test]
+    fn parse_disk_env_knobs_fall_back_to_defaults() {
+        // Unset, empty, garbage, zero — a typo can never disable the
+        // abort (it would hang instead), so every invalid form falls
+        // back to the shipped default.
+        assert_eq!(parse_disk_tick_secs(None), 60);
+        assert_eq!(parse_disk_tick_secs(Some("")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("abc")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("0")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("-5")), 60);
+        assert_eq!(parse_disk_hold_abort_rounds(None), 2);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("xyz")), 2);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("0")), 2);
+    }
+
+    #[test]
+    fn parse_disk_env_knobs_honor_valid_values() {
+        assert_eq!(parse_disk_tick_secs(Some("1")), 1);
+        assert_eq!(parse_disk_tick_secs(Some("300")), 300);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("1")), 1);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("10")), 10);
+    }
+
+    #[test]
+    fn endofrun_prune_sweeps_without_engine_thresholds() {
+        // No `[engine]` section → the historical unconditional sweep, on
+        // every free-space outcome (the measurement is simply irrelevant).
+        assert!(matches!(
+            endofrun_prune_decision(Some(0), None),
+            Prune::Sweep
+        ));
+        assert!(matches!(
+            endofrun_prune_decision(Some(39_000_000), None),
+            Prune::Sweep
+        ));
+        assert!(matches!(endofrun_prune_decision(None, None), Prune::Sweep));
+    }
+
+    #[test]
+    fn endofrun_prune_skips_above_reclaim_floor() {
+        // #893: with thresholds configured, comfortable free space keeps
+        // temporary outputs — the same floor the mid-run reclaim uses.
+        let thresholds = Some((5_000_000, 5_000_000)); // 5T reclaim
+        match endofrun_prune_decision(Some(39_000_000), thresholds) {
+            Prune::Skip {
+                free_mb,
+                reclaim_mb,
+            } => {
+                assert_eq!(free_mb, 39_000_000);
+                assert_eq!(reclaim_mb, 5_000_000);
+            }
+            other => panic!("expected Skip, got {other:?}"),
+        }
+        // Exactly at the floor counts as above it (mid-run reclaim only
+        // fires BELOW reclaim_free_disk — mirror that boundary).
+        assert!(matches!(
+            endofrun_prune_decision(Some(5_000_000), thresholds),
+            Prune::Skip { .. }
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_sweeps_below_reclaim_floor() {
+        // Under pressure → sweep (delete temporaries to free the space).
+        assert!(matches!(
+            endofrun_prune_decision(Some(4_999_999), Some((5_000_000, 5_000_000))),
+            Prune::Sweep
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_keeps_outputs_when_measurement_unknown() {
+        // Fail-open matches DiskPressureMonitor: a non-Unix platform under
+        // configured thresholds must NOT sweep (an unknown disk state is
+        // not a license to delete).
+        assert!(matches!(
+            endofrun_prune_decision(None, Some((5_000_000, 5_000_000))),
+            Prune::KeepOnUnknown
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_debug_representations_are_distinct() {
+        // Guards the enum from collapsing arms (e.g. Skip accidentally
+        // constructed for the KeepOnUnknown case) in a debug-print context.
+        let skip = format!(
+            "{:?}",
+            Prune::Skip {
+                free_mb: 1,
+                reclaim_mb: 1
+            }
+        );
+        let unknown = format!("{:?}", Prune::KeepOnUnknown);
+        let sweep = format!("{:?}", Prune::Sweep);
+        assert_ne!(skip, unknown);
+        assert_ne!(skip, sweep);
+        assert_ne!(unknown, sweep);
+    }
+
+    #[test]
+    fn spawn_watchdog_threshold_parsing() {
+        // issue #685: unset, garbage, and `0` all fall back to the default
+        // — `0` matches the OXO_ENV_LOCK_TIMEOUT_SECS convention rather
+        // than meaning "disable", so a typo can never silently turn the
+        // watchdog off. The derivation is pure: no env mutation needed.
+        assert_eq!(
+            parse_spawn_watchdog_threshold(None),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("abc")),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("0")),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("120")),
+            std::time::Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn watchdog_requeue_fires_parsing() {
+        // issue #872: same convention as the threshold — unset, garbage, and
+        // `0` all fall back to the default so a typo can never disable the
+        // requeue (it would wedge the lane instead). Pure derivation.
+        assert_eq!(parse_watchdog_requeue_fires(None), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("abc")), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("0")), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("3")), 3);
     }
 }

@@ -38,7 +38,7 @@ const RUN_ROUTES: &[(&str, &str)] = &[
 ];
 
 #[tokio::test]
-async fn every_runs_route_answers_the_structured_sqlite_boundary() {
+async fn every_runs_route_answers_the_structured_backend_boundary() {
     let app = build_router("personal");
     for (method, path) in RUN_ROUTES {
         let req = Request::builder()
@@ -59,7 +59,7 @@ async fn every_runs_route_answers_the_structured_sqlite_boundary() {
             panic!("{method} {path}: envelope is not the ApiError JSON: {e} — {bytes:?}")
         });
         assert_eq!(
-            envelope["code"], "RUNS_REQUIRE_SQLITE",
+            envelope["code"], "RUNS_REQUIRE_STORAGE_BACKEND",
             "{method} {path}: wrong code in {envelope}"
         );
         assert!(

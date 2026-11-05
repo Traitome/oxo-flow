@@ -1,10 +1,10 @@
 //! Shared test harness for web integration tests.
 //!
 //! The production router applies the audit middleware (issue #79 P1-05) to
-//! every mutation: it inserts an audit row through the legacy `db::pool()`,
-//! which **panics** when uninitialized. Any test that exercises a non-GET
-//! endpoint must therefore initialize both DB layers first — call
-//! [`ensure_db`] at the top of the test.
+//! every mutation. Any test that exercises a non-GET endpoint must
+//! initialize the database first — call [`ensure_db`] at the top of the
+//! test. `db::init_db` delegates to the canonical sqlite backend, so one
+//! call covers schema, pool, and the global storage backend.
 //!
 //! File-backed (not `sqlite::memory:`): in-memory databases are
 //! per-connection, so a pooled memory URL would silently fragment the
@@ -34,10 +34,8 @@ pub fn db_url() -> &'static String {
     })
 }
 
-/// Initialize both DB layers once. Concurrent calls are safe: the pool
-/// registries are OnceLocks and both pools point at the same file.
+/// Initialize the database once. Concurrent calls are safe: the pool
+/// registry is a OnceLock and repeat calls are no-ops.
 pub async fn ensure_db() {
-    let url = db_url();
-    oxo_flow_web::db::init_db(url).await.ok();
-    oxo_flow_web::infra::db::sqlite::init_pool(url).await;
+    oxo_flow_web::db::init_db(db_url()).await.ok();
 }

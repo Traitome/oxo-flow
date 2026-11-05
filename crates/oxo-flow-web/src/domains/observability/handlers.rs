@@ -8,8 +8,7 @@ use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_pool};
-use crate::infra::db::models;
+use crate::domains::workflow::handlers::{ApiError, db_err, err};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -24,8 +23,8 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 )]
 /// GET /api/health
 pub async fn health() -> ApiResult<HealthResponse> {
-    let db_healthy = if let Ok(pool) = get_pool() {
-        sqlx::query("SELECT 1").execute(pool).await.is_ok()
+    let db_healthy = if let Some(backend) = crate::infra::db::global_backend() {
+        backend.health().await.unwrap_or(false)
     } else {
         false
     };
@@ -75,20 +74,12 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
     let host = crate::sys::get_host_resources();
 
     // Count active runs from DB
-    let (active_workflows, total_requests) = if let Ok(pool) = get_pool() {
-        let active: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'queued')")
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-        (active, total as u64)
-    } else {
-        (0, 0)
-    };
+    let (active_workflows, total_requests) =
+        if let Some(backend) = crate::infra::db::global_backend() {
+            backend.get_run_metrics().await.unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
 
     // Process uptime via the shared START_TIME origin — the same source
     // /api/health and /api/system use. sysinfo::System::uptime() is HOST
@@ -113,48 +104,6 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
             used_swap_mb: host.used_swap_mb,
         },
     }))
-}
-
-/// GET /api/events (SSE — Server-Sent Events)
-pub async fn sse_events() -> impl axum::response::IntoResponse {
-    use axum::http::StatusCode;
-    let events: Vec<serde_json::Value> = if let Ok(pool) = get_pool() {
-        let rows: Vec<models::AuditLogRow> =
-            sqlx::query_as("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 50")
-                .fetch_all(pool)
-                .await
-                .unwrap_or_default();
-
-        rows.into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "id": r.id,
-                    "user_id": r.user_id,
-                    "action": r.action,
-                    "target": r.target,
-                    "timestamp": r.timestamp,
-                })
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // Return as SSE formatted text
-    let sse_body = events
-        .iter()
-        .map(|e| format!("data: {}\n", serde_json::to_string(e).unwrap_or_default()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (
-        StatusCode::OK,
-        [
-            ("content-type", "text/event-stream"),
-            ("cache-control", "no-cache"),
-            ("connection", "keep-alive"),
-        ],
-        sse_body,
-    )
 }
 
 #[utoipa::path(
@@ -257,17 +206,14 @@ pub async fn get_audit_logs(
         .clamp(1, 200);
     let offset = (page - 1) * per_page;
 
-    let (entries, total) = if let Ok(pool) = get_pool() {
+    let (entries, total) = if let Some(backend) = crate::infra::db::global_backend() {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
-        let rows: Vec<models::AuditLogRow> = sqlx::query_as(
-            "SELECT * FROM audit_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        )
-        .bind(&cutoff)
-        .bind(per_page as i64)
-        .bind(offset as i64)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        // Propagate, never swallow: a storage failure here would otherwise
+        // masquerade as "no audit activity" on a compliance surface.
+        let (rows, total) = backend
+            .list_audit_logs(&cutoff, per_page, offset)
+            .await
+            .map_err(|e| db_err(format!("DB error listing audit logs: {e}")))?;
 
         let entries = rows
             .into_iter()
@@ -279,12 +225,6 @@ pub async fn get_audit_logs(
                 result: r.result,
             })
             .collect();
-
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ?")
-            .bind(&cutoff)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
 
         (entries, total as u32)
     } else {
@@ -310,7 +250,13 @@ pub async fn get_audit_logs(
 )]
 /// GET /api/hpc — scheduler status (hpc mode only).
 pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
-    axum::Json(crate::hpc::get_hpc_status())
+    // get_hpc_status shells out synchronously to scheduler CLIs
+    // (sinfo/squeue/…); on a loaded controller that takes seconds, so keep
+    // it off the async worker the dashboard polls with.
+    let status = tokio::task::spawn_blocking(crate::hpc::get_hpc_status)
+        .await
+        .unwrap_or_default();
+    axum::Json(status)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,38 +281,30 @@ pub async fn get_webhook_config(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
+    crate::domains::auth::current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required to read the webhook configuration",
+    )?;
+    if crate::infra::db::global_backend().is_none() {
         return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to read the webhook configuration".into(),
-        ));
-    }
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
             StatusCode::SERVICE_UNAVAILABLE,
             "DB_ERROR",
             "Database not available".into(),
-        )
-    })?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
-        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-
-    match row {
-        Some((url, secret, enabled, events, scheme)) => Ok(Json(serde_json::json!({
-            "enabled": enabled != 0,
-            "url": url,
-            "secret_set": secret.is_some(),
-            "events": serde_json::from_str::<serde_json::Value>(&events).unwrap_or(serde_json::json!([])),
-            "signature_scheme": scheme,
+        ));
+    }
+    let settings = crate::domains::observability::webhook::load_settings().await;
+    match settings {
+        Some(s) => Ok(Json(serde_json::json!({
+            "enabled": s.enabled,
+            "url": s.url,
+            "secret_set": s.secret.is_some(),
+            "events": s.events,
+            "signature_scheme": s.signature_scheme,
         }))),
         None => Ok(Json(serde_json::json!({
             "enabled": false, "url": "", "secret_set": false, "events": [],
-            "signature_scheme": "sha256-keyed",
+            "signature_scheme": crate::domains::observability::webhook::DEFAULT_SIGNATURE_SCHEME,
         }))),
     }
 }
@@ -388,20 +326,18 @@ pub async fn put_webhook_config(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    if crate::server::running_mode() != "personal" && !user.is_admin() {
+    crate::domains::auth::current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required to configure webhooks",
+    )?;
+    if crate::infra::db::global_backend().is_none() {
         return Err(err(
-            StatusCode::FORBIDDEN,
-            "ACCESS_DENIED",
-            "Admin role required to configure webhooks".into(),
-        ));
-    }
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
             StatusCode::SERVICE_UNAVAILABLE,
             "DB_ERROR",
             "Database not available".into(),
-        )
-    })?;
+        ));
+    }
 
     let enabled = req
         .get("enabled")
@@ -438,6 +374,7 @@ pub async fn put_webhook_config(
     }
     // An empty secret field means "keep the existing one"; the caller
     // cannot read it back, only replace it.
+    let existing_settings = crate::domains::observability::webhook::load_settings().await;
     let secret: Option<String> = req
         .get("secret")
         .and_then(|v| v.as_str())
@@ -453,9 +390,9 @@ pub async fn put_webhook_config(
         // signals failure that way. Such a row is NOT a usable secret: the
         // gate must treat it as absent, or #909-NIT-1's downgrade to
         // unsigned (forgeable) deliveries silently re-arms itself.
-        let has_stored_secret = crate::domains::observability::webhook::load_settings()
-            .await
-            .and_then(|s| s.secret)
+        let has_stored_secret = existing_settings
+            .as_ref()
+            .and_then(|s| s.secret.as_ref())
             .is_some_and(|s| !s.is_empty());
         if !has_stored_secret {
             return Err(err(
@@ -476,46 +413,66 @@ pub async fn put_webhook_config(
         })
         .unwrap_or_else(|| vec!["workflow_completed".into(), "workflow_failed".into()]);
     let events_json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".into());
-    // Default 'sha256-keyed' keeps pre-v0.11 webhook consumers verifying
-    // after upgrade; 'hmac-sha256' (RFC 2104) is the explicit opt-in.
-    let signature_scheme = match req
-        .get("signature_scheme")
-        .and_then(|v| v.as_str())
-        .unwrap_or("sha256-keyed")
-    {
-        "hmac-sha256" => "hmac-sha256",
-        _ => "sha256-keyed",
+    // New configurations use the RFC-2104 scheme. Omission preserves the
+    // stored scheme for existing deployments, while an explicit unknown
+    // value is a client error rather than a silent downgrade.
+    let signature_scheme = match req.get("signature_scheme") {
+        Some(value) => {
+            let Some(value) = value.as_str() else {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_SIGNATURE_SCHEME",
+                    "signature_scheme must be a string: 'hmac-sha256' or 'sha256-keyed'".into(),
+                ));
+            };
+            crate::domains::observability::webhook::canonical_signature_scheme(value).ok_or_else(
+                || {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_SIGNATURE_SCHEME",
+                        "signature_scheme must be 'hmac-sha256' or 'sha256-keyed'".into(),
+                    )
+                },
+            )?
+        }
+        None => existing_settings
+            .as_ref()
+            .map(|settings| {
+                crate::domains::observability::webhook::canonical_signature_scheme(
+                    &settings.signature_scheme,
+                )
+                .ok_or_else(|| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "WEBHOOK_CONFIG_INVALID",
+                        "stored webhook signature_scheme is invalid; resend an explicit supported scheme"
+                            .into(),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(
+                crate::domains::observability::webhook::DEFAULT_SIGNATURE_SCHEME,
+            ),
     };
-    let now = chrono::Utc::now().to_rfc3339();
+    let sealed_secret = secret.as_deref().map(crate::infra::crypto::seal);
+    if let Some(backend) = crate::infra::db::global_backend() {
+        backend
+            .save_webhook_config(
+                &url,
+                sealed_secret.as_deref(),
+                enabled,
+                &events_json,
+                signature_scheme,
+            )
+            .await
+            .map_err(|e| db_err(format!("DB error saving webhook config: {e}")))?;
+    }
 
-    sqlx::query(
-        "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET url = excluded.url, \
-         secret = COALESCE(excluded.secret, webhook_config.secret), \
-         enabled = excluded.enabled, events = excluded.events, \
-         signature_scheme = excluded.signature_scheme, updated_at = excluded.updated_at",
-    )
-    .bind(&url)
-    // Sealed at rest like every other credential (AI keys #205, SSH keys
-    // #517) — legacy mode (no OXO_FLOW_MASTER_KEY) transparently stores
-    // plaintext (audit #664).
-    .bind(secret.as_deref().map(crate::infra::crypto::seal))
-    .bind(enabled as i64)
-    .bind(&events_json)
-    .bind(signature_scheme)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error saving webhook config: {e}");
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DB_ERROR",
-            "Internal database error".into(),
-        )
-    })?;
-
-    Ok(Json(
-        serde_json::json!({"status": "saved", "enabled": enabled, "events": events}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "saved",
+        "enabled": enabled,
+        "events": events,
+        "signature_scheme": signature_scheme,
+    })))
 }

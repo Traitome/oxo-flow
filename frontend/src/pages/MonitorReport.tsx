@@ -36,6 +36,12 @@ function trendColor(trend: string): string {
 // regex stays clear of the no-control-regex lint.
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
+// A request aborted on purpose (new selection / SSE refetch aborting an
+// in-flight load) is control flow, not a failure — never banner it.
+function isAbortError(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === 'AbortError';
+}
+
 // GET /api/runs/{id}/report returns ReportFile.path prefixed with the run's
 // workdir (e.g. "workspace/users/default/runs/<id>/results/summary.txt"),
 // whereas GET /api/runs/{id}/files?path=... resolves paths relative to the run
@@ -131,6 +137,9 @@ export default function MonitorReport() {
   const detailRef = useRef<HTMLDivElement>(null);
   const [qaInput, setQaInput] = useState('');
   const [qaAnswer, setQaAnswer] = useState<string | null>(null);
+  // Ask round-trips through the AI surface — keep the button in a visible
+  // loading state so a slow answer cannot look like a dead click.
+  const [asking, setAsking] = useState(false);
   // #907 P3-16: alert cards default to a one-line summary (level + rule +
   // time) so a burst of alerts doesn't bury the monitor; expand on click.
   // The Recent Events table under a finished run starts collapsed too.
@@ -139,6 +148,8 @@ export default function MonitorReport() {
   const [provResult, setProvResult] = useState<ProvenanceVerifyResponse | null>(null);
   const [driftResult, setDriftResult] = useState<ProtectedDriftResponse | null>(null);
   const [filePreview, setFilePreview] = useState<FilePreviewResponse | null>(null);
+  // Path currently being downloaded (spinner + per-download disable).
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const { id: routeId } = useParams();
   const navigate = useNavigate();
@@ -177,7 +188,17 @@ export default function MonitorReport() {
     setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
     setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
     setPreview(prev.status === 'fulfilled' ? prev.value : null);
-  }, []);
+    // Rejections used to collapse into the same set(null) as an empty pane —
+    // an error was indistinguishable from "no data". Surface the first
+    // failure on the shared banner; aborted requests (SSE refetch racing an
+    // in-flight load) are not errors.
+    const failure = [status, report, dag, diag, prev].find(
+      (r) => r.status === 'rejected' && !isAbortError(r.reason),
+    );
+    if (failure) {
+      setActionError(describeApiError((failure as PromiseRejectedResult).reason, t('monitor.detailLoadFailed')));
+    }
+  }, [t]);
 
   const selectRun = useCallback(async (id: string) => {
     selectAbort.current?.abort();
@@ -288,6 +309,21 @@ export default function MonitorReport() {
       es.onmessage = (evt) => {
         try {
           const event = JSON.parse(evt.data);
+          // Broadcast overflow (sse.rs ships {type:"lagged", data:{missed}}):
+          // any buffered event may have been dropped, so the selected run's
+          // state can no longer be trusted — refetch unconditionally via the
+          // same path terminal events use, instead of showing stale status
+          // until the next manual action.
+          if (event.type === 'lagged') {
+            void refreshRuns();
+            setLogs(null);
+            setInstances(null);
+            selectAbort.current?.abort();
+            const ctrl = new AbortController();
+            selectAbort.current = ctrl;
+            void fetchDetail(selId, ctrl.signal);
+            return;
+          }
           // Events are scoped to the run owner's canonical users.id (sse.rs),
           // which the login response never exposes — comparing it against the
           // stored login username dropped every live update. The loaded run row
@@ -330,9 +366,12 @@ export default function MonitorReport() {
 
     const interval = tab === 'monitor'
       ? setInterval(async () => {
+          // Same seq guard as fetchDetail: a slow poll for run A must not
+          // overwrite the state of a newer selection (issue #547 pattern).
+          const seq = selectSeq.current;
           try {
             const status = await api.aiStatus(selId);
-            setMonitorStatus(status);
+            if (seq === selectSeq.current) setMonitorStatus(status);
           } catch { /* ignore */ }
         }, 5000)
       : null;
@@ -355,7 +394,8 @@ export default function MonitorReport() {
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      // describeApiError keeps the backend's detail/suggestion hints visible.
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -367,7 +407,7 @@ export default function MonitorReport() {
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -380,7 +420,7 @@ export default function MonitorReport() {
       // reverted by the URL sync effect below.
       if (plan.new_run_id) navigate(`/runs/${plan.new_run_id}`);
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
@@ -396,17 +436,20 @@ export default function MonitorReport() {
     } catch (err: unknown) {
       // A 409 (process already exited) or any other failure must be
       // visible — silence read as success.
-      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+      setActionError(describeApiError(err, t('common.unknownError')));
     }
   };
 
   const handleAsk = async () => {
     if (!qaInput.trim() || !selId) return;
+    setAsking(true);
     try {
       const answer = await api.askReport(selId, qaInput);
       setQaAnswer(answer);
     } catch {
       setQaAnswer(t('monitor.askError'));
+    } finally {
+      setAsking(false);
     }
   };
 
@@ -450,6 +493,31 @@ export default function MonitorReport() {
     URL.revokeObjectURL(url);
   };
 
+  // Workdir artifact download: fetch + Blob instead of a bare <a href> —
+  // the link carried no Authorization header, so team/hpc mode answered 401
+  // for every download. Filename comes from Content-Disposition when the
+  // server sends one, else the caller's fallback (file name / zip label).
+  const downloadRunArtifact = async (relPath: string, fallbackName: string) => {
+    if (!selId) return;
+    setDownloading(relPath);
+    try {
+      const res = await api.downloadRunFile(selId, relPath);
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') ?? '';
+      const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = m ? decodeURIComponent(m[1]) : fallbackName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setActionError(describeApiError(err, t('monitor.downloadFailed')));
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   const renderLogs = () => (
     <div>
       <div className="row" style={{ marginBottom: '0.75rem' }}>
@@ -463,7 +531,7 @@ export default function MonitorReport() {
         <button className="btn-sm" onClick={downloadLogs} title={t('monitor.logs.download')}>
           <Download size={13} /> {t('monitor.logs.download')}
         </button>
-        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reload')} aria-label={t('monitor.logs.reload')}>
+        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reloadLabel')} aria-label={t('monitor.logs.reloadLabel')}>
           <RotateCcw size={13} />
         </button>
       </div>
@@ -578,8 +646,11 @@ export default function MonitorReport() {
                 if (!window.confirm(t('monitor.resumeCheckpointConfirm'))) return;
                 try {
                   const res = await api.resumeCheckpoint(selId);
+                  setActionError(null);
                   navigate(`/runs/${res.run_id}`);
-                } catch { /* ignore */ }
+                } catch (err: unknown) {
+                  setActionError(describeApiError(err, t('common.unknownError')));
+                }
               }}>
               <StepForward size={14} />
             </button>
@@ -590,7 +661,11 @@ export default function MonitorReport() {
                 if (!window.confirm(t('monitor.cleanWorkdirConfirm'))) return;
                 try {
                   await api.cleanRun(selId);
-                } catch { /* ignore */ }
+                  setActionError(null);
+                  void refreshRuns();
+                } catch (err: unknown) {
+                  setActionError(describeApiError(err, t('common.unknownError')));
+                }
               }}>
               <Trash2 size={14} />
             </button>
@@ -608,7 +683,10 @@ export default function MonitorReport() {
                 critical: 'var(--color-error)',
               };
               const levelNames: Record<string, string> = {
-                info: 'Info', warn: 'Warning', alert: 'Alert', critical: 'Critical',
+                info: t('monitor.alerts.levelInfo'),
+                warn: t('monitor.alerts.levelWarn'),
+                alert: t('monitor.alerts.levelAlert'),
+                critical: t('monitor.alerts.levelCritical'),
               };
               return (
                 // Key on the alert's stable id, not the array index — the
@@ -645,7 +723,7 @@ export default function MonitorReport() {
                       >
                         <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <ChevronDown size={13} style={{ transition: 'transform 0.15s', transform: collapsed ? 'rotate(-90deg)' : 'none', flexShrink: 0 }} />
-                          {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
+                          {levelNames[alert.level] || alert.level}: {alert.rule_name || t('chat.system')}
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
                           {new Date(alert.timestamp).toLocaleTimeString(locale)}
@@ -666,15 +744,17 @@ export default function MonitorReport() {
                               now a real run, manual edit opens the snapshot in
                               the editor. */}
                           <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
-                            onClick={() => void handleRetry()}><Wrench size={13} /> Fix & Retry</button>
+                            onClick={() => void handleRetry()}><Wrench size={13} /> {t('monitor.alerts.fixRetry')}</button>
                           <button className="btn-sm" onClick={async () => {
                             if (!selId) return;
                             try {
                               const run = await api.getRun(selId);
                               session.setPipelineToml(run.pipeline_snapshot ?? '');
                               navigate('/editor');
-                            } catch { /* ignore */ }
-                          }}><FileText size={13} /> Manual Edit</button>
+                            } catch (err: unknown) {
+                              setActionError(describeApiError(err, t('monitor.alerts.manualEditFailed')));
+                            }
+                          }}><FileText size={13} /> {t('monitor.alerts.manualEdit')}</button>
                         </div>
                       )}
                     </div>
@@ -819,13 +899,14 @@ export default function MonitorReport() {
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: '6px' }}>
               <h4 style={{ fontSize: '0.85rem', margin: 0 }}>{t('monitor.outputFiles')}</h4>
               {selId && (
-                <a
-                  href={api.getRunFileDownloadUrl(selId, '.')}
+                <button
+                  type="button"
                   className="btn-sm"
-                  style={{ textDecoration: 'none' }}
+                  disabled={downloading !== null}
+                  onClick={() => void downloadRunArtifact('.', `${selId.slice(0, 8)}-results.zip`)}
                 >
-                  <Download size={13} /> {t('monitor.downloadZip')}
-                </a>
+                  {downloading === '.' ? <Loader2 size={13} className="spin" /> : <Download size={13} />} {t('monitor.downloadZip')}
+                </button>
               )}
             </div>
             <div style={{ maxHeight: '240px', overflow: 'auto', fontSize: '0.78rem' }}>
@@ -853,20 +934,21 @@ export default function MonitorReport() {
                                     const p = await api.previewRunFile(selId, relPath);
                                     setFilePreview(p);
                                   } catch (err: unknown) {
-                                    setActionError(describeApiError(err, 'Preview unavailable'));
+                                    setActionError(describeApiError(err, t('monitor.previewFailed')));
                                   }
                                 }}
                               >
                                 <Eye size={12} /> {t('monitor.previewFile')}
                               </button>
                             )}
-                            <a
-                              href={api.getRunFileDownloadUrl(selId, relPath)}
+                            <button
+                              type="button"
                               className="btn-sm"
-                              style={{ textDecoration: 'none' }}
+                              disabled={downloading !== null}
+                              onClick={() => void downloadRunArtifact(relPath, f.name)}
                             >
-                              <Download size={12} /> {t('monitor.downloadFile')}
-                            </a>
+                              {downloading === relPath ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('monitor.downloadFile')}
+                            </button>
                           </div>
                         )}
                       </td>
@@ -894,8 +976,8 @@ export default function MonitorReport() {
               className="search-input"
               style={{ flex: 1, minWidth: 0 }}
             />
-            <button onClick={handleAsk} className="btn-run" disabled={!qaInput.trim()}>
-              <Bot size={14} /> {t('monitor.ask')}
+            <button onClick={() => void handleAsk()} className="btn-run" disabled={!qaInput.trim() || asking}>
+              {asking ? <Loader2 size={14} className="spin" /> : <Bot size={14} />} {t('monitor.ask')}
             </button>
           </div>
           {qaAnswer && (
@@ -921,12 +1003,40 @@ export default function MonitorReport() {
             <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, color: 'var(--color-error)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <CircleX size={14} /> {fn.rule}
+                <a
+                  href={`vscode://traitome.oxo-flow/open?rule=${encodeURIComponent(fn.rule)}`}
+                  style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--color-accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+                  title={t('monitor.vscodeOpen')}
+                >
+                  {t('monitor.vscodeLink')}
+                </a>
               </div>
               <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
               {fn.suggestions.length > 0 && (
                 <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
                   {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
                 </ul>
+              )}
+              {fn.auto_fixable && fn.fix_action && (
+                <div style={{ marginTop: '6px', padding: '6px 8px', background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--color-text)' }}>
+                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>{t('monitor.oneClickFix')}</span>
+                    {fn.fix_action.description}
+                  </div>
+                  <button
+                    className="btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                    onClick={() => {
+                      // Route through handleRetry so the RetryPlan is honored
+                      // (new_run_id navigation) and failures surface in the
+                      // shared actionError banner — a fire-and-forget call
+                      // would leave the user staring at a silent no-op.
+                      if (selId) void handleRetry();
+                    }}
+                  >
+                    {t('monitor.applyRetry')}
+                  </button>
+                </div>
               )}
               {/* AI explanation grounded in the deterministic diagnosis
                   (issue #82 P1-10: the explain endpoint existed but the
@@ -937,8 +1047,9 @@ export default function MonitorReport() {
                   setExplainState((prev) => ({ ...prev, [fn.rule]: { loading: true } }));
                   try {
                     // Run-scoped explain (issue #82 P1-10): deterministic
-                    // grounding + LLM prose, optionally in Chinese.
-                    const result = selId ? await api.aiExplain(selId, 'zh') : null;
+                    // grounding + LLM prose, following the UI language
+                    // instead of assuming Chinese.
+                    const result = selId ? await api.aiExplain(selId, lang) : null;
                     const text = result
                       ? `${result.summary}${result.fix_suggestion ? `\n→ ${result.fix_suggestion.action}` : ''}`
                       : t('monitor.aiExplainUnavailable');
@@ -981,6 +1092,16 @@ export default function MonitorReport() {
         rule: {},
       })),
       edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+      // The status payload carries progress counters, not shape metrics; the
+      // canvas reads only nodes/edges — the rest stays at zero.
+      metrics: {
+        node_count: dagStatus.nodes.length,
+        edge_count: dagStatus.edges.length,
+        max_depth: 0,
+        max_width: 0,
+        critical_path_length: 0,
+        parallel_group_count: 0,
+      },
     };
   }, [dagStatus]);
   const statusById = useMemo(
@@ -1040,7 +1161,7 @@ export default function MonitorReport() {
                   setProvResult(res);
                   setActionError(null);
                 } catch (err: unknown) {
-                  setActionError(describeApiError(err, 'Provenance verification failed'));
+                  setActionError(describeApiError(err, t('monitor.provFailed')));
                 }
               }}
             >
@@ -1048,24 +1169,24 @@ export default function MonitorReport() {
             </button>
           </div>
           <p className="muted">
-            Audits recorded SHA-256 output checksums in <code>.oxo-flow/checkpoint.json</code> against live workdir files.
+            {t('monitor.provHintPre')} <code>.oxo-flow/checkpoint.json</code> {t('monitor.provHintPost')}
           </p>
           {provResult && (
             <div>
               <div className="row" style={{ gap: 8, marginBottom: 8 }}>
                 <span className={`status-badge ${provResult.ok ? 'success' : 'failed'}`}>
-                  {provResult.ok ? 'VERIFIED OK' : 'DRIFT DETECTED'}
+                  {provResult.ok ? t('monitor.provOk') : t('monitor.provDrift')}
                 </span>
-                <span className="status-badge success">Matched: {provResult.matched}</span>
-                <span className={`status-badge ${provResult.mismatched > 0 ? 'failed' : 'skipped'}`}>Mismatched: {provResult.mismatched}</span>
-                <span className={`status-badge ${provResult.missing > 0 ? 'failed' : 'skipped'}`}>Missing: {provResult.missing}</span>
-                <span className="status-badge">Cleaned: {provResult.cleaned}</span>
+                <span className="status-badge success">{t('editor.data.matched')}: {provResult.matched}</span>
+                <span className={`status-badge ${provResult.mismatched > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.mismatched')}: {provResult.mismatched}</span>
+                <span className={`status-badge ${provResult.missing > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.missing')}: {provResult.missing}</span>
+                <span className="status-badge">{t('monitor.cleaned')}: {provResult.cleaned}</span>
               </div>
               {provResult.note && <div className="muted" style={{ marginBottom: 6 }}>{provResult.note}</div>}
               {provResult.entries.length > 0 && (
                 <div className="overflow-x" style={{ maxHeight: 200 }}>
                   <table className="data-table">
-                    <thead><tr><th>File</th><th>Status</th></tr></thead>
+                    <thead><tr><th>{t('monitor.file')}</th><th>{t('monitor.status')}</th></tr></thead>
                     <tbody>
                       {provResult.entries.map((e, i) => (
                         <tr key={i}>
@@ -1095,7 +1216,7 @@ export default function MonitorReport() {
                   setDriftResult(res);
                   setActionError(null);
                 } catch (err: unknown) {
-                  setActionError(describeApiError(err, 'Protected drift check failed'));
+                  setActionError(describeApiError(err, t('monitor.driftFailed')));
                 }
               }}
             >
@@ -1103,15 +1224,15 @@ export default function MonitorReport() {
             </button>
           </div>
           <p className="muted">
-            Read-only check of <code>[engine] protected_data_trees</code> against the run&apos;s baseline manifest.
+            {t('monitor.driftHintPre')} <code>[engine] protected_data_trees</code> {t('monitor.driftHintPost')}
           </p>
           {driftResult && (
             <div>
               <div className="row" style={{ gap: 8, marginBottom: 8 }}>
                 <span className={`status-badge ${driftResult.drifted_files.length === 0 ? 'success' : 'failed'}`}>
-                  Drifted files: {driftResult.drifted_files.length}
+                  {t('monitor.driftFilesCount').replace('{{count}}', String(driftResult.drifted_files.length))}
                 </span>
-                <span className="status-badge">New trees: {driftResult.new_trees}</span>
+                <span className="status-badge">{t('monitor.driftNewTrees').replace('{{count}}', String(driftResult.new_trees))}</span>
               </div>
               {driftResult.drifted_files.length > 0 && (
                 <pre className="log-view" style={{ maxHeight: 160 }}>
@@ -1204,7 +1325,7 @@ export default function MonitorReport() {
       {/* Dry-run preview: instance-level plan from the CLI's --json output
           (issue #79 P2 — the preview used to show unexpanded rules). */}
       {preview && (
-        <div className="dash-card" ref={detailRef}>
+        <div className="dash-card">
           <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)', marginBottom: '0.5rem' }}>
             {t('monitor.dryRunPreview')}
           </h3>
@@ -1239,15 +1360,16 @@ export default function MonitorReport() {
         </div>
       )}
 
-      {/* Run Detail */}
+      {/* Run Detail — the scroll target for selectRun; the dry-run preview
+          card above must not steal this ref. */}
       {(selId) && (
         <div className="dash-card" ref={detailRef}>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <div>
-              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 8)}...</h3>
+              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>{t('monitor.runTitle').replace('{{id}}', selId.slice(0, 8))}</h3>
               <div className="muted">
-                Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
-                · Phase: {selectedRun?.phase || '-'}
+                {t('monitor.statusLabel')} <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
+                · {t('monitor.phaseLabel')} {selectedRun?.phase || '-'}
               </div>
             </div>
             <div
@@ -1287,7 +1409,7 @@ export default function MonitorReport() {
               <button className="btn-sm" onClick={() => setFilePreview(null)} aria-label={t('common.close')}><X size={14} /></button>
             </div>
             <pre className="log-view" style={{ maxHeight: 420 }}>{filePreview.content}</pre>
-            {filePreview.truncated && <div className="muted" style={{ marginTop: 6 }}>Preview truncated at 100 KB — download the file for full contents.</div>}
+            {filePreview.truncated && <div className="muted" style={{ marginTop: 6 }}>{t('monitor.previewTruncated')}</div>}
           </div>
         </div>
       )}

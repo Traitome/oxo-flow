@@ -6,6 +6,30 @@
 
 use std::path::PathBuf;
 
+/// Render the available-rule hint appended to [`OxoFlowError::RuleNotFound`].
+///
+/// Empty when the caller had no rule list, so the base message stays clean;
+/// otherwise the first ten names (enough to orient, short enough not to bury
+/// the error in a 500-rule pipeline).
+fn rule_not_found_suffix(available_rules: &[String]) -> String {
+    if available_rules.is_empty() {
+        return String::new();
+    }
+    // Sorted before take(10): callers pass rule lists in graph-iteration
+    // (HashMap) order, and an error hint must not wobble between runs.
+    let mut names: Vec<&str> = available_rules.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    let shown: Vec<&str> = names.into_iter().take(10).collect();
+    let mut suffix = format!("; available rules: {}", shown.join(", "));
+    if available_rules.len() > shown.len() {
+        suffix.push_str(&format!(
+            " (and {} more — use 'oxo-flow graph -f tree')",
+            available_rules.len() - shown.len()
+        ));
+    }
+    suffix
+}
+
 /// Unified error type for oxo-flow core operations.
 ///
 /// All public API functions in `oxo-flow-core` return `Result<T, OxoFlowError>`.
@@ -43,8 +67,10 @@ pub enum OxoFlowError {
     #[error("duplicate rule name: '{name}'")]
     DuplicateRule { name: String },
 
-    /// A requested rule was not found.
-    #[error("rule not found: '{name}'")]
+    /// A requested rule was not found. The available-rule list rides in the
+    /// Display output (bounded) because it is the actionable half of the
+    /// message; `suggestion()` repeats it for surfaces that render hints.
+    #[error("rule not found: '{name}'{}", rule_not_found_suffix(available_rules))]
     RuleNotFound {
         name: String,
         available_rules: Vec<String>,
@@ -186,21 +212,15 @@ impl OxoFlowError {
                 name,
                 available_rules,
             } => {
-                if available_rules.len() <= 10 {
-                    Some(format!(
-                        "available rules: {}. Use 'oxo-flow graph -f tree' to list all rules",
-                        available_rules.join(", ")
-                    ))
-                } else if !available_rules.is_empty() {
-                    Some(format!(
-                        "{} rules available (use 'oxo-flow graph -f tree' to list all)",
-                        available_rules.len()
-                    ))
+                // The rule list rides in the Display output; do not repeat it
+                // here. Point at the full listing when the list is empty or
+                // was truncated to ten names.
+                if available_rules.is_empty() {
+                    Some(format!("check for typos in '{}'", name))
+                } else if available_rules.len() > 10 {
+                    Some("use 'oxo-flow graph -f tree' to list all rules".to_string())
                 } else {
-                    Some(format!(
-                        "check for typos in '{}'",
-                        name
-                    ))
+                    None
                 }
             }
             OxoFlowError::Execution { rule, message } => {
@@ -371,6 +391,58 @@ mod tests {
         let suggestion = err.suggestion();
         assert!(suggestion.is_some());
         assert!(suggestion.unwrap().contains("circular dependency"));
+    }
+
+    #[test]
+    fn rule_not_found_display_lists_available_rules() {
+        let err = OxoFlowError::RuleNotFound {
+            name: "algn".to_string(),
+            available_rules: vec!["fastqc".to_string(), "align".to_string()],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("rule not found: 'algn'"), "{msg}");
+        assert!(
+            // Sorted before the take(10) cap — the hint must not wobble with
+            // the caller's graph-iteration order.
+            msg.contains("available rules: align, fastqc"),
+            "the actionable half of the error must survive Display: {msg}"
+        );
+        assert!(
+            err.suggestion().is_none(),
+            "no duplicate hint for short lists"
+        );
+    }
+
+    #[test]
+    fn rule_not_found_display_bounds_long_rule_lists() {
+        // Deliberately unsorted input: the hint must sort internally
+        // (deterministic display) and cap at ten names.
+        let rules: Vec<String> = (0..25).rev().map(|i| format!("rule{i}")).collect();
+        let err = OxoFlowError::RuleNotFound {
+            name: "missing".to_string(),
+            available_rules: rules,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("rule0,"), "{msg}");
+        assert!(
+            !msg.contains("rule18"),
+            "must cap at ten names (rule0..rule9): {msg}"
+        );
+        assert!(msg.contains("and 15 more"), "{msg}");
+        assert!(
+            err.suggestion()
+                .is_some_and(|s| s.contains("oxo-flow graph")),
+            "truncated lists must point at the full listing"
+        );
+    }
+
+    #[test]
+    fn rule_not_found_with_no_rules_keeps_message_clean() {
+        let err = OxoFlowError::RuleNotFound {
+            name: "align".to_string(),
+            available_rules: Vec::new(),
+        };
+        assert_eq!(err.to_string(), "rule not found: 'align'");
     }
 
     #[test]

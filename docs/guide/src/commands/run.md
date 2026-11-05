@@ -351,6 +351,27 @@ oxo-flow run pipeline.oxoflow gene_bed=
 oxo-flow run pipeline.oxoflow --gene_bed ""
 ```
 
+!!! note "Did-you-mean hints on mistyped overrides and rules"
+
+    Typos in `--KEY VALUE` overrides and `--rule` targets are diagnosed,
+    not just rejected. An override key that is not declared in `[config]`
+    and never referenced as `{config.KEY}` suggests the closest declared
+    key by edit distance:
+
+    ```console
+    oxo-flow run pipeline.oxoflow --samplename S1
+    Warning: override 'samplename' is not a declared [config] key and the
+      workflow never references {config.samplename} — did you mean
+      'sample_name'? It changes nothing.
+    ```
+
+    The same heuristic powers `--rule` suggestions (`oxo-flow debug
+    workflow.oxoflow --rule <typo>` lists the nearest rule names) and the
+    engine's rule-not-found errors, which list the available rules
+    (sorted, capped at ten) when a `when`/`input` reference misses. The
+    hint logic lives once in the core (`edit_distance`) — the CLI and the
+    engine always agree on what "closest" means.
+
 !!! note "Empty values select the derive-if-empty branch"
 
     An **empty** value is accepted and overrides the config key with the
@@ -434,7 +455,7 @@ to a scheduler instead of executing locally:
 ```toml
 # profiles/slurm.toml
 [cluster]
-backend       = "slurm"      # slurm | pbs | sge | lsf — required
+backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch
 partition     = "compute"
 account       = "lab01"
 walltime      = "24h"        # a rule's own time_limit wins
@@ -447,7 +468,9 @@ reference = "/data/ref/hg38.fa"
 ```
 
 Keys the profile omits fall back to the driver defaults: `max_submitted`
-50, `max_array_size` 1001, `poll_interval` 5s. `extra_args` entries are
+50, `max_array_size` 1001, `poll_interval` 5s — the authoritative
+[`DriverConfig` table](../reference/execution-backends.md#backenddriver)
+carries the complete knob list. `extra_args` entries are
 emitted as scheduler directives verbatim and are not validated — a typo
 reaches the scheduler as written.
 
@@ -607,7 +630,8 @@ shared between the submitting host and the compute nodes.
 > `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean up an
 > interrupted run.
 
-Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured
+Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
+GCP Batch) is configured
 separately — see the [`cluster`](cluster.md) command.
 
 ### Execute a published bundle

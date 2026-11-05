@@ -15,22 +15,17 @@ export interface RunOptions {
   extraArgs?: string[];
 }
 
-/** Global flags every subcommand accepts (clap `global = true`). */
-function jsonFlag(): string[] {
-  return ["--json"];
-}
-
 export function validateArgs(file: string, opts?: { asInclude?: boolean; json?: boolean }): string[] {
   const args = ["validate", file];
   if (opts?.asInclude) args.push("--as-include");
-  if (opts?.json !== false) args.push(...jsonFlag());
+  if (opts?.json !== false) args.push("--json");
   return args;
 }
 
 export function lintArgs(file: string, opts?: { strict?: boolean; json?: boolean }): string[] {
   const args = ["lint", file];
   if (opts?.strict) args.push("--strict");
-  if (opts?.json !== false) args.push(...jsonFlag());
+  if (opts?.json !== false) args.push("--json");
   return args;
 }
 
@@ -44,9 +39,10 @@ export function runArgs(opts: RunOptions): string[] {
 }
 
 export function dryRunArgs(opts: RunOptions): string[] {
-  // Dry-run shares the run surface; the terminal view wants human output.
+  // Dry-run shares run's workflow/target surface only — the CLI's dry-run
+  // takes no `-j`/`-k` (verified against `oxo-flow dry-run --help`), so jobs
+  // and keepGoing are intentionally dropped here.
   const args = ["dry-run", opts.file];
-  if (opts.jobs !== undefined) args.push("-j", String(opts.jobs));
   for (const t of opts.targets ?? []) args.push("-t", t);
   args.push(...(opts.extraArgs ?? []));
   return args;

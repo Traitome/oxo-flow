@@ -24,11 +24,8 @@ pub mod sse;
 pub mod sys;
 pub mod workspace;
 
-use axum::{extract::Json, http::StatusCode, response::IntoResponse};
-
 use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // License configuration (oxo-dual-licenser integration)
@@ -71,104 +68,6 @@ const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
 // ---------------------------------------------------------------------------
 // Rate limiting
 // ---------------------------------------------------------------------------
-
-/// Configuration for the in-memory rate limiter.
-#[derive(Debug, Clone)]
-pub struct RateLimiterConfig {
-    /// Maximum number of requests allowed within the window.
-    pub max_requests: u64,
-    /// Sliding window duration.
-    pub window: std::time::Duration,
-}
-
-impl Default for RateLimiterConfig {
-    fn default() -> Self {
-        Self {
-            max_requests: 100,
-            window: std::time::Duration::from_secs(60),
-        }
-    }
-}
-
-/// Simple in-memory rate limiter that tracks request timestamps per key (IP).
-#[derive(Debug, Clone)]
-pub struct RateLimiter {
-    config: RateLimiterConfig,
-    /// Maps a client key to a list of request timestamps within the current window.
-    entries: Arc<dashmap::DashMap<String, Vec<std::time::Instant>>>,
-}
-
-impl RateLimiter {
-    /// Create a new rate limiter with the given configuration.
-    pub fn new(config: RateLimiterConfig) -> Self {
-        Self {
-            config,
-            entries: Arc::new(dashmap::DashMap::new()),
-        }
-    }
-
-    /// Check whether a request from `key` is allowed.
-    ///
-    /// Returns `Ok(())` when the request is within the limit, or
-    /// `Err(remaining_secs)` with the number of seconds until the oldest
-    /// entry expires when the limit is exceeded.
-    pub fn check_rate_limit(&self, key: &str) -> Result<(), u64> {
-        let now = std::time::Instant::now();
-        let window_start = now - self.config.window;
-
-        let mut timestamps = self.entries.entry(key.to_owned()).or_default();
-
-        // Evict timestamps outside the sliding window.
-        timestamps.retain(|t| *t > window_start);
-
-        if timestamps.len() as u64 >= self.config.max_requests {
-            let retry_after = timestamps
-                .first()
-                .map(|t| {
-                    self.config
-                        .window
-                        .saturating_sub(now.duration_since(*t))
-                        .as_secs()
-                        + 1
-                })
-                .unwrap_or(1);
-            return Err(retry_after);
-        }
-
-        timestamps.push(now);
-        Ok(())
-    }
-}
-
-/// Response returned when the rate limit is exceeded.
-#[derive(Serialize, Deserialize)]
-pub struct RateLimitResponse {
-    pub error: String,
-    pub retry_after_secs: u64,
-}
-
-/// Login request body.
-#[derive(Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-/// Login response body.
-#[derive(Serialize, Deserialize)]
-pub struct LoginResponse {
-    pub token: String,
-    pub username: String,
-    pub role: String,
-}
-
-/// Response from `GET /api/auth/me`.
-#[derive(Serialize, Deserialize)]
-pub struct AuthMeResponse {
-    pub authenticated: bool,
-    pub username: Option<String>,
-    pub role: Option<String>,
-}
 
 /// License status response.
 #[derive(Serialize, Deserialize)]
@@ -217,32 +116,9 @@ pub fn check_license() -> LicenseStatus {
 }
 
 use std::sync::OnceLock;
-use tokio::sync::broadcast;
 
-/// Broadcast channel for Server-Sent Events (SSE).
-static EVENT_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
-
-fn event_tx() -> broadcast::Sender<String> {
-    EVENT_TX
-        .get_or_init(|| {
-            let (tx, _rx) = broadcast::channel(100);
-            tx
-        })
-        .clone()
-}
-
-/// Send an SSE event.
-/// Broadcasts to both the legacy channel and the infra SSE channel
-/// so all connected clients receive real-time updates.
+/// Broadcast a system-wide SSE event (user = null) on the active SSE channel.
 pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
-    let msg = format!(
-        r#"{{"type":"{}","time":"{}","data":{}}}"#,
-        event_type,
-        chrono::Utc::now().to_rfc3339(),
-        serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
-    );
-    let _ = event_tx().send(msg.clone());
-    // Also forward to the infra SSE channel used by the active SSE endpoint
     crate::sse::broadcast_event(event_type, data);
 }
 
@@ -250,362 +126,6 @@ pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
 /// active SSE channel.
 pub fn broadcast_event_for(event_type: &str, data: &serde_json::Value, user: Option<&str>) {
     crate::sse::broadcast_event_for(event_type, data, user);
-}
-
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
-/// Health check response.
-#[derive(Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub version: String,
-}
-
-/// Summary of a workflow.
-#[derive(Serialize, Deserialize)]
-pub struct WorkflowSummary {
-    pub name: String,
-    pub version: String,
-    pub rules_count: usize,
-}
-
-/// Full workflow detail including parsed rules.
-#[derive(Serialize, Deserialize)]
-pub struct WorkflowDetail {
-    pub name: String,
-    pub version: String,
-    pub description: Option<String>,
-    pub author: Option<String>,
-    pub rules_count: usize,
-    pub rules: Vec<RuleSummary>,
-}
-
-/// Summary of a single rule within a workflow.
-#[derive(Serialize, Deserialize)]
-pub struct RuleSummary {
-    pub name: String,
-    pub inputs: Vec<String>,
-    pub outputs: Vec<String>,
-    pub environment: String,
-    pub threads: u32,
-}
-
-/// Request body for endpoints that accept TOML workflow content.
-#[derive(Serialize, Deserialize)]
-pub struct ValidateRequest {
-    pub toml_content: String,
-}
-
-/// Response from the validation endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct ValidateResponse {
-    pub valid: bool,
-    pub errors: Vec<String>,
-    pub rules_count: Option<usize>,
-    pub edges_count: Option<usize>,
-}
-
-/// Optional run configuration parameters.
-#[derive(Serialize, Deserialize)]
-pub struct RunConfig {
-    pub max_jobs: Option<usize>,
-    pub dry_run: Option<bool>,
-    pub keep_going: Option<bool>,
-}
-
-/// Status of a workflow run (used in dry-run response).
-#[derive(Serialize, Deserialize)]
-pub struct RunStatus {
-    pub id: String,
-    pub status: String,
-    pub rules_total: usize,
-    pub rules_completed: usize,
-    pub started_at: Option<String>,
-}
-
-/// Request body for the dry-run endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct DryRunRequest {
-    pub toml_content: String,
-    #[serde(default)]
-    pub config: Option<RunConfig>,
-}
-
-/// DAG visualisation response.
-#[derive(Serialize, Deserialize)]
-pub struct DagResponse {
-    pub dot: String,
-    pub nodes: usize,
-    pub edges: usize,
-}
-
-/// Request body for report generation.
-#[derive(Serialize, Deserialize)]
-pub struct ReportRequest {
-    pub toml_content: String,
-    pub format: Option<String>,
-}
-
-/// Uniform JSON error body.
-#[derive(Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub code: String,
-    pub message: String,
-    pub detail: Option<String>,
-    pub suggestion: Option<String>,
-}
-
-/// Response from the run endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct RunResponse {
-    pub run_id: String,
-    pub status: String,
-    pub execution_order: Vec<String>,
-    pub rules_total: usize,
-}
-
-/// Response from the version endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct VersionResponse {
-    pub version: String,
-    pub crate_name: String,
-    pub rust_version: String,
-}
-
-/// Response from the clean endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct CleanResponse {
-    pub workflow_name: String,
-    pub files_to_clean: Vec<String>,
-    pub total_files: usize,
-}
-
-/// Request body for the export endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct ExportRequest {
-    pub toml_content: String,
-    pub format: Option<String>, // "docker" or "singularity", default "docker"
-}
-
-/// Response from the export endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct ExportResponse {
-    pub format: String,
-    pub content: String,
-}
-
-/// Query parameters for paginated list endpoints.
-#[derive(Debug, Deserialize)]
-pub struct PaginationParams {
-    /// Page number (1-based). Defaults to 1.
-    #[serde(default = "default_page")]
-    pub page: usize,
-    /// Items per page. Defaults to 20, max 100.
-    #[serde(default = "default_per_page")]
-    pub per_page: usize,
-}
-
-fn default_page() -> usize {
-    1
-}
-
-fn default_per_page() -> usize {
-    20
-}
-
-impl PaginationParams {
-    /// Clamp per_page to the allowed range [1, 100].
-    pub fn clamped_per_page(&self) -> usize {
-        self.per_page.clamp(1, 100)
-    }
-
-    /// Returns the offset for database-style slicing.
-    pub fn offset(&self) -> usize {
-        (self.page.saturating_sub(1)) * self.clamped_per_page()
-    }
-}
-
-/// Pagination metadata included in paginated responses.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PaginationMeta {
-    /// Current page number (1-based).
-    pub page: usize,
-    /// Items per page.
-    pub per_page: usize,
-    /// Total number of items.
-    pub total_items: usize,
-    /// Total number of pages.
-    pub total_pages: usize,
-    /// Whether there is a next page.
-    pub has_next: bool,
-    /// Whether there is a previous page.
-    pub has_prev: bool,
-}
-
-impl PaginationMeta {
-    pub fn new(page: usize, per_page: usize, total_items: usize) -> Self {
-        let total_pages = if total_items == 0 {
-            1
-        } else {
-            total_items.div_ceil(per_page)
-        };
-        Self {
-            page,
-            per_page,
-            total_items,
-            total_pages,
-            has_next: page < total_pages,
-            has_prev: page > 1,
-        }
-    }
-}
-
-/// Request body for lint endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct LintRequest {
-    pub toml_content: String,
-}
-
-/// Response from lint endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct LintResponse {
-    pub diagnostics: Vec<DiagnosticItem>,
-    pub error_count: usize,
-    pub warning_count: usize,
-    pub info_count: usize,
-}
-
-/// Single diagnostic item in lint/validate response.
-#[derive(Serialize, Deserialize)]
-pub struct DiagnosticItem {
-    pub severity: String,
-    pub code: String,
-    pub message: String,
-    pub rule: Option<String>,
-}
-
-/// Response from format endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct FormatResponse {
-    pub formatted: String,
-}
-
-/// Paginated response from lint endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct PaginatedLintResponse {
-    pub diagnostics: Vec<DiagnosticItem>,
-    pub pagination: PaginationMeta,
-    pub summary: LintSummary,
-}
-
-/// Summary counts for lint results.
-#[derive(Serialize, Deserialize)]
-pub struct LintSummary {
-    pub error_count: usize,
-    pub warning_count: usize,
-    pub info_count: usize,
-}
-
-/// Response from stats endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct StatsResponse {
-    pub rule_count: usize,
-    pub shell_rules: usize,
-    pub script_rules: usize,
-    pub dependency_count: usize,
-    pub parallel_groups: usize,
-    pub max_depth: usize,
-    pub environments: Vec<String>,
-    pub total_threads: u32,
-    pub wildcard_count: usize,
-    pub wildcard_names: Vec<String>,
-}
-
-/// System information response.
-#[derive(Serialize, Deserialize)]
-pub struct SystemInfo {
-    pub version: String,
-    pub rust_version: String,
-    pub os: String,
-    pub arch: String,
-    pub pid: u32,
-    pub uptime_secs: f64,
-}
-
-/// Runtime metrics for monitoring and observability.
-#[derive(Debug, Serialize)]
-pub struct RuntimeMetrics {
-    pub uptime_secs: f64,
-    pub version: String,
-    pub pid: u32,
-    pub os: String,
-    pub arch: String,
-    /// Number of available CPU cores.
-    pub cpu_count: usize,
-    /// Total number of requests processed.
-    pub total_requests: u64,
-    /// Current number of active/running workflows.
-    pub active_workflows: i64,
-    /// Host resource usage.
-    pub host: sys::HostResources,
-}
-
-/// Request body for comparing two workflows.
-#[derive(Deserialize)]
-pub struct DiffRequest {
-    /// TOML content of the first workflow.
-    pub toml_a: String,
-    /// TOML content of the second workflow.
-    pub toml_b: String,
-}
-
-/// Response from workflow diff.
-#[derive(Serialize)]
-pub struct DiffResponse {
-    /// Number of differences found.
-    pub diff_count: usize,
-    /// List of differences.
-    pub diffs: Vec<DiffEntry>,
-}
-
-/// A single difference entry.
-#[derive(Serialize)]
-pub struct DiffEntry {
-    pub category: String,
-    pub description: String,
-}
-
-// ---------------------------------------------------------------------------
-// Error helper
-// ---------------------------------------------------------------------------
-
-/// Wrap an `ErrorResponse` with an HTTP status code so it can be returned from
-/// any handler via `Result<impl IntoResponse, ApiError>`.
-pub struct ApiError {
-    pub status: StatusCode,
-    pub body: ErrorResponse,
-}
-
-impl ApiError {
-    /// Create a NOT_FOUND error.
-    fn not_found(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "NOT_FOUND".to_string(),
-                message: error.into(),
-                detail: detail.into(),
-                suggestion: None,
-            },
-        }
-    }
-}
-impl IntoResponse for ApiError {
-    fn into_response(self) -> axum::response::Response {
-        (self.status, Json(self.body)).into_response()
-    }
 }
 
 /// The host a server should actually bind, given the requested mode and
@@ -682,18 +202,17 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
 /// Capability matrix advertised at startup when `DATABASE_URL` selects
 /// PostgreSQL.
 ///
-/// It must describe what this build actually serves: the HTTP layer is not
-/// yet PostgreSQL-aware — every domain handler (auth sessions included)
-/// reads the SQLite pool, so a PG deployment answers 503 `DB_ERROR` on
-/// DB-backed routes instead of silently handing out session tokens that are
-/// never persisted (logins then 401 forever).
+/// It must describe what this build actually serves: storage-backed routes
+/// use `StorageBackend`, while domains that have not completed migration
+/// still read the embedded SQLite pool and answer 503 on PostgreSQL.
 pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
-     available: /api/health · /api/license · /api/openapi.json · SPA assets\n  \
-     unavailable 503 DB_ERROR (SQLite-only handlers): auth sessions — login tokens are \
-     NOT persisted, later requests 401 — plus pipelines, templates, shares, clusters, \
-     audit, AI, chat\n  \
-     gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
-     (run execution is SQLite-only)";
+     available: /api/health · /api/license · /api/openapi.json · SPA assets; \
+     storage-backed users, login sessions, API keys, OAuth CSRF state, credential cascades, \
+     pipelines, revisions, templates, shares, run records, cluster inventory and mutations, \
+     chat sessions and messages, audit logging, webhook configuration, and AI provider configuration\n  \
+     unavailable: none (all web domain handlers decoupled through unified StorageBackend)\n  \
+     gated 503 RUNS_REQUIRE_STORAGE_BACKEND: every /api/runs* endpoint \
+     (record metadata is storage-backed; execution is SQLite-only)";
 
 /// Whether a database URL selects the PostgreSQL backend.
 pub fn is_postgres_url(url: &str) -> bool {
@@ -717,7 +236,9 @@ pub async fn init_database() -> anyhow::Result<()> {
         #[cfg(feature = "postgres")]
         {
             tracing::info!("Initializing PostgreSQL backend");
-            crate::infra::db::postgres::init_pool(&database_url).await;
+            if let Err(e) = crate::infra::db::postgres::init_pool(&database_url).await {
+                anyhow::bail!("PostgreSQL init failed: {e}");
+            }
             tracing::warn!("{}", PG_CAPABILITY_MATRIX);
         }
         #[cfg(not(feature = "postgres"))]
@@ -730,10 +251,10 @@ pub async fn init_database() -> anyhow::Result<()> {
             anyhow::bail!("PostgreSQL support not compiled in — rebuild with --features postgres");
         }
     } else {
+        // One schema, one pool: init_db delegates to the canonical sqlite
+        // backend and layers the web-boot template seed on top of it.
         crate::db::init_db(&database_url).await?;
         crate::db::recover_orphaned_runs().await?;
-        // Also initialize the v0.8 domain-driven DB pool for domain handlers.
-        crate::infra::db::sqlite::init_pool(&database_url).await;
     }
     Ok(())
 }
@@ -900,29 +421,18 @@ fn spawn_session_cleanup() {
     tokio::spawn(async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
-            let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
-                continue; // PostgreSQL deployment, or pool not ready yet
+            let Some(backend) = crate::infra::db::global_backend() else {
+                continue;
             };
             let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-            match sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
-                .bind(&cutoff)
-                .execute(pool)
-                .await
-            {
-                Ok(res) if res.rows_affected() > 0 => {
-                    tracing::info!(
-                        "session cleanup: pruned {} expired rows",
-                        res.rows_affected()
-                    );
+            match backend.cleanup_expired_sessions().await {
+                Ok(n) if n > 0 => {
+                    tracing::info!("session cleanup: pruned {n} expired rows");
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("session cleanup failed: {e}"),
             }
-            if let Err(e) = sqlx::query("DELETE FROM oauth_states WHERE created_at < ?")
-                .bind(&cutoff)
-                .execute(pool)
-                .await
-            {
+            if let Err(e) = backend.cleanup_stale_oauth_states(&cutoff).await {
                 tracing::warn!("oauth state cleanup failed: {e}");
             }
         }
@@ -991,10 +501,10 @@ pub async fn shutdown_signal() {
 mod effective_bind_host_tests {
     use super::*;
 
-    /// The PG capability log is the operator-facing contract; it must not
-    /// advertise SQLite-only surfaces (auth sessions) as available.
+    /// The PG capability log is the operator-facing contract; it must
+    /// distinguish migrated storage surfaces from SQLite-only remnants.
     #[test]
-    fn pg_capability_matrix_is_truthful_about_auth() {
+    fn pg_capability_matrix_is_truthful_about_storage_migration() {
         let line = |prefix: &str| {
             PG_CAPABILITY_MATRIX
                 .lines()
@@ -1004,16 +514,24 @@ mod effective_bind_host_tests {
 
         let available = line("available:");
         assert!(
-            !available.contains("auth"),
-            "auth sessions are SQLite-only and must not be advertised as available: {available}"
+            available.contains("login sessions")
+                && available.contains("API keys")
+                && available.contains("OAuth CSRF state")
+                && available.contains("credential cascades")
+                && available.contains("AI provider")
+                && available.contains("chat sessions")
+                && available.contains("audit logging")
+                && available.contains("webhook configuration")
+                && available.contains("cluster inventory"),
+            "storage-backed auth, API keys, OAuth, AI, chat, audit, webhook, and cluster surfaces must be advertised: {available}"
         );
         let unavailable = line("unavailable");
         assert!(
-            unavailable.contains("auth sessions"),
-            "the SQLite-only auth limitation must be spelled out: {unavailable}"
+            unavailable.contains("none"),
+            "storage-backed full domain parity must be reflected: {unavailable}"
         );
         assert!(
-            PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),
+            PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_STORAGE_BACKEND"),
             "the runs gate must stay in the matrix"
         );
     }

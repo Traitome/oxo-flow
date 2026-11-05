@@ -24,7 +24,7 @@ use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
 use crate::commands::quality::{format_command, lint_command, touch_command, validate_command};
 use crate::commands::run::{
-    debug_command, dry_run_command, handle_status, resume_command, run_command,
+    RunRequest, debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
 use crate::commands::verify_data::verify_data_command;
 use crate::commands::web::ServeMode;
@@ -82,7 +82,8 @@ pub enum Commands {
         #[arg(
             value_name = "WORKFLOW",
             help = "Path to the .oxoflow workflow file, or a repository to run \
-                    (gh:owner/repo[@ref], owner/repo[@ref], *.git URL, or file://dir)"
+                    (gh:owner/repo[@ref], owner/repo[@ref], *.git URL, or file://dir); \
+                    omitted = auto-discover main.oxoflow (else the first *.oxoflow) in the current directory"
         )]
         workflow: Option<PathBuf>,
         #[arg(
@@ -166,14 +167,15 @@ pub enum Commands {
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable; \
+                    if the same key is also set positionally, this flag wins"
         )]
         args: Vec<String>,
         #[arg(
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected; a duplicate key set via --arg wins"
         )]
         config_overrides: Vec<String>,
         /// Enable AI error recovery on rule failure.
@@ -188,7 +190,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Re-execute every rule selected for this run even if outputs are
@@ -282,7 +285,11 @@ pub enum Commands {
     /// Preview execution without running any commands (alias: plan).
     #[command(alias = "plan")]
     DryRun {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
+        #[arg(
+            value_name = "WORKFLOW",
+            help = "Path to the .oxoflow workflow file; omitted = auto-discover \
+                    main.oxoflow (else the first *.oxoflow) in the current directory"
+        )]
         workflow: Option<PathBuf>,
         #[arg(
             short = 't',
@@ -307,7 +314,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         #[arg(
@@ -335,7 +343,8 @@ pub enum Commands {
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable; \
+                    if the same key is also set positionally, this flag wins"
         )]
         args: Vec<String>,
         /// Direct config overrides in the same trailing positional form
@@ -345,7 +354,7 @@ pub enum Commands {
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected; a duplicate key set via --arg wins"
         )]
         config_overrides: Vec<String>,
         /// Force re-execution of this run's rules (ignore up-to-date
@@ -380,6 +389,26 @@ pub enum Commands {
             help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
         )]
         format: Option<String>,
+    },
+    /// Transpile a Nextflow DSL2 or Snakemake pipeline into oxo-flow.
+    Import {
+        #[arg(
+            value_name = "SOURCE",
+            help = "Path to Nextflow (.nf) or Snakemake (Snakefile, .smk) file"
+        )]
+        source: PathBuf,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            help = "Source format: 'nextflow' or 'snakemake' (auto-detected if omitted)"
+        )]
+        from: Option<String>,
+        #[arg(
+            short = 'o',
+            long,
+            help = "Output .oxoflow file (prints to stdout if omitted)"
+        )]
+        output: Option<PathBuf>,
     },
     /// Query the embedded knowledge base (Bioconda, nf-core, skills, docs).
     Knowledge {
@@ -592,11 +621,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: EnvAction,
     },
-    /// Reformat a .oxoflow file into canonical TOML form.
+    /// Reformat a .oxoflow file into canonical TOML form (in place by default).
     Format {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'o', long, help = "Output file path")]
+        #[arg(
+            short = 'o',
+            long,
+            help = "Write formatted output to this path instead of in place"
+        )]
         output: Option<PathBuf>,
         #[arg(long, help = "Only check formatting, don't write")]
         check: bool,
@@ -866,7 +899,8 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
+            help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Run deep health checks (script files, environment definition files,
@@ -1021,7 +1055,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(short = 'q', long, help = "Cluster queue or partition name")]
@@ -1071,7 +1105,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
@@ -1082,10 +1116,10 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
+        #[arg(value_name = "JOB_IDS", required = true, help = "One or more job IDs")]
         job_ids: Vec<String>,
     },
     /// Fetch logs for a submitted cluster job.
@@ -1093,7 +1127,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_ID", help = "Cluster job ID")]
@@ -1519,11 +1553,11 @@ async fn main() -> Result<()> {
             // (backward compat). Later entries win on duplicate keys.
             let mut merged_args = config_overrides;
             merged_args.extend(args);
-            run_command(
-                wf,
+            run_command(RunRequest {
+                workflow: wf,
                 jobs,
                 keep_going,
-                wd,
+                workdir: wd,
                 log_file,
                 target,
                 module,
@@ -1537,17 +1571,18 @@ async fn main() -> Result<()> {
                 skip_ref_build,
                 cache_dir,
                 provenance,
-                cli.json,
-                merged_args,
+                json: cli.json,
+                cli_args: merged_args,
                 ai_recover,
                 ai_max_retries,
                 samples_filter,
                 rerun,
                 no_report_snapshot,
                 max_submitted,
-                None, // checkpoint_override (run derives the workdir default)
+                // run derives the workdir default
+                checkpoint_override: None,
                 allow_protected_drift,
-            )
+            })
             .await?
         }
         Commands::Resume {
@@ -1634,6 +1669,25 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include, cli.json, ai).await?;
         }
         Commands::Info { workflow, format } => info_command(workflow, format)?,
+        Commands::Import {
+            source,
+            from,
+            output,
+        } => {
+            let parsed_from = match from.as_deref() {
+                Some("nextflow") | Some("nf") => {
+                    Some(oxo_flow_core::transpile::SourceFormat::Nextflow)
+                }
+                Some("snakemake") | Some("smk") => {
+                    Some(oxo_flow_core::transpile::SourceFormat::Snakemake)
+                }
+                Some(other) => anyhow::bail!(
+                    "unknown source format '{other}': expected 'nextflow' or 'snakemake'"
+                ),
+                None => None,
+            };
+            crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
+        }
         Commands::Knowledge { action, format } => knowledge_command(action, format)?,
         Commands::Init { name, dir, force } => init_command(name, dir, force)?,
         Commands::Template {
@@ -1646,13 +1700,14 @@ async fn main() -> Result<()> {
             ai_team_profile,
             ai_attempts,
         } => {
-            // CLI flag wins over `[ai] team_profile` in the resolved config.
+            // CLI flag wins over `[ai] team_profile` — the resolved-config
+            // value is merged inside generate_workflow from the config chain.
             let team_profile = match ai_team_profile.as_deref() {
                 Some(flag) => Some(
                     flag.parse::<oxo_flow_ai::agent::team::TeamProfile>()
                         .map_err(|e| anyhow::anyhow!(e))?,
                 ),
-                None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
+                None => None,
             };
             template_command(
                 template,
@@ -1715,13 +1770,19 @@ async fn main() -> Result<()> {
                 }
                 Some("test") => {
                     if explain_args {
-                        anyhow::bail!("'ai test' takes no workflow/--step/--json arguments");
+                        anyhow::bail!(
+                            "'ai test' takes no workflow/--step arguments (a global --json \
+                             before the subcommand is accepted but has no document here)"
+                        );
                     }
                     ai_test_command().await?
                 }
                 Some("setup") => {
                     if explain_args {
-                        anyhow::bail!("'ai setup' takes no workflow/--step/--json arguments");
+                        anyhow::bail!(
+                            "'ai setup' takes no workflow/--step arguments (a global --json \
+                             before the subcommand is accepted but has no document here)"
+                        );
                     }
                     ai_setup_command().await?
                 }
@@ -1990,35 +2051,41 @@ async fn main() -> Result<()> {
                 eprintln!("{} Execution...", if deep { "5." } else { "4." }.bold());
                 step!(
                     "run",
-                    run_command(
-                        Some(workflow.clone()),
+                    run_command(RunRequest {
+                        workflow: Some(workflow.clone()),
                         jobs,
-                        keep_going,      // keep_going
-                        workdir.clone(), // workdir
-                        None,            // log_file (default path)
-                        target.clone(),  // target
-                        Vec::new(),      // module
-                        retry,           // retry
-                        timeout.clone(), // timeout
-                        false,           // resume_failed
-                        profile.clone(), // profile
-                        0,               // max_threads
-                        0,               // max_memory
-                        false,           // skip_env_setup
-                        false,           // skip_ref_build
-                        None,            // cache_dir
-                        false,           // provenance
-                        false,           // json (the single test document is emitted here)
-                        vec![],          // cli_args
-                        false,           // ai_recover
-                        None,            // ai_max_retries
-                        samples_filter.clone(),
-                        false, // rerun (test mode: normal up-to-date checks)
-                        false, // no_report_snapshot (test mode keeps the standard run behavior)
-                        None,  // max_submitted (cluster queue cap — test keeps the profile's)
-                        None,  // checkpoint_override (test derives the workdir default)
-                        false, // allow_protected_drift (test honors the protection gate)
-                    )
+                        keep_going,
+                        workdir: workdir.clone(),
+                        log_file: None,
+                        target: target.clone(),
+                        module: Vec::new(),
+                        retry,
+                        timeout: timeout.clone(),
+                        resume_failed: false,
+                        profile: profile.clone(),
+                        max_threads: 0,
+                        max_memory: 0,
+                        skip_env_setup: false,
+                        skip_ref_build: false,
+                        cache_dir: None,
+                        provenance: false,
+                        // the single test document is emitted here
+                        json: false,
+                        cli_args: vec![],
+                        ai_recover: false,
+                        ai_max_retries: None,
+                        samples_filter: samples_filter.clone(),
+                        // test mode: normal up-to-date checks
+                        rerun: false,
+                        // test mode keeps the standard run behavior
+                        no_report_snapshot: false,
+                        // cluster queue cap — test keeps the profile's
+                        max_submitted: None,
+                        // test derives the workdir default
+                        checkpoint_override: None,
+                        // test honors the protection gate
+                        allow_protected_drift: false,
+                    })
                     .await
                 );
             }

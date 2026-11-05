@@ -31,6 +31,7 @@ pub async fn init_pool(database_url: &str) {
             Ok(backend) => match backend.init().await {
                 Ok(()) => {
                     let _ = DB_POOL.set(backend.pool.clone());
+                    super::set_global_backend(std::sync::Arc::new(backend));
                     return;
                 }
                 Err(e) => last_err = e,
@@ -65,6 +66,42 @@ pub struct SqliteBackend {
     pool: SqlitePool,
 }
 
+/// Insert a queued run row only while its workdir has no live run
+/// (`queued`/`running`/`paused`). Returns `false` when a live run holds
+/// the workdir — the insert is rejected, not queued behind it. One
+/// statement, so concurrent retry/resume requests serialize on the
+/// SQLite write lock instead of racing the read-check-then-insert
+/// window that let two CLIs onto one checkpoint.
+pub async fn create_run_if_workdir_idle(
+    pool: &SqlitePool,
+    run: &models::RunRow,
+) -> Result<bool, String> {
+    let result = sqlx::query(
+        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+         WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = ? AND status IN ('queued', 'running', 'paused'))",
+    )
+    .bind(&run.id)
+    .bind(&run.user_id)
+    .bind(&run.pipeline_id)
+    .bind(&run.pipeline_snapshot)
+    .bind(&run.workflow_name)
+    .bind(&run.status)
+    .bind(&run.phase)
+    .bind(run.dry_run)
+    .bind(run.pid)
+    .bind(&run.workdir)
+    .bind(&run.config_overrides)
+    .bind(&run.started_at)
+    .bind(&run.finished_at)
+    .bind(&run.created_at)
+    .bind(&run.workdir)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(result.rows_affected() == 1)
+}
+
 impl SqliteBackend {
     /// Create a new `SqliteBackend` with a connection pool.
     ///
@@ -72,6 +109,18 @@ impl SqliteBackend {
     /// connection so that all queries share the same schema and data.
     /// Otherwise the pool is configured with up to 5 connections.
     pub async fn new(database_url: &str) -> Result<Self, String> {
+        // Create the database file if missing — `SqlitePoolOptions::connect`
+        // only opens an existing file (code 14 otherwise). The legacy boot
+        // layer used to do this before delegating here.
+        use sqlx::migrate::MigrateDatabase;
+        if !sqlx::Sqlite::database_exists(database_url)
+            .await
+            .unwrap_or(false)
+        {
+            sqlx::Sqlite::create_database(database_url)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
         let is_memory = database_url.contains(":memory:");
         let mut opts = SqlitePoolOptions::new().max_connections(if is_memory { 1 } else { 5 });
         if is_memory {
@@ -90,6 +139,11 @@ impl SqliteBackend {
     /// Return a reference to the inner pool.
     pub fn inner_pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// Construct a `SqliteBackend` from an existing connection pool.
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     fn now() -> String {
@@ -216,6 +270,16 @@ impl StorageBackend for SqliteBackend {
                 FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS run_nodes (
+                run_id TEXT NOT NULL,
+                rule_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                started_at TEXT,
+                finished_at TEXT,
+                PRIMARY KEY (run_id, rule_name),
+                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
 
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
@@ -341,6 +405,18 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
+            -- One-time repair for databases created before seeding was
+            -- name-guarded (db.rs): the old seeder minted a fresh UUID per
+            -- boot, so restarts stacked same-name system templates. Keep the
+            -- oldest row per name, then pin the invariant with a partial
+            -- unique index (user templates may still share names).
+            DELETE FROM templates
+             WHERE is_system = 1
+               AND rowid NOT IN (
+                   SELECT MIN(rowid) FROM templates WHERE is_system = 1 GROUP BY name
+               );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_name
+                ON templates(name) WHERE is_system = 1;
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
             CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
@@ -360,6 +436,8 @@ impl StorageBackend for SqliteBackend {
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+            CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
             "#,
         )
         .execute(&self.pool)
@@ -511,7 +589,12 @@ impl StorageBackend for SqliteBackend {
     // Users
     // -----------------------------------------------------------------------
 
-    async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String> {
+    async fn create_user(
+        &self,
+        username: &str,
+        role: &str,
+        password_hash: Option<&str>,
+    ) -> Result<models::UserRow, String> {
         // The username becomes a workspace path component — reject anything
         // that could escape the per-user tree before it reaches the DB.
         crate::workspace::validate_username(username).map_err(|e| e.to_string())?;
@@ -523,23 +606,24 @@ impl StorageBackend for SqliteBackend {
             role: role.to_string(),
             auth_type: "password".to_string(),
             os_user: None,
+            password_hash: password_hash.map(|s| s.to_string()),
             created_at: now.clone(),
         };
         sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, role, auth_type, os_user, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.username)
         .bind(&row.role)
         .bind(&row.auth_type)
         .bind(&row.os_user)
+        .bind(password_hash)
         .bind(&row.created_at)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(row)
     }
-
     async fn get_user_by_id(&self, id: &str) -> Result<Option<models::UserRow>, String> {
         sqlx::query_as::<_, models::UserRow>("SELECT * FROM users WHERE id = ?")
             .bind(id)
@@ -567,11 +651,26 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_user(&self, id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM users WHERE id = ?")
+        // Cascade the user's live credentials (#520) atomically. If any step
+        // fails, keep the user row so a retry can finish the cleanup instead
+        // of leaving orphaned sessions or API keys behind.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -734,6 +833,10 @@ impl StorageBackend for SqliteBackend {
         Ok(row)
     }
 
+    async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        create_run_if_workdir_idle(&self.pool, run).await
+    }
+
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
         let now = Self::now();
         // If transitioning to a terminal state, set finished_at
@@ -748,8 +851,13 @@ impl StorageBackend for SqliteBackend {
                 .await
                 .map_err(|e| e.to_string())?;
         } else if status == "running" {
-            // Set started_at when run begins
-            sqlx::query("UPDATE runs SET status = ?, phase = ?, started_at = ? WHERE id = ?")
+            // Set started_at when the run begins. A resume after pause
+            // re-enters this branch — COALESCE keeps the original start
+            // time so duration math reflects the whole run, not the last
+            // segment.
+            sqlx::query(
+                "UPDATE runs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?) WHERE id = ?",
+            )
                 .bind(status)
                 .bind(phase)
                 .bind(&now)
@@ -816,10 +924,21 @@ impl StorageBackend for SqliteBackend {
         })
     }
 
-    async fn cancel_run(&self, id: &str) -> Result<(), String> {
-        let now = Self::now();
-        sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
-            .bind(&now)
+    async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(started_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
+            .bind(pid)
             .bind(id)
             .execute(&self.pool)
             .await
@@ -827,9 +946,269 @@ impl StorageBackend for SqliteBackend {
         Ok(())
     }
 
+    async fn is_run_cancelled(&self, id: &str) -> Result<bool, String> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(count.0 > 0)
+    }
+
+    async fn record_run_terminal(
+        &self,
+        id: &str,
+        status: &str,
+        phase: &str,
+        finished_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(phase)
+            .bind(finished_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT pid FROM runs WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.and_then(|r| r.0))
+    }
+
+    async fn list_runs_cursor(
+        &self,
+        filters: &models::RunFilters,
+    ) -> Result<models::CursorPage<models::RunRow>, String> {
+        // Filter/cursor semantics come from the shared assembler in models —
+        // the same tested implementation the handler-level tests pin and the
+        // PostgreSQL backend renders with `$N` binds.
+        let q = models::assemble_run_list_query(filters);
+
+        let limit = filters.limit.clamp(1, 500);
+        let sql = format!(
+            "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
+            q.page_where_sql,
+            limit + 1
+        );
+        let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
+        for bind in &q.page_binds {
+            query = query.bind(bind);
+        }
+        let rows: Vec<models::RunRow> = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let has_more = rows.len() as i64 > limit;
+        let items = if has_more {
+            rows[..limit as usize].to_vec()
+        } else {
+            rows
+        };
+        let next_cursor = if has_more {
+            items.last().map(|r| r.created_at.clone())
+        } else {
+            None
+        };
+
+        let count_sql = format!("SELECT COUNT(*) FROM runs{}", q.filter_where_sql);
+        let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
+        for bind in &q.filter_binds {
+            count_query = count_query.bind(bind);
+        }
+        // Propagate, never swallow: a failed COUNT must not degrade into a
+        // fabricated `total: 0` that the client reads as valid data.
+        let total: i64 = count_query
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("count runs: {e}"))?;
+
+        Ok(models::CursorPage {
+            items,
+            next_cursor,
+            total: total as u64,
+        })
+    }
+
+    async fn upsert_run_node(&self, node: &models::RunNodeRow) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO run_nodes (run_id, rule_name, status, exit_code, started_at, finished_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(run_id, rule_name) DO UPDATE SET \
+                status = excluded.status, \
+                exit_code = excluded.exit_code, \
+                started_at = COALESCE(excluded.started_at, run_nodes.started_at), \
+                finished_at = excluded.finished_at",
+        )
+        .bind(&node.run_id)
+        .bind(&node.rule_name)
+        .bind(&node.status)
+        .bind(node.exit_code)
+        .bind(&node.started_at)
+        .bind(&node.finished_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn list_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String> {
+        sqlx::query_as::<_, models::RunNodeRow>(
+            "SELECT * FROM run_nodes WHERE run_id = ? ORDER BY rule_name",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_cluster(&self, id: &str) -> Result<Option<models::ClusterRow>, String> {
+        sqlx::query_as::<_, models::ClusterRow>("SELECT * FROM clusters WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     // -----------------------------------------------------------------------
     // Sessions
     // -----------------------------------------------------------------------
+
+    async fn get_ai_provider_config(
+        &self,
+        user_id: Option<&str>,
+    ) -> Result<Option<models::AiProviderConfigRow>, String> {
+        match user_id {
+            Some(user_id) => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id = ? \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+            None => sqlx::query_as::<_, models::AiProviderConfigRow>(
+                "SELECT * FROM ai_provider_config WHERE user_id IS NULL \
+                     ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string()),
+        }
+    }
+
+    async fn save_ai_provider_config(
+        &self,
+        config: &models::AiProviderConfigRow,
+        preserve_api_key: bool,
+    ) -> Result<models::AiProviderConfigRow, String> {
+        let id = if config.id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            config.id.clone()
+        };
+        let now = Self::now();
+        let saved = models::AiProviderConfigRow {
+            id,
+            updated_at: now,
+            ..config.clone()
+        };
+
+        if let Some(user_id) = &saved.user_id {
+            sqlx::query(
+                r#"
+                INSERT INTO ai_provider_config (
+                    id, user_id, provider, api_key, api_url, model,
+                    search_enabled, monitor_enabled, auto_retry_enabled,
+                    max_correction_rounds, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    api_key = CASE WHEN ? = 1 THEN ai_provider_config.api_key
+                                   ELSE excluded.api_key END,
+                    api_url = excluded.api_url,
+                    model = excluded.model,
+                    search_enabled = excluded.search_enabled,
+                    monitor_enabled = excluded.monitor_enabled,
+                    auto_retry_enabled = excluded.auto_retry_enabled,
+                    max_correction_rounds = excluded.max_correction_rounds,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(&saved.id)
+            .bind(user_id)
+            .bind(&saved.provider)
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.created_at)
+            .bind(&saved.updated_at)
+            .bind(i64::from(preserve_api_key))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            let updated = sqlx::query(
+                "UPDATE ai_provider_config SET provider = ?, \
+                 api_key = CASE WHEN ? = 1 THEN ai_provider_config.api_key ELSE ? END, \
+                 api_url = ?, model = ?, search_enabled = ?, monitor_enabled = ?, \
+                 auto_retry_enabled = ?, max_correction_rounds = ?, updated_at = ? \
+                 WHERE user_id IS NULL",
+            )
+            .bind(&saved.provider)
+            .bind(i64::from(preserve_api_key))
+            .bind(&saved.api_key)
+            .bind(&saved.api_url)
+            .bind(&saved.model)
+            .bind(saved.search_enabled)
+            .bind(saved.monitor_enabled)
+            .bind(saved.auto_retry_enabled)
+            .bind(saved.max_correction_rounds)
+            .bind(&saved.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if updated.rows_affected() == 0 {
+                sqlx::query(
+                    "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
+                     search_enabled, monitor_enabled, auto_retry_enabled, \
+                     max_correction_rounds, created_at, updated_at) \
+                     VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&saved.id)
+                .bind(&saved.provider)
+                .bind(&saved.api_key)
+                .bind(&saved.api_url)
+                .bind(&saved.model)
+                .bind(saved.search_enabled)
+                .bind(saved.monitor_enabled)
+                .bind(saved.auto_retry_enabled)
+                .bind(saved.max_correction_rounds)
+                .bind(&saved.created_at)
+                .bind(&saved.updated_at)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+        }
+
+        self.get_ai_provider_config(saved.user_id.as_deref())
+            .await?
+            .ok_or_else(|| "AI provider config disappeared after save".to_string())
+    }
 
     async fn create_session(
         &self,
@@ -896,11 +1275,14 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn get_template(&self, id: &str) -> Result<Option<models::TemplateRow>, String> {
-        sqlx::query_as::<_, models::TemplateRow>("SELECT * FROM templates WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| e.to_string())
+        sqlx::query_as::<_, models::TemplateRow>(
+            "SELECT * FROM templates WHERE id = ? OR name = ? LIMIT 1",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
     }
 
     async fn save_template(&self, t: &models::TemplateRow) -> Result<models::TemplateRow, String> {
@@ -988,15 +1370,11 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn get_share_by_token(&self, token: &str) -> Result<Option<models::ShareRow>, String> {
-        let now = Self::now();
-        sqlx::query_as::<_, models::ShareRow>(
-            "SELECT * FROM shares WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)",
-        )
-        .bind(token)
-        .bind(&now)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())
+        sqlx::query_as::<_, models::ShareRow>("SELECT * FROM shares WHERE token = ?")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn list_shares(&self, pipeline_id: &str) -> Result<Vec<models::ShareRow>, String> {
@@ -1023,21 +1401,632 @@ impl StorageBackend for SqliteBackend {
     // -----------------------------------------------------------------------
 
     async fn log_action(&self, user_id: &str, action: &str, target: &str) -> Result<(), String> {
-        let id = Uuid::new_v4().to_string();
+        self.log_action_with_metadata(user_id, action, target, None)
+            .await
+    }
+
+    async fn log_action_with_metadata(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
+        self.record_audit_log(user_id, action, target, "success", metadata)
+            .await
+    }
+
+    // -----------------------------------------------------------------------
+    // API Keys
+    // -----------------------------------------------------------------------
+
+    async fn create_api_key(&self, key: &models::ApiKeyRow) -> Result<models::ApiKeyRow, String> {
+        sqlx::query(
+            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, last_used_at, revoked)              VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&key.id)
+        .bind(&key.user_id)
+        .bind(&key.name)
+        .bind(&key.key_hash)
+        .bind(&key.created_at)
+        .bind(&key.last_used_at)
+        .bind(key.revoked)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(key.clone())
+    }
+
+    async fn list_api_keys(&self, user_id: &str) -> Result<Vec<models::ApiKeyRow>, String> {
+        let rows = sqlx::query_as::<_, models::ApiKeyRow>(
+            "SELECT id, user_id, name, key_hash, created_at, last_used_at, revoked              FROM api_keys              WHERE user_id = ? AND revoked = 0              ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(rows)
+    }
+
+    async fn revoke_api_key(&self, id: &str, user_id: &str) -> Result<bool, String> {
+        let result = sqlx::query("UPDATE api_keys SET revoked = 1 WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn resolve_api_key(
+        &self,
+        key_hash: &str,
+        touched_at: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT k.user_id, u.role FROM api_keys k              LEFT JOIN users u ON u.id = k.user_id              WHERE k.key_hash = ? AND k.revoked = 0",
+        )
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let Some((user_id, role)) = row else {
+            return Ok(None);
+        };
+
+        if let Err(error) = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
+            .bind(touched_at)
+            .bind(key_hash)
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                "API key authenticated but last_used_at could not be updated"
+            );
+        }
+
+        Ok(Some((user_id, role)))
+    }
+
+    async fn delete_api_keys_for_user(&self, user_id: &str) -> Result<u64, String> {
+        let res = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    // -----------------------------------------------------------------------
+    // OAuth CSRF State
+    // -----------------------------------------------------------------------
+
+    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String> {
+        sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
+            .bind(state)
+            .bind(created_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+        // DELETE ... RETURNING consumes the state atomically: concurrent
+        // callbacks cannot both validate the same CSRF token. A delete error
+        // fails the callback closed instead of accepting a reusable state.
+        let row: Option<(String,)> =
+            sqlx::query_as("DELETE FROM oauth_states WHERE state = ? RETURNING created_at")
+                .bind(state)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(row.map(|(c,)| c))
+    }
+
+    async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String> {
+        let res = sqlx::query("DELETE FROM oauth_states WHERE created_at < ?")
+            .bind(older_than)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth Identity Provisioning & OAuth User Synchronization
+    // -----------------------------------------------------------------------
+
+    async fn ensure_env_user(
+        &self,
+        username: &str,
+        role: &str,
+    ) -> Result<Option<(String, String)>, String> {
         let now = Self::now();
         sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, 'success', ?, ?)",
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, ?, 'password', '', ?)",
+        )
+        .bind(username)
+        .bind(username)
+        .bind(role)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        Ok(row)
+    }
+
+    async fn ensure_oauth_user(
+        &self,
+        oauth_user_id: &str,
+        oauth_username: &str,
+        fallback_username: &str,
+    ) -> Result<String, String> {
+        if oauth_user_id.is_empty() || fallback_username.is_empty() {
+            return Err("OAuth identity is missing its unique id".into());
+        }
+
+        let existing = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+            .bind(oauth_user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| format!("OAuth user lookup failed: {e}"))?;
+        if let Some(name) = existing {
+            return Ok(name);
+        }
+
+        let now = Self::now();
+        match sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at)              VALUES (?, ?, 'user', 'oauth', '', ?)",
+        )
+        .bind(oauth_user_id)
+        .bind(oauth_username)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(_) => Ok(oauth_username.to_string()),
+            Err(first_err) => {
+                let retry =
+                    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
+                        .bind(oauth_username)
+                        .fetch_one(&self.pool)
+                        .await
+                        .map(|n| n > 0)
+                        .unwrap_or(false);
+                if !retry {
+                    return Err(format!("Failed to create OAuth user record: {first_err}"));
+                }
+                sqlx::query(
+                    "INSERT INTO users (id, username, role, auth_type, os_user, created_at)                      VALUES (?, ?, 'user', 'oauth', '', ?)",
+                )
+                .bind(oauth_user_id)
+                .bind(fallback_username)
+                .bind(&now)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to create OAuth user record: {e}"))?;
+                Ok(fallback_username.to_string())
+            }
+        }
+    }
+
+    async fn record_audit_log(
+        &self,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        result: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Self::now();
+        // The audit_logs.user_id FK (REFERENCES users(id), enforced via
+        // PRAGMA foreign_keys=ON) rejects any id without a users row — and
+        // authenticated ids are not limited to the seeded 'default' user
+        // (OAuth/env-provisioned users never pass through here). The
+        // synthetic viewer row is therefore functionally required, not
+        // bookkeeping garnish; INSERT OR IGNORE keeps repeat audits of the
+        // same id race-tolerant. (PostgreSQL record_audit_log mirrors this
+        // with ON CONFLICT (id) DO NOTHING — keep the two in step.)
+        sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, 'viewer', 'audit', NULL, ?)",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(user_id)
         .bind(action)
         .bind(target)
-        .bind(None::<String>)
+        .bind(result)
+        .bind(metadata)
         .bind(&now)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn list_audit_logs(
+        &self,
+        cutoff: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<models::AuditLogRow>, i64), String> {
+        let rows: Vec<models::AuditLogRow> = sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        )
+        .bind(cutoff)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ?")
+            .bind(cutoff)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok((rows, total))
+    }
+
+    async fn list_recent_audit_logs(&self, limit: u32) -> Result<Vec<models::AuditLogRow>, String> {
+        sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_run_metrics(&self) -> Result<(i64, u64), String> {
+        // Both COUNTs propagate: the trait already returns Result, and the
+        // caller owns the display-tier degrade — swallowing here would make
+        // that fallback dead code.
+        let active: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status IN ('running', 'queued')")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| format!("count active runs: {e}"))?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("count runs: {e}"))?;
+        Ok((active, total as u64))
+    }
+
+    async fn get_webhook_config(&self) -> Result<Option<models::WebhookConfigRow>, String> {
+        sqlx::query_as(
+            "SELECT id, url, secret, enabled, events, signature_scheme, updated_at FROM webhook_config WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn save_webhook_config(
+        &self,
+        url: &str,
+        secret: Option<&str>,
+        enabled: bool,
+        events: &str,
+        signature_scheme: &str,
+    ) -> Result<(), String> {
+        let now = Self::now();
+        sqlx::query(
+            "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at)              VALUES (1, ?, ?, ?, ?, ?, ?)              ON CONFLICT(id) DO UPDATE SET              url = excluded.url,              secret = COALESCE(excluded.secret, webhook_config.secret),              enabled = excluded.enabled,              events = excluded.events,              signature_scheme = excluded.signature_scheme,              updated_at = excluded.updated_at",
+        )
+        .bind(url)
+        .bind(secret)
+        .bind(enabled as i64)
+        .bind(events)
+        .bind(signature_scheme)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn is_chat_session_writable(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<bool, String> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ? AND user_id != ?)",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn save_chat_user_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        title: &str,
+        message: &str,
+    ) -> Result<bool, String> {
+        let now = Self::now();
+        let msg_id = Uuid::new_v4().to_string();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session = sqlx::query(
+            "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)              VALUES (?, ?, ?, ?, ?)              ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at              WHERE chat_sessions.user_id = excluded.user_id",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(title)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
+
+        sqlx::query(
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (?, ?, 'user', ?, NULL, ?)",
+        )
+        .bind(&msg_id)
+        .bind(session_id)
+        .bind(message)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+
+        Ok(true)
+    }
+
+    async fn save_chat_assistant_message(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        content: &str,
+    ) -> Result<bool, String> {
+        let now = Self::now();
+        let msg_id = Uuid::new_v4().to_string();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let session =
+            sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?")
+                .bind(&now)
+                .bind(session_id)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        if session.rows_affected() == 0 {
+            return Ok(false);
+        }
+
+        sqlx::query(
+            "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at)              VALUES (?, ?, 'assistant', ?, NULL, ?)",
+        )
+        .bind(&msg_id)
+        .bind(session_id)
+        .bind(content)
+        .bind(&now)
+        .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+
+        Ok(true)
+    }
+
+    async fn list_chat_sessions(
+        &self,
+        user_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::ChatSessionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, user_id, title, created_at, updated_at FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+        )
+        .bind(user_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn list_clusters(&self) -> Result<Vec<models::ClusterRow>, String> {
+        sqlx::query_as("SELECT * FROM clusters ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn save_cluster(&self, cluster: &models::ClusterRow) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at)              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)              ON CONFLICT(id) DO UPDATE SET name = excluded.name, ssh_host = excluded.ssh_host,              ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user, ssh_key = excluded.ssh_key,              scheduler = excluded.scheduler, remote_dir = excluded.remote_dir, enabled = excluded.enabled",
+        )
+        .bind(&cluster.id)
+        .bind(&cluster.name)
+        .bind(&cluster.ssh_host)
+        .bind(cluster.ssh_port)
+        .bind(&cluster.ssh_user)
+        .bind(&cluster.ssh_key)
+        .bind(&cluster.scheduler)
+        .bind(&cluster.remote_dir)
+        .bind(cluster.enabled as i64)
+        .bind(&cluster.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn delete_cluster(&self, id: &str) -> Result<bool, String> {
+        let affected = sqlx::query("DELETE FROM clusters WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
+    async fn get_latest_terminal_run_for_pipeline(
+        &self,
+        pipeline_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, String> {
+        sqlx::query_as(
+            "SELECT status, finished_at FROM runs WHERE pipeline_id = ?              AND status IN ('completed', 'failed', 'cancelled')              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(pipeline_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn record_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        user_id: &str,
+        version: &str,
+        toml_content: &str,
+    ) -> Result<(), String> {
+        let now = Self::now();
+        let rev_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&rev_id)
+        .bind(pipeline_id)
+        .bind(user_id)
+        .bind(version)
+        .bind(toml_content)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "DELETE FROM pipeline_revisions WHERE pipeline_id = ? AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id = ?               ORDER BY created_at DESC, id DESC LIMIT 50)",
+        )
+        .bind(pipeline_id)
+        .bind(pipeline_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    async fn list_pipeline_revisions(
+        &self,
+        pipeline_id: &str,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRevisionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .bind(pipeline_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn get_pipeline_revision(
+        &self,
+        pipeline_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<models::PipelineRevisionRow>, String> {
+        sqlx::query_as(
+            "SELECT id, pipeline_id, user_id, version, toml_content, created_at FROM pipeline_revisions              WHERE pipeline_id = ? AND id = ?",
+        )
+        .bind(pipeline_id)
+        .bind(revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn search_pipelines(
+        &self,
+        query: &str,
+        user_id: Option<&str>,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String> {
+        let pattern = format!("%{}%", query);
+        if is_admin {
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE name LIKE ? OR toml_content LIKE ? ORDER BY updated_at DESC LIMIT ?",
+            )
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+        } else {
+            let uid = user_id.unwrap_or("");
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE (user_id = ? OR visibility = 'workspace')                  AND (name LIKE ? OR toml_content LIKE ?) ORDER BY updated_at DESC LIMIT ?",
+            )
+            .bind(uid)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+        }
+    }
+
+    async fn list_pipelines_visible(
+        &self,
+        user_id: &str,
+        is_admin: bool,
+        limit: u32,
+    ) -> Result<Vec<models::PipelineRow>, String> {
+        if is_admin {
+            sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT ?")
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            sqlx::query_as(
+                "SELECT * FROM pipelines WHERE user_id = ? OR visibility = 'workspace' ORDER BY updated_at DESC LIMIT ?",
+            )
+            .bind(user_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -1113,7 +2102,7 @@ mod tests {
     async fn create_test_user(backend: &SqliteBackend, username: &str) -> models::UserRow {
         let role = if username == "admin" { "admin" } else { "user" };
         backend
-            .create_user(username, role)
+            .create_user(username, role, None)
             .await
             .unwrap_or_else(|e| panic!("Failed to create user '{username}': {e}"))
     }
@@ -1534,11 +2523,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test: cancel_run
+    // Test: record_run_terminal (cancelled)
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_cancel_run() {
+    async fn test_record_run_terminal_cancelled() {
         let backend = create_backend().await;
         let user = create_test_user(&backend, "cancel-test").await;
         let pipeline = create_test_pipeline(&backend, &user.id, "cancel-pipeline").await;
@@ -1561,9 +2550,18 @@ mod tests {
         };
         let created = backend.create_run(&run).await.unwrap();
 
-        backend.cancel_run(&created.id).await.unwrap();
+        backend
+            .record_run_terminal(
+                &created.id,
+                "cancelled",
+                "cancelled",
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .await
+            .unwrap();
         let cancelled = backend.get_run(&created.id).await.unwrap().unwrap();
         assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(cancelled.phase, "cancelled");
         assert!(cancelled.finished_at.is_some());
     }
 
@@ -1666,5 +2664,729 @@ mod tests {
         let p = pool();
         let row: (i64,) = sqlx::query_as("SELECT 1").fetch_one(p).await.unwrap();
         assert_eq!(row.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_nodes_and_cursor_pagination() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("memory backend");
+        backend.init().await.expect("init");
+
+        let user = backend
+            .create_user("alice", "user", None)
+            .await
+            .expect("user create");
+
+        let run = models::RunRow {
+            id: "run-nodes-test".into(),
+            user_id: user.id.clone(),
+            pipeline_id: None,
+            pipeline_snapshot: "[workflow]\nname = \"test\"".into(),
+            workflow_name: Some("test".into()),
+            status: "running".into(),
+            phase: "executing".into(),
+            dry_run: false,
+            pid: Some(12345),
+            workdir: Some("/tmp/test".into()),
+            config_overrides: None,
+            started_at: Some("timestamp-start".into()),
+            finished_at: None,
+            created_at: "timestamp-created-1".into(),
+        };
+        backend.create_run(&run).await.expect("create run");
+
+        let node = models::RunNodeRow {
+            run_id: run.id.clone(),
+            rule_name: "fastp_trim".into(),
+            status: "running".into(),
+            exit_code: None,
+            started_at: Some("timestamp-node-start".into()),
+            finished_at: None,
+        };
+        backend.upsert_run_node(&node).await.expect("upsert node");
+
+        let nodes = backend.list_run_nodes(&run.id).await.expect("list nodes");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].rule_name, "fastp_trim");
+        assert_eq!(nodes[0].status, "running");
+
+        let updated_node = models::RunNodeRow {
+            run_id: run.id.clone(),
+            rule_name: "fastp_trim".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            started_at: None,
+            finished_at: Some("timestamp-node-end".into()),
+        };
+        backend
+            .upsert_run_node(&updated_node)
+            .await
+            .expect("update node");
+
+        let nodes = backend.list_run_nodes(&run.id).await.expect("list nodes");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].status, "completed");
+        assert_eq!(nodes[0].exit_code, Some(0));
+        assert_eq!(nodes[0].started_at, Some("timestamp-node-start".into()));
+        assert_eq!(nodes[0].finished_at, Some("timestamp-node-end".into()));
+
+        let filters = models::RunFilters {
+            user_id: Some(user.id.clone()),
+            status: Some("running".into()),
+            q: None,
+            cursor: None,
+            limit: 10,
+        };
+        let page = backend.list_runs_cursor(&filters).await.expect("page");
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "run-nodes-test");
+    }
+}
+
+#[cfg(test)]
+mod workdir_guard_tests {
+    use super::*;
+    use crate::infra::db::models;
+
+    fn row(id: &str, status: &str, workdir: &str) -> models::RunRow {
+        models::RunRow {
+            id: id.into(),
+            user_id: "default".into(),
+            pipeline_id: None,
+            pipeline_snapshot: "[workflow]".into(),
+            workflow_name: Some("wf".into()),
+            status: status.into(),
+            phase: "parsing".into(),
+            dry_run: false,
+            pid: None,
+            workdir: Some(workdir.into()),
+            config_overrides: None,
+            started_at: None,
+            finished_at: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[tokio::test]
+    async fn workdir_guard_rejects_a_second_live_run() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        let pool = backend.inner_pool();
+
+        // The first insert claims the idle workdir via the StorageBackend trait.
+        assert!(
+            backend
+                .create_run_if_workdir_idle(&row("r1", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
+        // A second live run for the SAME workdir is rejected — the atomic
+        // guard is what stops concurrent retries from double-spawning.
+        assert!(
+            !backend
+                .create_run_if_workdir_idle(&row("r2", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
+        // A different workdir is unaffected.
+        assert!(
+            backend
+                .create_run_if_workdir_idle(&row("r3", "queued", "/other"))
+                .await
+                .unwrap()
+        );
+        // Terminal runs do not hold the workdir: everything failed → free.
+        sqlx::query("UPDATE runs SET status = 'failed'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(
+            backend
+                .create_run_if_workdir_idle(&row("r4", "queued", "/wd"))
+                .await
+                .unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod ai_provider_config_tests {
+    use super::*;
+    use crate::infra::db::models;
+
+    async fn backend() -> SqliteBackend {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        backend
+    }
+
+    fn row(user_id: Option<&str>, provider: &str, api_key: &str) -> models::AiProviderConfigRow {
+        let now = chrono::Utc::now().to_rfc3339();
+        models::AiProviderConfigRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: user_id.map(str::to_string),
+            provider: provider.to_string(),
+            api_key: Some(api_key.to_string()),
+            api_url: Some("https://ai.example.test".to_string()),
+            model: Some("test-model".to_string()),
+            search_enabled: 1,
+            monitor_enabled: 1,
+            auto_retry_enabled: 0,
+            max_correction_rounds: 3,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_config_upsert_is_idempotent_and_can_preserve_key() {
+        let backend = backend().await;
+
+        let saved = backend
+            .save_ai_provider_config(&row(None, "openai", "first-key"), false)
+            .await
+            .expect("first server save");
+        assert_eq!(saved.provider, "openai");
+
+        let update = row(None, "claude", "ignored-new-key");
+        let saved = backend
+            .save_ai_provider_config(&update, true)
+            .await
+            .expect("server update");
+        assert_eq!(saved.provider, "claude");
+        assert_eq!(saved.api_key.as_deref(), Some("first-key"));
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ai_provider_config WHERE user_id IS NULL")
+                .fetch_one(backend.inner_pool())
+                .await
+                .expect("server row count");
+        assert_eq!(count.0, 1);
+
+        let replaced = backend
+            .save_ai_provider_config(&row(None, "ollama", "replacement"), false)
+            .await
+            .expect("server key replacement");
+        assert_eq!(replaced.api_key.as_deref(), Some("replacement"));
+    }
+
+    #[tokio::test]
+    async fn user_configs_upsert_without_cross_scope_leakage() {
+        let backend = backend().await;
+        let alice = backend.create_user("alice", "user", None).await.unwrap();
+        let bob = backend.create_user("bob", "user", None).await.unwrap();
+
+        backend
+            .save_ai_provider_config(&row(Some(&alice.id), "openai", "alice-key"), false)
+            .await
+            .unwrap();
+        let update = row(Some(&alice.id), "claude", "ignored");
+        let saved = backend
+            .save_ai_provider_config(&update, true)
+            .await
+            .unwrap();
+        assert_eq!(saved.provider, "claude");
+        assert_eq!(saved.api_key.as_deref(), Some("alice-key"));
+
+        backend
+            .save_ai_provider_config(&row(Some(&bob.id), "openai", "bob-key"), false)
+            .await
+            .unwrap();
+        let alice_row = backend
+            .get_ai_provider_config(Some(&alice.id))
+            .await
+            .unwrap()
+            .expect("alice row");
+        let bob_row = backend
+            .get_ai_provider_config(Some(&bob.id))
+            .await
+            .unwrap()
+            .expect("bob row");
+        assert_eq!(alice_row.api_key.as_deref(), Some("alice-key"));
+        assert_eq!(bob_row.api_key.as_deref(), Some("bob-key"));
+
+        let server = backend.get_ai_provider_config(None).await.unwrap();
+        assert!(server.is_none(), "user writes must not create a server row");
+    }
+
+    #[tokio::test]
+    async fn api_key_lifecycle_and_touch() {
+        let backend = backend().await;
+        let alice = backend
+            .create_user("alice_key", "user", None)
+            .await
+            .unwrap();
+
+        let key = models::ApiKeyRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: alice.id.clone(),
+            name: "ci-key".to_string(),
+            key_hash: "hash_alice_123".to_string(),
+            created_at: SqliteBackend::now(),
+            last_used_at: None,
+            revoked: 0,
+        };
+        let created = backend.create_api_key(&key).await.expect("create key");
+        assert_eq!(created.name, "ci-key");
+
+        // List keys
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "ci-key");
+        assert!(keys[0].last_used_at.is_none());
+
+        // Resolve key
+        let touch_time = SqliteBackend::now();
+        let resolved = backend
+            .resolve_api_key("hash_alice_123", &touch_time)
+            .await
+            .expect("resolve key");
+        assert_eq!(resolved, Some((alice.id.clone(), "user".to_string())));
+
+        // Touch updated last_used_at
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert_eq!(keys[0].last_used_at.as_deref(), Some(touch_time.as_str()));
+
+        // Revoke key
+        let revoked = backend
+            .revoke_api_key(&key.id, &alice.id)
+            .await
+            .expect("revoke key");
+        assert!(revoked);
+
+        // After revocation, resolve yields None and list is empty
+        let resolved = backend
+            .resolve_api_key("hash_alice_123", &touch_time)
+            .await
+            .expect("resolve revoked");
+        assert!(resolved.is_none());
+        let keys = backend.list_api_keys(&alice.id).await.expect("list keys");
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn oauth_state_lifecycle_and_cleanup() {
+        let backend = backend().await;
+        let now = SqliteBackend::now();
+
+        backend
+            .store_oauth_state("state-one", &now)
+            .await
+            .expect("store state");
+        let consumed = backend
+            .consume_oauth_state("state-one")
+            .await
+            .expect("consume state");
+        assert_eq!(consumed, Some(now.clone()));
+
+        // Single use
+        let second = backend
+            .consume_oauth_state("state-one")
+            .await
+            .expect("consume again");
+        assert!(second.is_none());
+
+        // Pruning
+        let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
+        backend
+            .store_oauth_state("state-old", &old)
+            .await
+            .expect("store old");
+        backend
+            .store_oauth_state("state-fresh", &now)
+            .await
+            .expect("store fresh");
+
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let pruned = backend
+            .cleanup_stale_oauth_states(&cutoff)
+            .await
+            .expect("cleanup");
+        assert_eq!(pruned, 1);
+
+        assert!(
+            backend
+                .consume_oauth_state("state-old")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            backend
+                .consume_oauth_state("state-fresh")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_state_is_consumed_at_most_once_under_concurrency() {
+        let backend = backend().await;
+        let now = SqliteBackend::now();
+        backend
+            .store_oauth_state("concurrent-state", &now)
+            .await
+            .expect("store state");
+
+        let (first, second) = tokio::join!(
+            backend.consume_oauth_state("concurrent-state"),
+            backend.consume_oauth_state("concurrent-state")
+        );
+        let consumed = usize::from(first.expect("first consume").is_some())
+            + usize::from(second.expect("second consume").is_some());
+        assert_eq!(
+            consumed, 1,
+            "a CSRF state must be accepted by exactly one callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_deletion_cascades_credentials() {
+        let backend = backend().await;
+        let charlie = backend
+            .create_user("charlie_cred", "user", None)
+            .await
+            .unwrap();
+
+        let token = "session_charlie_tok";
+        let expires = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        backend
+            .create_session(&charlie.id, token, &expires)
+            .await
+            .unwrap();
+
+        let key = models::ApiKeyRow {
+            id: Uuid::new_v4().to_string(),
+            user_id: charlie.id.clone(),
+            name: "charlie-key".to_string(),
+            key_hash: "hash_charlie_456".to_string(),
+            created_at: SqliteBackend::now(),
+            last_used_at: None,
+            revoked: 0,
+        };
+        backend.create_api_key(&key).await.unwrap();
+
+        // Delete charlie
+        backend
+            .delete_user(&charlie.id)
+            .await
+            .expect("delete charlie");
+
+        // Sessions cascaded
+        assert!(backend.get_session(token).await.unwrap().is_none());
+
+        // API keys cascaded
+        assert!(backend.list_api_keys(&charlie.id).await.unwrap().is_empty());
+        let touch = SqliteBackend::now();
+        assert!(
+            backend
+                .resolve_api_key("hash_charlie_456", &touch)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_log_extended_and_metrics() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        // Initial metrics
+        let (active, total) = backend.get_run_metrics().await.unwrap();
+        assert_eq!(active, 0);
+        assert_eq!(total, 0);
+
+        // Record audit logs
+        let past = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        backend
+            .record_audit_log(
+                "alice",
+                "POST /api/runs",
+                "/api/runs",
+                "success",
+                Some("{\"status\":200}"),
+            )
+            .await
+            .unwrap();
+        backend
+            .record_audit_log(
+                "bob",
+                "DELETE /api/runs/1",
+                "/api/runs/1",
+                "failure",
+                Some("{\"status\":403}"),
+            )
+            .await
+            .unwrap();
+
+        let (entries, total_entries) = backend.list_audit_logs(&past, 10, 0).await.unwrap();
+        assert_eq!(total_entries, 2);
+        assert_eq!(entries.len(), 2);
+
+        let recent = backend.list_recent_audit_logs(1).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].user_id, "bob");
+    }
+
+    #[tokio::test]
+    async fn webhook_config_extended() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        assert!(backend.get_webhook_config().await.unwrap().is_none());
+
+        backend
+            .save_webhook_config(
+                "https://example.com/webhook",
+                Some("secret123"),
+                true,
+                "[\"workflow_completed\"]",
+                "hmac-sha256",
+            )
+            .await
+            .unwrap();
+
+        let cfg = backend
+            .get_webhook_config()
+            .await
+            .unwrap()
+            .expect("webhook cfg");
+        assert_eq!(cfg.url, "https://example.com/webhook");
+        assert_eq!(cfg.secret.as_deref(), Some("secret123"));
+        assert_eq!(cfg.enabled, 1);
+        assert_eq!(cfg.signature_scheme, "hmac-sha256");
+
+        // Update without changing secret
+        backend
+            .save_webhook_config(
+                "https://example.com/webhook2",
+                None,
+                false,
+                "[]",
+                "sha256-keyed",
+            )
+            .await
+            .unwrap();
+
+        let updated = backend
+            .get_webhook_config()
+            .await
+            .unwrap()
+            .expect("updated webhook cfg");
+        assert_eq!(updated.url, "https://example.com/webhook2");
+        assert_eq!(updated.secret.as_deref(), Some("secret123")); // Preserved by COALESCE
+        assert_eq!(updated.enabled, 0);
+        assert_eq!(updated.signature_scheme, "sha256-keyed");
+    }
+
+    #[tokio::test]
+    async fn chat_persistence_lifecycle() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        let session_id = "test-chat-session-1";
+        assert!(
+            backend
+                .is_chat_session_writable(session_id, "user-alice")
+                .await
+                .unwrap()
+        );
+
+        // Alice sends a message
+        let ok = backend
+            .save_chat_user_message(
+                session_id,
+                "user-alice",
+                "Help me build RNA-seq",
+                "Can you build an RNA-seq workflow?",
+            )
+            .await
+            .unwrap();
+        assert!(ok);
+
+        // Assistant replies
+        let ok = backend
+            .save_chat_assistant_message(session_id, "user-alice", "Here is your workflow: ...")
+            .await
+            .unwrap();
+        assert!(ok);
+
+        // Bob cannot write to Alice's session
+        assert!(
+            !backend
+                .is_chat_session_writable(session_id, "user-bob")
+                .await
+                .unwrap()
+        );
+        let rejected = backend
+            .save_chat_user_message(session_id, "user-bob", "Hijack", "Hijacking message")
+            .await
+            .unwrap();
+        assert!(!rejected);
+
+        let sessions = backend.list_chat_sessions("user-alice", 10).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(sessions[0].title, "Help me build RNA-seq");
+
+        assert!(
+            backend
+                .list_chat_sessions("user-bob", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_chat_session_claim_has_exactly_one_owner() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        for trial in 0..32 {
+            let session_id = format!("contested-chat-session-{trial}");
+            let (alice, bob) = tokio::join!(
+                backend.save_chat_user_message(&session_id, "user-alice", "Alice", "hello"),
+                backend.save_chat_user_message(&session_id, "user-bob", "Bob", "hello")
+            );
+            let accepted =
+                usize::from(alice.expect("Alice write")) + usize::from(bob.expect("Bob write"));
+            assert_eq!(
+                accepted, 1,
+                "a session id must be claimed by exactly one concurrent writer"
+            );
+        }
+
+        let alice_sessions = backend.list_chat_sessions("user-alice", 100).await.unwrap();
+        let bob_sessions = backend.list_chat_sessions("user-bob", 100).await.unwrap();
+        assert_eq!(
+            alice_sessions.len() + bob_sessions.len(),
+            32,
+            "each session must appear only in one user's history"
+        );
+    }
+
+    #[tokio::test]
+    async fn cluster_persistence_lifecycle() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        assert!(backend.list_clusters().await.unwrap().is_empty());
+
+        let cluster = models::ClusterRow {
+            id: "cluster-alpha".to_string(),
+            name: "Alpha HPC".to_string(),
+            ssh_host: "alpha.hpc.org".to_string(),
+            ssh_port: 22,
+            ssh_user: Some("slurm_user".to_string()),
+            ssh_key: None,
+            scheduler: Some("slurm".to_string()),
+            remote_dir: Some("/scratch/runs".to_string()),
+            enabled: true,
+            created_at: SqliteBackend::now(),
+        };
+
+        backend.save_cluster(&cluster).await.unwrap();
+        let list = backend.list_clusters().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "cluster-alpha");
+
+        let fetched = backend
+            .get_cluster("cluster-alpha")
+            .await
+            .unwrap()
+            .expect("fetched");
+        assert_eq!(fetched.name, "Alpha HPC");
+
+        let deleted = backend.delete_cluster("cluster-alpha").await.unwrap();
+        assert!(deleted);
+        assert!(
+            backend
+                .get_cluster("cluster-alpha")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!backend.delete_cluster("cluster-alpha").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pipeline_revision_and_search_lifecycle() {
+        let backend = SqliteBackend::new("sqlite::memory:").await.unwrap();
+        backend.init().await.unwrap();
+
+        let user = backend
+            .create_user("researcher", "user", None)
+            .await
+            .unwrap();
+
+        let pipe = models::PipelineRow {
+            id: "pipe-100".to_string(),
+            user_id: user.id.clone(),
+            name: "Variant Discovery".to_string(),
+            version: "0.1.0".to_string(),
+            toml_content: "[workflow]\nname = \"Variant Discovery\"\n".to_string(),
+            rules_count: 5,
+            forked_from: None,
+            visibility: "private".to_string(),
+            created_at: SqliteBackend::now(),
+            updated_at: SqliteBackend::now(),
+        };
+        backend.save_pipeline(&pipe).await.unwrap();
+
+        // Revision tracking
+        backend
+            .record_pipeline_revision(
+                "pipe-100",
+                &user.id,
+                "0.1.0",
+                "[workflow]\nname = \"Variant Discovery\"\n",
+            )
+            .await
+            .unwrap();
+        backend
+            .record_pipeline_revision(
+                "pipe-100",
+                &user.id,
+                "0.2.0",
+                "[workflow]\nname = \"Variant Discovery v2\"\n",
+            )
+            .await
+            .unwrap();
+
+        let revs = backend
+            .list_pipeline_revisions("pipe-100", 10)
+            .await
+            .unwrap();
+        assert_eq!(revs.len(), 2);
+        assert_eq!(revs[0].version, "0.2.0");
+
+        let rev = backend
+            .get_pipeline_revision("pipe-100", &revs[0].id)
+            .await
+            .unwrap()
+            .expect("rev");
+        assert_eq!(rev.version, "0.2.0");
+
+        // Search
+        let matches = backend
+            .search_pipelines("Discovery", Some(&user.id), false, 10)
+            .await
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+
+        let visible = backend
+            .list_pipelines_visible(&user.id, false, 10)
+            .await
+            .unwrap();
+        assert_eq!(visible.len(), 1);
     }
 }

@@ -88,13 +88,6 @@ pub struct WorkflowStatsResponse {
     pub wildcard_names: Vec<String>,
 }
 
-/// Request to validate a pipeline's DAG for structural issues.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidateRequest {
-    pub toml_content: String,
-    pub pipeline_id: Option<String>,
-}
-
 /// Validation result (empty errors = valid pipeline). The extra fields
 /// mirror the CLI's `validate --json` envelope (issue #81 parity).
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

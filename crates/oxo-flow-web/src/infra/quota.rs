@@ -83,7 +83,11 @@ impl QuotaTracker {
 
     /// Check whether a user can start a new run with the given resources.
     pub fn check(&self, user_id: &str, threads: u32, memory_mb: u64) -> QuotaCheckResult {
-        let config = self.config.read().unwrap().clone();
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let mut usage_map = self
             .usage
             .lock()
@@ -172,7 +176,10 @@ impl QuotaTracker {
 
     /// Get the configured limits.
     pub fn config(&self) -> QuotaConfig {
-        self.config.read().unwrap().clone()
+        self.config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -180,7 +187,6 @@ impl QuotaTracker {
 static QUOTA_TRACKER: std::sync::LazyLock<QuotaTracker> =
     std::sync::LazyLock::new(|| QuotaTracker::new(QuotaConfig::default()));
 
-/// Get a reference to the global quota tracker.
 /// A reservation: (user_id, threads, memory_mb).
 type Reservation = (String, u32, u64);
 
@@ -203,13 +209,29 @@ pub fn reserve(run_id: &str, user_id: &str, threads: u32, memory_mb: u64) {
 
 /// Release a run's reservation and return it (user, threads, memory) for
 /// the tracker's record_complete call.
-pub fn release(run_id: &str) -> Option<Reservation> {
+///
+/// Building block for [`release_and_complete`]; production callers should
+/// never split the pair.
+pub(crate) fn release(run_id: &str) -> Option<Reservation> {
     RUN_RESERVATIONS
         .lock()
         .ok()
         .and_then(|mut map| map.remove(run_id))
 }
 
+/// Release a run's reservation and feed it straight into the tracker.
+///
+/// Every terminal path needs exactly this pair — calling `release` and
+/// [`QuotaTracker::record_complete`] separately invites the leak class where
+/// one half runs without the other. Callers that only want the reservation
+/// values (none today) use `release` directly.
+pub fn release_and_complete(run_id: &str) {
+    if let Some((user_id, threads, memory_mb)) = release(run_id) {
+        global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
+}
+
+/// Get a reference to the global quota tracker.
 pub fn global_quota_tracker() -> &'static QuotaTracker {
     &QUOTA_TRACKER
 }

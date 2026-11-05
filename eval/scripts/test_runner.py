@@ -252,6 +252,31 @@ class RuleJudgingTests(unittest.TestCase):
         self.assertFalse(runner.param_present("-R", "gatk -RNA ref.fa"))
         self.assertFalse(runner.param_present("index", "tool indexing"))
 
+    def test_corrupted_gold_cell_is_surfaced_not_vacuously_perfect(self):
+        # A malformed JSON cell must not read as "no expectations" — the
+        # row's capture_error carries the corruption like a capture failure
+        # would (same policy as check_gold.py's hard finding).
+        result = self._judge(
+            self._row(expected_key_params="not-json["),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\nshell = "tool"\n',
+        )
+        self.assertIn("expected_key_params", result["capture_error"])
+        self.assertNotIn("key_params", result)
+
+    def test_corrupted_resource_range_cell_scores_zero_not_vacuous_pass(self):
+        # A corrupted range cell must not fall back to the lenient defaults
+        # (1-128 threads / 262144 MB) and read as a vacuous in-range pass —
+        # same policy as the other gold-cell corruption checks.
+        capture = (
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\n'
+            'threads = 4\nmemory = "8G"\nshell = "tool"\n'
+        )
+        for bad_cell in ("not-json[", "null", '"8G"'):
+            result = self._judge(self._row(resource_range=bad_cell), capture)
+            self.assertEqual(result["resources_in_range"], 0.0, bad_cell)
+            self.assertIn("resource_range", result["capture_error"])
+            self.assertEqual(result["resources_declared"], 1.0)
+
 
 class FailedRuleCaptureTests(unittest.TestCase):
     def test_meta_error_is_skipped_not_scored_zero(self):
@@ -268,6 +293,48 @@ class FailedRuleCaptureTests(unittest.TestCase):
             with mock.patch("common.oxo_flow_cmd", return_value=(0, "", "")):
                 results = runner.judge_rule(gold, td, "/bin/true")
         self.assertEqual(results, [])
+
+
+class WorkflowJudgingTests(unittest.TestCase):
+    """Regression: an edge-only gold row (expected_steps empty or unparseable,
+    expected_dag_edges non-empty) used to hit a NameError on the step-name map
+    inside judge_workflow."""
+
+    def _judge(self, gold_row, capture_text):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / f"{gold_row['id']}.oxoflow"
+            path.write_text(capture_text, encoding="utf-8")
+            with mock.patch("common.oxo_flow_cmd", return_value=(0, "", "")):
+                return runner.judge_workflow([gold_row], td, "/bin/true")[0]
+
+    def _row(self, **overrides):
+        row = {
+            "id": "wf-900",
+            "expected_steps": "[]",
+            "expected_tools": "[]",
+            "expected_dag_edges": "[]",
+            "expected_outputs": "[]",
+        }
+        row.update(overrides)
+        return row
+
+    def test_edge_only_gold_row_degrades_to_zero_coverage_not_crash(self):
+        result = self._judge(
+            self._row(expected_dag_edges='[["a", "b"]]'),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\noutput = ["a.txt"]\n',
+        )
+        self.assertEqual(result["edge_coverage"], 0.0)
+        self.assertNotIn("step_coverage", result)
+
+    def test_steps_and_edges_still_score_together(self):
+        result = self._judge(
+            self._row(expected_steps='["a"]', expected_dag_edges='[["a", "a"]]'),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "a"\noutput = ["a.txt"]\n',
+        )
+        self.assertEqual(result["step_coverage"], 1.0)
+        # The engine graph is empty under the mocked binary, so the mapped
+        # edge cannot hit — the metric must simply score 0, not crash.
+        self.assertEqual(result["edge_coverage"], 0.0)
 
 
 class ParserTests(unittest.TestCase):

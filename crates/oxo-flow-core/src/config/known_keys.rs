@@ -45,6 +45,7 @@ pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
     "resource_groups",
     "rules",
     "sample_groups",
+    "types",
     "values",
     "webhook",
     "wildcard_constraints",
@@ -92,6 +93,7 @@ const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
     "workflow.sample_groups_file",
     "workflow.sample_pattern",
     "workflow.version",
+    "types",
 ];
 
 /// Keys of the `[workflow]` table.
@@ -119,6 +121,7 @@ const DEFAULTS_KEYS: &[&str] = &[
     "environment",
     "memory",
     "shell_prelude",
+    "staging_mode",
     "threads",
     "time_limit",
 ];
@@ -214,8 +217,13 @@ const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"]
 /// drift baselines).
 const ENGINE_KEYS: &[&str] = &[
     "min_free_disk",
+    "numa_aware",
     "protected_data_trees",
     "reclaim_free_disk",
+    "staging_mode",
+    "tier0_ram_scratch",
+    "tier1_nvme_scratch",
+    "tier2_shared_scratch",
     "tmp_dir",
 ];
 
@@ -293,12 +301,14 @@ const RULE_KEYS: &[&str] = &[
     "scratch",
     "shell",
     "script",
+    "staging_mode",
     "tags",
     "target",
     "temp_output",
     "temporary",
     "threads",
     "transform",
+    "types",
     "when",
 ];
 
@@ -309,6 +319,8 @@ const RESOURCES_KEYS: &[&str] = &[
     "gpu_spec",
     "groups",
     "memory",
+    "numa_node",
+    "numa_pin",
     "partition",
     "threads",
     "time_limit",
@@ -316,6 +328,20 @@ const RESOURCES_KEYS: &[&str] = &[
 
 /// Keys of the `[resources.gpu_spec]` table.
 const GPU_SPEC_KEYS: &[&str] = &["compute_capability", "count", "memory_gb", "model"];
+
+/// Keys of a `[types.<name>]` biological semantic type specification.
+const BIOTYPE_KEYS: &[&str] = &[
+    "attributes",
+    "compression",
+    "format",
+    "index",
+    "read_groups",
+    "reference_build",
+    "sort_order",
+];
+
+/// Keys of a rule-level `[rules.types]` table.
+const RULE_TYPES_KEYS: &[&str] = &["inputs", "outputs"];
 
 /// Keys of an `environment` table (rule-level, `[defaults]`, `[[references]]`).
 const ENVIRONMENT_KEYS: &[&str] = &[
@@ -379,8 +405,11 @@ impl std::fmt::Display for UnknownKey {
 }
 
 /// Levenshtein edit distance between two keys, capped so unrelated pairs exit
-/// early.
-fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
+/// early. Exported because the CLI's did-you-mean diagnostics (`--KEY VALUE`
+/// overrides, `--rule` typos) must share the exact heuristic with the core
+/// unknown-key check — hand-copied distance helpers drift from their origin
+/// (engineering invariant: don't mirror semantics, share them).
+pub fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     if a.len().abs_diff(b.len()) > cap {
@@ -449,6 +478,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "scatter" => Some(SCATTER_KEYS),
         "split" => Some(SPLIT_KEYS),
         "transform" => Some(TRANSFORM_KEYS),
+        "types" => Some(RULE_TYPES_KEYS),
         "webhook" => Some(WEBHOOK_KEYS),
         "workflow" => Some(WORKFLOW_KEYS),
         _ => None,
@@ -477,6 +507,7 @@ fn table_of_tables(key: &str) -> Option<&'static [&'static str]> {
     match key {
         "env_groups" => Some(ENVIRONMENT_KEYS),
         "resource_groups" => Some(RESOURCE_GROUP_KEYS),
+        "types" => Some(BIOTYPE_KEYS),
         _ => None,
     }
 }
@@ -515,11 +546,28 @@ fn nesting(key: &str, value: &toml::Value) -> Nesting {
                         .is_some_and(|t| t.contains_key("file") || t.contains_key("caption"));
                 if is_rule_report {
                     Nesting::Table(RULE_REPORT_KEYS)
+                } else if key == "types" {
+                    let is_rule_types = value
+                        .as_table()
+                        .is_some_and(|t| t.contains_key("inputs") || t.contains_key("outputs"));
+                    if is_rule_types {
+                        Nesting::Table(RULE_TYPES_KEYS)
+                    } else if let Some(table_keys) = table_of_tables("types") {
+                        Nesting::NamedTables(table_keys)
+                    } else {
+                        Nesting::Table(keys)
+                    }
                 } else {
                     Nesting::Table(keys)
                 }
             }
-            None => Nesting::None,
+            None => {
+                if let Some(keys) = table_of_tables(key) {
+                    Nesting::NamedTables(keys)
+                } else {
+                    Nesting::None
+                }
+            }
         },
         toml::Value::Array(_) => {
             if let Some(keys) = array_of_tables(key) {
@@ -1114,12 +1162,14 @@ mod tests {
             on_failure = "echo"
             format_hint = ["bam"]
             pipe = true
+            staging_mode = "stream"
             checksum = "md5"
             resource_hint = { input_size = "small" }
             rule_metadata = { assay = "rna" }
             cache_key = "k"
             interpreter = "python"
             report = { file = "notes/report.md", caption = "Alignment QC" }
+            types = { inputs = { reads = "fastq" }, outputs = { bam = "bam" } }
         "#;
         let rule: crate::rule::Rule = toml::from_str(toml).expect("probe rule deserializes");
         let written = toml::to_string(&rule)
@@ -1243,6 +1293,7 @@ mod tests {
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
             (CITATION_KEYS, "/properties/citation"),
+            (INCLUDE_KEYS, "/properties/include/items"),
             (ENGINE_KEYS, "/properties/engine"),
             (RESOURCE_BUDGET_KEYS, "/properties/resource_budget"),
             (PLUGINS_KEYS, "/properties/plugins"),
@@ -1251,6 +1302,7 @@ mod tests {
             (SCATTER_KEYS, "/$defs/scatterConfig"),
             (TRANSFORM_KEYS, "/$defs/transformConfig"),
             (RESOURCE_HINT_KEYS, "/$defs/resourceHint"),
+            (BIOTYPE_KEYS, "/$defs/bioTypeSpec"),
         ] {
             let pointer = if pointer.is_empty() {
                 "/properties"

@@ -226,13 +226,6 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def parse_trial(value, default=1):
-    try:
-        return int(value or default)
-    except (TypeError, ValueError):
-        return default
-
-
 def trial_from_path(path):
     for part in path.replace("\\", "/").split("/"):
         m = TRIAL_RE.search(part)
@@ -530,7 +523,7 @@ def judge_tool(gold_rows, captures_path):
     by_id = {}
     with open(captures_path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            row["trial"] = parse_trial(row.get("trial"))
+            row["trial"] = common.parse_trial(row.get("trial"))
             by_id.setdefault(row["id"], []).append(row)
 
     known_names = common.known_tool_names()
@@ -617,6 +610,10 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
             rule = rules[0] if rules else {}
             shell = rule_shell(rule, text)
             scores = {}
+            # Corrupted gold CSV cells must not read as "no expectations" —
+            # that scores the row vacuously perfect. Record them like a
+            # parse failure (same policy as check_gold.py's hard finding).
+            gold_errs = []
 
             tool_names = (row["expected_tool"],) + PACKAGE_ALIASES.get(row["expected_tool"], ())
             scores["tool_present"] = 1.0 if any(common.name_present(name, shell + " " + text) for name in tool_names) else 0.0
@@ -635,8 +632,9 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
 
             try:
                 params = json.loads(row["expected_key_params"])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 params = []
+                gold_errs.append(f"expected_key_params: {exc}")
             if params:
                 scores["key_params"] = round(
                     sum(1 for p in params if param_present(p, shell)) / len(params),
@@ -646,8 +644,9 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
             try:
                 expected_in = json.loads(row["expected_inputs"])
                 expected_out = json.loads(row["expected_outputs"])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 expected_in, expected_out = [], []
+                gold_errs.append(f"expected_inputs/outputs: {exc}")
             declared_in = list(rule.get("input", [])) if rule else []
             if rule:
                 # `expand_inputs` patterns are real declared inputs (the
@@ -673,11 +672,18 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
 
             try:
                 resource_range = json.loads(row["resource_range"])
-            except json.JSONDecodeError:
-                resource_range = {}
+                if not isinstance(resource_range, dict):
+                    raise ValueError("expected a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                # Corrupted cell: None disables the lenient .get() fallbacks
+                # below (1-128 threads / 262144 MB) so the range check cannot
+                # read the corruption as a vacuous pass — the error is surfaced
+                # via capture_error instead.
+                resource_range = None
+                gold_errs.append(f"resource_range: {exc}")
             threads, memory = parse_resources(rule) if rule else (None, None)
             scores["resources_declared"] = 1.0 if (threads is not None or memory is not None) else 0.0
-            if threads is None and memory is None:
+            if resource_range is None or (threads is None and memory is None):
                 scores["resources_in_range"] = 0.0
             else:
                 ok = True
@@ -699,7 +705,7 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                     "capture_path": capture["path"],
                     "capture_source": capture["path"],
                     "parse_err": parse_err or "",
-                    "capture_error": meta.get("error", ""),
+                    "capture_error": "; ".join([meta.get("error", "")] + gold_errs).strip("; "),
                 }
             )
     return results
@@ -725,6 +731,9 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
             text, rules, parse_err = load_generated(capture["path"])
             names = [r.get("name", "") for r in rules]
             scores = {}
+            # Same policy as the rule layer: a corrupted gold cell must not
+            # read as "no expectations" and score the row vacuously perfect.
+            gold_errs = []
 
             code, _, _ = common.oxo_flow_cmd(
                 oxo_flow_bin, ["validate", os.path.basename(capture["path"])], cwd=os.path.dirname(capture["path"])
@@ -740,9 +749,14 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 expected_tools = json.loads(row["expected_tools"])
                 expected_edges = json.loads(row["expected_dag_edges"])
                 expected_outputs = json.loads(row["expected_outputs"])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 expected_steps = expected_tools = expected_edges = expected_outputs = []
+                gold_errs.append(f"expected_steps/tools/dag_edges/outputs: {exc}")
 
+            # Defined before both consumers: the edge check below reads the map
+            # even when expected_steps is empty/failed to parse, and a gold row
+            # with edges but no steps must degrade to 0 coverage, not NameError.
+            name_map = {}
             if expected_steps:
                 # One scientific step gets at most one generated rule. The
                 # previous first-match search could reuse a helper rule for
@@ -769,7 +783,6 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 declared = [p for r in rules for p in r.get("output", [])]
                 scores["output_coverage"] = path_hits(expected_outputs, declared)
 
-            meta = load_meta(capture["meta"])
             scores["overall"] = mean(list(scores.values())) if scores else 0.0
             results.append(
                 {
@@ -782,7 +795,7 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                     "capture_path": capture["path"],
                     "capture_source": capture["path"],
                     "parse_err": parse_err or "",
-                    "capture_error": meta.get("error", ""),
+                    "capture_error": "; ".join([meta.get("error", "")] + gold_errs).strip("; "),
                 }
             )
     return results

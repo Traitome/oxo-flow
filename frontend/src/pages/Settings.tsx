@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, oxoBase } from '../api/client';
+import { api } from '../api/client';
 import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
@@ -18,19 +18,6 @@ const DEFAULT_QUOTA: QuotaFormState = {
   max_total_memory_mb: 262144,
   max_runs_per_day: 100,
 };
-
-// The typed client has no quota endpoint — mirror its request pattern
-// (base-path prefix + bearer token, see api/client.ts) so team-mode
-// deployments under a sub-path or with auth enabled still load.
-function fetchQuota(): Promise<QuotaInfo> {
-  const token = localStorage.getItem('oxo_token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(`${oxoBase()}/api/quota`, { headers }).then((r) => {
-    if (!r.ok) throw new Error(`quota: ${r.status}`);
-    return r.json() as Promise<QuotaInfo>;
-  });
-}
 
 // Module-level components — defined outside the render function so React
 // preserves their identity across re-renders (prevents input focus loss).
@@ -77,12 +64,12 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [model, setModel] = useState('');
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [refs, setRefs] = useState<ReferenceStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [adv, setAdv] = useState({ search_enabled: true, monitor_enabled: true, auto_retry_enabled: false, max_correction_rounds: 3 });
-  const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>({ enabled: false, url: '', secret_set: false, events: [] });
+  const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[]; signature_scheme: string }>({ enabled: false, url: '', secret_set: false, events: [], signature_scheme: 'hmac-sha256' });
   const [webhookSecret, setWebhookSecret] = useState('');
   const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>([]);
   const [newKeyName, setNewKeyName] = useState('');
@@ -96,7 +83,7 @@ export default function Settings() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
-    fetchQuota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed')));
+    api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed')));
     api.referenceStatus().then(setRefs).catch(() => {});
     api.aiConfigUser().then((c) => {
       const u = c.user_config as Partial<typeof adv> | undefined;
@@ -127,24 +114,32 @@ export default function Settings() {
         model: model || undefined,
       });
       const c = await api.aiConfig(); setAiConfig(c);
-      setTestResult(t('settings.ai.saveSuccess').replace('{{provider}}', c.provider));
-    } catch (err: unknown) { setTestResult(t('settings.ai.saveFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))); }
+      setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setTestResult({ ok: false, text: t('settings.ai.saveFailed').replace('{{error}}', msg) });
+    }
     setSaving(false);
   };
 
   const handleTest = async () => {
-    setTestResult(t('settings.ai.testing'));
+    setTestResult({ ok: false, text: t('settings.ai.testing') });
     try {
       const r = await api.aiTest();
-      setTestResult(r.success ? t('settings.ai.testSuccess').replace('{{message}}', r.message) : t('settings.ai.testFailed').replace('{{error}}', r.message));
-    } catch (err: unknown) { setTestResult(t('settings.ai.testFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))); }
+      setTestResult(r.success
+        ? { ok: true, text: t('settings.ai.testSuccess').replace('{{message}}', r.message) }
+        : { ok: false, text: t('settings.ai.testFailed').replace('{{error}}', r.message) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setTestResult({ ok: false, text: t('settings.ai.testFailed').replace('{{error}}', msg) });
+    }
   };
 
   const handleSaveQuota = async () => {
     setQuotaSaving(true);
     try {
       await api.updateQuota(quotaForm);
-      const q = await fetchQuota();
+      const q = await api.quota();
       setQuota(q);
       setQuotaForm(q.limits);
       setNotice(t('settings.quota.saved'));
@@ -193,7 +188,7 @@ export default function Settings() {
                 <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
                 <button onClick={handleTest} className="action-btn">{t('settings.ai.test')}</button>
               </div>
-              {testResult && <div className={`result-bar ${testResult.startsWith('✅') ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult}</div>}
+              {testResult && <div className={`result-bar ${testResult.ok ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult.text}</div>}
             </div>
           </div>
           <div className="settings-side">
@@ -358,7 +353,7 @@ export default function Settings() {
               </div>
             </>
           ) : (
-            <span style={{ color: 'var(--color-text-secondary)' }}>Quota system enabled for team mode.</span>
+            <span style={{ color: 'var(--color-text-secondary)' }}>{t('settings.quota.disabled')}</span>
           )}
         </div>
       </Section>
@@ -417,6 +412,15 @@ export default function Settings() {
           <SettingInput placeholder="https://example.com/oxo-webhook" value={webhook.url}
             onChange={(e) => setWebhook({ ...webhook, url: e.target.value })} />
           <div style={{ marginTop: '0.5rem' }}>
+            <SettingLabel text={t('settings.webhook.scheme')} />
+            <select value={webhook.signature_scheme}
+              onChange={(e) => setWebhook({ ...webhook, signature_scheme: e.target.value })}
+              className="search-input" style={{ width: '100%' }}>
+              <option value="hmac-sha256">{t('settings.webhook.schemeHmac')}</option>
+              <option value="sha256-keyed">{t('settings.webhook.schemeLegacy')}</option>
+            </select>
+          </div>
+          <div style={{ marginTop: '0.5rem' }}>
             <SettingLabel text={webhook.secret_set ? t('settings.webhook.secretSet') : t('settings.webhook.secret')} />
             <SettingInput type="password" placeholder={webhook.secret_set ? '••••••••' : 'secret'} value={webhookSecret}
               onChange={(e) => setWebhookSecret(e.target.value)} />
@@ -427,7 +431,12 @@ export default function Settings() {
           </label>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px' }}>
             <button className="btn-sm" onClick={() => {
-              api.webhookUpdate({ enabled: webhook.enabled, url: webhook.url, secret: webhookSecret || undefined })
+              api.webhookUpdate({
+                enabled: webhook.enabled,
+                url: webhook.url,
+                secret: webhookSecret || undefined,
+                signature_scheme: webhook.signature_scheme,
+              })
                 .then(() => { setWebhookSecret(''); api.webhookConfig().then(setWebhook); setNotice(t('settings.webhook.saved')); })
                 .catch(() => setNotice(t('settings.webhook.saveFailed')));
             }}>{t('settings.webhook.save')}</button>

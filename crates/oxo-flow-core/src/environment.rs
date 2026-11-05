@@ -313,91 +313,27 @@ impl EnvironmentBackend for CondaBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        let env_name = conda_env_name_from_spec("conda", spec)?;
-        let escaped = escape_for_sh_single_quote(command);
-        // `--no-capture-output` (conda >= 4.13): without it, `conda run`
-        // buffers the wrapped process's stdout/stderr through its own
-        // internal pipes and polls them for EOF — when the wrapped
-        // command's grandchildren inherit those pipe write-ends (forked
-        // helpers, gzip/pigz workers, sra-tools daemons), the poll never
-        // sees EOF and the whole rule parks for 30+ minutes (live:
-        // auto-sra fasterq-dump rules on tx-ubuntu; the identical command
-        // ran instantly by hand). With the flag, conda forwards the child's
-        // fds straight through — the engine's own pipe draining
-        // (wait_with_output) is the capture mechanism.
-        //
-        // The wrapped bash also re-prepends $CONDA_PREFIX/bin to PATH:
-        // on conda+pixi (or other toolchain-manager) hybrid boxes the
-        // host PATH can precede the env's bin inside `conda run`, so
-        // tools resolve to unrelated pre-existing envs (live: pinned
-        // gatk 4.4.0.0 was bypassed by a user pixi env with 4.6.2.0 +
-        // JDK 25 → Spark Subject.getSubject crash). The env's own bin
-        // must always win, regardless of host PATH ordering.
-        Ok(format!(
-            "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
-        ))
+        conda_family_wrap("conda", "conda", command, spec, None)
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        // Inline package lists install directly — the same form container
-        // export has always rendered (`conda create -n <name> <packages>`).
-        // Each token was allowlist-validated by `inline_conda_packages`, so
-        // interpolation is argv-safe. `-c conda-forge` stands in for the
-        // channels block a YAML spec would declare: bioconda packages'
-        // transitive dependencies (libdeflate, htspop, ...) live on
-        // conda-forge, and without it the solver fails with "missing
-        // channel" (live evidence: fastp=1.3.6 lifecycle run).
-        if let Some(packages) = crate::rule::EnvironmentSpec::inline_conda_packages(spec) {
-            let env_name = conda_env_name_from_spec("conda", spec)?;
-            let joined = packages.join(" ");
-            return Ok(format!(
-                "conda create -n {env_name} -y -c conda-forge {joined} || conda install -n {env_name} -y -c conda-forge {joined}"
-            ));
-        }
-        // `-n <name>` keeps setup consistent with `wrap_command` (which runs
-        // `conda run -n <name>`): the name comes from the YAML's `name:` field
-        // or the file stem. Without `-n`, conda 25+ fails with "Unable to
-        // determine environment" for YAMLs that declare no name (the common
-        // nf-core style — found live: mixscape's seurat_lda.yaml).
-        //
-        // Neither arm redirects stderr: conda's solver progress is the only
-        // window into a cold bootstrap, and when create fails the engine
-        // must report create's root cause, not the fallback update's.
-        // `create || update` runs after the executor's verify step already
-        // found the env missing/broken, so the "already exists" noise the
-        // redirect used to hide is rare. No `--prune` (issue #429): update
-        // --prune re-resolves every dependency and deletes packages that
-        // the new spec no longer pins — live evidence: it removed
-        // `lib/R/bin/exec/R` from pre-built bioconda R 4.4 envs (deseq2,
-        // summarizedexperiment), breaking every R call in the env. The
-        // fallback only needs to complete the spec; additive is enough.
-        let env_name = conda_env_name_from_spec("conda", spec)?;
-        // #534: spec paths are quoted like the prefix below.
-        let quoted = escape_for_sh_single_quote(spec);
-        Ok(format!(
-            "conda env create -n {env_name} -f '{quoted}' || conda env update -n {env_name} -f '{quoted}'"
-        ))
+        conda_family_setup("conda", "conda", spec, None)
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec("conda", spec)?;
-        Ok(Some(format!("conda env remove -n {env_name} -y")))
+        conda_family_teardown("conda", "conda", spec, None)
     }
 
     fn verify_command(&self, spec: &str) -> Result<Option<String>> {
-        // `conda run` succeeds even when the env's own bin/ is missing
-        // (tools then resolve from the system PATH), so the check must
-        // target the env prefix itself — CONDA_PREFIX is set by `conda run`.
-        // A present-but-empty bin/ (interrupted transaction) is just as
-        // broken: require at least one entry, not just the dir (issue #136).
-        let env_name = conda_env_name_from_spec("conda", spec)?;
-        Ok(Some(format!(
-            "conda run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"
-        )))
+        conda_family_verify("conda", "conda", spec, None)
     }
 
     fn cache_key(&self, spec: &str) -> String {
-        format!("conda:{spec}")
+        // File-backed specs carry their YAML content hash (#532): the prefix
+        // verify only checks the directory exists, so editing the file behind
+        // the path must produce a fresh key or every later rule silently
+        // reuses the stale environment.
+        format!("conda:{spec}{}", spec_content_tag(spec))
     }
 }
 
@@ -408,15 +344,7 @@ impl CondaBackend {
     /// directory). When `None`, uses the default name-based `-n <name>`
     /// (install to the system conda directory).
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
-        if let Some(prefix) = prefix {
-            let quoted_prefix = escape_for_sh_single_quote(prefix);
-            let quoted_spec = escape_for_sh_single_quote(spec);
-            Ok(format!(
-                "conda env create -p '{quoted_prefix}' -f '{quoted_spec}' || conda env update -p '{quoted_prefix}' -f '{quoted_spec}'"
-            ))
-        } else {
-            self.setup_command(spec)
-        }
+        conda_family_setup("conda", "conda", spec, prefix)
     }
 
     /// Wrap command with optional project-local prefix.
@@ -426,19 +354,7 @@ impl CondaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<String> {
-        let escaped = escape_for_sh_single_quote(command);
-        // Same --no-capture-output + CONDA_PREFIX/bin-first rationale as
-        // wrap_command above.
-        if let Some(prefix) = prefix {
-            Ok(format!(
-                "conda run --no-capture-output -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
-            ))
-        } else {
-            let env_name = conda_env_name_from_spec("conda", spec)?;
-            Ok(format!(
-                "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
-            ))
-        }
+        conda_family_wrap("conda", "conda", command, spec, prefix)
     }
 
     /// Teardown command with optional project-local prefix.
@@ -447,47 +363,145 @@ impl CondaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<Option<String>> {
-        if let Some(prefix) = prefix {
-            Ok(Some(format!("conda env remove -p {prefix} -y")))
-        } else {
-            self.teardown_command(spec)
-        }
+        conda_family_teardown("conda", "conda", spec, prefix)
     }
 
     /// Verify command with optional project-local prefix.
-    ///
-    /// A prefix install (`conda env create -p`) creates no named env, so the
-    /// plain `-n {name}` verify checks a different (nonexistent) env and
-    /// always fails — a healthy pre-existing prefix env then failed verify,
-    /// which sent the executor down the teardown-and-recreate path and
-    /// deleted the user's own env (issue #136).
     pub fn verify_command_with_opts(
         &self,
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<Option<String>> {
-        if let Some(prefix) = prefix {
-            Ok(Some(format!(
-                "conda run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"
-            )))
-        } else {
-            self.verify_command(spec)
-        }
+        conda_family_verify("conda", "conda", spec, prefix)
     }
 
     /// Cache key with optional project-local prefix.
-    ///
-    /// For file-backed specs the YAML CONTENT hash rides in the key
-    /// (#532): the prefix verify only checks the directory exists, so
-    /// editing the file behind the path must produce a fresh cache entry
-    /// or every subsequent rule silently reuses the stale environment.
     pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
-        let content_tag = spec_content_tag(spec);
-        if let Some(prefix) = prefix {
-            format!("conda:{spec}:{prefix}{content_tag}")
-        } else {
-            format!("conda:{spec}{content_tag}")
-        }
+        conda_family_cache_key("conda:", spec, prefix)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared conda-family command builders
+// ---------------------------------------------------------------------------
+
+/// Render the environment selector for the conda family: `-p '<prefix>'` for
+/// project-local installs, `-n <derived-name>` otherwise.
+///
+/// Quoting the prefix here (rather than at each call site) is what keeps a
+/// prefix containing a quote/space from escaping into the surrounding shell
+/// command; the derived name is validated alphanumeric/`_`/`-`, so it needs
+/// no quoting.
+fn conda_family_target(kind: &str, spec: &str, prefix: Option<&str>) -> Result<String> {
+    match prefix {
+        Some(prefix) => Ok(format!("-p '{}'", escape_for_sh_single_quote(prefix))),
+        None => Ok(format!("-n {}", conda_env_name_from_spec(kind, spec)?)),
+    }
+}
+
+/// `create || update` for a YAML spec, or `create || install` for an inline
+/// package list.
+///
+/// `-c conda-forge` stands in for the channels block a YAML spec would
+/// declare: bioconda packages' transitive dependencies (libdeflate, htspop,
+/// ...) live on conda-forge, and without it the solver fails with "missing
+/// channel" (live evidence: fastp=1.3.6 lifecycle run). Inline tokens were
+/// allowlist-validated by `inline_conda_packages`, so interpolation is
+/// argv-safe.
+///
+/// No `--prune` (issue #429): update --prune re-resolves every dependency and
+/// deletes packages the new spec no longer pins — live evidence: it removed
+/// `lib/R/bin/exec/R` from pre-built bioconda R 4.4 envs (deseq2,
+/// summarizedexperiment), breaking every R call in the env.
+fn conda_family_setup(
+    binary: &str,
+    kind: &str,
+    spec: &str,
+    prefix: Option<&str>,
+) -> Result<String> {
+    let target = conda_family_target(kind, spec, prefix)?;
+    if let Some(packages) = crate::rule::EnvironmentSpec::inline_conda_packages(spec) {
+        let joined = packages.join(" ");
+        return Ok(format!(
+            "{binary} create {target} -y -c conda-forge {joined} || {binary} install {target} -y -c conda-forge {joined}"
+        ));
+    }
+    let quoted_spec = escape_for_sh_single_quote(spec);
+    Ok(format!(
+        "{binary} env create {target} -f '{quoted_spec}' || {binary} env update {target} -f '{quoted_spec}'"
+    ))
+}
+
+/// Wrap a rule command in a conda-family environment.
+///
+/// `--no-capture-output` is conda >= 4.13 only (mamba/micromamba reject it).
+/// Without it, `conda run` buffers through its own pipes and polls for EOF —
+/// when the wrapped command's grandchildren inherit those write-ends (forked
+/// helpers, gzip/pigz workers, sra-tools daemons) the poll never sees EOF and
+/// the rule parks for 30+ minutes (live: auto-sra fasterq-dump rules). The
+/// wrapped bash re-prepends `$CONDA_PREFIX/bin` because on conda+pixi hybrid
+/// boxes the host PATH can precede the env's bin (live: a pinned gatk 4.4.0.0
+/// was bypassed by a user pixi env with 4.6.2.0 + JDK 25 → Spark crash).
+fn conda_family_wrap(
+    binary: &str,
+    kind: &str,
+    command: &str,
+    spec: &str,
+    prefix: Option<&str>,
+) -> Result<String> {
+    let target = conda_family_target(kind, spec, prefix)?;
+    let escaped = escape_for_sh_single_quote(command);
+    let capture = if binary == "conda" {
+        " --no-capture-output"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{binary} run{capture} {target} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
+    ))
+}
+
+fn conda_family_teardown(
+    binary: &str,
+    kind: &str,
+    spec: &str,
+    prefix: Option<&str>,
+) -> Result<Option<String>> {
+    let target = conda_family_target(kind, spec, prefix)?;
+    Ok(Some(format!("{binary} env remove {target} -y")))
+}
+
+/// Verify an env is usable.
+///
+/// `conda run` succeeds even when the env's own bin/ is missing (tools then
+/// resolve from the system PATH), so the check targets the env prefix itself
+/// — CONDA_PREFIX is set by `run`. A present-but-empty bin/ (interrupted
+/// transaction) is just as broken, so require at least one entry. A prefix
+/// install creates no named env: verifying it with `-n {name}` checks a
+/// different env and always fails, which sent the executor down the
+/// teardown-and-recreate path and deleted the user's own env (issue #136).
+fn conda_family_verify(
+    binary: &str,
+    kind: &str,
+    spec: &str,
+    prefix: Option<&str>,
+) -> Result<Option<String>> {
+    let target = conda_family_target(kind, spec, prefix)?;
+    Ok(Some(format!(
+        "{binary} run {target} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"
+    )))
+}
+
+/// Cache key with the YAML content hash for file-backed specs (#532).
+///
+/// The prefix verify only checks the directory exists, so editing the file
+/// behind the path must produce a fresh cache entry or every later rule
+/// silently reuses the stale environment.
+fn conda_family_cache_key(key_prefix: &str, spec: &str, prefix: Option<&str>) -> String {
+    let content_tag = spec_content_tag(spec);
+    match prefix {
+        Some(prefix) => format!("{key_prefix}{spec}:{prefix}{content_tag}"),
+        None => format!("{key_prefix}{spec}{content_tag}"),
     }
 }
 
@@ -796,14 +810,7 @@ impl MambaBackend {
 
     /// Setup command with optional project-local prefix.
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
-        if let Some(prefix) = prefix {
-            Ok(format!(
-                "{} env create -p {prefix} -f {spec} || {} env update -p {prefix} -f {spec}",
-                self.binary, self.binary
-            ))
-        } else {
-            self.setup_command(spec)
-        }
+        conda_family_setup(&self.binary, "mamba", spec, prefix)
     }
 
     /// Wrap command with optional project-local prefix.
@@ -813,23 +820,7 @@ impl MambaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<String> {
-        // Same PATH re-export + conda-only --no-capture-output rationale as
-        // wrap_command below.
-        if let Some(prefix) = prefix {
-            let escaped = escape_for_sh_single_quote(command);
-            if self.binary == "conda" {
-                Ok(format!(
-                    "conda run --no-capture-output -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
-                ))
-            } else {
-                Ok(format!(
-                    "{} run -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
-                    self.binary
-                ))
-            }
-        } else {
-            self.wrap_command(command, spec, None, std::path::Path::new("."))
-        }
+        conda_family_wrap(&self.binary, "mamba", command, spec, prefix)
     }
 
     /// Teardown command with optional project-local prefix.
@@ -838,11 +829,7 @@ impl MambaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<Option<String>> {
-        if let Some(prefix) = prefix {
-            Ok(Some(format!("{} env remove -p {prefix} -y", self.binary)))
-        } else {
-            self.teardown_command(spec)
-        }
+        conda_family_teardown(&self.binary, "mamba", spec, prefix)
     }
 
     /// Verify command with optional project-local prefix — same
@@ -852,23 +839,12 @@ impl MambaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<Option<String>> {
-        if let Some(prefix) = prefix {
-            Ok(Some(format!(
-                "{} run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
-                self.binary
-            )))
-        } else {
-            self.verify_command(spec)
-        }
+        conda_family_verify(&self.binary, "mamba", spec, prefix)
     }
 
     /// Cache key with optional project-local prefix.
     pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
-        if let Some(prefix) = prefix {
-            format!("mamba:{}:{spec}:{prefix}", self.binary)
-        } else {
-            self.cache_key(spec)
-        }
+        conda_family_cache_key(&format!("mamba:{}:", self.binary), spec, prefix)
     }
 
     /// The resolved conda-family binary (`mamba`, `micromamba`, or `conda`)
@@ -898,59 +874,23 @@ impl EnvironmentBackend for MambaBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        let env_name = conda_env_name_from_spec("mamba", spec)?;
-        // Same CONDA_PREFIX/bin-first rationale as CondaBackend::wrap_command:
-        // `conda run` puts the env's bin AFTER the host PATH on hybrid boxes
-        // (conda+pixi et al.), so host tools shadow the env's pinned ones —
-        // live: a [defaults] mamba rule on this repo's doc-test server ran
-        // host pixi samtools 1.23.1 instead of the env's samtools 1.21.
-        // Re-prepending $CONDA_PREFIX/bin (set by `run` itself) makes the env
-        // win regardless of host PATH ordering.
-        //
-        // `--no-capture-output` is conda-specific (conda >= 4.13): mamba and
-        // micromamba reject the flag, so only add it when the detected
-        // binary actually is conda. Without it, the conda-fallback path has
-        // the same EOF-park hazard documented on CondaBackend::wrap_command.
-        if self.binary == "conda" {
-            Ok(format!(
-                "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
-                escaped = escape_for_sh_single_quote(command)
-            ))
-        } else {
-            let escaped = escape_for_sh_single_quote(command);
-            Ok(format!(
-                "{} run -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
-                self.binary
-            ))
-        }
+        conda_family_wrap(&self.binary, "mamba", command, spec, None)
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        // Same name-consistency fix as CondaBackend (see there): mamba 2.x
-        // refuses nameless YAMLs without `-n`. No `--prune` (issue #429,
-        // see CondaBackend::setup_command).
-        let env_name = conda_env_name_from_spec("mamba", spec)?;
-        Ok(format!(
-            "{} env create -n {env_name} -f {spec} || {} env update -n {env_name} -f {spec}",
-            self.binary, self.binary
-        ))
+        conda_family_setup(&self.binary, "mamba", spec, None)
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec("mamba", spec)?;
-        Ok(Some(format!("{} env remove -n {env_name} -y", self.binary)))
+        conda_family_teardown(&self.binary, "mamba", spec, None)
     }
 
     fn verify_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec("mamba", spec)?;
-        Ok(Some(format!(
-            "{} run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
-            self.binary
-        )))
+        conda_family_verify(&self.binary, "mamba", spec, None)
     }
 
     fn cache_key(&self, spec: &str) -> String {
-        format!("mamba:{}:{spec}", self.binary)
+        conda_family_cache_key(&format!("mamba:{}:", self.binary), spec, None)
     }
 }
 
@@ -1773,24 +1713,17 @@ impl Default for EnvironmentResolver {
 impl EnvironmentResolver {
     /// Create a new environment resolver.
     pub fn new() -> Self {
-        Self {
-            mamba: MambaBackend::new(),
-            conda: CondaBackend,
-            docker: DockerBackend,
-            singularity: SingularityBackend::new(),
-            venv: VenvBackend,
-            pixi: PixiBackend,
-            modules: ModulesBackend,
-            system: SystemBackend,
-            cache: Arc::new(Mutex::new(EnvironmentCache::new())),
-            setup_locks: std::sync::Mutex::new(HashMap::new()),
-            setup_origins: std::sync::Mutex::new(HashMap::new()),
-            setup_started: std::sync::Mutex::new(HashMap::new()),
-        }
+        Self::with_cache_impl(EnvironmentCache::new())
     }
 
     /// Create a new environment resolver with persistent cache directory.
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
+        Self::with_cache_impl(EnvironmentCache::with_cache_dir(cache_dir))
+    }
+
+    /// One constructor body: the eight backends and three lock fields are
+    /// identical for every resolver; only the cache differs.
+    fn with_cache_impl(cache: EnvironmentCache) -> Self {
         Self {
             mamba: MambaBackend::new(),
             conda: CondaBackend,
@@ -1800,7 +1733,7 @@ impl EnvironmentResolver {
             pixi: PixiBackend,
             modules: ModulesBackend,
             system: SystemBackend,
-            cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
+            cache: Arc::new(Mutex::new(cache)),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
             setup_origins: std::sync::Mutex::new(HashMap::new()),
             setup_started: std::sync::Mutex::new(HashMap::new()),
@@ -2182,6 +2115,18 @@ impl EnvironmentResolver {
             return Err(OxoFlowError::Environment {
                 kind: "singularity".to_string(),
                 message: "singularity/apptainer is not installed or not in PATH".to_string(),
+            });
+        }
+        if env_spec.venv.is_some() && !self.venv.is_available() {
+            // Stock Debian/Ubuntu ships python3 WITHOUT python3-venv:
+            // advertising venv as available while every setup fails at
+            // pip bootstrap was the "lying probe" this availability check
+            // exists to kill (issue #315 review). Preflight must answer
+            // the same question the setup step will.
+            return Err(OxoFlowError::Environment {
+                kind: "venv".to_string(),
+                message: "python3 venv support is missing (install python3-venv / ensurepip)"
+                    .to_string(),
             });
         }
         Ok(())
@@ -3412,6 +3357,23 @@ mod tests {
     }
 
     #[test]
+    fn mamba_conda_fallback_keeps_mamba_logical_kind() {
+        // The executable fallback is conda, but the selected backend is still
+        // mamba. Environment-name diagnostics must name the logical backend,
+        // not the executable that happens to implement it.
+        let dir = tempfile::tempdir().unwrap();
+        let evil = dir.path().join("evil.yaml");
+        std::fs::write(&evil, "name: \"x'; touch /tmp/pwn; '\"\n").unwrap();
+        let backend = MambaBackend {
+            binary: "conda".to_string(),
+        };
+        assert!(matches!(
+            backend.setup_command(evil.to_str().unwrap()),
+            Err(OxoFlowError::Environment { kind, .. }) if kind == "mamba"
+        ));
+    }
+
+    #[test]
     fn mamba_wrap_native_binary_omits_no_capture_output() {
         // Native mamba rejects --no-capture-output (conda >= 4.13 flag).
         let backend = MambaBackend {
@@ -3484,7 +3446,7 @@ mod tests {
         let result = backend
             .setup_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
-        assert!(result.contains("-p .oxo-conda"));
+        assert!(result.contains("-p '.oxo-conda'"));
     }
 
     #[test]
@@ -3493,7 +3455,7 @@ mod tests {
         let result = backend
             .wrap_command_with_opts("fastqc reads.fq", "envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
-        assert!(result.contains("-p .oxo-conda"));
+        assert!(result.contains("-p '.oxo-conda'"));
         assert!(result.contains("fastqc reads.fq"));
         // Prefix arm carries the same hybrid-box PATH guard.
         assert!(result.contains("export PATH=\"$CONDA_PREFIX/bin:$PATH\""));
@@ -3504,6 +3466,101 @@ mod tests {
         let backend = MambaBackend::new();
         let key = backend.cache_key_with_opts("envs/qc.yaml", Some(".oxo-conda"));
         assert!(key.contains(".oxo-conda"));
+    }
+
+    /// Regression: `mamba = "bioconda::fastp=0.23.4"` is a documented inline
+    /// package form (the AI generation prompt emits it), but the mamba setup
+    /// path used to pass the spec to `env create -f`, which treats it as a
+    /// YAML path and fails. Inline lists must render as argv packages.
+    #[test]
+    fn mamba_inline_package_setup_does_not_treat_spec_as_yaml() {
+        let backend = MambaBackend::new();
+        let cmd = backend.setup_command("bioconda::fastp=0.23.4").unwrap();
+        assert!(
+            cmd.contains("bioconda::fastp=0.23.4") && cmd.contains(" -c conda-forge "),
+            "inline packages must be installed from argv: {cmd}"
+        );
+        assert!(
+            !cmd.contains(" -f "),
+            "an inline package list is not a YAML path: {cmd}"
+        );
+        // Same rationale for the prefix arm.
+        let prefixed = backend
+            .setup_command_with_opts("bioconda::fastp=0.23.4", Some(".oxo-conda"))
+            .unwrap();
+        assert!(prefixed.contains("-p '.oxo-conda'"), "{prefixed}");
+        assert!(!prefixed.contains(" -f "), "{prefixed}");
+    }
+
+    /// Regression: the mamba builders interpolated `spec`/`prefix` raw while
+    /// the conda builders quoted them. A prefix or spec path containing a
+    /// single quote could break out of the command.
+    #[test]
+    fn mamba_commands_quote_user_paths() {
+        let backend = MambaBackend::new();
+        let prefix = "x'; touch /tmp/pwn; '";
+        let escaped = "x'\\''; touch /tmp/pwn; '\\''";
+        for cmd in [
+            backend
+                .setup_command_with_opts("envs/qc.yaml", Some(prefix))
+                .unwrap(),
+            backend
+                .wrap_command_with_opts("echo hi", "envs/qc.yaml", Some(prefix))
+                .unwrap(),
+            backend
+                .teardown_command_with_opts("envs/qc.yaml", Some(prefix))
+                .unwrap()
+                .unwrap(),
+            backend
+                .verify_command_with_opts("envs/qc.yaml", Some(prefix))
+                .unwrap()
+                .unwrap(),
+        ] {
+            assert!(
+                cmd.contains(escaped),
+                "prefix must be single-quote-escaped, got: {cmd}"
+            );
+            assert!(
+                !cmd.contains(prefix),
+                "raw prefix must never reach the shell: {cmd}"
+            );
+        }
+        // Keep the YAML name valid so this case exercises path quoting rather
+        // than the independent environment-name validation.
+        let dir = tempfile::tempdir().unwrap();
+        let spec_path = dir.path().join("q'; touch pwn; '.yaml");
+        std::fs::write(&spec_path, "name: qc\ndependencies:\n  - fastp\n").unwrap();
+        let spec = spec_path.to_str().unwrap();
+        let escaped_spec = spec.replace('\'', "'\\''");
+        let cmd = backend.setup_command(spec).unwrap();
+        assert!(cmd.contains(&escaped_spec), "spec must be escaped: {cmd}");
+        assert!(
+            !cmd.contains(spec),
+            "raw spec must never reach the shell: {cmd}"
+        );
+    }
+
+    /// Regression: the mamba cache key ignored the YAML content hash, so
+    /// editing a spec file behind an unchanged path reused the stale env
+    /// bookkeeping (conda has carried the #532 fix for this).
+    #[test]
+    fn mamba_cache_key_tracks_spec_content() {
+        let backend = MambaBackend::new();
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("qc.yaml");
+        let spec = yaml.to_str().unwrap();
+        std::fs::write(&yaml, "name: qc\ndependencies:\n  - fastp=0.23.4\n").unwrap();
+        let before = backend.cache_key_with_opts(spec, Some(".oxo-conda"));
+        std::fs::write(&yaml, "name: qc\ndependencies:\n  - fastp=1.0.0\n").unwrap();
+        let after = backend.cache_key_with_opts(spec, Some(".oxo-conda"));
+        assert_ne!(
+            before, after,
+            "editing a file-backed spec must change the cache key"
+        );
+        // Named-env (no prefix) keys get the same treatment.
+        let named_before = backend.cache_key(spec);
+        std::fs::write(&yaml, "name: qc\ndependencies:\n  - fastp=1.1.0\n").unwrap();
+        assert_ne!(named_before, backend.cache_key(spec));
     }
 
     #[test]
@@ -3793,7 +3850,7 @@ mod tests {
             .wrap_command_with_opts("echo hi", "envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
         assert!(
-            result.contains("conda run --no-capture-output -p .oxo-conda bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; echo hi'"),
+            result.contains("conda run --no-capture-output -p '.oxo-conda' bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; echo hi'"),
             "expected -p prefix form, got: {result}"
         );
         assert!(result.contains("echo hi"));
@@ -3816,7 +3873,7 @@ mod tests {
             .teardown_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
             .unwrap()
             .unwrap();
-        assert_eq!(cmd, "conda env remove -p .oxo-conda -y");
+        assert_eq!(cmd, "conda env remove -p '.oxo-conda' -y");
     }
 
     #[test]
@@ -3890,7 +3947,7 @@ mod tests {
         let result = resolver
             .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
-        assert!(result.contains("conda run --no-capture-output -p .oxo-conda bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; fastqc reads.fq'"));
+        assert!(result.contains("conda run --no-capture-output -p '.oxo-conda' bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; fastqc reads.fq'"));
         assert!(!result.contains(" -n "));
     }
 
@@ -3902,7 +3959,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
+            cmd.contains("conda run -p '.oxo-conda' bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
             "a prefix env must be verified with -p (the -n form checks a \
              named env that `conda env create -p` never creates) and the \
              check must require at least one entry in bin/, got: {cmd}"
@@ -3931,7 +3988,7 @@ mod tests {
             .unwrap();
         assert!(
             cmd.contains(&format!(
-                "{} run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
+                "{} run -p '.oxo-conda' bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
                 backend.binary
             )),
             "expected -p prefix form with a non-empty bin/ check, got: {cmd}"
@@ -3949,7 +4006,7 @@ mod tests {
         };
         let cmd = resolver.verify_command(&spec).unwrap().unwrap();
         assert!(
-            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
+            cmd.contains("conda run -p '.oxo-conda' bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
             "the named-env verify checks the WRONG env for a prefix install, got: {cmd}"
         );
         assert!(!cmd.contains(" -n "));

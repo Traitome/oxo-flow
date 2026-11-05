@@ -13,9 +13,6 @@ pub use oxo_flow_ai::provider::{
     create_provider_from_env, save_ai_config,
 };
 
-/// A saved per-user AI row: (provider kind, api_url, model, api_key).
-type UserAiRow = (String, Option<String>, Option<String>, Option<String>);
-
 /// Per-user provider cache (issue #82 follow-up): non-admin users' saved
 /// AI keys resolve to THEIR provider, never reconfiguring the shared
 /// runtime. Entries are invalidated whenever a config write lands.
@@ -36,6 +33,20 @@ pub fn invalidate_provider_for(user_id: &str) {
     }
 }
 
+fn parse_provider_kind(kind: &str) -> Result<ProviderKind, String> {
+    kind.parse()
+        .map_err(|error: oxo_flow_ai::error::AiError| error.to_string())
+}
+
+/// Validate durable AI configuration before it is written. The settings API
+/// must not persist a provider name that the runtime can never instantiate.
+pub(crate) fn validate_provider_kind(kind: &str) -> Result<(), String> {
+    if kind.eq_ignore_ascii_case("disabled") {
+        return Ok(());
+    }
+    parse_provider_kind(kind).map(|_| ())
+}
+
 /// Resolve the provider a user's AI calls must use:
 /// 1. their own saved row (provider != "disabled")
 /// 2. the shared runtime (server row / env / default)
@@ -53,31 +64,26 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
     }
 
     let mut resolved: Option<AiProvider> = None;
-    if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        let row: Option<UserAiRow> = sqlx::query_as(
-            "SELECT provider, api_url, model, api_key FROM ai_provider_config \
-                 WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-        if let Some((provider_kind, api_url, model, api_key)) = row
-            && provider_kind != "disabled"
-        {
-            // Rows are written through infra::crypto::seal (issue #205), so
-            // the stored value may be a `v1:` ciphertext — decrypt here too,
-            // never hand the encoded form to a provider.
-            let key = crate::infra::crypto::open(&api_key.unwrap_or_default());
-            // A per-user row without a key is not a usable configuration.
-            // Fall back to the shared runtime so the user gets the global
-            // provider (or Noop if none is configured) instead of a provider
-            // carrying an empty key that fails with a cryptic builder error.
-            if !key.trim().is_empty() {
-                let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
-                resolved = Some(create_provider(kind, Some(key), api_url, model));
-            }
+    let row = match crate::infra::db::global_backend() {
+        Some(backend) => backend
+            .get_ai_provider_config(Some(user_id))
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    if let Some(row) = row
+        && row.provider != "disabled"
+    {
+        // Rows are written through infra::crypto::seal, so the stored value
+        // may be a `v1:` ciphertext — decrypt before provider creation.
+        let key = crate::infra::crypto::open(&row.api_key.unwrap_or_default());
+        // A per-user row without a usable key falls back to the shared
+        // runtime rather than creating a provider that fails with a cryptic
+        // empty-credential builder error.
+        if !key.trim().is_empty() {
+            let kind: ProviderKind = row.provider.parse().unwrap_or(ProviderKind::OpenAi);
+            resolved = Some(create_provider(kind, Some(key), row.api_url, row.model));
         }
     }
 
@@ -164,7 +170,10 @@ impl AiProviderRegistry {
         api_url: Option<String>,
         model: Option<String>,
     ) -> Result<(), String> {
-        let kind_parsed: ProviderKind = kind.parse().map_err(|e: anyhow::Error| e.to_string())?;
+        if kind.eq_ignore_ascii_case("disabled") {
+            return oxo_flow_ai::AI.disable().map_err(|error| error.to_string());
+        }
+        let kind_parsed = parse_provider_kind(kind)?;
 
         let cfg = oxo_flow_ai::config::AiConfig {
             enabled: true,
@@ -211,5 +220,18 @@ impl AiProviderRegistry {
         // gated on OLLAMA_HOST by the caller (`provider_candidates`).
         // OLLAMA_HOST / OLLAMA_MODEL ride the canonical env snapshot now.
         Ok(create_provider(ProviderKind::Ollama, None, None, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_provider_kind;
+
+    #[test]
+    fn provider_names_are_validated_before_durable_writes() {
+        assert!(validate_provider_kind("openai").is_ok());
+        assert!(validate_provider_kind("claude").is_ok());
+        assert!(validate_provider_kind("disabled").is_ok());
+        assert!(validate_provider_kind("definitely-not-a-provider").is_err());
     }
 }

@@ -205,6 +205,24 @@ impl BackendDriver {
         Ok(())
     }
 
+    /// Cancel every accepted job before returning a terminal driver error.
+    /// Errors after submission must never leave billable scheduler jobs
+    /// running after `run` has already returned to its caller.
+    async fn fail_with_cancel<T>(
+        &self,
+        inflight: &HashMap<String, InFlight>,
+        error: OxoFlowError,
+    ) -> Result<T> {
+        let jobs: Vec<(String, String, Option<String>)> = inflight
+            .iter()
+            .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
+            .collect();
+        if let Err(cancel_error) = self.cancel_inflight(&jobs).await {
+            tracing::warn!(error = %cancel_error, "failed to cancel in-flight jobs after driver error");
+        }
+        Err(error)
+    }
+
     /// Execute exactly `to_run` on `plan`, returning one [`JobRecord`] per
     /// rule. On error the caller keeps any records already returned? No —
     /// errors are terminal: everything in flight is cancelled and the error
@@ -256,6 +274,15 @@ impl BackendDriver {
         // Consecutive polls a job has been invisible to BOTH the live
         // queue and the accounting/terminal probes (issue #244 guard).
         let mut unknown_rounds: HashMap<String, u32> = HashMap::new();
+
+        macro_rules! cancel_on_error {
+            ($expr:expr) => {
+                match $expr {
+                    Ok(value) => value,
+                    Err(error) => return self.fail_with_cancel(&inflight, error).await,
+                }
+            };
+        }
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -441,21 +468,23 @@ impl BackendDriver {
                                 .join("jobs")
                                 .join(sanitize(&sr.template))
                                 .join(format!("chunk-{}", chunk_k));
-                            std::fs::create_dir_all(&job_dir).map_err(|e| {
+                            cancel_on_error!(std::fs::create_dir_all(&job_dir).map_err(|e| {
                                 OxoFlowError::Config {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
                                 }
-                            })?;
+                            }));
                             for (i, (_, c_sr)) in chunk.iter().enumerate() {
                                 let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
-                                std::fs::write(&cmd_path, &c_sr.shell_cmd).map_err(|e| {
-                                    OxoFlowError::Config {
-                                        message: format!(
-                                            "cannot write {}: {e}",
-                                            cmd_path.display()
-                                        ),
-                                    }
-                                })?;
+                                cancel_on_error!(
+                                    write_private(&cmd_path, c_sr.shell_cmd.as_bytes()).map_err(
+                                        |e| OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot write {}: {e}",
+                                                cmd_path.display()
+                                            ),
+                                        }
+                                    )
+                                );
                             }
                             // The array presents itself under the TEMPLATE
                             // name: naming it after `chunk[0]`'s instance
@@ -465,38 +494,50 @@ impl BackendDriver {
                             // log prefix.
                             let mut array_rule = chunk[0].1.rule.clone();
                             array_rule.name = chunk[0].1.template.clone();
-                            let script = self.backend.render_array_script(
+                            let script = cancel_on_error!(self.backend.render_array_script(
                                 &array_rule,
                                 &job_dir.to_string_lossy(),
                                 chunk.len(),
-                            )?;
+                            ));
                             let script_path = job_dir.join("job.sh");
-                            std::fs::write(&script_path, &script).map_err(|e| {
-                                OxoFlowError::Config {
-                                    message: format!("cannot write {}: {e}", script_path.display()),
-                                }
-                            })?;
-                            let base_id = match self.backend.submit(&script_path).await {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    let jobs: Vec<(String, String, Option<String>)> = inflight
-                                        .iter()
-                                        .map(|(id, f)| {
-                                            (id.clone(), f.rule.clone(), f.array_base.clone())
-                                        })
-                                        .collect();
-                                    self.cancel_inflight(&jobs).await?;
-                                    return Err(e);
-                                }
-                            };
-                            std::fs::write(job_dir.join("job.id"), &base_id).map_err(|e| {
-                                OxoFlowError::Config {
-                                    message: format!(
-                                        "cannot write {}: {e}",
-                                        job_dir.join("job.id").display()
-                                    ),
-                                }
-                            })?;
+                            cancel_on_error!(
+                                write_private(&script_path, script.as_bytes()).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot write {}: {e}",
+                                            script_path.display()
+                                        ),
+                                    }
+                                })
+                            );
+                            let base_id = cancel_on_error!(self.backend.submit(&script_path).await);
+                            let submitted_at = Utc::now();
+                            // Register accepted elements before any bookkeeping
+                            // write. If job.id, index.json, or status.json
+                            // fails, fail_with_cancel must still see and
+                            // reclaim the scheduler allocation.
+                            for (i, (c_name, _)) in chunk.iter().enumerate() {
+                                let element_id = self.backend.array_element_id(&base_id, i + 1);
+                                inflight.insert(
+                                    element_id,
+                                    InFlight {
+                                        rule: c_name.clone(),
+                                        submitted_at,
+                                        array_base: Some(base_id.clone()),
+                                    },
+                                );
+                            }
+                            cancel_on_error!(
+                                write_private(job_dir.join("job.id").as_path(), base_id.as_bytes())
+                                    .map_err(|e| {
+                                        OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot write {}: {e}",
+                                                job_dir.join("job.id").display()
+                                            ),
+                                        }
+                                    })
+                            );
                             // index.json: array index → instance name, so the
                             // array stays an implementation detail (issue #74
                             // phase 3 — "an array index is meaningless on its
@@ -512,19 +553,32 @@ impl BackendDriver {
                             // run-dir writes above (issue #136 tier-2
                             // audit; the old `let _ =` swallowed it).
                             if let Some(parent) = index_path.parent() {
-                                std::fs::create_dir_all(parent).map_err(|e| {
+                                cancel_on_error!(std::fs::create_dir_all(parent).map_err(|e| {
                                     OxoFlowError::Config {
                                         message: format!("cannot create {}: {e}", parent.display()),
                                     }
-                                })?;
+                                }));
                             }
-                            std::fs::write(
-                                &index_path,
-                                serde_json::to_string_pretty(&array_index).unwrap_or_default(),
-                            )
-                            .map_err(|e| OxoFlowError::Config {
-                                message: format!("cannot write {}: {e}", index_path.display()),
-                            })?;
+                            let index_json = cancel_on_error!(
+                                serde_json::to_string_pretty(&array_index).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot serialize {}: {e}",
+                                            index_path.display()
+                                        ),
+                                    }
+                                })
+                            );
+                            cancel_on_error!(std::fs::write(&index_path, index_json).map_err(
+                                |e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot write {}: {e}",
+                                            index_path.display()
+                                        ),
+                                    }
+                                }
+                            ));
                             for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
                                 let element_id = self.backend.array_element_id(&base_id, i + 1);
                                 // Per-INSTANCE dirs keep the run directory
@@ -534,39 +588,47 @@ impl BackendDriver {
                                 // the array script: it is exactly what ran
                                 // for this element.
                                 let inst_dir = opts.run_dir.join("jobs").join(sanitize(c_name));
-                                std::fs::create_dir_all(&inst_dir).map_err(|e| {
+                                cancel_on_error!(std::fs::create_dir_all(&inst_dir).map_err(|e| {
                                     OxoFlowError::Config {
                                         message: format!(
                                             "cannot create {}: {e}",
                                             inst_dir.display()
                                         ),
                                     }
-                                })?;
-                                std::fs::copy(&script_path, inst_dir.join("job.sh")).map_err(
-                                    |e| OxoFlowError::Config {
-                                        message: format!(
-                                            "cannot copy {}: {e}",
-                                            inst_dir.join("job.sh").display()
-                                        ),
-                                    },
-                                )?;
-                                std::fs::write(inst_dir.join("job.id"), &element_id).map_err(
-                                    |e| OxoFlowError::Config {
-                                        message: format!(
-                                            "cannot write {}: {e}",
-                                            inst_dir.join("job.id").display()
-                                        ),
-                                    },
-                                )?;
-                                write_status(&inst_dir, &element_id, &c_sr.shell_cmd, "PENDING")?;
-                                inflight.insert(
-                                    element_id.clone(),
-                                    InFlight {
-                                        rule: c_name.clone(),
-                                        submitted_at: Utc::now(),
-                                        array_base: Some(base_id.clone()),
-                                    },
+                                }));
+                                cancel_on_error!(
+                                    std::fs::copy(&script_path, inst_dir.join("job.sh")).map_err(
+                                        |e| OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot copy {}: {e}",
+                                                inst_dir.join("job.sh").display()
+                                            ),
+                                        },
+                                    )
                                 );
+                                cancel_on_error!(
+                                    write_private(
+                                        inst_dir.join("job.id").as_path(),
+                                        element_id.as_bytes()
+                                    )
+                                    .map_err(|e| {
+                                        OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot write {}: {e}",
+                                                inst_dir.join("job.id").display()
+                                            ),
+                                        }
+                                    },)
+                                );
+                                cancel_on_error!(write_status(
+                                    &inst_dir,
+                                    &element_id,
+                                    &crate::executor::process::mask_sensitive(
+                                        &c_sr.shell_cmd,
+                                        opts.sensitive_values,
+                                    ),
+                                    "PENDING",
+                                ));
                                 emit(&mut events, "SUBMITTED", c_name, Some(&element_id), None);
                                 if let Some(ref mut hook) = opts.on_submit {
                                     let fut = hook(c_name.clone(), element_id.clone());
@@ -578,38 +640,25 @@ impl BackendDriver {
                             submitted_this_round += chunk.len();
                         } else {
                             let (c_name, c_sr) = &chunk[0];
-                            let script = self.backend.render_script(c_sr)?;
+                            let script = cancel_on_error!(self.backend.render_script(c_sr));
                             let job_dir = opts.run_dir.join("jobs").join(sanitize(c_name));
-                            std::fs::create_dir_all(&job_dir).map_err(|e| {
+                            cancel_on_error!(std::fs::create_dir_all(&job_dir).map_err(|e| {
                                 OxoFlowError::Config {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
                                 }
-                            })?;
+                            }));
                             let script_path = job_dir.join("job.sh");
-                            std::fs::write(&script_path, &script).map_err(|e| {
-                                OxoFlowError::Config {
-                                    message: format!("cannot write {}: {e}", script_path.display()),
-                                }
-                            })?;
-                            let job_id = match self.backend.submit(&script_path).await {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    let jobs: Vec<(String, String, Option<String>)> = inflight
-                                        .iter()
-                                        .map(|(id, f)| {
-                                            (id.clone(), f.rule.clone(), f.array_base.clone())
-                                        })
-                                        .collect();
-                                    self.cancel_inflight(&jobs).await?;
-                                    return Err(e);
-                                }
-                            };
-                            std::fs::write(job_dir.join("job.id"), &job_id).map_err(|e| {
-                                OxoFlowError::Config {
-                                    message: format!("cannot write {}: {e}", job_dir.display()),
-                                }
-                            })?;
-                            write_status(&job_dir, &job_id, &c_sr.shell_cmd, "PENDING")?;
+                            cancel_on_error!(
+                                write_private(&script_path, script.as_bytes()).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot write {}: {e}",
+                                            script_path.display()
+                                        ),
+                                    }
+                                })
+                            );
+                            let job_id = cancel_on_error!(self.backend.submit(&script_path).await);
                             inflight.insert(
                                 job_id.clone(),
                                 InFlight {
@@ -618,6 +667,26 @@ impl BackendDriver {
                                     array_base: None,
                                 },
                             );
+                            cancel_on_error!(
+                                write_private(job_dir.join("job.id").as_path(), job_id.as_bytes())
+                                    .map_err(|e| {
+                                        OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot write {}: {e}",
+                                                job_dir.display()
+                                            ),
+                                        }
+                                    })
+                            );
+                            cancel_on_error!(write_status(
+                                &job_dir,
+                                &job_id,
+                                &crate::executor::process::mask_sensitive(
+                                    &c_sr.shell_cmd,
+                                    opts.sensitive_values,
+                                ),
+                                "PENDING",
+                            ));
                             submitted_this_round += 1;
                             emit(&mut events, "SUBMITTED", c_name, Some(&job_id), None);
                             if let Some(ref mut hook) = opts.on_submit {
@@ -657,7 +726,7 @@ impl BackendDriver {
                     targets.dedup();
                     targets
                 };
-                let polled = self.backend.poll(&ids).await?;
+                let polled = cancel_on_error!(self.backend.poll(&ids).await);
                 let mut statuses = HashMap::new();
                 if direct {
                     statuses = polled;
@@ -869,12 +938,12 @@ impl BackendDriver {
                             {
                                 match hook(&f.rule) {
                                     Err(e) => {
-                                        write_status(
+                                        cancel_on_error!(write_status(
                                             &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                             &job_id,
                                             "",
                                             "FAILED",
-                                        )?;
+                                        ));
                                         return_record_failure(&mut records, &mut done, &f, &e);
                                         emit(
                                             &mut events,
@@ -889,29 +958,35 @@ impl BackendDriver {
                                         if !new_names.is_empty() {
                                             match &mut opts.merge {
                                                 Some(merge) => {
-                                                    merge(plan, &new_names)?;
+                                                    cancel_on_error!(merge(plan, &new_names));
                                                     for n in &new_names {
                                                         to_run_set.insert(n.clone());
                                                     }
                                                 }
                                                 None => {
-                                                    return Err(OxoFlowError::Config {
+                                                    let error = OxoFlowError::Config {
                                                         message: "checkpoint re-entry produced new instances but no merge hook is configured".into(),
-                                                    });
+                                                    };
+                                                    return self
+                                                        .fail_with_cancel(&inflight, error)
+                                                        .await;
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                            write_status_full(
+                            cancel_on_error!(write_status_full(
                                 &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                 &job_id,
-                                &plan.rules[&f.rule].shell_cmd,
+                                &crate::executor::process::mask_sensitive(
+                                    &plan.rules[&f.rule].shell_cmd,
+                                    opts.sensitive_values,
+                                ),
                                 "COMPLETED",
                                 Some((f.submitted_at, observed_at)),
                                 acct,
-                            )?;
+                            ));
                             JobRecord {
                                 signal: None,
                                 rule: f.rule.clone(),
@@ -937,14 +1012,14 @@ impl BackendDriver {
                             }
                         }
                         BackendJobStatus::Failed => {
-                            write_status_full(
+                            cancel_on_error!(write_status_full(
                                 &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                 &job_id,
                                 "",
                                 "FAILED",
                                 Some((f.submitted_at, observed_at)),
                                 acct,
-                            )?;
+                            ));
                             // Fail fast, mirroring the local executor's
                             // abort-on-first-failure default (run.rs): the
                             // remaining inflight entries are exactly this
@@ -1159,6 +1234,41 @@ fn write_status(job_dir: &Path, job_id: &str, command: &str, state: &str) -> Res
     write_status_full(job_dir, job_id, command, state, None, None)
 }
 
+/// Write scheduler-visible files without granting group/other access.
+///
+/// Cluster scripts may contain fully expanded sensitive config values.
+/// They must remain executable by the submitting user's scheduler, but not
+/// readable by unrelated local users. This is defense in depth, not a
+/// substitute for routing secrets through a dedicated secret store.
+fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| OxoFlowError::Config {
+        message: format!("cannot open {}: {e}", path.display()),
+    })?;
+    file.write_all(contents).map_err(|e| OxoFlowError::Config {
+        message: format!("cannot write {}: {e}", path.display()),
+    })?;
+    file.sync_all().map_err(|e| OxoFlowError::Config {
+        message: format!("cannot sync {}: {e}", path.display()),
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            OxoFlowError::Config {
+                message: format!("cannot set private permissions on {}: {e}", path.display()),
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Write `jobs/<instance>/status.json`.
 ///
 /// Terminal writes carry the accounting record plus the submit and
@@ -1215,9 +1325,7 @@ fn write_status_full(
         }
     }
     let body = format!("{{{}}}", fields.join(","));
-    std::fs::write(job_dir.join("status.json"), body).map_err(|e| OxoFlowError::Config {
-        message: format!("cannot write status.json: {e}"),
-    })
+    write_private(job_dir.join("status.json").as_path(), body.as_bytes())
 }
 
 fn return_record_failure(
@@ -1876,7 +1984,18 @@ shell = "cat {input} > merged.txt"
         // (issue #136 tier-2 audit — a corrupt/missing mapping silently
         // misleads status about which instance a job id belonged to).
         let fx = setup();
-        let (d, _) = driver(&fx);
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+            },
+        );
         // A directory in place of the file makes the write fail.
         std::fs::create_dir(fx.run_dir.path().join("index.json")).unwrap();
         // Two instances of one template → one array submission (the only
@@ -1928,6 +2047,61 @@ shell = "echo asm > out/{assembler}.txt"
             format!("{err}").contains("index.json"),
             "the error must name the index.json write: {err}"
         );
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.cancelled,
+            vec!["job-1"],
+            "a post-submit index write failure must cancel the accepted array"
+        );
+    }
+
+    #[test]
+    fn post_submit_artifact_write_failures_cancel_accepted_jobs() {
+        for artifact in ["job.id", "status.json"] {
+            let fx = setup();
+            let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+            let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+            let job_dir = fx.run_dir.path().join("jobs/only");
+            std::fs::create_dir_all(job_dir.join(artifact)).unwrap();
+            let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+            let d = BackendDriver::new(
+                backend.clone(),
+                DriverConfig {
+                    max_submitted: 2,
+                    max_array_size: 1001,
+                    no_arrays: true,
+                    poll_interval: std::time::Duration::from_millis(1),
+                    poll_timeout: Some(std::time::Duration::from_secs(5)),
+                    unknown_settle_grace: std::time::Duration::from_secs(90),
+                },
+            );
+            let err = tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(d.run(
+                    &mut plan,
+                    &to_run,
+                    DriverOptions {
+                        run_dir: fx.run_dir.path(),
+                        on_checkpoint: None,
+                        merge: None,
+                        sensitive_values: &[],
+                        on_submit: None,
+                    },
+                ))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains(artifact),
+                "error must name failed artifact {artifact}: {err}"
+            );
+            let state = backend.state();
+            let state = state.lock().unwrap();
+            assert_eq!(
+                state.cancelled,
+                vec!["job-1"],
+                "{artifact} write failure must cancel the accepted job"
+            );
+        }
     }
 
     #[test]
@@ -1967,6 +2141,65 @@ shell = "echo asm > out/{assembler}.txt"
             "cluster JobRecord.command must mask sensitive values: {command}"
         );
         assert!(command.contains("***"), "masked marker expected: {command}");
+        let status =
+            std::fs::read_to_string(fx.run_dir.path().join("jobs/echo_secret/status.json"))
+                .unwrap();
+        assert!(
+            !status.contains("s3cr3t-token-42"),
+            "status.json must mask sensitive values: {status}"
+        );
+        assert!(status.contains("***"), "masked status marker expected");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in ["job.sh", "status.json"] {
+                let mode = std::fs::metadata(fx.run_dir.path().join("jobs/echo_secret").join(path))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode & 0o077, 0, "{path} must not be group/world readable");
+            }
+        }
+    }
+
+    #[test]
+    fn poll_failure_after_submission_cancels_accepted_jobs() {
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+        backend.fail_polling();
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(err.to_string().contains("injected poll failure"));
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(state.submit_count, 1);
+        assert_eq!(state.cancelled, vec!["job-1"]);
     }
 
     // ─── issue #136 H-items ────────────────────────────────────────────────
@@ -1986,6 +2219,7 @@ shell = "echo asm > out/{assembler}.txt"
         verdict: Option<BackendJobStatus>,
         /// Element count of every array submission, in submit order.
         array_sizes: Vec<usize>,
+        poll_error: bool,
     }
     impl MockBackend {
         fn new(direct: bool, verdict: BackendJobStatus) -> Self {
@@ -1999,6 +2233,9 @@ shell = "echo asm > out/{assembler}.txt"
         }
         fn state(&self) -> Arc<std::sync::Mutex<MockState>> {
             self.inner.clone()
+        }
+        fn fail_polling(&self) {
+            self.inner.lock().unwrap().poll_error = true;
         }
     }
     #[async_trait::async_trait]
@@ -2026,6 +2263,11 @@ shell = "echo asm > out/{assembler}.txt"
         async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>> {
             let mut st = self.inner.lock().unwrap();
             st.poll_args.push(job_ids.to_vec());
+            if st.poll_error {
+                return Err(OxoFlowError::Config {
+                    message: "injected poll failure".to_string(),
+                });
+            }
             Ok(job_ids
                 .iter()
                 .map(|id| (id.clone(), st.verdict.unwrap()))
@@ -2104,6 +2346,35 @@ shell = "echo asm > out/{assembler}.txt"
             for i in 1..=2 {
                 let cmd = tpl_dir.join(chunk).join(format!("cmd.{i}.sh"));
                 assert!(cmd.exists(), "{} must exist", cmd.display());
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let private_paths = ["chunk-1", "chunk-2"]
+                .into_iter()
+                .flat_map(|chunk| {
+                    [
+                        tpl_dir.join(chunk).join("job.sh"),
+                        tpl_dir.join(chunk).join("cmd.1.sh"),
+                        tpl_dir.join(chunk).join("job.id"),
+                    ]
+                })
+                .chain((1..=4).map(|i| fx.run_dir.path().join(format!("jobs/sib_{i:02}/job.sh"))))
+                .chain((1..=4).map(|i| fx.run_dir.path().join(format!("jobs/sib_{i:02}/job.id"))))
+                .chain((1..=4).map(|i| {
+                    fx.run_dir
+                        .path()
+                        .join(format!("jobs/sib_{i:02}/status.json"))
+                }));
+            for path in private_paths {
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(
+                    mode & 0o077,
+                    0,
+                    "{} must not be group/world readable",
+                    path.display()
+                );
             }
         }
         let c1 = std::fs::read_to_string(tpl_dir.join("chunk-1/cmd.1.sh")).unwrap();

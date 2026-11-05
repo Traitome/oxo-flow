@@ -9,7 +9,7 @@ import {
   lintArgs,
   versionArgs,
 } from "./core/cliArgs";
-import { runCli } from "./core/exec";
+import { DEFAULT_EXECUTABLE, parseCliVersion, runCli } from "./core/exec";
 import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
 import {
@@ -19,7 +19,13 @@ import {
   type ReportContext,
   type ReportEnvironment,
 } from "./core/reportIssue";
-import { buildGenerationPrompt, extractToml, resolveBackend } from "./core/aiBackend";
+import {
+  buildGenerationPrompt,
+  extractToml,
+  pipelineSlug,
+  resolveBackend,
+} from "./core/aiBackend";
+import { ruleLensInfos } from "./core/ruleIndex";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCodeActionProvider } from "./providers/codeActions";
 import { OxoflowCompletionProvider } from "./providers/completion";
@@ -28,11 +34,12 @@ import { OxoflowFormattingProvider } from "./providers/formatting";
 import { OxoflowHoverProvider } from "./providers/hover";
 import { StatusBar } from "./providers/statusBar";
 import {
+  TASK_TYPE,
   createTask,
   OxoflowTaskProvider,
   relativeWorkflow,
+  resolveFolder,
   type OxoflowTaskDefinition,
-  type TaskKind,
 } from "./providers/taskProvider";
 
 const DOCS_URL = "https://traitome.github.io/oxo-flow/";
@@ -106,7 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const taskProvider = new OxoflowTaskProvider(() => statusBar.executable());
   context.subscriptions.push(
-    vscode.tasks.registerTaskProvider("oxo-flow", taskProvider),
+    vscode.tasks.registerTaskProvider(TASK_TYPE, taskProvider),
     vscode.languages.registerCompletionItemProvider("oxoflow", new OxoflowCompletionProvider(), "[", "{", ".", '"'),
     vscode.languages.registerHoverProvider("oxoflow", new OxoflowHoverProvider()),
     vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider()),
@@ -132,6 +139,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!cfg.get<boolean>("formatOnSave", false)) return;
       const editorCfg = vscode.workspace.getConfiguration("editor", doc.uri);
       if (editorCfg.get<boolean>("formatOnSave", false)) return;
+      // No dispose: the token is consumed by the synchronous waitUntil call
+      // below and is garbage-collected with it — a disposal registration per
+      // save event would outlive its usefulness.
       event.waitUntil(
         new OxoflowFormattingProvider().provideDocumentFormattingEdits(
           doc,
@@ -149,13 +159,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.onDidEndTaskProcess((event) => {
       if (event.exitCode !== 0) return;
       const runDef = event.execution.task.definition as OxoflowTaskDefinition;
-      if (runDef?.type !== "oxo-flow" || (runDef.kind ?? "run") !== "run") return;
+      if (runDef?.type !== TASK_TYPE || (runDef.kind ?? "run") !== "run") return;
       const cfg = vscode.workspace.getConfiguration("oxo-flow");
       if (!cfg.get<boolean>("autoOpenGraph", false)) return;
       const folder = folderFor(vscode.Uri.file(runDef.workflow));
       if (!folder) return;
       const format = context.workspaceState.get<GraphFormat>("graphFormat") ?? "ascii";
-      const graphDef: OxoflowTaskDefinition = { type: "oxo-flow", workflow: runDef.workflow, kind: "graph", format };
+      const graphDef: OxoflowTaskDefinition = { type: TASK_TYPE, workflow: runDef.workflow, kind: "graph", format };
       void vscode.tasks.executeTask(createTask(statusBar.executable(), folder, graphDef, "graph"));
     })
   );
@@ -172,7 +182,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
   register("oxo-flow.format", () => formatDocument());
   register("oxo-flow.resume", () => resumePipeline(statusBar));
-  register("oxo-flow.generate", () => generateWithAI(statusBar, context));
+  register("oxo-flow.generate", () => generateWithAI(output, statusBar, context));
   register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
   register("oxo-flow.exportSchema", () => exportSchema(statusBar));
   register("oxo-flow.clean", () => cleanOutputs(output, statusBar));
@@ -186,6 +196,23 @@ export function activate(context: vscode.ExtensionContext): void {
     const ctx = (args[0] ?? {}) as ReportContext;
     return reportIssue(statusBar, ctx);
   });
+  register("oxo-flow.jumpToRule", (rule: unknown) => {
+    if (typeof rule === "string") {
+      void jumpToRule(rule);
+    }
+  });
+
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri(uri: vscode.Uri) {
+        const query = new URLSearchParams(uri.query);
+        const rule = query.get("rule");
+        if (rule) {
+          void jumpToRule(rule);
+        }
+      },
+    })
+  );
 }
 
 export function deactivate(): void {
@@ -224,7 +251,25 @@ async function pipelineTarget(): Promise<{ folder: vscode.WorkspaceFolder; file:
 }
 
 function folderFor(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
-  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+  return resolveFolder(uri);
+}
+
+async function jumpToRule(ruleName: string): Promise<void> {
+  const target = await pipelineTarget();
+  if (!target) return;
+  const doc = await vscode.workspace.openTextDocument(target.file);
+  const editor = await vscode.window.showTextDocument(doc);
+  const infos = ruleLensInfos(doc.getText());
+  const found = infos.find((r) => r.name === ruleName);
+  if (found) {
+    const pos = new vscode.Position(found.nameLine, 0);
+    editor.selection = new vscode.Selection(pos, pos);
+    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+  } else {
+    void vscode.window.showWarningMessage(
+      `Rule \`${ruleName}\` not found in ${vscode.workspace.asRelativePath(target.file)}.`
+    );
+  }
 }
 
 async function executePipelineTask(
@@ -235,7 +280,7 @@ async function executePipelineTask(
   const target = await pipelineTarget();
   if (!target) return;
   const def: OxoflowTaskDefinition = {
-    type: "oxo-flow",
+    type: TASK_TYPE,
     workflow: relativeWorkflow(target.folder, target.file),
     kind,
   };
@@ -293,7 +338,7 @@ async function executeRunTargets(statusBar: StatusBar, rawTargets: unknown): Pro
     createTask(
       statusBar.executable(),
       target.folder,
-      { type: "oxo-flow", workflow: runOpts.file, kind: "run" },
+      { type: TASK_TYPE, workflow: runOpts.file, kind: "run" },
       "run",
       runArgs(runOpts)
     )
@@ -379,8 +424,8 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
       statusBar.executable(),
       folder,
       {
-        type: "oxo-flow",
-        workflow: vscode.workspace.asRelativePath(pick.file),
+        type: TASK_TYPE,
+        workflow: relativeWorkflow(folder, pick.file),
         kind: "resume",
       },
       "resume"
@@ -388,7 +433,11 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
   );
 }
 
-async function generateWithAI(statusBar: StatusBar, extContext: vscode.ExtensionContext): Promise<void> {
+async function generateWithAI(
+  output: vscode.OutputChannel,
+  statusBar: StatusBar,
+  extContext: vscode.ExtensionContext
+): Promise<void> {
   const description = await vscode.window.showInputBox({
     prompt: "Describe the pipeline to generate (e.g. 'RNA-seq with STAR and featureCounts')",
     placeHolder: "Natural-language description",
@@ -421,7 +470,7 @@ async function generateWithAI(statusBar: StatusBar, extContext: vscode.Extension
     await generateWithCli(statusBar, folder, description);
     return;
   }
-  await generateWithIdeModel(extContext, statusBar, folder, description, resolution.reason);
+  await generateWithIdeModel(output, statusBar, folder, description, resolution.reason);
 }
 
 /** Best-effort CLI AI probe: `oxo-flow ai` JSON reports the active provider. */
@@ -438,12 +487,7 @@ async function cliAiConfigured(statusBar: StatusBar): Promise<boolean> {
 
 /** CLI engine path: the eval-tuned generation loop runs as a task. */
 async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFolder, description: string): Promise<void> {
-  const slug =
-    description
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "generated-pipeline";
+  const slug = pipelineSlug(description);
   const target = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
     filters: { "oxo-flow pipeline": ["oxoflow"] },
@@ -459,8 +503,8 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
       statusBar.executable(),
       folder,
       {
-        type: "oxo-flow",
-        workflow: vscode.workspace.asRelativePath(target),
+        type: TASK_TYPE,
+        workflow: relativeWorkflow(folder, target),
         kind: "generate",
       },
       "generate",
@@ -478,7 +522,7 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
  * repair round feeding the findings back to the model.
  */
 async function generateWithIdeModel(
-  extContext: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
   statusBar: StatusBar,
   folder: vscode.WorkspaceFolder,
   description: string,
@@ -493,20 +537,13 @@ async function generateWithIdeModel(
       ? picks[0]
       : await vscode.window.showQuickPick(picks, { placeHolder: "Language model for this generation" });
   if (!pick) return;
-  const slug =
-    description
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "generated-pipeline";
+  const slug = pipelineSlug(description);
   const target = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
     filters: { "oxo-flow pipeline": ["oxoflow"] },
   });
   if (!target) return;
 
-  const output = vscode.window.createOutputChannel("oxo-flow");
-  extContext.subscriptions.push(output);
   await withOxoProgress("oxo-flow: generating pipeline via the editor model…", async () => {
     const prompt = buildGenerationPrompt(description);
     const chat = async (messages: vscode.LanguageModelChatMessage[]): Promise<string> => {
@@ -545,6 +582,11 @@ async function generateWithIdeModel(
       if (fixed) {
         toml = fixed;
         await vscode.workspace.fs.writeFile(target, Buffer.from(fixed, "utf8"));
+      } else {
+        appendLog(output, "[ai:ide] repair round produced no toml block — keeping the unvalidated draft");
+        void vscode.window.showWarningMessage(
+          "The repair round produced no pipeline — the file holds the original UNVALIDATED draft. Check the oxo-flow output panel."
+        );
       }
     }
     void vscode.window.showInformationMessage(
@@ -642,7 +684,7 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
       createTask(
         executable,
         target.folder,
-        { type: "oxo-flow", workflow: rel, kind: "run" },
+        { type: TASK_TYPE, workflow: rel, kind: "run" },
         "run",
         cleanArgs(target.file.fsPath, { force: true, orphans: true }),
         `clean (orphans) ${rel}`
@@ -655,7 +697,7 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
     createTask(
       executable,
       target.folder,
-      { type: "oxo-flow", workflow: rel, kind: "run" },
+      { type: TASK_TYPE, workflow: rel, kind: "run" },
       "run",
       cleanArgs(target.file.fsPath, { force: true }),
       `clean ${rel}`
@@ -683,7 +725,7 @@ async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar)
   const folder = folderFor(pick.file);
   if (!folder) return;
   const executable = statusBar.executable();
-  const args = statusArgs(vscode.workspace.asRelativePath(pick.file), { timing: true });
+  const args = statusArgs(relativeWorkflow(folder, pick.file), { timing: true });
   const res = await withOxoProgress("oxo-flow: reading run status…", () =>
     runCli(executable, args, { cwd: folder.uri.fsPath })
   );
@@ -693,7 +735,9 @@ async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar)
     output.show(true);
     return;
   }
-  appendLog(output, `$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}${res.stderr.trimEnd()}`);
+  // stdout and stderr interleave in the CLI (progress on stdout, warnings on
+  // stderr) — keep an explicit newline so chunks never fuse mid-line.
+  appendLog(output, `$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}\n${res.stderr.trimEnd()}`);
   output.show(true);
 }
 
@@ -728,7 +772,7 @@ async function reportIssue(statusBar: StatusBar, context: ReportContext): Promis
   let cliVersion: string | undefined;
   await withOxoProgress("oxo-flow: preparing the issue report…", async () => {
     const probe = await runCli(executable, versionArgs(), { timeoutMs: 3000 });
-    if (!probe.spawnError) cliVersion = probe.stdout.trim().split(/\s+/).pop();
+    if (!probe.spawnError) cliVersion = parseCliVersion(probe.stdout);
   });
   const env: ReportEnvironment = {
     extensionVersion,
@@ -741,7 +785,7 @@ async function reportIssue(statusBar: StatusBar, context: ReportContext): Promis
     cliExecutable: executable,
     cliVersion,
     settings: {
-      "oxo-flow.executablePath": cfg.get("executablePath", "oxo-flow"),
+      "oxo-flow.executablePath": cfg.get("executablePath", DEFAULT_EXECUTABLE),
       "oxo-flow.diagnosticMode": cfg.get("diagnosticMode", "save"),
       "oxo-flow.enableLintDiagnostics": cfg.get("enableLintDiagnostics", true),
       "oxo-flow.formatOnSave": cfg.get("formatOnSave", false),
@@ -773,7 +817,3 @@ async function pickCommand(): Promise<void> {
   const pick = await vscode.window.showQuickPick(COMMAND_PICKS, { placeHolder: "oxo-flow command" });
   if (pick) await vscode.commands.executeCommand(pick.command);
 }
-
-// TaskKind re-export guard: keeps the union honest if a kind is added to the
-// task provider but not wired here.
-export type _WiredTaskKinds = TaskKind;

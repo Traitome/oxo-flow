@@ -14,6 +14,12 @@ use tower::ServiceExt;
 mod common;
 
 async fn ensure_db() {
+    // Run creation has a process-wide five-per-minute budget. This contract
+    // suite intentionally creates more runs than that across independent
+    // cases, while the limiter itself is pinned by its dedicated unit and
+    // router-auth tests. Use the atomic test seam instead of mutating the
+    // process environment while other test threads may be reading it.
+    oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
     common::ensure_db().await;
 }
 
@@ -31,12 +37,21 @@ async fn seed_webhook_row(secret: Option<&str>) {
     sqlx::query(
         "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) \
          VALUES (1, 'https://hooks.example/alive', ?, 0, '[]', 'sha256-keyed', '2026-10-25T00:00:00Z') \
-         ON CONFLICT(id) DO UPDATE SET url = excluded.url, secret = excluded.secret, enabled = 0",
+         ON CONFLICT(id) DO UPDATE SET url = excluded.url, secret = excluded.secret, \
+             enabled = 0, signature_scheme = 'sha256-keyed'",
     )
     .bind(secret)
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn clear_webhook_row() {
+    let pool = oxo_flow_web::infra::db::sqlite::try_pool().expect("personal mode has SQLite");
+    sqlx::query("DELETE FROM webhook_config WHERE id = 1")
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 async fn request(
@@ -336,6 +351,41 @@ async fn server_ai_config_reports_an_unreadable_credential_as_unconfigured() {
     );
 }
 
+#[tokio::test]
+async fn unsupported_ai_provider_is_rejected_before_persistence() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let invalid_provider = "not-a-real-provider";
+    let (status, body) = put(
+        &app,
+        "/api/ai/config/server",
+        json!({"provider": invalid_provider}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_AI_PROVIDER", "{body}");
+
+    let (status, body) = put(
+        &app,
+        "/api/ai/config/user",
+        json!({"provider": invalid_provider}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_AI_PROVIDER", "{body}");
+
+    let persisted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_provider_config WHERE provider = ?")
+            .bind(invalid_provider)
+            .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        persisted, 0,
+        "invalid AI provider settings must be rejected before persistence"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // F-4 — POST /api/runs speaks ONE typed contract (issue #324)
 // ---------------------------------------------------------------------------
@@ -367,6 +417,478 @@ async fn create_run_accepts_the_flat_wire_contract() {
 }
 
 #[tokio::test]
+async fn create_run_rejects_invalid_biotypes_before_persistence() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-type-gate"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[types.bam_sorted_indexed]
+format = "bam"
+sort_order = "coordinate"
+index = "bai"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+
+[[rules]]
+name = "call"
+input = ["aligned.sam"]
+output = ["calls.vcf"]
+shell = "touch calls.vcf"
+
+[rules.types]
+inputs = { default = "bam_sorted_indexed" }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("TYPE-001"), "{body}");
+    assert!(message.contains("TYPE-002"), "{body}");
+    assert!(message.contains("TYPE-003"), "{body}");
+
+    let persisted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-type-gate'")
+            .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+            .await
+            .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_accepts_a_compatible_typed_workflow() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-type-compatible"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+
+[[rules]]
+name = "call"
+input = ["aligned.sam"]
+output = ["calls.vcf"]
+shell = "touch calls.vcf"
+
+[rules.types]
+inputs = { default = "sam_unsorted" }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_for_typed_workflows_with_overrides() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-type-override-gate"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "config_overrides": ["sample=changed"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-type-override-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_for_inline_types_with_overrides() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+types = { sam_unsorted = { format = "sam", sort_order = "unsorted" } }
+
+[workflow]
+name = "web-inline-type-override-gate"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+types = { outputs = { default = "sam_unsorted" } }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "config_overrides": ["sample=changed"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-inline-type-override-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_when_an_include_declares_types() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-type-include-gate"
+
+[[include]]
+path = "modules/typed.oxoflow"
+"#;
+    let included = r#"
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"modules/typed.oxoflow": included}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-type-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_when_an_include_uses_inline_types() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-inline-type-include-gate"
+
+[[include]]
+path = "modules/typed.oxoflow"
+"#;
+    let included = r#"
+[workflow]
+name = "typed-module"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+types = { outputs = { default = "sam_unsorted" } }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"modules/typed.oxoflow": included}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-inline-type-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_ignores_unrelated_staged_toml_that_declares_types() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "dry_run": true,
+            "include_files": {
+                "assets/unrelated.toml": "[types.sam]\nformat = \"sam\"\n"
+            },
+            "config_overrides": ["min_quality=30"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_when_a_reachable_include_is_unstaged() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-unstaged-include-gate"
+
+[[include]]
+path = "modules/missing.oxoflow"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"assets/unrelated.toml": "[env]\n"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-unstaged-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_for_an_unstaged_include_without_optional_fields() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-unstaged-include-no-options-gate"
+
+[[include]]
+path = "modules/missing.oxoflow"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-unstaged-include-no-options-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_for_a_git_include_without_optional_fields() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-git-include-gate"
+
+[[include]]
+path = "modules/typed.oxoflow"
+repo = "https://example.com/workflows.git"
+ref = "v1"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-git-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_accepts_direct_types_with_an_unrelated_staged_asset() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-direct-types-with-asset"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"envs/pixi.toml": "[env]\n"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
+}
+
+#[tokio::test]
+async fn create_run_fails_closed_for_direct_types_with_a_local_include_graph() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-direct-types-with-include"
+
+[types.sam_unsorted]
+format = "sam"
+sort_order = "unsorted"
+
+[[include]]
+path = "modules/plain.oxoflow"
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[rules.types]
+outputs = { default = "sam_unsorted" }
+"#;
+    let included = r#"
+[workflow]
+name = "plain-module"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"modules/plain.oxoflow": included}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-direct-types-with-include'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
 async fn create_run_keeps_the_stable_missing_toml_error() {
     ensure_db().await;
     let app = server::build_router("personal");
@@ -385,9 +907,9 @@ async fn create_run_accepts_include_files_and_config_overrides() {
     // The CLI→web milestone fields: [[include]] sources staged beside the
     // workflow, config overrides passed through as `--arg KEY=VALUE`. The
     // run itself is a dry-run, so nothing executes — the point is that the
-    // typed contract accepts both fields end to end (staging happens before
-    // the spawn; a 200 means the include files parsed, validated, and were
-    // written).
+    // request contract accepts both fields for an untyped workflow. This test
+    // proves acceptance and staging, not resolved-workflow type validation;
+    // the fail-closed typed cases above bound that limitation.
     let (status, body) = post(
         &app,
         "/api/runs",
@@ -422,6 +944,129 @@ async fn create_run_rejects_include_files_absolute_paths() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "INVALID_INCLUDE_PATH", "{body}");
+}
+
+#[tokio::test]
+async fn create_run_rejects_a_dot_alias_of_the_main_workflow_key() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-main-key-alias-gate"
+
+[[rules]]
+name = "hello"
+shell = "echo hi"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {
+                "./workflow.oxoflow": "[workflow]\nname = \"overwritten\"\n"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_INCLUDE_PATH", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-main-key-alias-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_rejects_duplicate_canonical_include_keys() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "dry_run": true,
+            "include_files": {
+                "modules/env.toml": "[env]\n",
+                "./modules/env.toml": "[env]\nchannels = []\n"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_INCLUDE_PATH", "{body}");
+}
+
+#[tokio::test]
+async fn create_run_rejects_case_insensitive_duplicate_include_keys() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "dry_run": true,
+            "include_files": {
+                "modules/env.toml": "[env]\n",
+                "Modules/env.toml": "[env]\nchannels = []\n"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_INCLUDE_PATH", "{body}");
+}
+
+#[tokio::test]
+async fn create_run_detects_types_through_a_dot_alias_include_key() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-alias-type-include-gate"
+
+[[include]]
+path = "modules/typed.oxoflow"
+"#;
+    let included = r#"
+[workflow]
+name = "typed-module"
+
+[[rules]]
+name = "align"
+types = { outputs = { default = "sam" } }
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "include_files": {"./modules/typed.oxoflow": included}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-alias-type-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +1204,80 @@ async fn webhook_rejects_a_url_without_a_parseable_host() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "url {url:?}: {body}");
         assert_eq!(body["code"], "INVALID_URL", "url {url:?}: {body}");
     }
+}
+
+#[tokio::test]
+async fn webhook_signature_scheme_is_explicit_and_never_silently_coerced() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(Some("stored-key")).await;
+
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({
+            "enabled": true,
+            "url": "https://hooks.example/alive",
+            "signature_scheme": "hmac-sha512"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_SIGNATURE_SCHEME", "{body}");
+
+    // Omission preserves the stored legacy scheme for existing consumers.
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({"enabled": true, "url": "https://hooks.example/alive"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["signature_scheme"], "sha256-keyed", "{body}");
+
+    // An explicit migration is reflected by both PUT and GET.
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({
+            "enabled": true,
+            "url": "https://hooks.example/alive",
+            "signature_scheme": "hmac-sha256"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["signature_scheme"], "hmac-sha256", "{body}");
+
+    let (status, body) = get(&app, "/api/webhook").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["signature_scheme"], "hmac-sha256", "{body}");
+}
+
+#[tokio::test]
+async fn webhook_new_configuration_defaults_to_hmac() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let _guard = WEBHOOK_ROW.lock().await;
+    clear_webhook_row().await;
+
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({
+            "enabled": true,
+            "url": "https://hooks.example/alive",
+            "secret": "new-key"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["signature_scheme"], "hmac-sha256", "{body}");
+
+    let (status, body) = get(&app, "/api/webhook").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["signature_scheme"], "hmac-sha256", "{body}");
 }
 
 #[tokio::test]

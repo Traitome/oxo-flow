@@ -210,7 +210,7 @@ Your TOML MUST include:
 /// structurally broken TOML.
 pub fn extract_toml(response: &str) -> Option<String> {
     let mut fallback = None;
-    for segment in fenced_segments(response).into_iter().rev() {
+    for (_, segment) in fenced_segments(response).into_iter().rev() {
         let Ok(value) = toml::from_str::<toml::Value>(&segment) else {
             continue;
         };
@@ -226,36 +226,38 @@ pub fn extract_toml(response: &str) -> Option<String> {
     fallback.or_else(|| raw_workflow(response))
 }
 
-/// All ```-delimited segments in document order, with the info tag on the
-/// opening fence (```toml, ```TOML, …) dropped. A tagged fence line while
-/// a segment is open closes it and starts a new one: models correct an
-/// unclosed draft by opening a fresh fence, and that stray opener must
-/// not be mistaken for the missing closer (which would let the stale
-/// draft shadow the corrected one). An unclosed fence yields no segment —
-/// its content has no verified boundary, so it is left to the raw
-/// fallback.
-fn fenced_segments(text: &str) -> Vec<String> {
+/// All triple-backtick fence-delimited segments in document order as
+/// `(info_tag, body)` pairs — the tag is the trimmed info string on the
+/// opening fence (`toml`, `TOML`, …; empty for a bare fence) so
+/// language-specific callers can filter without re-scanning. A tagged
+/// fence line while a segment is open closes it and starts a new one:
+/// models correct an unclosed draft by opening a fresh fence, and that
+/// stray opener must not be mistaken for the missing closer (which would
+/// let the stale draft shadow the corrected one). An unclosed fence
+/// yields no segment — its content has no verified boundary, so it is
+/// left to the caller's raw fallback.
+pub fn fenced_segments(text: &str) -> Vec<(String, String)> {
     let mut segments = Vec::new();
-    let mut open: Option<String> = None;
+    let mut open: Option<(String, String)> = None;
     for line in text.lines() {
         match line.trim_start().strip_prefix("```") {
             None => {
-                if let Some(buf) = open.as_mut() {
+                if let Some((_, buf)) = open.as_mut() {
                     buf.push_str(line);
                     buf.push('\n');
                 }
             }
             // Bare fence: closes the open segment, or opens one from scratch.
             Some(tag) if tag.trim().is_empty() => match open.take() {
-                Some(buf) => segments.push(buf.trim().to_string()),
-                None => open = Some(String::new()),
+                Some((t, buf)) => segments.push((t, buf.trim().to_string())),
+                None => open = Some((String::new(), String::new())),
             },
             // Tagged fence: reopens (implicitly closing any open segment).
-            Some(_) => {
-                if let Some(buf) = open.take() {
-                    segments.push(buf.trim().to_string());
+            Some(tag) => {
+                if let Some((t, buf)) = open.take() {
+                    segments.push((t, buf.trim().to_string()));
                 }
-                open = Some(String::new());
+                open = Some((tag.trim().to_string(), String::new()));
             }
         }
     }
@@ -704,5 +706,35 @@ mod tests {
             tool_approver: None,
             session: crate::session::AiSession::new("t", "t", "noop", "none"),
         }
+    }
+
+    #[test]
+    fn fenced_segments_keeps_tags_in_document_order() {
+        let segs = fenced_segments("```toml\nx = 1\n```\nmid\n```yaml\ny: 2\n```");
+        assert_eq!(
+            segs,
+            vec![
+                ("toml".to_string(), "x = 1".to_string()),
+                ("yaml".to_string(), "y: 2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fenced_segments_tagged_reopen_and_unclosed_yields_nothing() {
+        // A tagged opener while a draft is open closes the draft: the stale
+        // "x = 1" must surface, not be glued to the yaml body.
+        let segs = fenced_segments("```toml\nx = 1\n```yaml\ny: 2\n```\n");
+        assert_eq!(
+            segs,
+            vec![
+                ("toml".to_string(), "x = 1".to_string()),
+                ("yaml".to_string(), "y: 2".to_string()),
+            ]
+        );
+        // Inline backticks in prose are not fences; an unclosed fence has no
+        // verified boundary.
+        assert!(fenced_segments("use ```toml inline only").is_empty());
+        assert!(fenced_segments("```toml\nx = 1\n").is_empty());
     }
 }

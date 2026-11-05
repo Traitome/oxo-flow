@@ -141,7 +141,7 @@ def capture_workflows(rows, out_dir, oxo_flow_bin, provider, args):
             error = ""
             generated = ""
             returncode = -1
-            with tempfile.TemporaryDirectory(prefix="oxo-eval-", dir="/tmp") as tmpdir:
+            with tempfile.TemporaryDirectory(prefix="oxo-eval-") as tmpdir:
                 proc = subprocess.run(
                     [
                         oxo_flow_bin,

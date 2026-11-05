@@ -10,37 +10,8 @@ mod common;
 use common::free_port;
 use common::spawn_web_server;
 
-use reqwest::Client;
-use serde_json::{Value, json};
-
-async fn post(
-    base: &str,
-    path: &str,
-    token: Option<&str>,
-    body: Value,
-) -> (reqwest::StatusCode, Value) {
-    let client = Client::new();
-    let mut req = client.post(format!("{base}{path}")).json(&body);
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().await.unwrap();
-    let status = resp.status();
-    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
-    (status, value)
-}
-
-async fn get(base: &str, path: &str, token: Option<&str>) -> (reqwest::StatusCode, Value) {
-    let client = Client::new();
-    let mut req = client.get(format!("{base}{path}"));
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().await.unwrap();
-    let status = resp.status();
-    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
-    (status, value)
-}
+use common::{api_get, api_post};
+use serde_json::json;
 
 #[tokio::test]
 async fn cluster_responses_never_carry_ssh_key() {
@@ -55,7 +26,7 @@ async fn cluster_responses_never_carry_ssh_key() {
     );
     let base = server.base.clone();
 
-    let (status, login) = post(
+    let (status, login) = api_post(
         &base,
         "/api/auth/login",
         None,
@@ -64,7 +35,7 @@ async fn cluster_responses_never_carry_ssh_key() {
     .await;
     assert_eq!(status, 200, "admin login: {login}");
     let admin = login["token"].as_str().unwrap().to_string();
-    let (status, body) = post(
+    let (status, body) = api_post(
         &base,
         "/api/users",
         Some(&admin),
@@ -72,7 +43,7 @@ async fn cluster_responses_never_carry_ssh_key() {
     )
     .await;
     assert_eq!(status, 200, "create viewer: {body}");
-    let (status, login) = post(
+    let (status, login) = api_post(
         &base,
         "/api/auth/login",
         None,
@@ -83,7 +54,7 @@ async fn cluster_responses_never_carry_ssh_key() {
     let viewer = login["token"].as_str().unwrap().to_string();
 
     // Admin stores a cluster with sensitive key material.
-    let (status, upserted) = post(
+    let (status, upserted) = api_post(
         &base,
         "/api/clusters",
         Some(&admin),
@@ -108,7 +79,7 @@ async fn cluster_responses_never_carry_ssh_key() {
 
     // The list must not expose the key to anyone — admin or viewer.
     for token in [&admin, &viewer] {
-        let (status, list) = get(&base, "/api/clusters", Some(token)).await;
+        let (status, list) = api_get(&base, "/api/clusters", Some(token)).await;
         assert_eq!(status, 200, "list as {token}: {list}");
         let text = list.to_string();
         assert!(
@@ -123,6 +94,6 @@ async fn cluster_responses_never_carry_ssh_key() {
     }
 
     // The probe endpoint actively uses the credential — admin-only.
-    let (status, _) = post(&base, "/api/clusters/lab/probe", Some(&viewer), json!({})).await;
+    let (status, _) = api_post(&base, "/api/clusters/lab/probe", Some(&viewer), json!({})).await;
     assert_eq!(status, 403, "viewer must not probe: cluster credential use");
 }

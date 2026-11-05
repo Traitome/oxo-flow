@@ -71,14 +71,13 @@ pub fn validate_wildcard_constraints_compiled(
     }
 }
 
-/// Validate wildcard values against regex constraints.
-///
-/// NOTE: This function compiles regexes on every call. Use `validate_wildcard_constraints_compiled`
-/// for better performance when validating multiple combinations.
-pub fn validate_wildcard_constraints(
-    values: &WildcardValues,
+/// Compile a constraints map into regexes, sharing the error shape with
+/// every consumer that surfaces invalid `[wildcard_constraints]` entries
+/// (plan-time fan-out, validate-time diagnostics). A single error is
+/// returned per call — the FIRST invalid entry in iteration order.
+pub fn compile_wildcard_constraint_map(
     constraints: &WildcardConstraints,
-) -> Result<()> {
+) -> Result<HashMap<String, Regex>> {
     let mut compiled = HashMap::new();
     for (name, pattern) in constraints {
         match Regex::new(pattern) {
@@ -96,6 +95,18 @@ pub fn validate_wildcard_constraints(
             }
         }
     }
+    Ok(compiled)
+}
+
+/// Validate wildcard values against regex constraints.
+///
+/// NOTE: This function compiles regexes on every call. Use `validate_wildcard_constraints_compiled`
+/// for better performance when validating multiple combinations.
+pub fn validate_wildcard_constraints(
+    values: &WildcardValues,
+    constraints: &WildcardConstraints,
+) -> Result<()> {
+    let compiled = compile_wildcard_constraint_map(constraints)?;
     validate_wildcard_constraints_compiled(values, &compiled)
 }
 
@@ -662,9 +673,11 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
 /// comment that mentions `{meta.id}` or `{input[N]}` (e.g. explaining why
 /// a glob pattern was NOT used) must not warn. A `#` starts a comment when
 /// it begins a line or follows whitespace; `#` glued to a word
-/// (`dir${x}#2`, shebang-free `a#b`) is left alone. Quoted `#` characters
-/// are preserved — the scanners' false-positive evidence is all full-line
-/// comments, so a conservative quote-aware single-pass scan suffices.
+/// (`dir${x}#2`, shebang-free `a#b`) is left alone. Quote state is NOT
+/// tracked: a quoted `#` preceded by whitespace is still treated as a
+/// comment (`echo "a # b"` loses its tail). Callers must therefore use
+/// this only for diagnostic scanning over shell text, never to rewrite
+/// commands for execution.
 #[must_use = "stripping returns a new String"]
 pub fn strip_shell_comments(text: &str) -> String {
     if !text.contains('#') {
@@ -894,7 +907,8 @@ pub fn expand_meta_namespace(
 /// Given `{"sample": ["A", "B"], "read": ["1", "2"]}`, produces:
 /// `[{sample: A, read: 1}, {sample: A, read: 2}, {sample: B, read: 1}, {sample: B, read: 2}]`
 pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> WildcardCombinations {
-    let keys: Vec<&String> = wildcard_lists.keys().collect();
+    let mut keys: Vec<&String> = wildcard_lists.keys().collect();
+    keys.sort_unstable();
     if keys.is_empty() {
         return vec![WildcardValues::new()];
     }

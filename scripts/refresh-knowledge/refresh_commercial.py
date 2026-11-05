@@ -22,24 +22,23 @@ Output (JSONL):
   - note       = optional provenance remark ("" when absent)
 
 Idempotent: re-running replaces the output file atomically. A failing
-source logs a warning and is dropped from the output — the file is still
-written with the entries that succeeded.
+source degrades to a manual entry (version "") instead of disappearing
+from the output; degraded fetches are counted so the exit code signals
+the partially-failed run.
 """
 
 import argparse
 import datetime
-
-
-def today_iso() -> str:
-    return datetime.date.today().isoformat()
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import default_out_dir, http_get, http_get_json, log, update_meta, write_jsonl  # noqa: E402
+from common import default_out_dir, http_get, log, update_meta, write_jsonl  # noqa: E402
 
-RELEASES_API = "https://api.github.com/repos/{repo}/releases/latest"
+
+def today_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 # (name, repo, description) — versions fetched via the GitHub API.
 GITHUB_SOURCES = [
@@ -54,9 +53,11 @@ GITHUB_SOURCES = [
     ("tw", "seqeralabs/tower-cli", "Seqera Tower command-line interface"),
 ]
 
-# (name, description) — scraped from vendor documentation where possible,
-# otherwise carried as a manual entry with v="".
-SCRAPES = [
+# (name, description) — third entry (clara-parabricks) is scraped from
+# docs.nvidia.com (see PARABRICK_URL); the rest are recorded as manual
+# entries with v="" (see MANUAL below). Kept so the tool set and main()'s
+# log line stay in sync.
+SCRAPE_TOOLS = [
     ("bcl-convert", "Illumina BCL to FASTQ conversion tool"),
     ("dragen", "Illumina DRAGEN Bio-IT Platform (germline/somatic pipelines)"),
     ("clara-parabricks", "NVIDIA Clara Parabricks GPU-accelerated genomics suite"),
@@ -206,7 +207,7 @@ def main() -> int:
     ap.add_argument("--out", default=default_out_dir(), help="output dir (default: crates/oxo-flow-ai/src/knowledge/)")
     args = ap.parse_args()
     out_dir = args.out
-    checked_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    checked_at = today_iso()
 
     rows: list[dict] = []
     failed = 0
@@ -214,14 +215,17 @@ def main() -> int:
     log(f"Fetching GitHub latest releases for {len(GITHUB_SOURCES)} repos ...")
     for name, repo, desc in GITHUB_SOURCES:
         rec = fetch_github(name, repo, desc)
-        if rec is None:
+        if not rec["auto"]:
             failed += 1
-            continue
         rec["checked_at"] = checked_at
         rows.append(rec)
         log(f"  {name}: {rec['v']} (auto={rec['auto']})")
 
     log("Fetching vendor pages ...")
+    # bcl-convert and dragen are the first two SCRAPE_TOOLS entries (the
+    # third, clara-parabricks, goes through the real docs.nvidia.com scrape
+    # below). The dragen page slug differs from its tool name, hence the
+    # per-entry URL.
     for name, desc, url in (
         ("bcl-convert", "Illumina BCL to FASTQ conversion tool",
          "https://support.illumina.com/sequencing/sequencing_software/bcl-convert.html"),

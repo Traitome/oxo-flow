@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { t } from '../context/I18n';
 
 interface Props {
   /** Human-readable page name shown in the fallback UI and console logs. */
@@ -46,11 +47,11 @@ export default class RouteErrorBoundary extends Component<Props, State> {
       }}>
         <span style={{ fontSize: '2rem' }} role="img" aria-label="error">💥</span>
         <p style={{ color: 'var(--color-text-secondary)', margin: 0 }}>
-          This page hit an unexpected error ({this.props.name}). Other pages are unaffected.
+          {t('routeErrorBoundary.body').replace('{{name}}', this.props.name)}
         </p>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-run" onClick={this.reset}>Try again</button>
-          <Link to="/" className="btn-run btn-secondary">Go home</Link>
+          <button className="btn-run" onClick={this.reset}>{t('routeErrorBoundary.tryAgain')}</button>
+          <Link to="/" className="btn-run btn-secondary">{t('routeErrorBoundary.goHome')}</Link>
         </div>
       </div>
     );

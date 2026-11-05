@@ -7,21 +7,16 @@
 //! compiles and links on its own).
 
 mod common;
-use common::workspace_bin;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 
 fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
-}
-
-/// Log-assertion tests must see the engine's default (info) tracing level —
-/// a dev shell exporting `RUST_LOG=warn` filters the teed stream and breaks
-/// them (same pin as oxo_flow_cmd_without_rust_log in cli_integration.rs).
-fn oxo_flow_cmd_without_rust_log() -> Command {
-    let mut cmd = oxo_flow_cmd();
+    // Log-assertion tests must see the engine's default (info) tracing
+    // level — a developer shell exporting RUST_LOG=warn would suppress the
+    // asserted log lines, so this variant always strips it.
+    let mut cmd = common::oxo_flow_cmd();
     cmd.env_remove("RUST_LOG");
     cmd
 }
@@ -85,7 +80,7 @@ fn cli_run_records_workflow_git_sha_in_git_repo() {
     let head = git(&["rev-parse", "HEAD"]);
     let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
 
-    oxo_flow_cmd_without_rust_log()
+    oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()
@@ -384,9 +379,15 @@ fn cli_info_json_carries_git_provenance_in_repo() {
     );
     let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(meta["git_sha"].as_str(), Some(head.as_str()));
+    // Compare against git's own view of the remote: host-level insteadOf
+    // rewrites legitimately change what `remote get-url` reports.
+    let reported_remote = String::from_utf8_lossy(&git(&["remote", "get-url", "origin"]).stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         meta["git_remote"].as_str(),
-        Some("https://github.com/example/wf.git")
+        Some(reported_remote.as_str()),
+        "git_remote must match git remote get-url origin"
     );
     assert!(
         meta["git_describe"].as_str().is_some_and(|s| !s.is_empty()),

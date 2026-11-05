@@ -100,13 +100,18 @@ pub fn curate(intent: &str) -> Option<String> {
     // Topology hints: pipeline-graph nodes matching the keywords, with the
     // literature-backed next steps downstream of each.
     let mut topo_lines: Vec<String> = Vec::new();
+    let mut seen_edges = std::collections::HashSet::new();
     for keyword in intent_keywords(intent) {
         if let Some(node) = pipeline_graph::find_node(&keyword) {
             for edge in pipeline_graph::downstream(&node.id).iter().take(3) {
-                topo_lines.push(format!(
-                    "- {} → {} (data: {})",
-                    node.name, edge.to, edge.data_types
-                ));
+                // Two keywords can hit the same node (substring matching) —
+                // dedupe transitions so the brief stays free of filler.
+                if seen_edges.insert((node.name.clone(), edge.to.clone())) {
+                    topo_lines.push(format!(
+                        "- {} → {} (data: {})",
+                        node.name, edge.to, edge.data_types
+                    ));
+                }
             }
         }
     }
@@ -135,9 +140,9 @@ fn intent_keywords(intent: &str) -> Vec<String> {
         "the", "and", "for", "with", "from", "into", "using", "then", "after", "before", "against",
         "when", "where", "this", "that", "these", "those", "my", "our", "their", "data", "samples",
         "sample", "reads", "read", "file", "files", "analysis", "pipeline", "workflow", "step",
-        "steps", "stage", "need", "needs", "want", "call", "calling", "produce", "produce",
-        "output", "outputs", "report", "reports", "style", "based", "only", "also", "each", "both",
-        "via", "per", "all", "set", "run",
+        "steps", "stage", "need", "needs", "want", "call", "calling", "produce", "output",
+        "outputs", "report", "reports", "style", "based", "only", "also", "each", "both", "via",
+        "per", "all", "set", "run",
     ];
     let mut out: Vec<String> = Vec::new();
     for token in intent.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
@@ -244,10 +249,19 @@ pub fn parse_verdict(review: &str) -> Option<Verdict> {
     let asks_changes = verdict_text.contains("request_changes")
         || verdict_text.contains("request changes")
         || verdict_text.contains("changes requested");
-    let says_approve = verdict_text.contains("approve")
-        && !verdict_text.contains("not approve")
-        && !verdict_text.contains("do not ")
-        && !verdict_text.contains("n't approve");
+    // Fail-safe direction: ANY negation token on the verdict line ("cannot
+    // approve", "won't approve", "should not be approved", …) means the
+    // review is discarded, never guessed as approve. The old allowlist of
+    // specific negations kept missing real-world phrasings (#544 patched
+    // one; this closes the class). Token match on word boundaries so
+    // prose like "noteworthy" is not a negation.
+    let negated = verdict_text
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .any(|w| {
+            w == "not" || w == "cannot" || w == "never" || w == "neither" || w.ends_with("n't")
+        });
+    let says_approve = verdict_text.contains("approve") && !negated;
     if asks_changes {
         // Findings = the rest of the response, minus the verdict line.
         let findings = review

@@ -6,9 +6,6 @@
 //! user's explicit Accept click, never a model action.
 
 use oxo_flow_ai::tools::ToolRegistry;
-use oxo_flow_ai::tools::builtin::{
-    FetchUrlTool, LookupDocTool, LookupPipelineTool, LookupSkillTool, LookupTool,
-};
 
 use oxo_flow_ai::error::AiError;
 use oxo_flow_ai::tools::{Tool, ToolDef};
@@ -30,21 +27,19 @@ impl Tool for RunStatusTool {
         }
     }
     async fn execute(&self, _arguments: &str) -> Result<String, AiError> {
-        let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        let Some(backend) = crate::infra::db::global_backend() else {
             return Err(AiError::ToolError {
                 tool: "get_run_status".into(),
                 message: "database unavailable".into(),
             });
         };
-        let run: Option<crate::infra::db::models::RunRow> =
-            sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-                .bind(&self.run_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| AiError::ToolError {
-                    tool: "get_run_status".into(),
-                    message: e.to_string(),
-                })?;
+        let run = backend
+            .get_run(&self.run_id)
+            .await
+            .map_err(|e| AiError::ToolError {
+                tool: "get_run_status".into(),
+                message: e,
+            })?;
         let Some(run) = run else {
             return Err(AiError::ToolError {
                 tool: "get_run_status".into(),
@@ -105,21 +100,19 @@ impl Tool for RunLogsTool {
         }
     }
     async fn execute(&self, _arguments: &str) -> Result<String, AiError> {
-        let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        let Some(backend) = crate::infra::db::global_backend() else {
             return Err(AiError::ToolError {
                 tool: "get_run_logs".into(),
                 message: "database unavailable".into(),
             });
         };
-        let run: Option<crate::infra::db::models::RunRow> =
-            sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-                .bind(&self.run_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| AiError::ToolError {
-                    tool: "get_run_logs".into(),
-                    message: e.to_string(),
-                })?;
+        let run = backend
+            .get_run(&self.run_id)
+            .await
+            .map_err(|e| AiError::ToolError {
+                tool: "get_run_logs".into(),
+                message: e,
+            })?;
         let Some(run) = run else {
             return Err(AiError::ToolError {
                 tool: "get_run_logs".into(),
@@ -170,11 +163,9 @@ pub fn build_chat_tool_registry(
     is_admin: bool,
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    registry.register(Box::new(LookupTool::new()));
-    registry.register(Box::new(LookupSkillTool::new()));
-    registry.register(Box::new(LookupPipelineTool::new()));
-    registry.register(Box::new(LookupDocTool::new()));
-    registry.register(Box::new(FetchUrlTool::new()));
+    // Knowledge tools come from the single canonical registry
+    // (oxo-flow-ai); web-chat extras (run diagnosis) sit on top.
+    registry.merge(oxo_flow_ai::tools::builtin::knowledge_tool_registry());
     if let Some(run_id) = run_id {
         registry.register(Box::new(RunStatusTool {
             run_id: run_id.to_string(),
@@ -188,4 +179,25 @@ pub fn build_chat_tool_registry(
         }));
     }
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drift guard: the web chat registry must contain at least the
+    /// canonical embedded-knowledge tool set from oxo-flow-ai (single
+    /// source of truth). Run-diagnosis extras come on top.
+    #[test]
+    fn chat_registry_covers_knowledge_tools() {
+        let base = oxo_flow_ai::tools::builtin::knowledge_tool_registry();
+        let chat = build_chat_tool_registry(Some("r1"), "u", false);
+        for name in base.names() {
+            assert!(
+                chat.get(&name).is_some(),
+                "chat tool registry lost knowledge tool '{name}' — re-sync with \
+                 oxo_flow_ai::tools::builtin::knowledge_tool_registry"
+            );
+        }
+    }
 }

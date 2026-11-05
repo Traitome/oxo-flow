@@ -14,79 +14,6 @@
 use crate::domains::ai::types::OptimizeConstraints;
 use crate::domains::execution::types::DiagnosticsResponse;
 
-/// Assemble the translate prompt: intent → .oxoflow generation.
-///
-/// ## Role
-/// You are oxo-flow's AI bioinformatics expert. You translate scientist intent
-/// into valid, production-grade .oxoflow pipeline definitions.
-///
-/// ## Safety
-/// - NEVER generate commands that modify files outside the pipeline's workdir.
-/// - NEVER suggest disabling QC steps or validation.
-/// - NEVER generate pipelines that lack resource constraints (threads, memory).
-///
-/// ## Instructions
-/// 1. Understand the analysis intent from the user message and any data context.
-/// 2. Select optimal tools for the task (fastp for QC, STAR for RNA-seq, etc.).
-/// 3. Generate valid .oxoflow TOML inside ```toml ...  code blocks.
-/// 4. Include all required fields: name, shell, depends_on, threads, memory.
-pub fn assemble_translate_prompt(
-    intent: &str,
-    data_summary: Option<&str>,
-    templates: &[String],
-) -> (String, String) {
-    let system = r#"## Role
-You are oxo-flow's AI bioinformatics expert — a specialist in building production-grade bioinformatics pipelines using the oxo-flow engine.
-
-## Core Knowledge
-- oxo-flow uses .oxoflow TOML format with [workflow] header and [[rules]] sections
-- Rules form a DAG via `depends_on` fields
-- Wildcards like {sample} are expanded at runtime
-- Each rule must specify resources (threads, memory) and environment
-
-## Tools Reference
-| Tool | Domain | Key params | Resources |
-|------|--------|------------|-----------|
-| fastp | QC/trimming | --detect_adapter_for_pe, --threads | 4 threads, 8GB |
-| STAR | RNA-seq alignment | --genomeDir, --runThreadN | 16 threads, 32GB |
-| featureCounts | Quantification | -a GTF, -o output, -T threads | 8 threads, 16GB |
-| BWA-MEM | DNA alignment | -t threads, -M, -R @RG | 16 threads, 24GB |
-| GATK HC | Variant calling | -R ref, -I input, -O output | 8 threads, 16GB |
-| bowtie2 | ChIP-seq alignment | -x index, --very-sensitive | 8 threads, 8GB |
-| MACS2 | Peak calling | -f BAMPE, -g genome, -q 0.05 | 2 threads, 8GB |
-
-## Safety Rules
-- NEVER omit resource constraints (threads, memory) — every rule needs them
-- NEVER disable QC steps — quality control is mandatory
-- NEVER use `rm -rf` or destructive commands
-- NEVER write files outside the pipeline's working directory
-- ALWAYS specify environment (conda environment or container)
-
-## Output Format
-Generate the pipeline inside ```toml fences. Include comments explaining key parameters.
-
-## Instructions
-1. Analyze the user's intent and any provided data context
-2. Choose appropriate tools from the reference above
-3. Build a DAG: connect rules via depends_on to create a logical workflow
-4. Set appropriate resource allocations based on the tool reference
-5. Validate the DAG has no cycles and at least one entry point
-"#;
-
-    let mut user = format!("## User Request\nGenerate a .oxoflow pipeline for: {intent}\n\n");
-    if let Some(summary) = data_summary {
-        user.push_str(&format!("## Data Context\n{summary}\n\n"));
-    }
-    if !templates.is_empty() {
-        user.push_str("## Available Templates\n");
-        for t in templates.iter().take(3) {
-            user.push_str(&format!("- {t}\n"));
-        }
-    }
-    user.push_str("\n## Task\nGenerate the optimized .oxoflow TOML configuration now. Output inside ```toml fences.");
-    (system.to_string(), user)
-}
-
 /// Assemble the explain prompt: diagnostics → human-readable explanation.
 ///
 /// ## Role
@@ -254,34 +181,6 @@ You are a bioinformatics pipeline optimizer for oxo-flow. You analyze pipeline T
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_translate_prompt_has_role_and_safety() {
-        let (system, _) = assemble_translate_prompt("RNA-seq", None, &[]);
-        assert!(system.contains("## Role"), "should have ## Role section");
-        assert!(
-            system.contains("## Safety"),
-            "should have ## Safety section"
-        );
-        assert!(
-            system.contains("## Tools Reference"),
-            "should have tool reference"
-        );
-        assert!(
-            system.contains("## Instructions"),
-            "should have instructions"
-        );
-    }
-
-    #[test]
-    fn test_translate_prompt_includes_user_input() {
-        let (_, user) = assemble_translate_prompt("variant calling", None, &[]);
-        assert!(
-            user.contains("variant calling"),
-            "should include user intent"
-        );
-        assert!(user.contains("```toml"), "should mention output format");
-    }
 
     #[test]
     fn test_explain_prompt_has_protocol() {

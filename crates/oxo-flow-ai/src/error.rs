@@ -17,9 +17,6 @@ pub enum AiError {
     #[error("AI response did not contain expected content")]
     EmptyResponse,
 
-    #[error("AI response did not contain valid TOML: {details}")]
-    InvalidToml { details: String },
-
     #[error("Tool '{tool}' execution failed: {message}")]
     ToolError { tool: String, message: String },
 
@@ -44,10 +41,22 @@ pub enum AiError {
     #[error("Network error: {message}")]
     Network { message: String },
 
-    #[error("Rate limited by {provider}. Retry after {retry_after:?}")]
+    /// A provider response could not be parsed as the expected JSON shape.
+    /// Distinct from [`AiError::Config`]: the configuration is fine — the
+    /// model's/server's payload is what failed to parse.
+    #[error("Invalid AI response: {message}")]
+    InvalidResponse { message: String },
+
+    /// Rate limited (HTTP 429). `retry_after` is whole seconds, parsed from
+    /// the provider's `Retry-After` header (digits form; HTTP-date form is
+    /// reported as absent — callers fall back to their own backoff).
+    #[error("Rate limited by {provider}.{}", match retry_after {
+        Some(secs) => format!(" Retry-After: {secs}s"),
+        None => String::new(),
+    })]
     RateLimited {
         provider: String,
-        retry_after: Option<String>,
+        retry_after: Option<u64>,
     },
 
     #[error("Authentication failed for {provider}: {message}")]
@@ -63,18 +72,10 @@ pub enum AiError {
     OutputLimit { provider: String, message: String },
 }
 
-impl From<reqwest::Error> for AiError {
-    fn from(e: reqwest::Error) -> Self {
-        AiError::Network {
-            message: e.to_string(),
-        }
-    }
-}
-
 impl From<serde_json::Error> for AiError {
     fn from(e: serde_json::Error) -> Self {
-        AiError::Config {
-            message: format!("JSON serialization error: {e}"),
+        AiError::InvalidResponse {
+            message: format!("JSON parse/serialization error: {e}"),
         }
     }
 }

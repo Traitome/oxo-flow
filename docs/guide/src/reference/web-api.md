@@ -348,7 +348,19 @@ file on disk defines the version.
 
 ### Create Run
 
-> **PostgreSQL deployments**: every `/api/runs*` endpoint returns `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}` — run execution requires a SQLite-backed server. Library/AI/auth domains remain available.
+> **Database Backends**: run-record persistence and lifecycle routing use
+> the unified `StorageBackend`, with SQLite and feature-gated PostgreSQL
+> implementations. A CI smoke test against a live PostgreSQL container
+> verifies the schema bootstrap and the core `StorageBackend` CRUD surface,
+> and the storage contract was live-verified against `postgres:16`
+> (2026-11-05: full contract round-trip passed, web suite 554 passed /
+> 0 failed with the `postgres` feature); concurrency, crash recovery, and
+> multi-instance behavior remain unvalidated. The runs gate is
+> backend-agnostic: if no storage backend is initialized at all, these
+> endpoints return
+> `503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}`.
+> Team/HPC execution also lacks an OS-level tenant boundary and must not be
+> exposed to untrusted workflow authors.
 
 ```
 POST /api/runs
@@ -385,6 +397,21 @@ without `pipeline_id` get a fresh per-run sandbox and execute everything.
 Malformed or unknown pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
 `404 PIPELINE_NOT_FOUND`).
 
+**Typed-workflow admission limit:** directly submitted typed workflows are
+checked by the same core BioType validator as CLI preflight. Typed
+declarations are detected structurally from parsed TOML, including both
+table forms such as `[types.*]` / `[rules.types]` and inline forms such as
+`types = { ... }`. Only the host workflow and locally staged sources reached
+through `[[include]]` participate in that check; unrelated staged assets are
+ignored. Any reachable typed include or uninspectable include fails closed
+regardless of optional fields. A directly typed workflow is validated in
+place when it has no include graph; adding `config_overrides` to that direct
+typed path also fails closed. In those cases the web layer cannot yet
+reconstruct the CLI's fully resolved graph, so it responds with
+`400 {"code":"TYPED_ADMISSION_UNSUPPORTED"}` before creating a run row. Use
+the CLI admission path for typed workflows that depend on includes or
+configuration overrides until resolved admission lands.
+
 Execution flags are forwarded to the CLI executor:
 
 - `dry_run: true` spawns the preview subcommand (`oxo-flow dry-run`) —
@@ -400,9 +427,13 @@ Execution flags are forwarded to the CLI executor:
   `envs/clinical/pixi.toml`), values are the file contents. Keys are
   validated as relative workspace paths — absolute paths, `..` components,
   and degenerate keys (empty, `.`-only, trailing slash) are rejected
-  (`400 INVALID_INCLUDE_PATH`), and the key `workflow.oxoflow`
-  is rejected because it would overwrite the main workflow. Files are written
-  beside `workflow.oxoflow` in the run directory, where the CLI's
+  (`400 INVALID_INCLUDE_PATH`). Keys are canonicalized before validation
+  and staging, so aliases such as `./workflow.oxoflow` and duplicate
+  canonical keys, including case-insensitive aliases, are rejected; any
+  canonical key equal to
+  `workflow.oxoflow` (case-insensitively) is refused because it would
+  overwrite the main workflow. Files are written beside `workflow.oxoflow`
+  in the run directory, where the CLI's
   `resolve_includes` resolves them unchanged — the same machinery local
   `oxo-flow run` uses. Note: `pipeline_snapshot` in the run row stores only
   the host TOML, so status/DAG endpoints re-parse it without includes; the
@@ -497,7 +528,7 @@ Read-only drift audit of the run's `[engine] protected_data_trees` (issue #935 s
 
 ```json
 {
-  "drifted_files": ["raw/S1.fq: 1024 B @2026-01-01 → 0 B @2026-01-02 (TRUNCATED)"],
+  "drifted_files": ["raw/S1.fq: 1024 B @<baseline-time> → 0 B @<current-time> (TRUNCATED)"],
   "new_trees": 0,
   "warnings": []
 }
@@ -579,6 +610,9 @@ Content-Type: application/json
 The retry spawns a real run, so it pays the same #213 runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
 the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED` (#519).
+Like every `ApiResult` error, the 429 carries no `Retry-After` header
+(the typed tuple cannot carry headers) — the countdown lives in the
+error `message` instead (`retry in {wait_secs}s`).
 `from_rule` is **not supported**: the engine has no "re-run from rule X
 downstream" mode (`--target` selects the *upstream* closure), so the field is
 rejected with `400 UNSUPPORTED_FIELD` instead of being silently ignored.
@@ -805,8 +839,27 @@ only a `prompt` field fails deserialization); `context` is optional.
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. `GET /api/ai/config/effective` shows the resolved result and
-which level supplied each field. API keys are stored encrypted at rest
-(#205) and never echoed back — responses mark `key_set` instead.
+which level supplied each field. API keys are never echoed back — responses
+mark `key_set` instead. Rows are encrypted at rest only when
+`OXO_FLOW_MASTER_KEY` is configured; without it, the local database uses the
+documented plaintext compatibility mode (#205).
+
+There is deliberately no DELETE endpoint: resetting a tier means saving
+`provider: "disabled"` through the same PUT endpoints. A disabled user-tier
+row makes that user fall back to the shared runtime; a disabled server-tier
+row disables the shared runtime (immediately via the same reconfiguration
+path, and again on the next startup when the row is restored). Omitting
+`provider` in a PUT body defaults to `"disabled"`, so a save that only flips
+a toggle must carry the current provider over (the bundled Settings page
+does exactly that).
+
+Provider names are validated before either configuration endpoint writes
+to storage. An unsupported name returns `400 INVALID_AI_PROVIDER` and
+leaves the existing configuration untouched. If storage succeeds but the
+runtime cannot activate the new provider, the endpoint returns
+`500 AI_RECONFIGURE_FAILED`; the durable row remains available for the
+next startup, but the caller must correct the provider settings rather
+than assuming the running process switched.
 
 See [AI Translation Layer](ai-translation.md) for details.
 
@@ -895,10 +948,17 @@ PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:
 
-- `sha256-keyed` (default) — `sha256(secret‖body)`, the pre-v0.12 format.
-  The default keeps existing webhook consumers working across upgrades.
-- `hmac-sha256` — RFC 2104 HMAC (`X-OxoFlow-Signature: hmac-sha256=<hex>`),
-  the recommended opt-in for new deployments.
+- `hmac-sha256` — RFC 2104 HMAC (`X-OxoFlow-Signature: hmac-sha256=<hex>`).
+  This is the default for a new web-server row and for a workflow `[webhook]`
+  section.
+- `sha256-keyed` — frozen `sha256(secret‖body)` compatibility. Existing
+  web-server rows keep this scheme when an update omits `signature_scheme`;
+  it is not the default for a new row.
+
+An unknown or non-string `signature_scheme` returns
+`400 INVALID_SIGNATURE_SCHEME` rather than being silently coerced. The PUT
+response and subsequent GET report the scheme actually stored. The settings
+UI exposes the choice and labels the legacy scheme as compatibility-only.
 
 Validation on `PUT` (issue #907 N5): `url` must parse as an absolute
 `http://` or `https://` URL with a host (`400 INVALID_URL` otherwise — a
@@ -951,7 +1011,8 @@ POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (
 The stored `ssh_key` is a secret (#517): it is never returned by any
 response (including the upsert echo) — clients see `ssh_key_set: true |
 false` instead. When `OXO_FLOW_MASTER_KEY` is set, the key is sealed at
-rest with the same AES-256-GCM scheme as AI provider keys.
+rest with the same AES-256-GCM scheme as AI provider keys; without it, the
+database stores plaintext compatibility-mode rows.
 `POST /api/runs` accepts `cluster_id`: the run then stages its workdir to
 the remote host (tar over stdio — no rsync), executes under a per-run
 nohup wrapper, and pulls the results back on completion so every

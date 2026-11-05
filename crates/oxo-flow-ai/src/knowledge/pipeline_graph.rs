@@ -228,7 +228,15 @@ pub fn format_path(from: &str, to: &str) -> String {
     match find_path(from, to) {
         None => format!("No pipeline path found from '{}' to '{}'.", from, to),
         Some(path) => {
-            let mut s = format!("Pipeline path: {} → {} ({} steps)\n", from, to, path.len());
+            // find_path includes both endpoints, so hops = entries - 1.
+            let steps = path.len().saturating_sub(1);
+            let mut s = format!(
+                "Pipeline path: {} → {} ({} step{})\n",
+                from,
+                to,
+                steps,
+                if steps == 1 { "" } else { "s" }
+            );
             for (node_id, data_types, papers) in &path {
                 let name = find_node(node_id)
                     .map(|n| n.name.clone())

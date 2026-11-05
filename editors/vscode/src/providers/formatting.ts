@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatArgs } from "../core/cliArgs";
-import { runCli } from "../core/exec";
+import { DEFAULT_EXECUTABLE, runCli } from "../core/exec";
 
 /**
  * Formatting via the engine's canonical TOML formatter (`oxo-flow format`).
@@ -17,7 +17,7 @@ export class OxoflowFormattingProvider implements vscode.DocumentFormattingEditP
     token: vscode.CancellationToken
   ): Promise<vscode.TextEdit[] | undefined> {
     const cfg = vscode.workspace.getConfiguration("oxo-flow", document.uri);
-    const executable = cfg.get<string>("executablePath", "oxo-flow");
+    const executable = cfg.get<string>("executablePath", DEFAULT_EXECUTABLE);
 
     const dir = await mkdtemp(join(tmpdir(), "oxoflow-format-"));
     const input = join(dir, "in.oxoflow");

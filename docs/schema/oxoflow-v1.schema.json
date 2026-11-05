@@ -133,10 +133,18 @@
               "default": {
                 "description": "Default value when not provided via CLI",
                 "anyOf": [
-                  { "type": "string" },
-                  { "type": "integer" },
-                  { "type": "number" },
-                  { "type": "boolean" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "required": {
@@ -250,6 +258,19 @@
         "time_limit": {
           "type": "string",
           "description": "Default wall-time limit (e.g. 48h) applied to every rule whose resources.time_limit is unset"
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Default remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
         }
       }
     },
@@ -285,11 +306,41 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "Path to the included .oxoflow file"
+            "description": "Path to the included .oxoflow file, or a path inside a pinned git repository"
           },
           "namespace": {
             "type": "string",
             "description": "Optional namespace prefix for included rules"
+          },
+          "name": {
+            "type": "string",
+            "description": "Module identity for partial runs; defaults to the included file stem"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Input file patterns the host must provide to the module"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output file patterns the module exposes to the host"
+          },
+          "params": {
+            "type": "object",
+            "description": "Default config values for the module; explicit host values take precedence"
+          },
+          "repo": {
+            "type": "string",
+            "description": "Git repository containing the included path"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Git tag, branch, or commit pinning the repository include"
           }
         }
       }
@@ -362,7 +413,7 @@
           },
           "values_from": {
             "type": "string",
-            "description": "Config-driven value list (comma string or array key) — resolves the fan-out at expansion time, CLI --arg / profile driven"
+            "description": "Config-driven value list (comma string or array key) \u2014 resolves the fan-out at expansion time, CLI --arg / profile driven"
           }
         }
       }
@@ -436,6 +487,36 @@
         "tmp_dir": {
           "type": "string",
           "description": "Global scratch directory injected as TMPDIR/TMP/TEMP into every rule shell so tools that spill caches into the system temp directory write to a volume with room. Relative paths resolve against the workflow file's directory; created on demand. OXO_FLOW_TMPDIR overrides it per invocation."
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Global remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
+        },
+        "numa_aware": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable NUMA-aware node allocation and affinity wrapping."
+        },
+        "tier0_ram_scratch": {
+          "type": "string",
+          "description": "Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. /dev/shm)."
+        },
+        "tier1_nvme_scratch": {
+          "type": "string",
+          "description": "Tier 1 local fast scratch directory (local NVMe SSD, e.g. /mnt/nvme/scratch)."
+        },
+        "tier2_shared_scratch": {
+          "type": "string",
+          "description": "Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS)."
         }
       }
     },
@@ -704,6 +785,13 @@
           "type": "string"
         }
       }
+    },
+    "types": {
+      "type": "object",
+      "description": "Biological semantic type specifications ([types.<name>])",
+      "additionalProperties": {
+        "$ref": "#/$defs/bioTypeSpec"
+      }
     }
   },
   "$defs": {
@@ -784,6 +872,15 @@
         "partition": {
           "type": "string"
         },
+        "numa_node": {
+          "type": "integer",
+          "description": "Explicit NUMA node index to bind execution to."
+        },
+        "numa_pin": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pin rule execution to an optimal NUMA node via numactl."
+        },
         "groups": {
           "type": "object",
           "additionalProperties": {
@@ -859,7 +956,7 @@
           }
         }
       ],
-      "description": "Fan-out over `values` (declared list) or `values_from` (config reference); both absent is accepted at parse time (the executor expands zero instances — see validate W-side emptiness checks)"
+      "description": "Fan-out over `values` (declared list) or `values_from` (config reference); both absent is accepted at parse time (the executor expands zero instances \u2014 see validate W-side emptiness checks)"
     },
     "transformConfig": {
       "type": "object",
@@ -1309,7 +1406,7 @@
         },
         "when": {
           "type": "string",
-          "description": "Conditional expression — skip rule when false"
+          "description": "Conditional expression \u2014 skip rule when false"
         },
         "envvars": {
           "type": "object",
@@ -1427,6 +1524,19 @@
           "type": "boolean",
           "default": false,
           "description": "Enable FIFO streaming mode"
+        },
+        "staging_mode": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "stream",
+            "stream_fifo",
+            "fifo",
+            "passthrough",
+            "pass_through"
+          ],
+          "default": "eager",
+          "description": "Remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
         },
         "checksum": {
           "type": "string",
@@ -1649,7 +1759,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "description": "Per-sample multi-file grouping (pattern/group_by/keep) — issue #231"
+            "description": "Per-sample multi-file grouping (pattern/group_by/keep) \u2014 issue #231"
           }
         },
         "scratch": {
@@ -1678,6 +1788,10 @@
             "null"
           ],
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "types": {
+          "$ref": "#/$defs/ruleTypesSpec",
+          "description": "Biological type declarations for rule inputs and outputs"
         }
       }
     },
@@ -1834,6 +1948,116 @@
             "null"
           ],
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
+      }
+    },
+    "bioTypeSpec": {
+      "type": "object",
+      "description": "Biological semantic type contract (format, sort order, index accompaniment, reference assembly, compression)",
+      "required": [
+        "format"
+      ],
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "description": "Extensible biological domain metadata attributes",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "compression": {
+          "type": "string",
+          "description": "Compression stream encoding (none, gzip, bgzip, zstd)",
+          "enum": [
+            "none",
+            "gzip",
+            "bgzip",
+            "zstd"
+          ]
+        },
+        "format": {
+          "type": "string",
+          "description": "Biological file format category (fastq, sam, bam, cram, vcf, bcf, bed, gtf, gff3, fasta, h5ad, rds, parquet, tsv, generic)",
+          "enum": [
+            "fastq",
+            "sam",
+            "bam",
+            "cram",
+            "vcf",
+            "bcf",
+            "bed",
+            "gtf",
+            "gff",
+            "gff3",
+            "fasta",
+            "h5ad",
+            "rds",
+            "parquet",
+            "tsv",
+            "generic"
+          ]
+        },
+        "index": {
+          "type": "string",
+          "description": "Companion index file requirement (bai, csi, crai, tbi, fai)",
+          "enum": [
+            "bai",
+            "csi",
+            "crai",
+            "tbi",
+            "fai"
+          ]
+        },
+        "read_groups": {
+          "type": "object",
+          "description": "Mandatory read group contract specification for alignment files",
+          "properties": {
+            "required": {
+              "type": "boolean",
+              "description": "Whether valid @RG headers are mandatory"
+            },
+            "fields": {
+              "type": "array",
+              "description": "Required @RG tag fields (e.g. ID, SM, PL)",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "reference_build": {
+          "type": "string",
+          "description": "Reference genome assembly build identifier (e.g. GRCh38, hg19, T2T-CHM13)"
+        },
+        "sort_order": {
+          "type": "string",
+          "description": "Record sort discipline (unsorted, queryname, coordinate, unknown)",
+          "enum": [
+            "unsorted",
+            "queryname",
+            "coordinate",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "ruleTypesSpec": {
+      "type": "object",
+      "description": "Rule-level semantic biological type contracts for input and output channels",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "description": "Input channel to biological type mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output channel to biological type mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     }

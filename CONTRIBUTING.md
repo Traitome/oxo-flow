@@ -10,7 +10,7 @@ cargo build --workspace
 
 ## CI Checks (run before PR)
 
-The canonical gate is `make ci` (fmt + clippy + build + test + schema-drift + version-check + audit + frontend-lint):
+The canonical gate is `make ci` (fmt, clippy, build, test plus every drift/audit/secrets/docs/eval/extension gate — the complete list lives in the `ci` target of the Makefile, which is the single source for it):
 
 ```bash
 make ci
@@ -26,7 +26,7 @@ cargo test --workspace -- --test-threads=1      # Full workspace suite
 ```
 crates/oxo-flow-core/    # DAG engine, executor, config, scheduling
 crates/oxo-flow-ai/      # AI companion: providers, skills, agents
-crates/oxo-flow-cli/     # CLI binary (32 subcommands)
+crates/oxo-flow-cli/     # CLI binary (33 subcommands)
 crates/oxo-flow-web/     # Web server (axum REST API + React SPA)
 frontend/                # React 19 TypeScript SPA
 ```

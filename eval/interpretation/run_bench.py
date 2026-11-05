@@ -34,6 +34,9 @@ HERE = Path(__file__).resolve().parent
 SEEDS_DIR = HERE / "seeds"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import common  # noqa: E402
+
 
 def clean(text: str) -> str:
     return ANSI.sub("", text)
@@ -51,9 +54,18 @@ def materialize(workdir: Path, setup: dict) -> None:
 
 
 def run_cmd(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A hung seed must not discard the seeds already scored: record the
+        # timeout as a failed command (exit 124, the convention run_eval.py's
+        # gates use) and let the main loop keep going. The caller marks the
+        # row broken via its exit/analysis_exit checks.
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        return 124, clean(stdout), clean(stderr)
     return proc.returncode, clean(proc.stdout), clean(proc.stderr)
 
 
@@ -72,17 +84,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=300, help="per-command timeout in seconds")
     args = ap.parse_args()
 
-    binary = Path(
-        args.binary
-        or next(
-            p
-            for p in [
-                HERE.parent.parent / "target" / "release" / "oxo-flow",
-                HERE.parent.parent / "target" / "debug" / "oxo-flow",
-            ]
-            if p.exists()
-        )
-    ).resolve()
+    try:
+        binary = Path(args.binary or common.find_engine_binary()).resolve()
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     provider_ready = bool(os.environ.get("OXO_FLOW_AI_PROVIDER")) or (
         Path.home() / ".oxo-flow" / "ai_config.json"

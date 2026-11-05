@@ -224,9 +224,7 @@ pub fn analyze_run_status(
 /// back to the classic exit-code signatures (OOM 137/9, segfault 139) when
 /// no tail survived, and to the generic message when neither matches.
 /// Returns `(prediction, suggestion, auto_fixable, level, pattern_id)`.
-fn classify_failure(
-    node: &NodeExecutionStatus,
-) -> (String, String, bool, AlertLevel, &'static str) {
+fn classify_failure(node: &NodeExecutionStatus) -> (String, String, bool, AlertLevel, String) {
     let tail = [node.stderr_tail.as_deref(), node.stdout_tail.as_deref()]
         .into_iter()
         .flatten()
@@ -244,22 +242,23 @@ fn classify_failure(
             .error_pattern
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let pattern_id: &'static str = match pattern.as_str() {
-            "oom_killed" => "oom_killed",
-            "segfault" => "segfault",
-            "command_not_found" => "command_not_found",
-            "timeout" => "timeout",
-            "disk_full" => "disk_full",
-            "permission_denied" => "permission_denied",
-            "network_error" => "network_error",
-            "conda_env_fail" => "conda_env_fail",
-            "shell_syntax" => "shell_syntax",
+        let pattern_id: String = match pattern.as_str() {
+            "oom_killed" => "oom_killed".to_string(),
+            "segfault" => "segfault".to_string(),
+            "command_not_found" => "command_not_found".to_string(),
+            "timeout" => "timeout".to_string(),
+            "disk_full" => "disk_full".to_string(),
+            "permission_denied" => "permission_denied".to_string(),
+            "network_error" => "network_error".to_string(),
+            "conda_env_fail" => "conda_env_fail".to_string(),
+            "shell_syntax" => "shell_syntax".to_string(),
             // The engine's full table is the identity, not just the 9 most
             // common signatures — an unmapped id is used verbatim so
             // alert ids stay specific and dedup consumers can tell causes
-            // apart (issue #908 review). Runtime ids are bounded by the
-            // static pattern table, so the &'static leak is fixed at size.
-            other => Box::leak(other.to_string().into_boxed_str()),
+            // apart (issue #908 review). Owned, not leaked: a future
+            // dynamic pattern id must not turn the polling endpoint into
+            // an unbounded leak.
+            other => other.to_string(),
         };
         let level = match result.category {
             // Resource exhaustion escalates the run regardless of whether the
@@ -300,23 +299,19 @@ fn classify_failure(
 
     // No tail (or no match): fall back to the exit-code-only signatures.
     match node.exit_code {
-        Some(137) | Some(9) => (
-            format!(
-                "Rule '{}' killed by OOM (exit {})",
-                node.rule,
-                node.exit_code.unwrap()
-            ),
+        Some(code @ (137 | 9)) => (
+            format!("Rule '{}' killed by OOM (exit {})", node.rule, code),
             "Increase memory allocation and retry from checkpoint.".into(),
             true,
             AlertLevel::Critical,
-            "oom_killed",
+            "oom_killed".to_string(),
         ),
         Some(139) => (
             format!("Rule '{}' segfaulted (exit 139)", node.rule),
             "Possible memory corruption -- reduce threads or check input data integrity.".into(),
             false,
             AlertLevel::Critical,
-            "segfault",
+            "segfault".to_string(),
         ),
         _ => (
             format!(
@@ -327,62 +322,8 @@ fn classify_failure(
             "Review logs and adjust parameters.".into(),
             false,
             AlertLevel::Alert,
-            "exit_code",
+            "exit_code".to_string(),
         ),
-    }
-}
-
-/// Generate a fix suggestion for a failed rule.
-pub fn suggest_fix(rule: &str, exit_code: Option<i32>, _log_excerpt: &str) -> Vec<String> {
-    match exit_code {
-        Some(137) | Some(9) => vec![
-            format!("Increase memory allocation for '{rule}'"),
-            "Add checkpoint/retry mechanism".into(),
-            "Reduce input file size or split into chunks".into(),
-        ],
-        Some(139) => vec![
-            format!("Reduce threads for '{rule}'"),
-            "Verify input data integrity".into(),
-            "Update tool to latest version".into(),
-        ],
-        Some(1) => vec![
-            format!("Check '{rule}' for missing input files or incorrect paths"),
-            "Verify environment/tool availability".into(),
-        ],
-        _ => vec![
-            format!("Review logs for '{rule}' and adjust parameters"),
-            "Try running manually to isolate the issue".into(),
-        ],
-    }
-}
-
-/// Check if a failed rule matches a known error pattern.
-///
-/// Delegates to the shared [`DiagnosticsEngine`] pattern table so the AI
-/// monitor and the web diagnostics service agree on what counts as a known
-/// error (issue #708) — the previous hand-rolled substring checks matched
-/// near-miss words (`contains("oom")` matched "zoom"). Returns
-/// `(auto_fixable, pattern_id)`.
-///
-/// Exit-code-only signatures still fire when no stderr text survived:
-/// 137/9 is the OOM killer's SIGKILL, 139 is SIGSEGV.
-pub fn is_known_error_pattern(exit_code: Option<i32>, log_excerpt: &str) -> (bool, String) {
-    match exit_code {
-        Some(137) | Some(9) => return (true, "oom_killed".into()),
-        Some(139) => return (true, "segfault".into()),
-        _ => {}
-    }
-
-    match DiagnosticsEngine::global()
-        .analyze("monitor", log_excerpt, exit_code)
-        .into_iter()
-        .find(|r| r.error_pattern.as_deref() != Some("unknown_error"))
-    {
-        Some(result) => (
-            result.auto_fixable,
-            result.error_pattern.unwrap_or_else(|| "unknown".into()),
-        ),
-        None => (false, "unknown".into()),
     }
 }
 
@@ -441,13 +382,6 @@ mod tests {
                 .any(|a| a.level == AlertLevel::Critical)
         );
         assert!(status.alerts.iter().any(|a| a.auto_fixable));
-    }
-
-    #[test]
-    fn test_is_known_oom_pattern() {
-        let (known, pattern) = is_known_error_pattern(Some(137), "");
-        assert!(known);
-        assert_eq!(pattern, "oom_killed");
     }
 
     #[test]
@@ -602,37 +536,6 @@ mod tests {
         let ids_b: Vec<&str> = b.alerts.iter().map(|x| x.alert_id.as_str()).collect();
         assert_eq!(ids_a, ids_b);
         assert!(ids_a.iter().any(|id| id.starts_with("failed:star_align:")));
-    }
-
-    #[test]
-    fn test_is_known_log_pattern() {
-        let (known, pattern) = is_known_error_pattern(None, "Out of memory: killed process");
-        assert!(known);
-        assert_eq!(pattern, "oom_killed");
-    }
-
-    #[test]
-    fn test_zoom_does_not_match_oom() {
-        // Regression for issue #709: contains("oom") matched "zoom".
-        let (known, pattern) = is_known_error_pattern(None, "Zooming the canvas to level 5");
-        assert!(!known);
-        assert_eq!(pattern, "unknown");
-    }
-
-    #[test]
-    fn test_shared_engine_reports_diagnostics_pattern_id() {
-        // The monitor and the diagnostics engine now share one table, so
-        // pattern ids and auto-fixability cannot drift apart (#708).
-        let (known, pattern) =
-            is_known_error_pattern(Some(127), "sh: 1: fastqc: command not found");
-        assert!(known);
-        assert_eq!(pattern, "command_not_found");
-    }
-
-    #[test]
-    fn test_suggest_fix_oom() {
-        let fixes = suggest_fix("star_align", Some(137), "");
-        assert!(fixes[0].contains("memory"));
     }
 
     #[test]

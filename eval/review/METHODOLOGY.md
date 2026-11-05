@@ -207,12 +207,12 @@ The sample size distribution ($N = 149, 70, 38$) was engineered according to sta
   Sampled across 21 heterogeneous workflow contexts (spanning 9 easy, 45 medium, and 16 hard tasks) to cover all core bioinformatics functional operators: read trimming, sequence alignment, duplicate marking, variant discovery, filtering, quantification, and multi-omics aggregation.
 - **Tool Grounding ($N = 149$, Domain Lexicon Coverage)**:
   Systematically generated via fixed-stride deterministic sampling across Bioconda (6,590 packages) and nf-core (2,108 modules), combined with curated tables (59 exact-name recall, 46 purpose-to-tool mappings, 17 version-pin directives, 12 alias queries, 10 negative control queries, 5 commercial platforms, and 6 audited rejections). This sample size aligns with standard information retrieval and entity extraction benchmarks (100-200 items), ensuring broad coverage across distinct biological disciplines while enabling rigorous human verification.
-- **Total Statistical Trials ($N = 1,285$)**:
-  Under the standard multi-trial evaluation protocol (5 trials per item across all layers):
+- **Total Statistical Trials (planned $N = 1,285$)**:
+  Under the planned multi-trial evaluation protocol (5 trials per item across all layers, pending capture runs; the current capture default is 1 trial per item):
 
   $$N_{\text{total}} = (149_{\text{tool}} + 70_{\text{rule}} + 38_{\text{workflow}}) \times 5 = 1,285 \text{ trials}$$
 
-  This volume provides rigorous statistical power to compute unbiased $\text{pass}@k$ estimators ($k \in \{1, 5\}$) and robust 95% bootstrap confidence intervals, resolving statistically significant performance differentials across foundation models ($p < 0.05$).
+  The planned volume is sized to provide power for unbiased $\text{pass}@k$ estimation ($k \in \{1, 5\}$) and 95% bootstrap confidence intervals; claims of statistically significant differentials (p < 0.05) require a completed measured run and are not asserted here.
 
 ## Appendix: Advisory AI Judge & Robust Reporting
 

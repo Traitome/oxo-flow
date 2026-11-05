@@ -234,17 +234,17 @@ Respond in this exact structure:
 ///
 /// The diagnostic prompt allows "only the changed portions" — a `[[rules]]`
 /// block is a valid fix on its own, so accept it alongside `[workflow]`.
+/// Fence pairing is the shared state machine
+/// (`pipeline_gen::fenced_segments`); the guard runs per segment so a
+/// first fragment without anchors cannot hide a later complete fix block.
 fn extract_toml_block(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```toml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            let content = response[start..start + end].trim().to_string();
-            if content.contains("[workflow]") || content.contains("[[rules]") {
-                return Some(content);
-            }
-        }
-    }
-    None
+    oxo_flow_ai::agent::pipeline_gen::fenced_segments(response)
+        .into_iter()
+        .find(|(tag, body)| {
+            tag.eq_ignore_ascii_case("toml")
+                && (body.contains("[workflow]") || body.contains("[[rules]"))
+        })
+        .map(|(_, body)| body)
 }
 
 /// Extract a named section from the AI response.
@@ -372,7 +372,7 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         );
     }
 
-    /// The prompt permits "only the changed portions" — a [[rules]]-only
+    /// The prompt permits "only the changed portions" — a `[[rules]]`-only
     /// block is a legitimate fix and must not be discarded.
     #[test]
     fn toml_block_accepts_rules_only_fragments() {

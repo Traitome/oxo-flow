@@ -85,26 +85,33 @@ fn test_ai_copilot_no_write_imports() {
 
 #[test]
 fn test_path_traversal_prevention() {
-    // Exercise the production sanitizer — a local copy here would drift
-    // from the real implementation and test nothing.
-    let func = oxo_flow_web::domains::execution::sanitize_path_component;
+    // Exercise the production path validator (`workspace::canonicalize_relative_path`
+    // — the gate every user-supplied relative path goes through). A local
+    // copy here would drift from the real implementation and test nothing.
+    let func = |raw: &str| oxo_flow_web::workspace::canonicalize_relative_path(raw);
 
     // Normal paths should pass through
-    assert_eq!(func("run-123"), "run-123");
-    assert_eq!(func("my_pipeline_v2"), "my_pipeline_v2");
+    assert_eq!(func("run-123").ok(), Some("run-123".to_string()));
+    assert_eq!(
+        func("my_pipeline_v2").ok(),
+        Some("my_pipeline_v2".to_string())
+    );
 
-    // Path traversal attempts should be neutralized
-    assert_ne!(func("../../../etc/passwd"), "../../../etc/passwd");
-    assert!(!func("../../../etc/passwd").contains("/etc"));
-    assert!(!func("../../../etc/passwd").contains(".."));
+    // Path traversal attempts must be refused outright
+    assert!(func("../../../etc/passwd").is_err());
+    assert!(func("a/../../etc/passwd").is_err());
+    assert!(func("/absolute/path").is_err());
 
     // Null byte injection
-    assert!(!func("run\0hidden").contains('\0'));
+    assert!(func("run\0hidden").is_err());
 
-    // Mixed traversal
-    let result = func("..\\..\\windows\\system32");
-    assert!(!result.contains(".."));
-    assert!(!result.contains("\\\\"));
+    // Windows-style backslashes are NOT separators on Unix: the validator
+    // treats `..\..\windows\system32` as one flat (weird) filename that
+    // stays inside the workspace. The security property is containment —
+    // the accepted value must never carry a '/' separator or resolve
+    // outside the workspace root.
+    let ok = func("..\\..\\windows\\system32").expect("contained filename is accepted");
+    assert!(!ok.contains('/'), "must stay a flat filename: {ok:?}");
 }
 
 // ── Runtime: SQL Injection Prevention ──
@@ -125,13 +132,18 @@ fn test_sql_injection_prevention() {
         if !path.exists() {
             continue;
         }
-        let source = std::fs::read_to_string(&path).unwrap_or_default();
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let source = strip_comments(&raw);
 
-        // Check that SQL queries use .bind() (parameterized)
-        let has_sql = source.contains("SELECT")
-            || source.contains("INSERT")
-            || source.contains("UPDATE")
-            || source.contains("DELETE");
+        // Statement-shaped patterns only: utoipa method verbs (`delete,`) and
+        // prose like "/// DELETE /api/..." must not read as SQL. Handlers are
+        // expected to route storage through StorageBackend; any raw SQL that
+        // does appear must be parameterized with .bind().
+        let has_sql = ["INSERT INTO", "DELETE FROM"]
+            .iter()
+            .any(|p| source.contains(p))
+            || (source.contains("UPDATE ") && source.contains(" SET "))
+            || (source.contains("SELECT ") && source.contains(" FROM "));
         let has_bind = source.contains(".bind(");
 
         if has_sql {
@@ -140,12 +152,6 @@ fn test_sql_injection_prevention() {
                 "Handler file {file} has SQL queries but no .bind() calls — possible SQL injection risk"
             );
         }
-
-        // The key safety check: all SQL queries must use .bind() for parameters.
-        // format! is safe when used only for error messages (not building SQL).
-        // The definitive check: has SQL + has .bind() → parameterized → safe.
-        // This was verified above.
-        let _ = file; // used in assertion messages above
     }
 }
 

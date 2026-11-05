@@ -11,6 +11,7 @@ import RunDialog, { type RunOptions } from '../components/RunDialog';
 import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
+import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
 
 // Lazy: guided mode (the default) never mounts these, so @xyflow/react,
 // d3-dag and CodeMirror stay out of the initial editor load (issue #79).
@@ -80,86 +81,9 @@ function hasControlOrNewline(value: string): boolean {
   return false;
 }
 
-interface TomlSectionSpan {
-  name: string;
-  isArrayTable: boolean;
-  headerLineStart: number;
-  bodyStart: number;
-  end: number;
-}
-
-// Lexically scan TOML top-level section headers (`[table]` and `[[array]]`),
-// ignoring anything inside basic/literal single- or multi-line strings,
-// `#` comments, or multi-line inline arrays/tables.
-function scanTomlTopLevelSections(toml: string): TomlSectionSpan[] {
-  const sections: TomlSectionSpan[] = [];
-  let inMultiBasic = false;
-  let inMultiLiteral = false;
-  let bracketDepth = 0;
-
-  let lineStart = 0;
-  while (lineStart <= toml.length) {
-    const nlIdx = toml.indexOf('\n', lineStart);
-    const lineEnd = nlIdx === -1 ? toml.length : nlIdx;
-    const rawLine = toml.slice(lineStart, lineEnd);
-
-    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
-      const arrayMatch = rawLine.match(/^[ \t]*\[\[([A-Za-z0-9_.-]+)\]\][ \t]*(?:#.*)?\r?$/);
-      const tableMatch = !arrayMatch ? rawLine.match(/^[ \t]*\[([A-Za-z0-9_.-]+)\][ \t]*(?:#.*)?\r?$/) : null;
-      if (arrayMatch || tableMatch) {
-        if (sections.length > 0) {
-          sections[sections.length - 1].end = lineStart;
-        }
-        sections.push({
-          name: (arrayMatch ?? tableMatch)![1],
-          isArrayTable: Boolean(arrayMatch),
-          headerLineStart: lineStart,
-          bodyStart: nlIdx === -1 ? toml.length : nlIdx + 1,
-          end: toml.length,
-        });
-        if (nlIdx === -1) break;
-        lineStart = nlIdx + 1;
-        continue;
-      }
-    }
-
-    let i = 0;
-    let inBasic = false;
-    let inLiteral = false;
-    while (i < rawLine.length) {
-      const ch = rawLine[i];
-      if (inMultiBasic) {
-        if (ch === '\\') { i += 2; continue; }
-        if (rawLine.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
-        i++;
-      } else if (inMultiLiteral) {
-        if (rawLine.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
-        i++;
-      } else if (inBasic) {
-        if (ch === '\\') { i += 2; continue; }
-        if (ch === '"') inBasic = false;
-        i++;
-      } else if (inLiteral) {
-        if (ch === "'") inLiteral = false;
-        i++;
-      } else {
-        if (ch === '#') break;
-        if (rawLine.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
-        if (rawLine.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
-        if (ch === '"') { inBasic = true; i++; continue; }
-        if (ch === "'") { inLiteral = true; i++; continue; }
-        if (ch === '[' || ch === '{') bracketDepth++;
-        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
-        i++;
-      }
-    }
-
-    if (nlIdx === -1) break;
-    lineStart = nlIdx + 1;
-  }
-
-  return sections;
-}
+// scanTomlTopLevelSections / splitSectionStatements live in
+// ../utils/tomlSections so the guided rule builder can reuse the exact same
+// section scanning when it splices card edits back into the document.
 
 function insertBeforeFirstRuleSection(toml: string, snippet: string): string {
   const sections = scanTomlTopLevelSections(toml);
@@ -170,56 +94,6 @@ function insertBeforeFirstRuleSection(toml: string, snippet: string): string {
   const before = toml.slice(0, firstRule.headerLineStart).trimEnd();
   const after = toml.slice(firstRule.headerLineStart);
   return before ? `${before}\n\n${snippet}\n\n${after}` : `${snippet}\n\n${after}`;
-}
-
-function splitSectionStatements(body: string): string[] {
-  const lines = body.replace(/\r\n/g, '\n').split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  const statements: string[] = [];
-  let current: string[] = [];
-  let inMultiBasic = false;
-  let inMultiLiteral = false;
-  let bracketDepth = 0;
-
-  for (const line of lines) {
-    current.push(line);
-    let i = 0;
-    let inBasic = false;
-    let inLiteral = false;
-    while (i < line.length) {
-      const ch = line[i];
-      if (inMultiBasic) {
-        if (ch === '\\') { i += 2; continue; }
-        if (line.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
-        i++;
-      } else if (inMultiLiteral) {
-        if (line.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
-        i++;
-      } else if (inBasic) {
-        if (ch === '\\') { i += 2; continue; }
-        if (ch === '"') inBasic = false;
-        i++;
-      } else if (inLiteral) {
-        if (ch === "'") inLiteral = false;
-        i++;
-      } else {
-        if (ch === '#') break;
-        if (line.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
-        if (line.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
-        if (ch === '"') { inBasic = true; i++; continue; }
-        if (ch === "'") { inLiteral = true; i++; continue; }
-        if (ch === '[' || ch === '{') bracketDepth++;
-        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
-        i++;
-      }
-    }
-    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
-      statements.push(current.join('\n'));
-      current = [];
-    }
-  }
-  if (current.length > 0) statements.push(current.join('\n'));
-  return statements;
 }
 
 function unescapeTomlBasicString(raw: string): string {
@@ -425,13 +299,13 @@ export default function PipelineEditor() {
           if (cancelled) return;
           setToml(pl.toml_content);
           session.setRunResult({
-            message: `Opened saved pipeline "${pl.name}"`,
+            message: t('editor.load.opened').replace('{{name}}', pl.name),
             type: 'success',
           });
         })
         .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : 'Pipeline not found';
-          session.setRunResult({ message: `Pipeline load failed: ${msg}`, type: 'error' });
+          const msg = err instanceof Error ? err.message : t('editor.load.notFound');
+          session.setRunResult({ message: t('editor.load.failed').replace('{{error}}', msg), type: 'error' });
         });
       return () => {
         cancelled = true;
@@ -445,13 +319,13 @@ export default function PipelineEditor() {
         if (cancelled || !tpl.toml_content) return;
         setToml(tpl.toml_content);
         session.setRunResult({
-          message: `Loaded template "${tpl.name}" — edit it on the canvas, then dry-run`,
+          message: t('editor.template.loaded').replace('{{name}}', tpl.name),
           type: 'success',
         });
       })
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : 'Template not found';
-        session.setRunResult({ message: `Template load failed: ${msg}`, type: 'error' });
+        const msg = err instanceof Error ? err.message : t('editor.template.notFound');
+        session.setRunResult({ message: t('editor.template.failed').replace('{{error}}', msg), type: 'error' });
       });
     return () => {
       cancelled = true;
@@ -475,10 +349,10 @@ export default function PipelineEditor() {
       setDagJson(dag);
       setValidation(val);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
       setValidation({ valid: false, errors: [{ code: 'ERROR', message: msg, rule: null, suggestion: null }] });
     }
-  }, []);
+  }, [t]);
 
   // Debounced buildDag+validate runs in both view modes: guided mode gates
   // its Run/Dry-Run buttons on `validation`, which nothing else populates
@@ -511,7 +385,7 @@ export default function PipelineEditor() {
       session.setRunResult({
         runId: res.run_id,
         message: t('editor.runStarted')
-          .replace('{{kind}}', dryRun ? 'Dry-Run' : 'Run')
+          .replace('{{kind}}', dryRun ? t('editor.dryRunBtn') : t('editor.run'))
           .replace('{{id}}', res.run_id.slice(0, 8))
           .replace('{{rules}}', String(res.execution_plan.total_rules))
           .replace('{{secs}}', String(res.estimated_resources.estimated_duration_secs)),
@@ -542,12 +416,12 @@ export default function PipelineEditor() {
       setToml(res.toml_content);
       const errors = res.validation_errors ?? [];
       if (!res.success && errors.length > 0) {
-        session.setRunResult({ message: `Validation: ${errors.join('; ')}`, type: 'error' });
+        session.setRunResult({ message: t('editor.validationFailed').replace('{{errors}}', errors.join('; ')), type: 'error' });
       }
       return res.toml_content;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Edit failed';
-      session.setRunResult({ message: `Edit failed: ${msg}`, type: 'error' });
+      const msg = err instanceof Error && err.message ? err.message : t('common.unknownError');
+      session.setRunResult({ message: t('editor.editFailed').replace('{{error}}', msg), type: 'error' });
       return null;
     }
   };
@@ -589,10 +463,14 @@ export default function PipelineEditor() {
     });
   };
 
-  const handleEditRule = (name: string) => {
+  // Stable across keystrokes: the canvas rebuild effect lists onEditRule in
+  // its deps — a fresh function per render tore down all nodes/edges every
+  // time this parent re-rendered (e.g. on each validation state update).
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- the build does not run the React Compiler; dropping dagJson from the deps would open the inspector on a stale rule
+  const handleEditRule = useCallback((name: string) => {
     const node = dagJson?.nodes.find((n) => n.id === name);
     setInspector({ ruleName: name, rule: node ? node.rule : null });
-  };
+  }, [dagJson]);
 
   const handleInspectorSave = async (patch: Record<string, unknown>, newName?: string) => {
     if (!inspector) return;
@@ -631,7 +509,7 @@ export default function PipelineEditor() {
       if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Nothing to undo';
+      const msg = err instanceof Error && err.message ? err.message : t('editor.noUndo');
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -642,7 +520,7 @@ export default function PipelineEditor() {
       if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Nothing to redo';
+      const msg = err instanceof Error && err.message ? err.message : t('editor.noRedo');
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -689,8 +567,10 @@ export default function PipelineEditor() {
                 try {
                   const snap = await api.getRevision(savedPipelineId, r.id);
                   setToml(snap.toml_content);
-                  session.setRunResult({ message: `Loaded snapshot ${r.id.slice(0, 8)} into the editor — Save to keep it`, type: 'success' });
-                } catch { /* ignore */ }
+                  session.setRunResult({ message: t('editor.history.snapshotLoaded').replace('{{id}}', r.id.slice(0, 8)), type: 'success' });
+                } catch (err: unknown) {
+                  session.setRunResult({ message: describeApiError(err, t('editor.history.loadFailed')), type: 'error' });
+                }
               }}>{t('editor.history.load')}</button>
               <button className="btn-sm" onClick={async () => {
                 if (!window.confirm(t('editor.history.rollbackConfirm').replace('{{time}}', new Date(r.created_at).toLocaleString(locale)))) return;
@@ -698,8 +578,10 @@ export default function PipelineEditor() {
                   await api.rollbackPipeline(savedPipelineId, r.id);
                   setToml((await api.getPipeline(savedPipelineId)).toml_content);
                   api.listRevisions(savedPipelineId).then(setRevisions);
-                  session.setRunResult({ message: 'Rolled back — the current version was preserved as a revision', type: 'success' });
-                } catch { /* ignore */ }
+                  session.setRunResult({ message: t('editor.history.rolledBack'), type: 'success' });
+                } catch (err: unknown) {
+                  session.setRunResult({ message: describeApiError(err, t('editor.history.rollbackFailed')), type: 'error' });
+                }
               }}>{t('editor.history.rollback')}</button>
             </div>
           </div>
@@ -721,13 +603,19 @@ export default function PipelineEditor() {
     if (current && !current.valid) {
       setShowErrors(true);
       session.setRunResult({
-        message: `Not saved: ${current.errors.length} validation error(s) — see the panel below`,
+        message: t('editor.notSaved').replace('{{n}}', String(current.errors.length)),
         type: 'error',
       });
       return;
     }
     try {
-      const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'untitled-pipeline';
+      // Scope the name lookup to [workflow]: a first-match regex over the
+      // whole file picks up [[rule]] or [ai] names instead (fix 7).
+      const sections = scanTomlTopLevelSections(toml);
+      const wfSec = sections.find((s) => !s.isArrayTable && s.name === 'workflow');
+      const name = (wfSec ? toml.slice(wfSec.bodyStart, wfSec.end).match(/name\s*=\s*"([^"]+)"/)?.[1] : undefined)
+        || toml.match(/name\s*=\s*"([^"]+)"/)?.[1]
+        || 'untitled-pipeline';
       const savedId = searchParams.get('pipeline');
       if (savedId) {
         // Editing an existing saved pipeline updates it in place (the old
@@ -755,7 +643,7 @@ export default function PipelineEditor() {
       setToml(res.formatted);
       session.setRunResult({ message: t('editor.formatted'), type: 'success' });
     } catch (err: unknown) {
-      const msg = describeApiError(err, 'Format failed');
+      const msg = describeApiError(err, t('editor.formatFailed'));
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -770,12 +658,12 @@ export default function PipelineEditor() {
         setValidation({ valid: res.errors.length === 0, errors: issues });
         setShowErrors(true);
         session.setRunResult({
-          message: `Lint found ${issues.length} item(s) — inspect the diagnostics panel`,
+          message: t('editor.lintFound').replace('{{count}}', String(issues.length)),
           type: 'info',
         });
       }
     } catch (err: unknown) {
-      const msg = describeApiError(err, 'Lint failed');
+      const msg = describeApiError(err, t('editor.lintFailed'));
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
@@ -855,17 +743,17 @@ export default function PipelineEditor() {
               className="btn-sm"
               onClick={openRunDialogFromGuided}
               disabled={running || !validation?.valid}
-              title="Preview the execution plan without running anything"
+              title={t('editor.dryRunHint')}
             >
-              <CheckCircle size={14} /> Dry-Run
+              <CheckCircle size={14} /> {t('editor.dryRunBtn')}
             </button>
             <button
               className="btn-run"
               onClick={openRunDialogFromGuided}
               disabled={running || !validation?.valid}
-              title="Switch to Canvas mode and run this pipeline"
+              title={t('editor.runHint')}
             >
-              <Play size={16} /> Run
+              <Play size={16} /> {t('editor.run')}
             </button>
           </div>
           <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
@@ -877,7 +765,7 @@ export default function PipelineEditor() {
           this parent (toml/dagJson/validation), so switching back loses
           nothing. */}
       {viewMode === 'canvas' && (
-      <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
+      <Suspense fallback={<div className="empty-state">{t('common.loading')}</div>}>
       <div className={`editor-layout ${leftCollapsed ? 'editor-layout--left-collapsed' : ''} ${fullscreen ? 'editor-layout--fullscreen' : ''}`}>
         <div className={`left-rail ${leftCollapsed ? 'left-rail--collapsed' : ''}`}>
           <div className="left-rail-tabs" role="tablist">
@@ -1010,7 +898,7 @@ export default function PipelineEditor() {
                   <span className="validation-error-code">{e.code}</span>
                   {e.line != null && (
                     <button className="btn-sm" style={{ fontSize: '0.7rem' }}
-                      title="Jump to this line in the editor"
+                      title={t('editor.errors.jump')}
                       onClick={() => setHighlightLine(e.line!)}>
                       {t('editor.errors.line').replace('{{line}}', String(e.line))}
                     </button>
@@ -1033,7 +921,7 @@ export default function PipelineEditor() {
           <ErrorBoundary
             fallback={
               <div className="empty-state">
-                <p>The TOML editor crashed and was reset. Switch modes or reload to recover — your edits above are preserved in the pipeline state.</p>
+                <p>{t('editor.tomlCrashed')}</p>
               </div>
             }
           >
@@ -1051,7 +939,7 @@ export default function PipelineEditor() {
           onClick={() => session.setRunResult(null)}
         >
           {session.state.lastRunResult.message}
-          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>click to dismiss</span>
+          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>{t('common.dismiss')}</span>
         </div>
       )}
 
@@ -1105,7 +993,7 @@ export default function PipelineEditor() {
                         const res = await api.parseSamplesheet(sheetText);
                         setSheetParsed(res);
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Sample sheet parse failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.sheetParseFailed')), type: 'error' });
                       }
                     }}
                   >
@@ -1139,7 +1027,7 @@ export default function PipelineEditor() {
                   <div className="overflow-x" style={{ maxHeight: 180 }}>
                     <table className="data-table">
                       <thead>
-                        <tr><th>Sample</th><th>R1</th><th>R2</th></tr>
+                        <tr><th>{t('editor.data.colSample')}</th><th>{t('editor.data.colR1')}</th><th>{t('editor.data.colR2')}</th></tr>
                       </thead>
                       <tbody>
                         {sheetParsed.samples.map((s, idx) => (
@@ -1174,7 +1062,7 @@ export default function PipelineEditor() {
                         setUploadedFiles(list);
                         session.setRunResult({ message: t('editor.data.uploaded'), type: 'success' });
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Upload failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.uploadFailed')), type: 'error' });
                       }
                     }}
                   />
@@ -1184,7 +1072,7 @@ export default function PipelineEditor() {
                 ) : (
                   <div className="overflow-x" style={{ maxHeight: 200 }}>
                     <table className="data-table">
-                      <thead><tr><th>Path</th><th>Size</th></tr></thead>
+                      <thead><tr><th>{t('editor.data.colPath')}</th><th>{t('editor.data.colSize')}</th></tr></thead>
                       <tbody>
                         {uploadedFiles.map((f) => (
                           <tr key={f.path}>
@@ -1218,7 +1106,7 @@ export default function PipelineEditor() {
                         const r = await api.verifyData(verifyTree.trim(), verifyMd5);
                         setVerifyRes(r);
                       } catch (err: unknown) {
-                        session.setRunResult({ message: describeApiError(err, 'Data verification failed'), type: 'error' });
+                        session.setRunResult({ message: describeApiError(err, t('editor.data.verifyFailed')), type: 'error' });
                       }
                     }}
                   >
