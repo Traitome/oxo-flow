@@ -114,17 +114,17 @@ sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 > `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
 > `environment`, `metrics`, `sample-matrix`, `provenance`,
 > `task-summary`, `software-versions`, `rule-captions`,
-> `aggregate-metrics`). `template` is **consumed** (see below); `format` is
-> parsed but still unsupported: setting it makes the command warn (or fail
-> under `--strict`) instead of silently ignoring it — output formats are
-> selected via the CLI `-f` flag.
+> `aggregate-metrics`). `template` is **consumed** (see below); `format`
+> is **consumed** as the default output format: when `report` runs
+> without `-f` and the `-o` extension does not name a format, the first
+> `format` entry is used.
 
 ### Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `template` | String | Report template: the built-in name `"report.html"`, or a template file path (resolved relative to the workflow file's directory first, then the current directory). Applies to HTML output only; a render failure warns and falls back to the default renderer (exit 2 under `--strict`) |
-| `format` | Array | Parsed but not supported yet — setting it warns (or fails under `--strict`); use `-f` to select the output format |
+| `format` | Array | Default output format. Precedence: explicit `-f` wins; else a recognizable `-o` extension (`json`, `md`, `pdf`); else the **first** `format` entry (`html`, `json`, `md`, `pdf`); else `html`. Listing multiple entries uses the first and warns about the extras (fails under `--strict`) |
 | `sections` | Array | Sections to include, by generator name (see above) |
 
 ### Custom templates

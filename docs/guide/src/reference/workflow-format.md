@@ -589,7 +589,7 @@ sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 | Field | Type | Description |
 |---|---|---|
 | `template` | String | Report template: the built-in name `"report.html"`, or a template file path (workflow directory first, then cwd). Applies to HTML output only; a render failure warns and falls back to the default renderer |
-| `format` | Array | Parsed but **not supported yet** — setting it makes `report` warn (or fail under `--strict`); select the output format with `-f` instead |
+| `format` | Array | Default output format for `oxo-flow report`. Precedence: explicit `-f` wins; else a recognizable `-o` extension (`json`, `md`, `pdf`); else the **first** `format` entry (`html`, `json`, `md`, `pdf`); else `html`. Multiple entries use the first and warn about the extras (fail under `--strict`) |
 | `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`, `software-versions`, `rule-captions`, `aggregate-metrics` — 15 in total (run `oxo-flow report --list-sections` for the live list) |
 
 ### How Sections Work
