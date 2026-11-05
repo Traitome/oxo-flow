@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::backend::ScheduledPlan;
 use oxo_flow_core::backend::cluster::ClusterExecutor;
-use oxo_flow_core::backend::driver::{BackendDriver, DriverConfig, DriverOptions};
+use oxo_flow_core::backend::driver::{BackendDriver, CancelSignal, DriverConfig, DriverOptions};
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::{ClusterProfile, WorkflowConfig};
 use oxo_flow_core::dag::WorkflowDag;
@@ -302,6 +302,15 @@ async fn record_outcome(
             ck.record_run(record, output_tail_bytes);
             ck.mark_failed(&record.rule);
         }
+        // A signal-interrupted job arrives as Failed (handled above) — the
+        // driver only ever produces Cancelled records from the scheduler
+        // itself reporting a cancelled job, which counts as neither success
+        // nor failure but must still persist to the checkpoint.
+        JobStatus::Cancelled => {
+            summary.skipped += 1;
+            ck.record_run(record, output_tail_bytes);
+            ck.mark_failed(&record.rule);
+        }
         _ => {
             summary.skipped += 1;
         }
@@ -442,7 +451,7 @@ pub(crate) async fn run_on_cluster(
         );
         max_submitted = max_jobs;
     }
-    let driver_config = DriverConfig {
+    let mut driver_config = DriverConfig {
         // CLI flag beats the profile, which beats the driver default.
         max_submitted,
         max_array_size: cluster
@@ -454,10 +463,25 @@ pub(crate) async fn run_on_cluster(
             .map(std::time::Duration::from_secs)
             .unwrap_or(driver_defaults.poll_interval),
         // No wall-clock budget: cluster jobs legitimately sit in the queue
-        // for hours. Cancellation is the user's call (phase 2 follow-up).
+        // for hours. Cancellation is the user's signal call (below).
         poll_timeout: None,
         unknown_settle_grace: std::time::Duration::from_secs(90),
+        // Wired below, after the watch channel exists.
+        cancel: None,
     };
+    // Wire OS signals into the driver: SIGINT/SIGTERM/SIGHUP cancel every
+    // in-flight scheduler job and surface as a Cancelled error carrying the
+    // interrupted records (issue #1013 C1).
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+    let signal_task = tokio::spawn(async move {
+        if let Some(signal) = crate::commands::run::signals::wait_for_termination_signal().await {
+            let _ = cancel_tx.send(Some(CancelSignal {
+                signal_name: signal.name,
+                signum: signal.signum,
+            }));
+        }
+    });
+    driver_config.cancel = Some(cancel_rx);
 
     eprintln!(
         "{} submitting {} to {} (max {} in flight)",
@@ -509,7 +533,7 @@ pub(crate) async fn run_on_cluster(
             ck.save_to_file(&path)
         })
     };
-    let records = driver
+    let run_result = driver
         .run(
             &mut plan,
             &to_run,
@@ -521,8 +545,20 @@ pub(crate) async fn run_on_cluster(
                 on_submit: Some(Box::new(on_submit)),
             },
         )
-        .await
-        .map_err(|e| anyhow::anyhow!("cluster execution failed: {e}"))?;
+        .await;
+    signal_task.abort();
+    // A cancellation must persist its interrupted records like any terminal
+    // state — dropping them through map_err would lose the only truthful
+    // account of what the signal stopped (and skip the failed-count
+    // summary the webhook + exit contract below rely on).
+    let records = match run_result {
+        Ok(records) => records,
+        Err(oxo_flow_core::error::OxoFlowError::Cancelled {
+            records: interrupted,
+            ..
+        }) => interrupted,
+        Err(e) => return Err(anyhow::anyhow!("cluster execution failed: {e}")),
+    };
 
     for record in &records {
         record_outcome(&args, record, &mut summary).await;

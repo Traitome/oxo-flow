@@ -160,6 +160,18 @@ pub enum OxoFlowError {
         required: u32,
         available: u32,
     },
+
+    /// The run received an interrupt signal (Ctrl-C / SIGTERM / SIGHUP) and
+    /// cancelled its in-flight work. Carries the interrupted job records so
+    /// the caller can persist them before exiting — dropping them would lose
+    /// the only truthful account of what the signal interrupted.
+    #[error("{message}")]
+    Cancelled {
+        message: String,
+        records: Vec<crate::executor::JobRecord>,
+        signal_name: String,
+        exit_code: i32,
+    },
 }
 
 impl OxoFlowError {

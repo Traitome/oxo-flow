@@ -10590,9 +10590,8 @@ fn cli_webhook_rule_events_reach_subscribed_endpoint() {
             if tx.send(String::from_utf8_lossy(body).to_string()).is_err() {
                 break;
             }
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         }
     });
 

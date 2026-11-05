@@ -624,12 +624,23 @@ real code could not be read, instead of defaulting to `1`.
 Outputs, the working directory, and logs are assumed to live on storage
 shared between the submitting host and the compute nodes.
 
-> **Not yet implemented.** The driver polls until every job reaches a
-> terminal state; it does not yet re-attach to jobs still in flight if the
-> driver exits, and Ctrl-C does not yet cancel submitted jobs. Until then,
-> use `oxo-flow cluster status` (no ids: lists your queued jobs) and
-> `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean up an
-> interrupted run.
+Interrupting a cluster run cancels its in-flight scheduler jobs: on
+Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
+every job still in the queue or running, records each interrupted rule as
+failed with an `interrupted by <SIG...>` skip reason, and exits with
+`128 + <signal number>` — the same shape the local executor reports.
+Signals are watched on the cluster path only; the local executor has its
+own (pre-existing) signal handling.
+
+What remains out of scope is *re-attaching*: a driver that died without a
+signal (crash, OOM) cannot adopt the scheduler job ids of a previous
+process. Those jobs keep running under the scheduler, and a subsequent
+`resume` / `--resume-failed` re-queues their rules from the checkpoint's
+RUNNING entries rather than reusing the live job ids — completed work on
+shared storage is still honored by the invalidation analysis. Until a
+re-attach path exists, use `oxo-flow cluster status` (no ids: lists your
+queued jobs) and `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean
+up jobs orphaned by a crashed driver.
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured

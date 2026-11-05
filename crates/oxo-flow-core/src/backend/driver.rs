@@ -42,6 +42,32 @@ pub struct DriverConfig {
     /// ROUNDS` consecutive blind rounds AFTER this grace settle the job
     /// as Failed with an unknown exit code.
     pub unknown_settle_grace: Duration,
+    /// Watch channel delivering an interrupt request (Ctrl-C / SIGTERM /
+    /// SIGHUP). `Some(Some(signal))` cancels every in-flight job, records
+    /// them as interrupted, and ends the run with
+    /// [`OxoFlowError::Cancelled`]; `None` (or `Some(None)`) leaves the
+    /// driver polling to terminal states. The receiver is cloned into the
+    /// driver; the sender stays with the caller's signal watcher.
+    pub cancel: Option<tokio::sync::watch::Receiver<Option<CancelSignal>>>,
+}
+
+/// An interrupt request delivered through [`DriverConfig::cancel`].
+///
+/// Core-side mirror of the CLI's `InterruptSignal` (the CLI module is
+/// private and core must not depend on the CLI crate).
+#[derive(Debug, Clone)]
+pub struct CancelSignal {
+    /// Canonical name, e.g. `"SIGINT"` — surfaces in skip_reason and events.
+    pub signal_name: &'static str,
+    /// Raw signal number, e.g. `2` — recorded on the job record.
+    pub signum: i32,
+}
+
+impl CancelSignal {
+    /// Process exit convention for signal termination: 128 + signum.
+    pub fn exit_code(&self) -> i32 {
+        128 + self.signum
+    }
 }
 
 impl Default for DriverConfig {
@@ -53,6 +79,7 @@ impl Default for DriverConfig {
             poll_interval: Duration::from_secs(5),
             poll_timeout: None,
             unknown_settle_grace: Duration::from_secs(90),
+            cancel: None,
         }
     }
 }
@@ -224,9 +251,11 @@ impl BackendDriver {
     }
 
     /// Execute exactly `to_run` on `plan`, returning one [`JobRecord`] per
-    /// rule. On error the caller keeps any records already returned? No —
-    /// errors are terminal: everything in flight is cancelled and the error
-    /// propagates (partial state lives in the run directory).
+    /// rule. Errors are terminal: everything in flight is cancelled and the
+    /// error propagates (partial state lives in the run directory). The one
+    /// exception is [`OxoFlowError::Cancelled`] — an interrupt delivered via
+    /// [`DriverConfig::cancel`] — which carries the interrupted job records
+    /// itself so the caller can persist them before exiting.
     pub async fn run(
         &self,
         plan: &mut ScheduledPlan,
@@ -1145,6 +1174,79 @@ impl BackendDriver {
                     message: "poll timeout exceeded".into(),
                 });
             }
+            // Interrupt requested (Ctrl-C / SIGTERM / SIGHUP): cancel every
+            // in-flight job, record each as interrupted, and end the run
+            // with a Cancelled error carrying those records — the caller
+            // persists them like any terminal state.
+            if let Some(cancel) = &self.config.cancel
+                && let Some(sig) = cancel.borrow().as_ref()
+            {
+                let signal_name = sig.signal_name;
+                let exit_code = sig.exit_code();
+                let jobs: Vec<(String, String, Option<String>)> = inflight
+                    .iter()
+                    .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
+                    .collect();
+                self.cancel_inflight(&jobs).await?;
+                let mut interrupted: Vec<JobRecord> = Vec::new();
+                for (job_id, f) in inflight.iter() {
+                    let reason = format!("interrupted by {signal_name}");
+                    let job_dir = opts.run_dir.join("jobs").join(sanitize(&f.rule));
+                    let status_id = f.array_base.as_deref().unwrap_or(job_id);
+                    cancel_on_error!(write_status_full(
+                        &job_dir,
+                        status_id,
+                        "",
+                        "FAILED",
+                        Some((f.submitted_at, Utc::now())),
+                        None,
+                    ));
+                    emit(
+                        &mut events,
+                        "FAILED",
+                        &f.rule,
+                        Some(status_id),
+                        Some(&reason),
+                    );
+                    interrupted.push(JobRecord {
+                        signal: Some(sig.signum),
+                        rule: f.rule.clone(),
+                        // Failed, not a fabricated exit: the job was killed
+                        // by the signal, so the exit code is unknown (never
+                        // fabricate — issue #525).
+                        status: JobStatus::Failed,
+                        enqueued_at: Some(f.submitted_at),
+                        started_at: Some(f.submitted_at),
+                        finished_at: Some(Utc::now()),
+                        exit_code: None,
+                        stdout: None,
+                        stderr: None,
+                        command: Some(crate::executor::process::mask_sensitive(
+                            &plan.rules[&f.rule].shell_cmd,
+                            opts.sensitive_values,
+                        )),
+                        retries: 0,
+                        skip_reason: Some(reason),
+                        max_rss_mb: None,
+                        cpu_seconds: None,
+                        caption: crate::executor::process::rule_report_caption(
+                            &plan.rules[&f.rule].rule,
+                            &plan.rules[&f.rule].workdir,
+                        ),
+                    });
+                }
+                tracing::warn!(
+                    signal = %signal_name,
+                    cancelled = interrupted.len(),
+                    "interrupt received — cancelling in-flight jobs"
+                );
+                return Err(OxoFlowError::Cancelled {
+                    message: format!("interrupted by {signal_name}; in-flight jobs cancelled"),
+                    records: interrupted,
+                    signal_name: signal_name.to_string(),
+                    exit_code,
+                });
+            }
             tokio::time::sleep(self.config.poll_interval).await;
         }
         Ok(records)
@@ -1534,6 +1636,7 @@ mod tests {
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         (d, executor)
@@ -1792,6 +1895,7 @@ mod tests {
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: None,
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let mut plan = chain_plan(fx.workdir.path(), &[("a", "true", "a.txt")]);
@@ -1994,6 +2098,7 @@ shell = "cat {input} > merged.txt"
                 poll_interval: std::time::Duration::from_millis(1),
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         // A directory in place of the file makes the write fail.
@@ -2074,6 +2179,7 @@ shell = "echo asm > out/{assembler}.txt"
                     poll_interval: std::time::Duration::from_millis(1),
                     poll_timeout: Some(std::time::Duration::from_secs(5)),
                     unknown_settle_grace: std::time::Duration::from_secs(90),
+                    cancel: None,
                 },
             );
             let err = tokio::runtime::Runtime::new()
@@ -2179,6 +2285,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(1),
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2324,6 +2431,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(20),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -2402,6 +2510,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_secs(10)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -2451,6 +2560,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: None, // NO timeout: only the guard ends this
                 unknown_settle_grace: std::time::Duration::from_millis(0),
+                cancel: None,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -2514,6 +2624,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2569,6 +2680,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(20),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         tokio::runtime::Runtime::new()
@@ -2628,6 +2740,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(5),
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2682,6 +2795,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(5),
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         tokio::runtime::Runtime::new()
@@ -2720,6 +2834,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(2),
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2765,6 +2880,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(2),
                 poll_timeout: Some(std::time::Duration::from_millis(120)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         tokio::runtime::Runtime::new()
@@ -2836,6 +2952,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
             },
         );
         tokio::runtime::Runtime::new()
@@ -2862,5 +2979,122 @@ shell = "echo asm > out/{assembler}.txt"
             !job_sh.contains("--job-name=asm_assembler"),
             "no instance name may leak into the array job name: {job_sh}"
         );
+    }
+
+    /// A cancel signal mid-flight cancels every in-flight job (BASE ids for
+    /// arrays) and returns a [`OxoFlowError::Cancelled`] carrying the
+    /// interrupted records instead of an unreachable success value.
+    #[test]
+    fn cancel_signal_cancels_inflight_and_returns_cancelled_error() {
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Running));
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<super::CancelSignal>);
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: Some(cancel_rx),
+            },
+        );
+        cancel_tx
+            .send(Some(super::CancelSignal {
+                signal_name: "SIGINT",
+                signum: 2,
+            }))
+            .unwrap();
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        let OxoFlowError::Cancelled {
+            message,
+            records,
+            signal_name,
+            exit_code,
+        } = &err
+        else {
+            panic!("expected OxoFlowError::Cancelled, got: {err}");
+        };
+        assert_eq!(signal_name, "SIGINT");
+        assert_eq!(*exit_code, 130);
+        assert!(message.contains("interrupted by SIGINT"));
+        assert_eq!(records.len(), 1);
+        let rec = &records[0];
+        assert_eq!(rec.rule, "only");
+        assert_eq!(rec.status, JobStatus::Failed);
+        assert_eq!(rec.signal, Some(2));
+        assert_eq!(rec.skip_reason.as_deref(), Some("interrupted by SIGINT"));
+        assert_eq!(rec.exit_code, None);
+        assert!(rec.enqueued_at.is_some());
+        assert!(rec.started_at.is_some());
+        assert!(rec.finished_at.is_some());
+        // The in-flight job was actually cancelled at the scheduler.
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(state.submit_count, 1);
+        assert_eq!(state.cancelled, vec!["job-1"]);
+        // status.json + events.jsonl record the interruption.
+        let status =
+            std::fs::read_to_string(fx.run_dir.path().join("jobs/only/status.json")).unwrap();
+        assert!(status.contains(r#""state":"FAILED""#));
+        let events = std::fs::read_to_string(fx.run_dir.path().join("events.jsonl")).unwrap();
+        assert!(events.contains(r#""t":"FAILED""#));
+        assert!(events.contains("interrupted by SIGINT"));
+    }
+
+    /// With no signal wired the cancel check is inert: the driver runs to
+    /// completion as before.
+    #[test]
+    fn cancel_channel_absent_runs_to_completion() {
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Success);
+        assert!(backend.state().lock().unwrap().cancelled.is_empty());
     }
 }

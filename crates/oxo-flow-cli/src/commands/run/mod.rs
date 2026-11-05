@@ -34,7 +34,7 @@ mod refs;
 pub mod resume;
 mod run_log;
 mod scheduler_loop;
-mod signals;
+pub(crate) mod signals;
 pub mod status;
 mod task;
 
