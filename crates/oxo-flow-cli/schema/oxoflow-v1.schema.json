@@ -467,7 +467,7 @@
     },
     "engine": {
       "type": "object",
-      "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843), the global scratch directory (issue #907), and protected-tree drift baselines (issue #935). Sizes use T/G/M/K suffixes; a bare number means MiB.",
+      "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, and protected-tree drift baselines. Sizes use T/G/M/K suffixes; a bare number means MiB.",
       "properties": {
         "min_free_disk": {
           "type": "string",
@@ -722,7 +722,7 @@
     },
     "webhook": {
       "type": "object",
-      "description": "Workflow-level webhook notifications (issue #227)",
+      "description": "Workflow-level webhook notifications",
       "properties": {
         "url": {
           "type": "string"
@@ -755,7 +755,7 @@
     },
     "ai": {
       "type": "object",
-      "description": "AI companion activation and tuning (issue #634); credentials stay in env/config files, never here",
+      "description": "AI companion activation and tuning; credentials stay in env/config files, never here",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -1548,7 +1548,7 @@
         },
         "cache_key": {
           "type": "string",
-          "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)"
+          "description": "Content-based cache key: enables content-addressed output reuse across runs"
         },
         "input_function": {
           "type": "string",
@@ -1759,7 +1759,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "description": "Per-sample multi-file grouping (pattern/group_by/keep) \u2014 issue #231"
+            "description": "Per-sample multi-file grouping (pattern/group_by/keep)"
           }
         },
         "scratch": {
@@ -1768,7 +1768,7 @@
         },
         "temporary": {
           "type": "boolean",
-          "description": "Delete the rule's outputs after a fully successful run once every dependent rule has completed, recording a checkpoint tombstone so a future run regenerates them on demand. Leaf rules (no dependents) keep their outputs; with [engine] disk thresholds configured, deletion only fires when free space is below reclaim_free_disk at run end (issue #893)"
+          "description": "Delete the rule's outputs after a fully successful run once every dependent rule has completed, recording a checkpoint tombstone so a future run regenerates them on demand. Leaf rules (no dependents) keep their outputs; with [engine] disk thresholds configured, deletion only fires when free space is below reclaim_free_disk at run end"
         },
         "output_pattern": {
           "type": [
