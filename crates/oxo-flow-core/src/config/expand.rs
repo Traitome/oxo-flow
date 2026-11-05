@@ -1958,10 +1958,14 @@ impl WorkflowConfig {
         // fq of a sample, the CAT_FASTQ shape. Star-free patterns compile
         // to exactly the strict matcher, so nothing else changes.
         //
-        // A `**` pattern must reach `pattern_to_regex_glob`'s hard error:
-        // routing it to the strict matcher instead would escape the stars
-        // into a literal `**` and report a misleading "matched no files"
-        // (the cross-segment glob is unsupported, not absent).
+        // `**` (issue #1013 O4) recurses across segments in the same glob
+        // face: `raw/{sample}/**.fq` groups every fq of a sample at any
+        // depth; `**/` also matches zero directories. Inside a `**`
+        // pattern `{wildcard}` spans stay pinned to one segment so the
+        // recursive star — not the group key — absorbs the extra segments.
+        // Routing a `**` pattern to the strict matcher instead would
+        // escape the stars into a literal `**` and report a misleading
+        // "matched no files".
         let has_glob_star = pattern.contains('*');
         let pattern_re = if has_glob_star {
             crate::wildcard::pattern_to_regex_glob(&pattern)?

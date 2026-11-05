@@ -1283,9 +1283,15 @@ shell = "cat {input} > {output}"
   `raw/{sample}_*_R1.fastq.gz` groups every lane file of a
   sample without enumerating lane names — the CAT_FASTQ shape, where the
   per-sample file count is not known ahead of time and no `[[values]]`
-  table can list it. `**` (cross-segment recursion) is rejected. Note a
-  `{wildcard}` span may span a separator by design (`\S+`); the segment
-  locality applies to bare `*` only.
+  table can list it. `**` (issue #1013) is **cross-segment recursion**:
+  `raw/{sample}/**.fq` groups every fq of a sample at any depth. The
+  idiomatic `**/` form also matches zero directories (`raw/**/{sample}.fq`
+  matches `raw/S1.fq` with an empty star value), and inside a `**`
+  pattern a `{wildcard}` span is pinned to a single segment — so the
+  recursive star, not the group key, absorbs the extra path components.
+  In star-free patterns a `{wildcard}` span may still span a separator by
+  design (`\S+`); segment locality applies to bare `*` and `**` patterns
+  only.
 - `group_by` — the wildcard that names each group. One instance is
   created per discovered group value. May also be a metadata column,
   `group_by = "meta.<column>"` — see below.
@@ -1317,8 +1323,8 @@ shell = "cat {input} > {output}"
   folds by base id, the same convention the group pattern itself uses.
 
 v1 constraints: at most **one** `input_groups` entry per rule;
-`**` recursion is not supported in `pattern` (bare `*` globs within one
-segment are supported);
+`**` recursion is supported in `pattern` (a bare `*` stays within one
+segment; `**/` also matches zero directories);
 producers must be declared **before** their `input_groups` consumer;
 the `keep` wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via

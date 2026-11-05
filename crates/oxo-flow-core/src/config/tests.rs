@@ -9079,12 +9079,19 @@ fn merge_profile_defaults_carries_shell_prelude_and_time_limit() {
 }
 
 #[test]
-fn input_groups_double_star_pattern_is_a_hard_error() {
-    // `**` is an unsupported cross-segment glob. It used to bypass the glob
-    // matcher (which rejects it) and compile as a literal `**`, so the run
-    // reported a misleading "matched no files" instead of the real problem.
+fn input_groups_double_star_pattern_groups_across_nested_dirs() {
+    // `**` (issue #1013 O4) recurses across path segments: the pattern
+    // groups every fq of a sample at any depth under raw/. The rule fans
+    // out per group key exactly like the flat-pattern fan-out.
     let dir = tempfile::tempdir().unwrap();
     let workflow_path = dir.path().join("doublestar.oxoflow");
+    for (sample, lanes) in [("S1", vec!["L1", "L2"]), ("S2", vec!["L1"])] {
+        for lane in lanes {
+            let path = dir.path().join(format!("raw/{sample}/lanes/{lane}.fq"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("{sample}-{lane}")).unwrap();
+        }
+    }
     std::fs::write(
         &workflow_path,
         r#"
@@ -9104,18 +9111,30 @@ fn input_groups_double_star_pattern_is_a_hard_error() {
 
     let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
     config.apply_defaults();
-    let err = config
-        .expand_wildcards()
-        .expect_err("'**' must be rejected, not matched literally");
-    let message = err.to_string();
-    assert!(
-        message.contains("**"),
-        "the error names the offending token: {message}"
+    config.expand_wildcards().expect("** patterns now expand");
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["lanemerge_S1", "lanemerge_S2"]);
+
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S1")
+        .expect("S1 instance");
+    assert_eq!(
+        s1.input.to_vec(),
+        vec![
+            "raw/S1/lanes/L1.fq".to_string(),
+            "raw/S1/lanes/L2.fq".to_string()
+        ],
+        "nested files group under their sample, sorted"
     );
-    assert!(
-        message.contains("cross-segment") || message.contains("not supported"),
-        "the error explains the unsupported glob: {message}"
-    );
+    let s2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S2")
+        .expect("S2 instance");
+    assert_eq!(s2.input.to_vec(), vec!["raw/S2/lanes/L1.fq"]);
 }
 
 #[test]

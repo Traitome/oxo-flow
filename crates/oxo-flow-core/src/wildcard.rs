@@ -163,19 +163,20 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
 /// matches any run of non-separator characters (`[^/]*`), like a shell
 /// glob — `raw/{sample}_*.fq` groups "every fq under this sample". The
 /// captured star text is unnamed (callers reconstruct matched paths with
-/// [`expand_pattern_with_glob`]); `**` is rejected — cross-segment globs
-/// are out of scope for v1.
+/// [`expand_pattern_with_glob`]). `**` (issue #1013 O4) recurses across
+/// segment separators — `raw/**/{sample}.fq` groups "every fq of a sample
+/// at any depth"; the idiomatic `**/` form also matches zero directories
+/// (the trailing `/` folds into the star capture, so `raw/S1.fq` matches
+/// with an empty star value). Inside a `**` pattern a `{wildcard}` is
+/// pinned to a single path segment, so the recursive star takes the
+/// surrounding segments instead of corrupting the group key with a
+/// `/`-bearing value.
 ///
 /// Only discovery-facing callers (input_groups) use this; rule
 /// input/output patterns keep the strict literal-`*` matcher so a
 /// literally-named `*` file still round-trips exactly.
 pub fn pattern_to_regex_glob(pattern: &str) -> Result<Regex> {
-    if pattern.contains("**") {
-        return Err(OxoFlowError::Wildcard {
-            rule: String::new(),
-            message: "pattern contains '**' — cross-segment globs are not supported; use per-segment '*' or {wildcard} placeholders".to_string(),
-        });
-    }
+    let is_double_star = pattern.contains("**");
     let mut regex_str = String::from("^");
     let mut last_end = 0;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -195,10 +196,14 @@ pub fn pattern_to_regex_glob(pattern: &str) -> Result<Regex> {
                 ),
             })?;
         let name = &cap[1];
+        // In a `**` pattern the wildcard is pinned to one segment so the
+        // recursive star takes the surrounding segments — a group key like
+        // "S1/x" would mis-group the fan-out.
+        let wildcard_span = if is_double_star { "[^/]+" } else { "\\S+" };
         if seen.insert(name.to_string()) {
-            regex_str.push_str(&format!("(?P<{}>\\S+)", name));
+            regex_str.push_str(&format!("(?P<{name}>{wildcard_span})"));
         } else {
-            regex_str.push_str("(?:\\S+)");
+            regex_str.push_str(&format!("(?:{wildcard_span})"));
         }
 
         last_end = mat.end();
@@ -216,7 +221,12 @@ pub fn pattern_to_regex_glob(pattern: &str) -> Result<Regex> {
 
 /// Escape a literal pattern segment for the glob regex, turning each bare
 /// `*` into a segment-local anonymous match. Names are `__star<N>` so
-/// callers can reconstruct the matched path.
+/// callers can reconstruct the matched path. A `**` run (issue #1013 O4)
+/// recurses across separators: when the run is immediately followed by
+/// `/`, that slash folds into the capture — `(?P<__starN>(?:.*/)?)` — so
+/// `**/` also matches zero directories; otherwise it is a plain `.*`.
+/// A single `*` always stays segment-local (`[^/]*`), matching shell glob
+/// behavior where only `**` crosses separators.
 fn push_glob_literal(regex_str: &mut String, literal: &str, star_index: &mut usize) {
     let mut piece_start = 0;
     let bytes = literal.as_bytes();
@@ -224,19 +234,87 @@ fn push_glob_literal(regex_str: &mut String, literal: &str, star_index: &mut usi
     while i < bytes.len() {
         if bytes[i] == b'*' {
             regex_str.push_str(&regex::escape(&literal[piece_start..i]));
-            regex_str.push_str(&format!("(?P<__star{}>[^/]*)", star_index));
+            let mut run_end = i;
+            while run_end < bytes.len() && bytes[run_end] == b'*' {
+                run_end += 1;
+            }
+            if run_end - i >= 2 {
+                // `**` run: one capture recursing across separators; a
+                // following `/` folds into the capture so `**/` also
+                // matches zero directories.
+                if run_end < bytes.len() && bytes[run_end] == b'/' {
+                    regex_str.push_str(&format!("(?P<__star{}>(?:.*/)?)", star_index));
+                    piece_start = run_end + 1;
+                } else {
+                    regex_str.push_str(&format!("(?P<__star{}>.*)", star_index));
+                    piece_start = run_end;
+                }
+            } else {
+                regex_str.push_str(&format!("(?P<__star{}>[^/]*)", star_index));
+                piece_start = run_end;
+            }
             *star_index += 1;
-            piece_start = i + 1;
+            i = run_end;
+            continue;
         }
         i += 1;
     }
     regex_str.push_str(&regex::escape(&literal[piece_start..]));
 }
 
+/// Render a literal pattern chunk's star runs into `out`, consuming one
+/// `star_values` entry per run. Mirrors [`push_glob_literal`]: a `**` run
+/// recurses and — when a `/` immediately follows the run — its star value
+/// is slash-inclusive and that slash is consumed here; a single `*`
+/// renders its segment-local capture verbatim.
+fn push_glob_star_runs(
+    out: &mut String,
+    chunk: &str,
+    star_values: &[String],
+    star_index: &mut usize,
+) -> Result<()> {
+    let bytes = chunk.as_bytes();
+    let mut piece_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'*' {
+            out.push_str(&chunk[piece_start..i]);
+            let value = star_values
+                .get(*star_index)
+                .ok_or_else(|| OxoFlowError::Wildcard {
+                    rule: String::new(),
+                    message: format!("missing value for glob star #{}", *star_index),
+                })?;
+            out.push_str(value);
+            let mut run_end = i;
+            while run_end < bytes.len() && bytes[run_end] == b'*' {
+                run_end += 1;
+            }
+            // A slash-folded `**/` renders only the value — the folded
+            // `/` is already part of the captured star value.
+            if run_end - i >= 2 && run_end < bytes.len() && bytes[run_end] == b'/' {
+                piece_start = run_end + 1;
+            } else {
+                piece_start = run_end;
+            }
+            *star_index += 1;
+            i = run_end;
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&chunk[piece_start..]);
+    Ok(())
+}
+
 /// Reconstruct the concrete path a glob pattern matched: `{wildcard}`
-/// spans render their combo values, each `*` renders the text its
-/// `__star<N>` capture matched. Mirrors [`expand_pattern`] for
-/// glob-bearing discovery patterns (issue #246).
+/// spans render their combo values, each star renders the text its
+/// `__star<N>` capture matched. A `**` run consumes one `star_values`
+/// entry and — when the run is immediately followed by `/`, mirroring
+/// [`push_glob_literal`] — folds that slash into the rendered value, so
+/// slash-inclusive star values round-trip exactly. Mirrors
+/// [`expand_pattern`] for glob-bearing discovery patterns (issue #246,
+/// `**` recursion issue #1013 O4).
 pub fn expand_pattern_with_glob(
     pattern: &str,
     combo: &WildcardValues,
@@ -247,7 +325,14 @@ pub fn expand_pattern_with_glob(
     let mut star_index = 0usize;
 
     for mat in WILDCARD_RE.find_iter(pattern) {
-        out.push_str(&pattern[last_end..mat.start()]);
+        // The literal chunk before this wildcard may itself carry star
+        // runs — they consume their star_values entries in pattern order.
+        push_glob_star_runs(
+            &mut out,
+            &pattern[last_end..mat.start()],
+            star_values,
+            &mut star_index,
+        )?;
         let cap = WILDCARD_RE
             .captures(&pattern[mat.start()..mat.end()])
             .ok_or_else(|| OxoFlowError::Wildcard {
@@ -268,25 +353,7 @@ pub fn expand_pattern_with_glob(
     }
 
     let remaining = &pattern[last_end..];
-    let bytes = remaining.as_bytes();
-    let mut piece_start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'*' {
-            out.push_str(&remaining[piece_start..i]);
-            let value = star_values
-                .get(star_index)
-                .ok_or_else(|| OxoFlowError::Wildcard {
-                    rule: String::new(),
-                    message: format!("missing value for glob star #{star_index}"),
-                })?;
-            out.push_str(value);
-            star_index += 1;
-            piece_start = i + 1;
-        }
-        i += 1;
-    }
-    out.push_str(&remaining[piece_start..]);
+    push_glob_star_runs(&mut out, remaining, star_values, &mut star_index)?;
     Ok(out)
 }
 
@@ -1415,8 +1482,40 @@ mod tests {
     }
 
     #[test]
-    fn pattern_to_regex_glob_rejects_double_star() {
-        assert!(pattern_to_regex_glob("data/**/{sample}.fq").is_err());
+    fn pattern_to_regex_glob_double_star_recurses_across_segments() {
+        // `**` (issue #1013 O4) matches any run of characters including
+        // separators; a following `/` folds into the capture so `**/` also
+        // matches zero segments (empty star value).
+        let re = pattern_to_regex_glob("raw/**/{sample}.fq").unwrap();
+        assert!(re.is_match("raw/a/b/S1.fq"));
+        assert!(re.is_match("raw/S1.fq"), "'**/' also matches zero segments");
+        assert!(!re.is_match("other/S1.fq"));
+        let caps = re.captures("raw/a/b/S1.fq").unwrap();
+        assert_eq!(&caps["sample"], "S1");
+
+        let combo = WildcardValues::new();
+        let mut combo = combo;
+        combo.insert("sample".to_string(), "S1".to_string());
+        // Round-trip: the trailing slash is part of the star capture.
+        assert_eq!(
+            expand_pattern_with_glob("raw/**/{sample}.fq", &combo, &["a/b/".to_string()]).unwrap(),
+            "raw/a/b/S1.fq"
+        );
+        assert_eq!(
+            expand_pattern_with_glob("raw/**/{sample}.fq", &combo, &["".to_string()]).unwrap(),
+            "raw/S1.fq"
+        );
+    }
+
+    #[test]
+    fn pattern_to_regex_glob_wildcards_are_segment_local_in_double_star_patterns() {
+        // A greedy `\S+` span would swallow the path components ahead of
+        // `**` (`raw/S1/x.fq` would capture sample = "S1/x") and mis-group;
+        // inside a `**` pattern a `{wildcard}` is pinned to one segment.
+        let re = pattern_to_regex_glob("raw/{sample}/**.fq").unwrap();
+        let caps = re.captures("raw/S1/x/y.fq").unwrap();
+        assert_eq!(&caps["sample"], "S1");
+        assert_eq!(&caps["__star0"], "x/y");
     }
 
     #[test]
