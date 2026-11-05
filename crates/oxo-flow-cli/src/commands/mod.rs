@@ -327,6 +327,7 @@ pub mod ai_status;
 pub mod ai_template;
 pub mod batch;
 pub mod bundle;
+pub mod bundle_signing;
 pub mod clean;
 pub mod cluster;
 pub mod completions;

@@ -43,6 +43,7 @@ each environment YAML, ensuring exact reproducibility across time.
 | `--output` | `-o` | Output path for the bundle archive (default: `<name>-bundle.<ext>`) |
 | `--with-lockfiles` | | Generate `conda-lock` lockfiles for reproducible environments |
 | `--format` | | Archive format: `tar.zst` (default, better compression) or `tar.gz` (universal compatibility) |
+| `--sign-key` | | Ed25519 signing key (64 hex chars or 32 raw bytes) — signs the manifest so `run --bundle` verifies it |
 | `--verbose` | `-v` | Enable verbose (debug-level) logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |
@@ -65,6 +66,9 @@ oxo-flow publish my_pipeline.oxoflow -o /path/to/bundle.tar.zst
 
 # Publish with deterministic lockfiles
 oxo-flow publish my_pipeline.oxoflow --with-lockfiles
+
+# Publish a signed bundle (ed25519; key = 64 hex chars or 32 raw bytes)
+oxo-flow publish my_pipeline.oxoflow --sign-key ~/.oxo-flow/bundle-signing.key
 
 # Run a published bundle (extract → verify → confirm → execute)
 oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16
@@ -125,9 +129,35 @@ The `manifest.json` inside each bundle:
 }
 ```
 
-`signatures` is reserved for future bundle signing and is always empty today.
-It is present so that adding signatures later is an additive change rather than
-a manifest format bump.
+`signatures` carries one entry per ed25519 signature over the manifest. It is
+empty for unsigned bundles and stays an array so old manifests remain valid.
+
+## Bundle Signing
+
+`publish --sign-key <file>` signs the manifest with ed25519: the key file
+holds the 32-byte seed, either raw or as 64 hex characters. The signature
+covers the manifest JSON with the `signatures` field removed — and since the
+manifest carries a SHA-256 checksum for every archived file, one signature
+transitively attests the whole bundle.
+
+On the consumer side, `oxo-flow run --bundle` (and `pull`, which hands the
+downloaded bundle to the same verifier) checks checksums first, then verifies
+every signature entry:
+
+- an empty `signatures` array keeps the old behavior — checksums only, valid;
+- a bundle that *claims* a signature must have it verify — a present but
+  wrong, malformed, or algorithm-unsupported signature aborts the run before
+  execution, even when every file checksum matches.
+
+Generate a key once and reuse it per publisher identity (the public key in
+the manifest is what consumers can pin against):
+
+```bash
+openssl genpkey -algorithm ed25519 -outform DER -out seed.der 2>/dev/null
+# or any 32 random bytes:
+head -c 32 /dev/urandom > ~/.oxo-flow/bundle-signing.key
+oxo-flow publish my_pipeline.oxoflow --sign-key ~/.oxo-flow/bundle-signing.key
+```
 
 ## Reproducibility Caveats
 

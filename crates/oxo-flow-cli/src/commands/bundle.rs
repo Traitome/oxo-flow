@@ -194,6 +194,27 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         files.len()
     );
 
+    // Signature verification runs AFTER checksums: every file hash in the
+    // manifest has been confirmed on disk, so a manifest signature (which
+    // covers those hashes) transitively attests the whole archive. A bundle
+    // that carries signatures must have all of them verify — an unsigned
+    // (empty/absent) array keeps the checksums-only behavior.
+    let signature_count = crate::commands::bundle_signing::verify_manifest_signatures(&manifest)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "bundle signature verification failed:\n{e}\n\
+                     The manifest or its signature was altered after publishing."
+            )
+        })?;
+    if signature_count > 0 {
+        eprintln!(
+            "{} Manifest signature verified: {signature_count} ed25519 signature(s) OK",
+            "✓".green()
+        );
+    } else {
+        eprintln!("  (unsigned bundle — checksums only)");
+    }
+
     // Verified successfully — hand ownership of the directory to the run.
     Ok((workflow_path, extract_dir.keep()))
 }

@@ -665,6 +665,11 @@ oxo-flow run --bundle pipeline-bundle.tar.gz -j 16 --yes
 oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
 ```
 
+Bundles published with `publish --sign-key` carry an ed25519 manifest
+signature. `run --bundle` verifies it after the checksums and aborts before
+execution if the manifest or signature was altered; unsigned bundles keep
+the checksums-only behavior (see `publish` → Bundle Signing).
+
 ### Pilot runs and scale-up
 
 For a large cohort, run a fast pilot on a subset first; the checkpoint
