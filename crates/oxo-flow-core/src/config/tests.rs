@@ -58,6 +58,46 @@ fn parse_minimal_workflow() {
 }
 
 #[test]
+fn rejected_interpreter_override_fails_config_validation() {
+    // Issue #1013: a rejected interpreter override (security policy) must
+    // fail parse-time validation, not warn-and-fall-back at run time.
+    let toml = r#"
+        [workflow]
+        name = "interp-guard"
+
+        [[rules]]
+        name = "plot"
+        output = ["plot.png"]
+        script = "plot.py"
+        interpreter = "/tmp/evil/python"
+    "#;
+    let err = WorkflowConfig::parse(toml)
+        .map(|_| ())
+        .expect_err("rejected interpreter must fail parse-time validation");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not in safe directories") && msg.contains("rule 'plot'"),
+        "error should carry the security reason and the rule, got: {msg}"
+    );
+}
+
+#[test]
+fn bare_interpreter_name_passes_config_validation() {
+    let toml = r#"
+        [workflow]
+        name = "interp-ok"
+
+        [[rules]]
+        name = "plot"
+        output = ["plot.png"]
+        script = "plot.py"
+        interpreter = "python3"
+    "#;
+    let config = WorkflowConfig::parse(toml).unwrap();
+    config.validate().expect("bare interpreter name is allowed");
+}
+
+#[test]
 fn parse_full_workflow() {
     let config = WorkflowConfig::parse(FULL_WORKFLOW).unwrap();
     assert_eq!(config.workflow.name, "test-pipeline");

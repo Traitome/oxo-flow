@@ -302,7 +302,8 @@ fn build_rule(
         wildcard_values,
         &config.workflow.interpreter_map,
         crate::scheduler::detect_system_limits(),
-    ) else {
+    )?
+    else {
         return Ok(None); // no shell/script — not schedulable
     };
     // The prelude goes INSIDE the environment wrapper, matching the local

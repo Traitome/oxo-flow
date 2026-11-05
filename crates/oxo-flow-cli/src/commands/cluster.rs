@@ -538,14 +538,19 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     &config.workflow.interpreter_map,
                     oxo_flow_core::scheduler::detect_system_limits(),
                 ) {
-                    Some(cmd) => cmd,
-                    None => {
+                    Ok(Some(cmd)) => cmd,
+                    Ok(None) => {
                         eprintln!(
                             "  {} {} — no shell command or script, skipping",
                             "⊘".yellow(),
                             rule_name
                         );
                         continue;
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("rule '{rule_name}' command construction failed")
+                        });
                     }
                 };
 

@@ -1712,6 +1712,26 @@ impl Rule {
                 ),
             });
         }
+        // A declared interpreter is a security decision (issue #1013): a
+        // path the engine would reject at run time (traversal, unsafe
+        // location) must fail parse/validate instead of silently running
+        // the script under an auto-detected interpreter.
+        if let Some(interp) = self.interpreter.as_deref() {
+            crate::executor::security::validate_interpreter_path(interp).map_err(|e| {
+                // Re-nest with the rule attributed; keep the original
+                // message (and its suggestion when present) intact.
+                crate::error::OxoFlowError::Validation {
+                    message: format!("rule '{}': {e}", self.name),
+                    rule: Some(self.name.clone()),
+                    suggestion: match &e {
+                        crate::error::OxoFlowError::Validation { suggestion, .. } => {
+                            suggestion.clone()
+                        }
+                        _ => None,
+                    },
+                }
+            })?;
+        }
         Ok(())
     }
 

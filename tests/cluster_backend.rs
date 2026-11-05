@@ -480,7 +480,9 @@ output = ["finish.txt"]
                 threads: 4,
                 memory_mb: 8192,
             },
-        ) else {
+        )
+        .expect("rule command construction succeeds")
+        else {
             continue;
         };
         let wrapped = env_resolver

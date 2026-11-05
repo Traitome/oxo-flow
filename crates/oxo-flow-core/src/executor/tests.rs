@@ -2663,6 +2663,55 @@ fn validate_interpreter_path_blocks_windows_path() {
     assert!(result.is_err(), "should block Windows drive-letter path");
 }
 
+#[test]
+fn detect_interpreter_surfaces_rejected_override() {
+    let result = detect_interpreter("run.py", Some("/tmp/evil/python"), &HashMap::new());
+    assert!(
+        result.is_err(),
+        "a rejected interpreter override must be an error, not a silent fallback"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("not in safe directories"),
+        "error should carry the security reason, got: {err}"
+    );
+}
+
+#[test]
+fn build_execution_command_fails_on_rejected_interpreter() {
+    let rule = RuleBuilder::new("bad_interp")
+        .script("run.py")
+        .interpreter("/tmp/evil/python")
+        .output(vec!["out.txt".to_string()])
+        .build();
+    let result = build_execution_command(&rule, &HashMap::new(), &HashMap::new(), TEST_LIMITS);
+    assert!(
+        result.is_err(),
+        "rule with rejected interpreter override must fail command construction"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("not in safe directories"),
+        "error should carry the security reason, got: {err}"
+    );
+}
+
+#[test]
+fn build_execution_command_accepts_safe_interpreter() {
+    let rule = RuleBuilder::new("good_interp")
+        .script("run.py")
+        .interpreter("python3")
+        .output(vec!["out.txt".to_string()])
+        .build();
+    let cmd = build_execution_command(&rule, &HashMap::new(), &HashMap::new(), TEST_LIMITS)
+        .expect("bare interpreter name is allowed and must not fail")
+        .expect("script rule renders a command");
+    assert!(
+        cmd.contains("python3"),
+        "declared interpreter should appear in the command, got: {cmd}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Additional wildcard injection tests
 // ---------------------------------------------------------------------------

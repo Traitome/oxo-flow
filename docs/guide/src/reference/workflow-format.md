@@ -883,12 +883,14 @@ interpreter = "python3" # Optional: overrides auto-detection
 path separator is validated before use. Bare command names (`python`,
 `Rscript`) are always allowed; absolute paths must live under a safe
 directory (`/usr/bin`, `/usr/local/bin`, `/bin`, `/opt`, `/home`, `/Users`).
-Rejected (the engine falls back to auto-detection with a warning):
-relative paths containing a separator (`./evil`, `bin/evil`), paths whose
-prefix merely resembles a safe directory (`/home_evil/x`, `/opt_bad/x`),
-Windows drive-letter/backslash paths, and anything containing `..`.
-A rejected interpreter never aborts the run — the engine logs
-`interpreter override rejected` and uses the detection order above.
+Rejected: relative paths containing a separator (`./evil`, `bin/evil`),
+paths whose prefix merely resembles a safe directory (`/home_evil/x`,
+`/opt_bad/x`), Windows drive-letter/backslash paths, and anything
+containing `..`.
+A rejected interpreter is a **hard error**: workflow validation fails (E002
+from `oxo-flow validate`) and the workflow refuses to load; at run time the
+rule fails with the same validation error rather than silently running the
+script under an auto-detected interpreter.
 
 ### Lifecycle Hooks
 
