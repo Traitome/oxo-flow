@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "f05b51e9e5d7ed1ef0ce4297f3c082e8fa606d7f1069818f62777aa1f07cbc77",
+  "schemaSha256": "686e352cc6ba870d83558f64d4defa5edf5055c173a3ef6a0b80709af734f6dd",
   "contexts": {
     "root": {
       "keys": [
@@ -612,7 +612,7 @@
         },
         {
           "key": "input_function",
-          "description": "Dynamic input resolver function name",
+          "description": "Declared name for dynamic input resolution; not called by the engine yet (lint flags it as W036)",
           "type": "string"
         },
         {

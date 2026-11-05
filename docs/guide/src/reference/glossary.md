@@ -379,6 +379,7 @@ below list every code the engine currently emits.
 | `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
 | `W034` | An `{input[N]}`/`{output[N]}` index is out of range, or a named `{input.key}`/`{output.key}` is not declared — renders as literal brace text and the tool fails on a path that looks valid |
 | `W035` | A command reads a shell glob (e.g. `cat stats/*.count.txt`) while the rule declares no inputs — globs are expanded by the shell at run time and create no DAG dependency, so the rule may run before the files it reads exist |
+| `W036` | A rule declares `input_function`, but the engine performs no dynamic input resolution — the field is parsed and round-tripped yet never called, so the input list stays exactly as declared (the declared function name does not fill it at run time) |
 
 Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
 reachable through `oxo-flow lint` (not `validate`, which reports only

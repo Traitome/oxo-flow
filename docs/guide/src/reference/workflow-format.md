@@ -700,7 +700,7 @@ memory = "32G"
 | `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs |
 | `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run |
-| `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
+| `input_function` | String | No | Declared function name for dynamic input resolution — **not yet called**: the engine performs no dynamic input resolution, so the input list stays exactly as declared, and `lint` flags every use with `W036`. Declare inputs statically (`input`, glob inputs, `expand_inputs`) instead |
 | `rule_metadata` | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
 | `types` | Table | No | Biological type contracts for the rule's channels: `inputs` / `outputs` maps from a channel name (or `default`) to a type expression. Violations fail validation and abort `run` before any compute — see [Biological Type Contracts](#biological-type-contracts-types) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
@@ -1506,7 +1506,7 @@ cache_key = "vc_v2.0"           # Content cache key — outputs are reused when 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_function` | String | Parsed and included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today (use `expand_inputs` or `output_pattern` for dynamic inputs) |
+| `input_function` | String | Included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today, and `lint` flags every use with `W036` (use `expand_inputs` or `output_pattern` for dynamic inputs) |
 
 ### Arbitrary Metadata
 

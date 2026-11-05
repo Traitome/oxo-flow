@@ -1555,7 +1555,7 @@
         },
         "input_function": {
           "type": "string",
-          "description": "Dynamic input resolver function name"
+          "description": "Declared name for dynamic input resolution; not called by the engine yet (lint flags it as W036)"
         },
         "benchmark": {
           "type": "string",

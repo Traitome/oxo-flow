@@ -158,18 +158,22 @@ api_token = { default = "sk-...", sensitive = true }
 Declared-sensitive keys are env-routed and masked on disk, so W032
 never flags them — see
 [`[config]` — Configuration Variables](../reference/workflow-format.md#config-configuration-variables).
-[W035](../reference/glossary.md#diagnostic-codes) flags a command that reads a shell glob — e.g. `cat
-stats/*.count.txt` — in a rule that declares no inputs. The shell
-expands the glob at run time, so the DAG builder never sees the
-individual files: the rule gets no edges against the rules that
-produce them and can be scheduled before they exist, failing with
-`cat: 'stats/*.count.txt': No such file or directory`. The repair is
 to declare the glob in `input = [...]` — glob inputs are compiled by
 the DAG builder and linked to every matching producer output, so they
 create real edges — or, for gather/fan-in steps, to list the files via
 `expand_inputs`. Pattern arguments (`find data -name '*.tmp'`) and
 cleanup commands (`rm -rf build/*`) are not data reads and are not
 flagged.
+
+[W036](../reference/glossary.md#diagnostic-codes) flags a rule that
+declares `input_function`. The field is parsed and round-tripped, but
+the engine performs no dynamic input resolution — the function is
+never called, so the rule's input list stays exactly as declared.
+Because `input_function` also suppresses W035's glob-only heuristic,
+an undeclared-glob rule would otherwise look silently safe; W036
+fires alongside so the missing dynamic behavior is never invisible.
+The repair is to declare the inputs statically (`input = [...]`,
+glob inputs, or `expand_inputs`).
 
 ---
 

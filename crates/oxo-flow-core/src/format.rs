@@ -1708,6 +1708,30 @@ pub fn lint_format(
             }
         }
 
+        // W036: `input_function` declared but never called. The field is
+        // parsed, round-tripped, and impact-tracked, but no dynamic input
+        // resolution exists — its only effect today is to suppress W035
+        // above, which reads as if the engine would fill the input list at
+        // run time. It never does, so a workflow author relying on it gets
+        // neither edges nor inputs (issue #1013 E3). Fires alongside the
+        // W035 suppression rather than instead of it: the glob read is
+        // still real even though the nominal escape hatch is not.
+        if rule.input_function.is_some() && executes && !can_never_run {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "input_function `{}` is parsed but no dynamic input resolution is performed by the engine — the input list will stay as declared",
+                    rule.input_function.as_deref().unwrap_or_default()
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W036".to_string(),
+                suggestion: Some(
+                    "declare the inputs statically (`input = [...]`, glob inputs, or `expand_inputs`) — dynamic input functions are not supported yet"
+                        .to_string(),
+                ),
+            });
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -6474,7 +6498,64 @@ shell = "samtools faidx {{config.reference}}"
         let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W035"),
-            "input_function fills the input list at run time — no warning: {diagnostics:?}"
+            "input_function suppresses the glob-only heuristic (W035) — but W036 must fire instead: {diagnostics:?}"
+        );
+    }
+
+    // ---- W036: input_function declared but never called ----
+    // The engine parses `input_function` and carries it through
+    // round-trips and impact fingerprints, but nothing resolves inputs
+    // dynamically at run time — the field's only effect today is to
+    // suppress W035, which reads like the engine will fill the input
+    // list later and it never will. W036 says so at lint time (issue
+    // #1013 E3).
+
+    #[test]
+    fn lint_w036_flags_declared_but_uncallable_input_function() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_function = "get_inputs"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w036: Vec<_> = diagnostics.iter().filter(|d| d.code == "W036").collect();
+        assert_eq!(w036.len(), 1, "exactly one W036: {diagnostics:?}");
+        assert_eq!(w036[0].rule.as_deref(), Some("merge"));
+        assert!(
+            w036[0].message.contains("get_inputs"),
+            "message names the declared function: {}",
+            w036[0].message
+        );
+        assert!(
+            w036[0].message.contains("no dynamic input resolution"),
+            "message states the actual engine behavior: {}",
+            w036[0].message
+        );
+    }
+
+    #[test]
+    fn lint_no_w036_without_input_function() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "plain"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat in.txt > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W036"),
+            "no input_function declared — no W036: {diagnostics:?}"
         );
     }
 
