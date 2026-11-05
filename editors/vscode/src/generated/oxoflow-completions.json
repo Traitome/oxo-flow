@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "c472ee28fae15f314e33b04ee5a8f1b38d1df5eedd733a32566a8ca6a3acfc5a",
+  "schemaSha256": "f05b51e9e5d7ed1ef0ce4297f3c082e8fa606d7f1069818f62777aa1f07cbc77",
   "contexts": {
     "root": {
       "keys": [
@@ -627,7 +627,7 @@
         },
         {
           "key": "localrule",
-          "description": "Always run locally",
+          "description": "Pin the rule to local execution; cluster paths refuse to submit it",
           "type": "boolean"
         },
         {
