@@ -561,7 +561,7 @@ pipeline — CLI `template --ai`, `POST /api/ai/translate` (JSON and SSE),
 and web chat (`/api/chat/send`, `/api/chat/send/json`) — runs **one**
 agent through **one** loop. Before the unification, each surface carried
 its own prompt and validation copy with divergent quality; the weakest
-taught a schema the engine rejects (Snakemake-style tables → `E017`).
+taught a schema the engine rejects (Snakemake-style tables → [E017](./glossary.md#diagnostic-codes)).
 
 ```mermaid
 flowchart TB

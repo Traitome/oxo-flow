@@ -1281,7 +1281,7 @@ The response ladder:
 
 Protected outputs (`protected_output`) are never reclaimed, and the final
 (leaf) rule's outputs always survive. See
-[`[engine]` in the workflow format reference](../reference/workflow-format.md#engine-runtime-disk-pressure-guard-issue-843)
+[`[engine]` in the workflow format reference](../reference/workflow-format.md#engine-runtime-disk-pressure-guard)
 for the full field table and edge cases.
 
 Tuning knobs (both fall back to their defaults when unset, invalid, or

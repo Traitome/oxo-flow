@@ -26,7 +26,7 @@ Recursive-deletion targets are judged after rendering: `rm -rf {config.out_dir}/
 with an absolute `out_dir` is **allowed** when the resolved path lies inside the
 run workdir (pipelines legitimately clean up their own outputs), while root,
 home (`~`), `--no-preserve-root` forms, and any target outside the workdir
-remain hard errors. The static lint (E011) still flags raw `rm -rf /`-style
+remain hard errors. The static lint ([E011](./glossary.md#diagnostic-codes)) still flags raw `rm -rf /`-style
 templates regardless.
 
 Quoted operands are parsed, not blanket-rejected: each operand may be
@@ -70,8 +70,8 @@ and the rule will run; it is flagged because such content can also ride in on
 rendered wildcard values — verify it is intentional
 ```
 
-The static lint for the same idioms is `W023` (aggregated one diagnostic per
-command since #375).
+The static lint for the same idioms is [W023](./glossary.md#diagnostic-codes) (aggregated one diagnostic per
+command).
 
 ---
 

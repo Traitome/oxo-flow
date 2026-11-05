@@ -109,7 +109,7 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 - **Detection**: Checks for `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file
-- **Naming**: A file-backed spec resolves to the env name `<name>-<hash8>`, where `<name>` is the YAML's `name:` field (falling back to the file stem) and `<hash8>` is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one (issue #159). Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (`conda env create -n <name>-<hash8> -f envs/spec.yaml`); the engine prints the expected name when it detects the env is missing under `--skip-env-setup`
+- **Naming**: A file-backed spec resolves to the env name `<name>-<hash8>`, where `<name>` is the YAML's `name:` field (falling back to the file stem) and `<hash8>` is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one. Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (`conda env create -n <name>-<hash8> -f envs/spec.yaml`); the engine prints the expected name when it detects the env is missing under `--skip-env-setup`
 - **Activation**: Runs `conda run --no-capture-output -n <env_name> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` — `--no-capture-output` (conda ≥ 4.13) keeps stdout/stderr live, and the `PATH` prefix makes the rule see the env's own tools first
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 
@@ -125,8 +125,8 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 - **Detection**: Checks for `pixi` on `$PATH`
 - **Resolution**: Parses the `pixi.toml` manifest the rule names
-- **Activation**: Runs `pixi run --manifest-path <pixi.toml> bash -c '<command>'` — the **whole** rule command travels inside the env. `pixi run` is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (`&&`, `|`) and the executor's prepended `mkdir -p` line escape the env and run on the host PATH (live-caught on a SLURM cluster, issue #354). The spec is a **manifest path**, not an environment name (`-e` would only search the current directory for a discoverable manifest)
-- **Lockfile**: Pixi's native lockfile ensures reproducible resolution, and is part of the environment's identity: the pixi cache is keyed by the manifest spec **plus content hashes of the manifest and its sibling `pixi.lock`** (`pixi:<path>:<hash8>:<hash8>`), so an in-place edit of either — e.g. committing a reproducibility pin to the lockfile — invalidates the cache and the next run rebuilds the environment (#827; before it the key covered the manifest only and a lock re-pin was silently ignored). Unreadable or missing files degrade to empty tags. Rule fingerprints carry the same digests, so completed rules referencing the spec are invalidated too (see [run — config changes and precise invalidation](../commands/run.md#config-changes-and-precise-invalidation))
+- **Activation**: Runs `pixi run --manifest-path <pixi.toml> bash -c '<command>'` — the **whole** rule command travels inside the env. `pixi run` is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (`&&`, `|`) and the executor's prepended `mkdir -p` line escape the env and run on the host PATH (live-caught on a SLURM cluster). The spec is a **manifest path**, not an environment name (`-e` would only search the current directory for a discoverable manifest)
+- **Lockfile**: Pixi's native lockfile ensures reproducible resolution, and is part of the environment's identity: the pixi cache is keyed by the manifest spec **plus content hashes of the manifest and its sibling `pixi.lock`** (`pixi:<path>:<hash8>:<hash8>`), so an in-place edit of either — e.g. committing a reproducibility pin to the lockfile — invalidates the cache and the next run rebuilds the environment. Unreadable or missing files degrade to empty tags. Rule fingerprints carry the same digests, so completed rules referencing the spec are invalidated too (see [run — config changes and precise invalidation](../commands/run.md#config-changes-and-precise-invalidation))
 - **Site quirks (live-verified)**: hand-written manifests must declare `platforms` (e.g. `platforms = ["linux-64"]`) — modern pixi refuses to solve a workspace without them; and `pixi` must be on `$PATH` inside batch jobs, which start with a clean environment
 
 ### Docker
@@ -160,9 +160,8 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 - **Caching**: Venvs are stored in a cache directory keyed by the declared
   venv spec **plus a content hash of the requirements file**
   (`venv:<path>:<hash8>`), so editing `requirements.txt` in place
-  invalidates the cache and the next run rebuilds the environment
-  (#532 — previously the key was the path only and edits were silently
-  ignored). Unreadable/missing files degrade to the plain path key.
+  invalidates the cache and the next run rebuilds the environment.
+  Unreadable/missing files degrade to the plain path key.
 
 ### HPC Modules
 
@@ -259,14 +258,14 @@ oxo-flow env check pipeline.oxoflow
 
 The `env check` command calls the resolver's `validate_spec` for each rule's
 environment (relative file specs — `conda`/`mamba`/`pixi`/
-`venv_requirements` — resolve against the workflow directory first, issue
-#427), which verifies **backend availability on the current system**
+`venv_requirements` — resolve against the workflow directory first),
+which verifies **backend availability on the current system**
 (e.g. the conda/pixi/docker/singularity binary exists and is runnable;
 a pixi spec must point at a `pixi.toml` manifest). It does not
 re-check spec files or image reference syntax — `validate` and `lint` cover
 declaration-level checks.
 
-## Shared environment store (opt-in, #904)
+## Shared environment store (opt-in)
 
 By default every workflow is **self-contained**: pixi and venv environments
 materialize inside the workflow tree (`.pixi` next to the manifest, the venv
@@ -289,7 +288,7 @@ is rebuilt automatically. Details: [`env` command](../commands/env.md#env-gc).
 - [Use Environments how-to](../how-to/use-environments.md) — practical recipes
 - [`env` command](../commands/env.md) — CLI reference
 - [`run` command](../commands/run.md) — `--skip-env-setup` and `--cache-dir` options
-- [Shared env store (opt-in)](#shared-environment-store-opt-in-904) — `OXO_FLOW_ENV_STORE` semantics and GC
+- [Shared env store (opt-in)](#shared-environment-store-opt-in) — `OXO_FLOW_ENV_STORE` semantics and GC
 - [China Network Mirrors](china-mirrors.md) — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable

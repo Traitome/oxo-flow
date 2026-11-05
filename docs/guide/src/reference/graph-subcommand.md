@@ -16,7 +16,7 @@ different purpose, at a different level of detail:
 | **Reviewer** — checking a port against its upstream | preview | Tool names per step (is `samtools index` present?), correspondence with the upstream nf-core/snakemake process list | `-f metro --granularity process`, fidelity tables |
 | **Operator** — running, rerunning, debugging a run | computation | Rule-level detail: which rules map to which checkpoint entries, files, and resource settings | `-f metro --granularity rule`, `-f ascii`, `-f tree`, `--expanded` |
 | **Publication author** — preparing a figure for a paper | publication | A compact, print-friendly, color-blind-safe transit map at figure scale (~2:1 landscape, ≤ ~1800 px wide) | `-f metro --granularity module`, `nf-metro render` recipes |
-| **Site maintainer** — regenerating diagrams for every community pipeline | documentation | Deterministic output, a repeatable automation script, pinned engine and renderer versions | `graph` + the site regeneration pipeline (issue #16) |
+| **Site maintainer** — regenerating diagrams for every community pipeline | documentation | Deterministic output, a repeatable automation script, pinned engine and renderer versions | `graph` + the site regeneration pipeline |
 | **Engine developer** — extending the exporter | development | A generic design: one mechanism serves every workflow; no per-pipeline special cases | granularity ladder, shared stage/tool knowledge tables |
 | **Auditor** — graph analysis with external tools | audit | Machine-readable DAGs for graphviz pipelines and custom analysis | `-f dot`, `-f dot-clustered`, `--expanded` |
 

@@ -46,7 +46,7 @@ for the include syntax and interface contracts.
 Branch and tag pins re-fetch on every activation, so the workflow file
 alone cannot prove which module content a past run used. Every repo-include
 therefore also records **the checkout's resolved HEAD SHA** in the
-checkpoint (`include_resolutions`, issue #899) at parse time — one entry
+checkpoint (`include_resolutions`) at parse time — one entry
 per include, shown per include in the run report's Provenance section.
 A run/resume pair (or any two runs) can be compared by these SHAs to prove
 the module content did not drift between them.
@@ -57,7 +57,7 @@ Published workflows are referenced by repo + version, never by an
 unpinned "latest". `oxo-flow info --json` derives a workflow's git
 identity directly — `git_sha` (HEAD commit), `git_remote` (origin URL),
 and `git_describe` (nearest tag) — with the keys omitted outside a git
-repository (issue #124). Catalog generation consumes these fields to
+repository. Catalog generation consumes these fields to
 record the repository and version of each published workflow, so a
 reference to a catalog entry resolves to a specific, reproducible
 artifact.

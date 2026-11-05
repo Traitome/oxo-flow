@@ -7,7 +7,7 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 ## API Design Conventions
 
 - **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail?, suggestion? }`
-- **Errors**: `{ code: "E001", message, detail?, suggestion? }`
+- **Errors**: `{ code: "E001", message, detail?, suggestion? }` — the `code` value uses the engine's [diagnostic codes](./glossary.md#diagnostic-codes)
 - **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
 - **Versioning**: `/api/` prefix for all endpoints
 - **Authentication**: in team/hpc mode, protected endpoints accept an `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.
@@ -74,9 +74,9 @@ GET /api/health
 ```
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.
 
-`components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise (issue #205).
+`components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
-`components.engine` (issue #579) reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
+`components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
 ```json
 {
@@ -99,7 +99,7 @@ GET /api/system
 ```
 Returns OS, architecture, PID, uptime, and version. **Team/hpc modes require authentication** (the endpoint left the anonymous whitelist in the v0.11 hardening).
 
-The response also carries `engine` — the same engine-CLI info as `/api/health`'s `components.engine` (issue #579).
+The response also carries `engine` — the same engine-CLI info as `/api/health`'s `components.engine`.
 
 ### Runtime Metrics
 ```
@@ -139,8 +139,8 @@ refetch run state when you see it.
 **Team/hpc modes require a one-time `?ticket=`** minted at
 `POST /api/events/ticket` under normal bearer auth (EventSource cannot set
 an Authorization header; the ticket is single-use, expires in 30 s, and
-replaces the session token that used to travel — and leak — in the URL,
-#522). `POST /api/events/ticket` responds
+replaces the session token that used to travel — and leak — in the URL).
+`POST /api/events/ticket` responds
 `{"ticket": "...", "expires_in_secs": 30}`. The stream is filtered to the
 subscriber's own runs — admins see everything. Events carry a `user` field
 (the owning user id, or `null` for system-wide events). The `run_started`
@@ -155,7 +155,7 @@ and input-set changes that invalidated checkpoint records this run
 
 The stream ends when the server shuts down (SIGTERM/Ctrl+C): the response
 is closed as part of the graceful drain, so an `EventSource` sees its
-`error`/close at shutdown rather than a hung connection (#572). Clients
+`error`/close at shutdown rather than a hung connection. Clients
 should reconnect with backoff after an unexpected close.
 
 ---
@@ -179,7 +179,7 @@ Returns session token, username, and role.
 > set the env vars when launching `oxo-flow serve` (see
 > [Web System Architecture](web-system-architecture.md)).
 >
-> **Identity is pinned server-side (#516):** the shared user/viewer
+> **Identity is pinned server-side:** the shared user/viewer
 > passwords never mint or adopt the `admin` identity (or any existing
 > API-created account) — `admin` signs in only with
 > `OXO_FLOW_ADMIN_PASSWORD`, and a username that belongs to a managed
@@ -189,7 +189,7 @@ Returns session token, username, and role.
 > role lookups match by id only and a session whose user row is gone
 > (deleted user, stale pre-upgrade session) is rejected with 401.
 >
-> **Session lifetime is operator-tunable (#976):** every minted session
+> **Session lifetime is operator-tunable:** every minted session
 > (login and OAuth callback) expires after `OXO_FLOW_SESSION_TTL_HOURS`
 > hours — default `24`, minimum `1`, cap `8760` (one year). Unset keeps
 > the historical 24-hour TTL; an unparseable or out-of-range value warns
@@ -208,7 +208,7 @@ Returns `{"authenticated": true, "username": "admin", "role": "admin"}` or `{"au
 POST /api/auth/logout
 Authorization: Bearer <token>
 ```
-Revokes the presented session server-side (#520) — the token stops
+Revokes the presented session server-side — the token stops
 authenticating immediately instead of living out its configured TTL. The
 client should drop its local copy (`logged_out: true` on success).
 Deleting a user (`DELETE /api/users/{id}`) cascades: the deleted user's
@@ -226,7 +226,7 @@ POST /api/license/upload
 ```
 Admin-only outside personal mode; the payload is bounded (64 KiB). The
 raw blob is **not** stored — only its size and SHA-256 land in the audit
-trail (the endpoint does not yet activate licenses) (#519).
+trail (the endpoint does not yet activate licenses).
 
 ### Users (admin)
 ```
@@ -259,7 +259,7 @@ Content-Type: application/json
 ```
 Returns `{ valid, errors: [{ code, message, rule, suggestion }] }`.
 `base_dir` (optional, for missing-input checks) must be relative (no
-`..`) and resolves inside the acting user's workspace (#521).
+`..`) and resolves inside the acting user's workspace.
 
 ### Prepare
 ```
@@ -335,7 +335,7 @@ POST   /api/pipelines/search       # Search by name, tags, content
 ```
 
 The pipeline's `version` is always derived from the stored TOML's
-`[workflow] version` key — the TOML is the source of truth (#907 P2-5).
+`[workflow] version` key — the TOML is the source of truth.
 An explicit `version` field on POST/PUT is ignored (never stored), so a
 save whose content carries `version = "1.2.3"` reports `1.2.3` on the
 next GET, and updating content without touching `[workflow] version`
@@ -375,7 +375,7 @@ it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
 (not nested under a `config` object). Run-mutating endpoints
 (create/cancel/pause/resume/retry/clean/resume-checkpoint) require the
 `user` role or above — the viewer role is read-only — and a `pipeline_id`
-must be readable by the acting user (#519). This flat shape is the typed
+must be readable by the acting user. This flat shape is the typed
 `CreateRunRequest` schema — the OpenAPI spec declares it as the endpoint's
 `requestBody`, and the handler parses exactly that type, so the spec, the
 server, and the TypeScript client stay in lockstep. Returns
@@ -452,9 +452,9 @@ Execution flags are forwarded to the CLI executor:
   Cluster (`cluster_id`) runs carry the same overrides into the remote
   wrapper command. Overrides and include-file keys are validated **before**
   the run row is persisted, so a `400` never leaves a ghost `queued` run
-  behind (PR #930 NIT-3).
+  behind (a `400` is validated before anything is written).
 - `allow_protected_drift` (boolean, optional, default `false`) forwards
-  `--allow-protected-drift` to the spawned run (issue #935): the CLI's
+  `--allow-protected-drift` to the spawned run: the CLI's
   run gate refuses to execute when files under a
   [`protected_data_trees`](workflow-format.md) tree changed since the
   recorded baseline; this flag is the web escape hatch to proceed anyway
@@ -488,43 +488,43 @@ Cursor pagination, not page numbers: pass the `created_at` of the last row
 of the previous page as `cursor` (`created_at < cursor`). `limit` defaults
 to 100 and is capped at 500. The response is the envelope
 `{ items, next_cursor, total }`, where `next_cursor: null` means the last
-page. Each item carries `dry_run` (#907 P3-14) — see [Run Detail](#run-detail).
+page. Each item carries `dry_run` — see [Run Detail](#run-detail).
 
 ### Run Status
 ```
 GET /api/runs/{id}/status
 ```
-Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule that did not run — when-gated off (`when_verdicts == false`) or abort-cancelled (`rule_runs` status `cancelled`, which records no set membership) — is surfaced as `skipped`, never as a forever-`pending` node (issues #739, #767).
+Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule that did not run — when-gated off (`when_verdicts == false`) or abort-cancelled (`rule_runs` status `cancelled`, which records no set membership) — is surfaced as `skipped`, never as a forever-`pending` node.
 
 ### DAG Status
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled, issues #739/#767, surfaced in the metric since #907) keeps `completed + failed + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures and skips never inflate it (#907 P1-2).
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled) keeps `completed + failed + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures and skips never inflate it.
 
 ### Diagnostics
 ```
 GET /api/runs/{id}/diagnostics
 ```
-Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of `execution.log` (seek-based tail, torn first line dropped), never the whole file (issue #710).
+Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of `execution.log` (seek-based tail, torn first line dropped), never the whole file.
 
 ### Run Detail
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses (#907 P3-14) — legacy rows created before the column existed read as `false`.
+The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
 
 ### Run Preview
 ```
 GET /api/runs/{id}/preview
 ```
-The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one — or when the workdir path is not a regular file (issue #735: a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
+The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one — or when the workdir path is not a regular file (a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
 
 ### Protected-Tree Drift Preview
 ```
 GET /api/runs/{id}/protected-drift
 ```
-Read-only drift audit of the run's `[engine] protected_data_trees` (issue #935 slice 3). The response mirrors the CLI dry-run's `protected_tree_drift` object:
+Read-only drift audit of the run's `[engine] protected_data_trees`. The response mirrors the CLI dry-run's `protected_tree_drift` object:
 
 ```json
 {
@@ -577,7 +577,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 ```
 GET /api/runs/{id}/report
 ```
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rules and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data (stdout captured since #691, surfaced since #765).
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log`; the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware**: a failed run's narrative headline names the failed rules and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data.
 
 ### Report Q&A
 ```
@@ -586,10 +586,10 @@ Content-Type: application/json
 
 {"question": "which rules failed and why"}
 ```
-Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim (issues #759, #765).
+Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim.
 
 ### Run Status exit codes and failure tails
-`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (issue #765; some tools print their root cause on stdout). The AI monitor (`/ai-status`) receives the same tails and classifies failures through the shared `DiagnosticsEngine` pattern table before falling back to exit-code-only signatures (#907 P1-3); its alerts carry a stable `alert_id` for cross-poll dedup (#907 P1-8). The AI chat `get_run_status` tool carries the same fields.
+`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records: completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (some tools print their root cause on stdout). The AI monitor (`/ai-status`) receives the same tails and classifies failures through the shared `DiagnosticsEngine` pattern table before falling back to exit-code-only signatures; its alerts carry a stable `alert_id` for cross-poll dedup. The AI chat `get_run_status` tool carries the same fields.
 
 ### Report Visualization
 ```
@@ -607,9 +607,9 @@ Content-Type: application/json
 
 {"skip_succeeded": true}
 ```
-The retry spawns a real run, so it pays the same #213 runs-per-minute
+The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
-the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED` (#519).
+the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
 Like every `ApiResult` error, the 429 carries no `Retry-After` header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error `message` instead (`retry in {wait_secs}s`).
@@ -621,7 +621,7 @@ The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with `--resume-failed
 --rerun` so the failed rules re-execute despite their existing outputs and
 the checkpoint's cascade invalidation re-runs their downstream dependents.
-The retry **replays the original run's `config_overrides`** (PR #930 NIT-8):
+The retry **replays the original run's `config_overrides`**:
 the new row carries the stored overrides forward and the spawned CLI
 receives the same `--arg=KEY=VALUE` entries, so a retry re-executes with the
 configuration it claims to redo instead of silently falling back to
@@ -629,7 +629,7 @@ defaults.
 Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }` — plus an
 optional `note` when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
-re-fails identically unless the error is fixed — issue #760).
+re-fails identically unless the error is fixed).
 
 ### Cancel
 ```
@@ -652,7 +652,7 @@ it instead). A terminal run in either endpoint returns `409 RUN_NOT_ACTIVE`.
 ```
 GET /api/runs/{id}/logs
 ```
-Returns the execution log text — bounded to the newest 8 MiB with an explicit `[log truncated …]` marker line when the log is larger (issue #734; buffering a multi-GB log per request was a memory-amplification surface). Read the full file from the run workdir when the marker appears.
+Returns the execution log text — bounded to the newest 8 MiB with an explicit `[log truncated …]` marker line when the log is larger (buffering a multi-GB log per request was a memory-amplification surface). Read the full file from the run workdir when the marker appears.
 
 ### Results
 ```
@@ -760,7 +760,7 @@ Content-Type: application/json
 
 {"tree": "inputs/delivery-2026-10", "md5_content": "d41d8cd98f00b204e9800998ecf8427e  raw/S1.fq\nd41d8cd98f00b204e9800998ecf8427e  raw/S2.fq\n"}
 ```
-Audits a delivered data tree against a vendor md5 sidecar — the web slice of the CLI's `oxo-flow verify-data` command (issue #935 P2). `tree` is workspace-relative (uploads live under `inputs/`, run workdirs under `runs/<id>/`; absolute paths and `..` are rejected). The sidecar arrives inline in the standard `md5sum` text format and is staged server-side; the CLI subprocess streams an md5 over every file.
+Audits a delivered data tree against a vendor md5 sidecar — the web slice of the CLI's `oxo-flow verify-data` command. `tree` is workspace-relative (uploads live under `inputs/`, run workdirs under `runs/<id>/`; absolute paths and `..` are rejected). The sidecar arrives inline in the standard `md5sum` text format and is staged server-side; the CLI subprocess streams an md5 over every file.
 
 Response is HTTP 200 even when drift is found — the counts ARE the finding:
 
@@ -842,7 +842,7 @@ variables. `GET /api/ai/config/effective` shows the resolved result and
 which level supplied each field. API keys are never echoed back — responses
 mark `key_set` instead. Rows are encrypted at rest only when
 `OXO_FLOW_MASTER_KEY` is configured; without it, the local database uses the
-documented plaintext compatibility mode (#205).
+documented plaintext compatibility mode.
 
 There is deliberately no DELETE endpoint: resetting a tier means saving
 `provider: "disabled"` through the same PUT endpoints. A disabled user-tier
@@ -942,7 +942,7 @@ run endpoint.
 ## Webhooks
 
 ```
-GET /api/webhook   # admin-only outside personal mode (#519) — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
+GET /api/webhook   # admin-only outside personal mode — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
 PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 ```
 Runs POST a signed payload to the configured URL on terminal states. The
@@ -960,7 +960,7 @@ An unknown or non-string `signature_scheme` returns
 response and subsequent GET report the scheme actually stored. The settings
 UI exposes the choice and labels the legacy scheme as compatibility-only.
 
-Validation on `PUT` (issue #907 N5): `url` must parse as an absolute
+Validation on `PUT`: `url` must parse as an absolute
 `http://` or `https://` URL with a host (`400 INVALID_URL` otherwise — a
 bare `https://` prefix no longer passes). Enabling delivery requires a
 usable signing secret: either supply `secret` in the request or leave a
@@ -969,7 +969,7 @@ a webhook URL is a bearer credential, and unsigned delivery lets anyone who
 learns the URL forge events. Disabling (`enabled: false`) never demands a
 secret. A stored secret that fails to decrypt (e.g. the master key was
 rotated) reads as absent: enable is refused until a fresh `secret` is
-supplied (#907, review NIT-1) — silently signing with an empty key would
+supplied — silently signing with an empty key would
 produce forgeable deliveries.
 
 Admin-only outside personal mode — the endpoint is shared infrastructure.
@@ -1008,7 +1008,7 @@ POST   /api/clusters                  # upsert (admin-only outside personal mode
 DELETE /api/clusters/{id}
 POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 ```
-The stored `ssh_key` is a secret (#517): it is never returned by any
+The stored `ssh_key` is a secret: it is never returned by any
 response (including the upsert echo) — clients see `ssh_key_set: true |
 false` instead. When `OXO_FLOW_MASTER_KEY` is set, the key is sealed at
 rest with the same AES-256-GCM scheme as AI provider keys; without it, the

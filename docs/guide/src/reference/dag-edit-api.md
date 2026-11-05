@@ -331,10 +331,10 @@ returned in `validation_errors` with `success: false`, and the edit is rolled
 back atomically — `toml_content` echoes the caller's unchanged input and the
 undo/redo history is untouched. Edits that break parsing — invalid TOML syntax, unknown fields, or
 duplicate rule names — are rejected with HTTP `400` instead. Cycle detection
-**is** part of the edit validation path: since issue #466, `validate_format`
+**is** part of the edit validation path: `validate_format`
 builds the DAG with parsed config values on every edit, so a cycle introduced
 via `depends_on` edits surfaces immediately as `success: false` with the
-`DAG error:` (E006) message in `validation_errors` (the edit is rolled back
+`DAG error:` ([E006](./glossary.md#diagnostic-codes)) message in `validation_errors` (the edit is rolled back
 atomically). See [DAG Engine](./dag-engine.md).
 
 - **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.

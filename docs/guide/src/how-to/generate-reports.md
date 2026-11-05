@@ -57,7 +57,7 @@ Each rule records its declared backend — docker `image:tag`, module
 files with sha256 content hashes (a bare `venv` directory path is
 recorded as declared, without a hash). When the workflow uses pinned git
 `[[include]]`s, the YAML also lists each one's resolved commit SHA under
-`workflow.includes` (issue #899) — diffing the file in CI therefore also
+`workflow.includes` — diffing the file in CI therefore also
 catches module drift, not just engine/workflow changes. This is a static
 declaration (the engine never executes anything to collect it), so
 resolved runtime package versions are not

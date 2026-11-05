@@ -368,7 +368,7 @@ below list every code the engine currently emits.
 | `W019` | Rule executes a command but declares no outputs |
 | `W020`/`W021`/`W022` | A missing relative input file (`W020`), or a `pre_exec`/`on_success`/`on_failure` hook containing a dangerous pattern. `W021` also labels a `script` that references another rule's output without an ordering edge (`depends_on`) |
 | `W023` | Shell command uses flagged idioms (`$()`, backticks, `rm -rf`, `chmod 777`, `eval`, curl-pipe-shell) — aggregated one diagnostic per command; common in bioinformatics scripts, verify intentional |
-| `W024` | A wildcard has no declared source — it will stay literal at run time. Also surfaced by `validate` (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it (#973 F6) |
+| `W024` | A wildcard has no declared source — it will stay literal at run time. Also surfaced by `validate` (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it |
 | `W025` | Legacy `threads =`/`memory =` keys under the rule body (use `resources.`) |
 | `W027` | A `when` condition references a wildcard nothing can bind — evaluates false |
 | `W028` | Docker image is not fully qualified (resolves against docker.io) |
@@ -387,8 +387,7 @@ parse-level errors): `S001` invalid TOML syntax, `S002` missing
 `S005` a rule entry that is not a table, and `S006` an unknown top-level
 section (checked against the parser's own E017 whitelist — the documented
 sections are never flagged; since the parsed config cannot retain unknown
-keys, `S006` is the one schema code users can actually trigger, per issue
-#470). `S007` warns when `[workflow].format_version` is present but
+keys, `S006` is the one schema code users can actually trigger). `S007` warns when `[workflow].format_version` is present but
 unrecognized, and `S008` is the secret-scanning warning: a token-shaped
 pattern in the raw file ([security](security.md)); like the whole S-series,
 it reaches users only through the lint pass.

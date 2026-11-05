@@ -137,7 +137,7 @@ let groups: Vec<Vec<String>> = dag.parallel_groups()?;
 // [["fastqc", "trim_reads"], ["align"], ["multiqc"]]
 ```
 
-This is used by `oxo-flow dry-run` to display the execution plan grouped by level, and by `oxo-flow run` to suggest a `-j` value: each group is evaluated against its own heaviest rule (`min(group width, cores ÷ heaviest threads in the group)`), and the suggestion is the maximum across groups — so a wide wave of light rules is not starved by an unrelated heavy wave (issue #361). The resource pool still enforces declared threads at execution time, so running with a higher `-j` than suggested is safe.
+This is used by `oxo-flow dry-run` to display the execution plan grouped by level, and by `oxo-flow run` to suggest a `-j` value: each group is evaluated against its own heaviest rule (`min(group width, cores ÷ heaviest threads in the group)`), and the suggestion is the maximum across groups — so a wide wave of light rules is not starved by an unrelated heavy wave. The resource pool still enforces declared threads at execution time, so running with a higher `-j` than suggested is safe.
 
 ---
 
@@ -303,12 +303,12 @@ Use these to understand workflow structure: root rules are your entry points (ty
 
 ### Orphan Rules
 
-The `WorkflowDag` API has no orphan query, and no dedicated orphan lint exists. The closest check is `oxo-flow validate`'s W020 warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.
+The `WorkflowDag` API has no orphan query, and no dedicated orphan lint exists. The closest check is `oxo-flow validate`'s [W020](./glossary.md#diagnostic-codes) warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.
 
 ### Output Collision Detection
 
 Output-collision checking is enforced by `oxo-flow lint` (warning
-**W033**): two rules writing the same output path — differently-named
+**[W033](./glossary.md#diagnostic-codes)**): two rules writing the same output path — differently-named
 wildcards over one template (`variants/{smp}.vcf` vs
 `variants/{sample}.vcf`) and identical literal paths count too — trigger
 a warning, because the second to finish silently overwrites the first.
@@ -386,7 +386,7 @@ For workflows that still wait: remove the shared-group claim (give each
 rule set its own group), restore the missing `depends_on` edge so
 downstream rules cannot start before their producers, or declare `output`
 on producer rules that execute commands but declare nothing (`lint`
-flags these with warning W019).
+flags these with warning [W019](./glossary.md#diagnostic-codes)).
 
 ### "A rule I expect to run is being skipped"
 
@@ -404,7 +404,7 @@ flags these with warning W019).
    `.oxo-flow/checkpoint.json` (see
    [Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation))
 
-**Durability & reuse guarantees** (issue #194):
+**Durability & reuse guarantees**:
 
 - The checkpoint is written **atomically** — serialized to a sibling
   `.tmp`, fsynced, renamed over the target, then the parent directory is
@@ -419,7 +419,7 @@ flags these with warning W019).
   grace period** (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the
   grace window are caught by a re-scan before the KILL sweep.
-- Abort demotion is **evidence-based twice over** (#525): a failed rule
+- Abort demotion is **evidence-based twice over**: a failed rule
   is only demoted to *cancelled* when its pid was in the abort's kill
   snapshots **and** its record shows a pure signal death. A sibling the
   kernel OOM-killer shot at the same moment carries the same signal
@@ -427,7 +427,7 @@ flags these with warning W019).
   survives. The SIGINT teardown records engine-killed rules with
   `signal = SIGTERM, exit_code = none` (real evidence) instead of a
   fabricated exit code.
-- Aborts kill auxiliary children too (#524): every rule-side spawn
+- Aborts kill auxiliary children too: every rule-side spawn
   (environment setup/verify, `pre_exec`, success/failure hooks) sets
   `kill_on_drop`, so cancelling a task kills its in-flight child instead
   of orphaning it — an interrupted `conda env create` can no longer
