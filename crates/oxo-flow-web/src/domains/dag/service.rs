@@ -676,6 +676,27 @@ mod tests {
     }
 
     #[test]
+    fn update_rule_can_edit_inputs_to_change_file_derived_edges() {
+        // The `input`/`output` fields control file-derived edges; `update_rule`
+        // patches them like any other field, so the edit API can rewire
+        // implicit edges (the "file-based edges are immutable" caveat in the
+        // docs predates the `update_rule` patch path).
+        let toml = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"\nshell = \"echo s1\"\noutput = [\"a.txt\"]\n\n[[rules]]\nname = \"s2\"\nshell = \"cat {input}\"\ninput = [\"a.txt\"]\n";
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "update_rule".into(),
+            payload: serde_json::json!({
+                "name": "s2",
+                "patch": {"input": ["b.txt"]}
+            }),
+        };
+        let r = execute_edit(toml, "rewire-1", &cmd).unwrap();
+        let config = WorkflowConfig::parse(&r.toml_content).unwrap();
+        let s2 = config.rules.iter().find(|r| r.name == "s2").unwrap();
+        assert_eq!(s2.input, vec!["b.txt".to_string()].into());
+    }
+
+    #[test]
     fn update_rule_null_patch_key_removes_field() {
         let cmd = DagEditCommand {
             source: "dag_editor".into(),
