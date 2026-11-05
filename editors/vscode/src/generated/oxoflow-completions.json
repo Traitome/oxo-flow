@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "686e352cc6ba870d83558f64d4defa5edf5055c173a3ef6a0b80709af734f6dd",
+  "schemaSha256": "996ab13d6f71745d65a63699573f9ef9394ea2a90d56087c469f80b06721a257",
   "contexts": {
     "root": {
       "keys": [
@@ -485,8 +485,13 @@
       "keys": [
         {
           "key": "auto_fix",
-          "description": "",
-          "type": "string"
+          "description": "What the AI recovery path may do with a proposed workflow patch: ask (default) prompts before writing on an interactive terminal, always auto-applies safe fixes, never only reports.",
+          "type": "string",
+          "enums": [
+            "always",
+            "ask",
+            "never"
+          ]
         },
         {
           "key": "enabled",

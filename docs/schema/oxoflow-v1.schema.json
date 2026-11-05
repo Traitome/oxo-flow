@@ -773,7 +773,14 @@
           "type": "integer"
         },
         "auto_fix": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "ask",
+            "always",
+            "never"
+          ],
+          "description": "What the AI recovery path may do with a proposed workflow patch: ask (default) prompts before writing on an interactive terminal, always auto-applies safe fixes, never only reports.",
+          "default": "ask"
         },
         "temperature": {
           "type": "number"
