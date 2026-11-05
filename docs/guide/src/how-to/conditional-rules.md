@@ -58,7 +58,7 @@ paths pass through unchanged.
 ### Data-dependent gates (runtime functions)
 
 `when` can also inspect files produced earlier in the same run — the gate
-becomes data-dependent (issue #282). Five read-only functions are
+becomes data-dependent. Five read-only functions are
 available in `when` strings:
 
 | Function | Reads | Returns |
@@ -100,8 +100,7 @@ whose recorded verdict actually flipped are invalidated (see "Resume &
 checkpoints"). A when-false verdict also removes the rule from the
 checkpoint's `failed_rules` set — a gated-off rule is never counted as a
 failure, and `oxo-flow status` reports such rules under **Skipped (when
-condition false)** (`skipped_by_when` in `--json`), never as ✗ Failed
-(issue #690).
+condition false)** (`skipped_by_when` in `--json`), never as ✗ Failed.
 
 **Scope limits.** These functions are intentionally restricted to pure
 file reads — no shell, no globbing beyond `{wildcard}` expansion, and

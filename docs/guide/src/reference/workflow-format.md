@@ -57,8 +57,8 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
-[webhook]           # Optional: workflow-level webhook notifications (issue #227)
-[engine]            # Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907) + protected data trees (#935)
+[webhook]           # Optional: workflow-level webhook notifications
+[engine]            # Optional: runtime disk-pressure guard + global scratch dir + protected data trees
 ```
 
 `reference_dir` is a bare top-level key, so it must appear before the first
@@ -134,7 +134,7 @@ Resulting rules: `qc::fastqc`, `qc::trim`, `align`
 ### Interface Contracts
 
 An `[[include]]` may declare a typed interface — what the host must wire
-in, what the module exposes, and config defaults it reads (issue #112).
+in, what the module exposes, and config defaults it reads.
 All checks run at **validation time**; execution semantics are unchanged,
 and includes without a contract behave exactly as before.
 
@@ -201,8 +201,8 @@ Merge semantics:
   not namespaced by the module. Two modules that both need a group named
   `all` share it, exactly as two host-side sections would.
 - **Identical duplicate declarations** (same identifier, same content)
-  collapse into one with a warning naming the group/pair — the issue #823
-  cross-source semantics.
+  collapse into one with a warning naming the group/pair — the same
+  cross-source semantics as duplicate host-side declarations.
 - **Conflicting declarations** (same identifier, different content) fail
   with a config error naming both sides, because fan-out would produce
   colliding task/output paths.
@@ -325,7 +325,7 @@ Several keys are **engine-injected**:
   rewritten by `--samples` filtering.
 - `config.paired_pairs_list` (pair ids whose control is non-empty,
   comma-joined) and `config.paired_pairs_count` (their count, an integer,
-  `0` for a tumor-only cohort) — the paired subset of `[[pairs]]` (#881).
+  `0` for a tumor-only cohort) — the paired subset of `[[pairs]]`.
   Use `paired_pairs_list` in `expand_inputs` to scope cohort aggregation
   rules to genuinely paired pairs, and gate paired-only cohort rules with
   `when = "config.paired_pairs_count != 0"` (unquoted — the comparison
@@ -552,16 +552,16 @@ shell_prelude = "set -euo pipefail"
 | `threads` | Integer | Default CPU thread count |
 | `memory` | String | Default memory allocation |
 | `environment` | Table | Default environment specification |
-| `shell_prelude` | String | Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line (issue #92) — e.g. `set -euo pipefail` for fail-fast shells. **Opt-in**: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. `pipefail` requires bash (the engine falls back to `sh` only when bash is absent) |
+| `shell_prelude` | String | Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line — e.g. `set -euo pipefail` for fail-fast shells. **Opt-in**: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. `pipefail` requires bash (the engine falls back to `sh` only when bash is absent) |
 
 ### Conda/mamba environment naming
 
 For file-backed env specs the conda/mamba env name is derived as
 `<stem-or-yaml-name>-<hash8>`, where `hash8` is the first 8 hex chars
-of the SHA-256 of the YAML **content** (issue #159). Relative env file
+of the SHA-256 of the YAML **content**. Relative env file
 specs (`conda`, `mamba`, `pixi`, `venv_requirements`) resolve against
 the **workflow directory** — the single base for relative paths in the
-workflow file (issue #427); with `--workdir` the engine anchors them
+workflow file; with `--workdir` the engine anchors them
 automatically, so rule shells running from the workdir still find the
 specs. `venv` (a directory the backend creates in the workdir) and
 `conda_prefix`/`mamba_prefix` (an environment store outside the
@@ -669,7 +669,7 @@ memory = "32G"
 | `name` | String | **Yes** | Unique rule identifier |
 | `input` | Array of strings | No | Input file paths. Optional (defaults to empty) — a rule with no `input` is legal (e.g. a pure producer or a setup step; pair it with `depends_on` when ordering matters) |
 | `output` | Array of strings | No | Output file paths. Optional (defaults to empty) — a shell-only rule with no declared outputs validates and runs; pair with `depends_on` for ordering |
-| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A `[[values]]` wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
+| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A `[[values]]` wildcard in the pattern is a plan-time fan-out trigger instead. Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |
@@ -697,9 +697,9 @@ memory = "32G"
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
 | `optional` | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
 | `benchmark` | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
-| `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs (issue #832) |
+| `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs |
 | `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
-| `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
+| `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run |
 | `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
 | `rule_metadata` | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
 | `types` | Table | No | Biological type contracts for the rule's channels: `inputs` / `outputs` maps from a channel name (or `default`) to a type expression. Violations fail validation and abort `run` before any compute — see [Biological Type Contracts](#biological-type-contracts-types) |
@@ -719,7 +719,7 @@ memory = "32G"
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
 
-> **Run-path field validation (#523).** Rule *names* (charset:
+> **Run-path field validation.** Rule *names* (charset:
 > alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
 > (`<number><G|M|K|T>`), thread counts and `retry_delay` formats are
 > validated when the workflow is parsed — an invalid value fails the run
@@ -1000,9 +1000,9 @@ oxo-flow automatically cleans up temporary outputs:
 |---|---|---|
 | Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
-| Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors; issue #756) |
+| Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors) |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With `[engine]` thresholds configured, this post-run deletion only fires when free space is below `reclaim_free_disk` at run end — with disk comfortable the outputs are kept so later runs skip the producer (issue #893; see the [engine] notes). For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
+| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With `[engine]` thresholds configured, this post-run deletion only fires when free space is below `reclaim_free_disk` at run end — with disk comfortable the outputs are kept so later runs skip the producer (see the [engine] notes). For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
 
 `temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
@@ -1016,7 +1016,7 @@ and modification time; when the rule fails (non-zero exit, timeout, or
 missing outputs after an exit-0 shell), the declared outputs are
 invalidated: files created during the attempt are deleted, and every
 pre-existing declared output moves aside as `<name>.oxo-failed` — modified
-or untouched (issue #756). The recorded failure schedules a re-execution,
+or untouched. The recorded failure schedules a re-execution,
 and a stale file surviving at the declared path would block that re-run
 inside the script (`ln: File exists`, `mv: cannot move ... File exists`);
 move-aside keeps it recoverable, and `protected_output` remains the escape
@@ -1034,7 +1034,7 @@ run's process group ("one run = one process group"), so the engine snapshots
 parent→child links via sysinfo and signals each descendant individually,
 deepest first: SIGTERM to the whole subtree, a 10-second grace poll for
 survivors, a re-scan for descendants spawned during the window, then SIGKILL
-to whatever remains (issue #194):
+to whatever remains:
 
 ```toml
 [rules.resources]
@@ -1235,7 +1235,7 @@ differently from the producer still connect when the templates are
 identical apart from the wildcard names at the same positions
 (`bqsr/{experiment}/{experiment}.bam` matches
 `bqsr/{sample}/{sample}.bam`) — every `{...}` placeholder is
-canonicalized to `{}` before the final comparison (issue #863).
+canonicalized to `{}` before the final comparison.
 Templates differing in shape or in any literal segment never connect.
 Rules that declare the SAME output string (shared
 bins/staging directories — e.g. two assembler variants emitting into one
@@ -1277,8 +1277,8 @@ shell = "cat {input} > {output}"
 
 - `pattern` — path glob with `{wildcard}` placeholders, relative to the
   workflow file's directory (the same root `sample_pattern` scans). A
-  bare `*` outside `{wildcard}` spans is a **segment-local glob**
-  (issue #246): `raw/{sample}_*_R1.fastq.gz` groups every lane file of a
+  bare `*` outside `{wildcard}` spans is a **segment-local glob**:
+  `raw/{sample}_*_R1.fastq.gz` groups every lane file of a
   sample without enumerating lane names — the CAT_FASTQ shape, where the
   per-sample file count is not known ahead of time and no `[[values]]`
   table can list it. `**` (cross-segment recursion) is rejected. Note a
@@ -1310,8 +1310,7 @@ shell = "cat {input} > {output}"
   skipped for that key with a warning (no instance = nothing to run).
 - When the workflow declares a sample domain (`[[sample_groups]]`,
   `sample_pattern`, or `[[pairs]]`), `group_by = "sample"` group keys
-  must be in that domain — keys outside it are pruned with a warning
-  (#246). A key whose value is an underscore-suffixed form of a declared
+  must be in that domain — keys outside it are pruned with a warning. A key whose value is an underscore-suffixed form of a declared
   sample (`S1_REP1` for declared `S1`) is kept: replicate-suffix naming
   folds by base id, the same convention the group pattern itself uses.
 
@@ -1494,7 +1493,7 @@ benchmark = "benchmarks/align_{sample}.json"  # per-instance JSON, written by th
 | Field | Type | Description |
 |-------|------|-------------|
 | `group` | String | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
-| `cache_key` | String | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
+| `cache_key` | String | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run |
 
 ```toml
 [[rules]]
@@ -1553,7 +1552,7 @@ over inputs it will never read. An **unresolvable** `values_from` (missing
 config key, non-string/array value) is deliberately NOT treated as empty —
 the executor expands zero instances silently in that case, so validate keeps
 the input-existence check to surface the typo as a missing-input diagnostic
-instead of silently passing (issue #616; the stricter `[[values]]` tables and
+instead of silently passing (the stricter `[[values]]` tables and
 `transform.split` reject an unresolvable reference outright).
 
 ### Expand Inputs
@@ -1760,15 +1759,15 @@ environment still being set up, or waiting on the resource pool).
 Every 30s the engine compares rules it considers running against the
 processes it can actually see; a rule that has been Running for over
 `OXO_FLOW_SPAWN_WATCHDOG_SECS` (default 600) with no child process at
-all is reported by name, and the report distinguishes two cases
-(issue #847). If the rule is queued in the resource pool — it has not
+all is reported by name, and the report distinguishes two cases.
+If the rule is queued in the resource pool — it has not
 acquired its threads/memory yet — the report is a WARN pointing at
 the scheduler's own 60-second blockage lines, because a queued wait
 is benign and self-resolving. A rule that is *not* queued (has
 acquired resources, or is parked in environment setup) and still has
 no child process gets the `tracing::error!` report with the explicit
 dispatch state `dispatched-not-forked` — that is the genuine
-lost-wakeup signature (issue #685). Both reports land in the run log
+lost-wakeup signature. Both reports land in the run log
 as well as stderr. The watchdog re-arms: once a rule is past the
 threshold it is re-reported on every 30s tick, and each report carries
 a consecutive fire count. After `OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES`
@@ -1778,7 +1777,7 @@ every 30s tick), the stuck rule is requeued to *Pending* instead of
 wedging its lane forever: the engine kills any stuck process tree,
 aborts the never-forked spawn task, releases any pool reservation it
 holds, clears the checkpoint running-set entry, and re-dispatches the
-rule when it next becomes ready (issue #872). If the wedge repeats,
+rule when it next becomes ready. If the wedge repeats,
 the engine keeps requeueing — the fire count restarts on each
 requeue, so a permanently wedged rule cycles between Running and
 Pending rather than failing the run; there is currently no cumulative
@@ -1814,7 +1813,7 @@ shell = "bwa mem {input.reads1} {input.reads2} > {output.bam}"
 
 There is no `[rules.named_input]` / `[rules.named_output]` TOML table —
 the map is the value of `input`/`output` itself (a sub-table named
-`named_input` fails validation with E017).
+`named_input` fails validation with [E017](./glossary.md#diagnostic-codes)).
 
 A named reference to a key the rule does not declare is likewise never
 substituted (literal brace text at render time) and is flagged by **W034**
@@ -1851,8 +1850,8 @@ shell = "{assembler} -o {output} {input}"
 - Every rule referencing `{assembler}` (bare form) or `{values.assembler}`
   (namespaced form) expands into one instance per value. The reference may
   live in any trigger field — inputs, outputs, shell, `when`,
-  `expand_inputs` patterns, **or the rule's `output_pattern`** (issue
-  #296): a pattern-only reference fans the producer out per value with the
+  `expand_inputs` patterns, **or the rule's `output_pattern`**: a
+  pattern-only reference fans the producer out per value with the
   pattern baked per instance, exactly as it already does for
   `{sample}`/pair wildcards.
 
@@ -2103,7 +2102,7 @@ group metadata**: it fans out per `(group, sample)` pair as a bare
 `{key}` wildcard in paths/shell/log and as `wildcard.<key>` in `when`
 conditions — the same vocabulary as the inline
 `metadata` table. This is how a cohort declares a second read
-dimension (issue #283):
+dimension:
 
 ```toml
 [[rules]]
@@ -2437,7 +2436,7 @@ shell = "fastqc {input[0]} -o qc/"
 | `len(config.<key>)` | `len(config.gene_sets) > 0` | Element count comparison: array items, string characters, or table keys, compared against a whole number (`==`, `!=`, `>=`, `<=`, `>`, `<`). A missing key counts as 0. Bare `len(config.<key>)` is truthy when non-empty. Note a bare `config.<key>` array is truthy even when empty — `len(...) > 0` is the "list is non-empty" gate. Comparing against a non-numeric literal is a lint warning (W029) and always evaluates false |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test. Relative paths resolve against the **workflow root** (the workflow file's directory), not the process working directory, and every evaluation site (plan time, execution re-check, config-change analysis) resolves the same way. In per-instance predicates (`wildcard.<key>` / `{meta.<column>}`) it is evaluated at **plan time** — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with `{meta.*}` (plan-time bakeable) or an execution-time `config` gate instead |
 | `reads_count("path")` / `wc_lines("path")` / `file_size("path")` | `reads_count('trimmed/{sample}.fq.gz') > config.min_reads` | Data-dependent gates — count FASTQ records (4-line records, plain or `.gz`), text lines of the decompressed content (plain or `.gz`), or file bytes in the **run workdir** at execution time. See [Data-Dependent `when` Gates](#data-dependent-when-gates) |
-| `regex_extract("path", "pattern", group?)` | `regex_extract('alignment/{sample}.flagstat', '(\\d+) \\+ \\d+ mapped', 1) > config.min_mapped_reads` | Data-dependent gate — parse an integer out of a text report's first regex match (issue #312). `group` defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030 |
+| `regex_extract("path", "pattern", group?)` | `regex_extract('alignment/{sample}.flagstat', '(\\d+) \\+ \\d+ mapped', 1) > config.min_mapped_reads` | Data-dependent gate — parse an integer out of a text report's first regex match. `group` defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030 |
 | `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `{meta.<column>} == "value"` | `{meta.endedness} == 'SE'` | Per-instance sample-metadata comparison (see [Sample Metadata](#sample-metadata-metadata_file)) — baked and evaluated per instance at plan time; instances whose gate evaluates false never enter the DAG. A missing row or column renders `''` in a comparison (a closed gate) |
 | `!<expr>` | `!config.skip` | Logical NOT |
@@ -2451,7 +2450,7 @@ Any other token — a bare identifier like `params_mode`, or an unknown function
 
 The runtime functions `reads_count(path)`, `wc_lines(path)`,
 `file_size(path)`, and `regex_extract(path, pattern, group?)` let a `when`
-gate inspect files produced earlier in the same run (issues #282/#312) —
+gate inspect files produced earlier in the same run —
 e.g. skip a variant caller on samples whose trimmed FASTQ has too few
 records:
 
@@ -2473,8 +2472,7 @@ shell = "caller --input {input[0]} --output {output[0]}"
   resolve against the workflow directory. `{input}` / `{log}` in rule
   commands stay workdir-relative — data and logs are addressed from the
   run cwd (matching the freshness gates and the engine's log-dir
-  creation), so point `--workdir` at the directory holding your data
-  (issue #427).
+  creation), so point `--workdir` at the directory holding your data.
 - **Phase semantics** — at *plan time* a runtime-function atom whose file
   is missing — or whose file is an output of this run but still holds a
   previous run's stale value — defers (`true`, the rule stays in the plan
@@ -2509,7 +2507,7 @@ shell = "caller --input {input[0]} --output {output[0]}"
   failure: the rule never enters `failed_rules` (a stale entry is pruned),
   `status` reports it under *Skipped (when condition false)*
   (`skipped_by_when` in `--json`), and `report --r-data` writes it to
-  `metrics.tsv` as `skipped_by_when` (issue #690).
+  `metrics.tsv` as `skipped_by_when`.
 - **Scope** — only `when` strings may call these functions; `shell`,
   `input`, and `output` cannot read the filesystem at plan time.
 
@@ -2540,7 +2538,7 @@ A pair/group-level gate prunes the failing instance during expansion, but
 a downstream **cohort consumer** that fans its input over
 `config.pairs_list` via `expand_inputs` still bakes every pair's concrete
 path into `rule.input` — including the path of the instance that never ran.
-The engine closes that gap in two layers (issues #882/#883):
+The engine closes that gap in two layers:
 
 - **Baked inputs** — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
@@ -2556,12 +2554,12 @@ The engine closes that gap in two layers (issues #882/#883):
   not `optional = "any"`) is pruned from the full-run execution plan with
   a note ("rule … is unreachable — its upstream is when-gated false"),
   instead of failing at runtime on the absent file. The same
-  death-propagation already applied to `--target` runs (issue #247)
+  death-propagation already applied to `--target` runs
   applies when no targets are given. The when-gated rule itself stays in
   the plan: the executor evaluates its `when` and counts it as skipped
   exactly once.
 
-The baked-input drop is **live-producer aware** (issue #931): a recorded
+The baked-input drop is **live-producer aware**: a recorded
 when-skipped path is dropped from the baked input list only when no live
 final-DAG instance declares the same path. Complementary when-gated
 producer twins (e.g. paired-mode `mutect2` and tumor-only `mutect2_tumoronly`
@@ -2572,16 +2570,16 @@ stays in `expand_inputs_baked` as provenance for snapshot invalidation.
 
 If EVERY expanded entry is dropped, the consumer would execute with empty
 `{input}` args — planning fails instead with a validation error naming the
-rule (issue #931). Fix the producer's `when`-condition/config so a live
+rule. Fix the producer's `when`-condition/config so a live
 instance covers the paths, or give the consumer a fallback input.
 
 Avoid `expand_inputs` over an output path that two rules both declare
 unless the twins are complementary when-gates (the duplicate-owner shape
 lint [W033](../commands/lint.md) warns about other shapes). On the `run`
 side a missing input whose only remaining producer instance was vetoed by
-its `when` at fan-out is exempt from the missing-source gate (issue #915)
+its `when` at fan-out is exempt from the missing-source gate
 — expansion records vetoed instances' declared outputs in
-`when_skipped_outputs` (#882, including deferred `output_pattern` consumer
+`when_skipped_outputs` (including deferred `output_pattern` consumer
 combos vetoed at runtime instantiation) and the gate exempts any missing
 pattern found there, config-expanded at compare time so `{config.*}`-bearing
 recorded patterns match their expanded gate forms. The file belongs to a
@@ -3173,7 +3171,7 @@ Semantics:
   scan; discovered files are literals, so exact-match edge inference works
   as usual.
 - A `[[values]]` wildcard in the pattern is **not** fresh — it is a
-  plan-time bound dimension (issue #296). The producer fans out per value
+  plan-time bound dimension. The producer fans out per value
   with the pattern baked per instance, the pattern is registered
   producer-side in the DAG (so a per-value consumer's materialized input
   exact-matches its own producer instance), and a pattern whose wildcards
@@ -3188,7 +3186,7 @@ Semantics:
   consumer references on its own project as an extra Cartesian dimension at
   instantiation, under the same plan-time semantics as a static fan-out —
   `wildcard_constraints` filtered and per-instance `when` gates evaluated,
-  so gated-off combos never become instances (issue #296 follow-up). A
+  so gated-off combos never become instances. A
   consumer declared **before** its producer is legal but warned
   (`output_pattern consumer declared BEFORE its producer; the fan-out still
   resolves, but declare the producer first for stable run attribution`).
@@ -3224,7 +3222,7 @@ Semantics:
 ## `[webhook]` — Workflow-Level Notifications
 
 Post `workflow_started` / `workflow_completed` / `workflow_failed` events
-to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
+to an HTTP endpoint when a run starts and finishes —
 the transport counterpart of the `on_complete` / `on_error` shell hooks.
 
 ```toml
@@ -3256,7 +3254,7 @@ and, on failure, an `error` summary. Notifications are **best-effort** —
 an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.
 
-## `[engine]` — Runtime Disk-Pressure Guard (issue #843)
+## `[engine]` — Runtime Disk-Pressure Guard
 
 Optional run-time disk monitoring and hardware placement knobs. Without this
 section the engine never measures free space mid-run and behavior is
@@ -3267,7 +3265,7 @@ unchanged.
 min_free_disk = "50G"        # required to enable: abort/park floor
 # reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk
 # tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule
-# protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data (issue #935)
+# protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data
 # numa_aware = true          # optional: discover NUMA topology at run start (also implied by rule-level numa_pin/numa_node)
 # staging_mode = "stream"    # optional: global remote-input staging mode (rule-level / [defaults] override this)
 # tier0_ram_scratch = "/dev/shm"        # optional: RAM/tmpfs scratch tier
@@ -3279,8 +3277,8 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 |---|---|---|---|
 | `min_free_disk` | String | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
 | `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
-| `tmp_dir` | String | — | Global scratch directory (issue #907). Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
-| `protected_data_trees` | Array of String | — | Workdir-relative data trees whose content must not change behind the engine's back (issue #935 P1) — e.g. `["raw/", "reference/"]`. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud `PROTECTED TREE DRIFT:` section when a file changed, was removed, or appeared. `run` **refuses to execute** on drift unless `--allow-protected-drift` is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented |
+| `tmp_dir` | String | — | Global scratch directory. Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
+| `protected_data_trees` | Array of String | — | Workdir-relative data trees whose content must not change behind the engine's back — e.g. `["raw/", "reference/"]`. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud `PROTECTED TREE DRIFT:` section when a file changed, was removed, or appeared. `run` **refuses to execute** on drift unless `--allow-protected-drift` is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented |
 | `numa_aware` | Bool | `false` | Discover hardware NUMA topology at run start and enable per-rule `numactl` wrapping. Implied automatically when any rule sets `numa_pin` or `numa_node` — see [NUMA pinning](#numa-pinning) |
 | `staging_mode` | String | `"eager"` | Global default for how remote storage inputs (S3/GCS) reach a rule's shell. `eager` downloads the full object to local scratch before the rule runs; `stream` (aliases `stream_fifo`/`fifo`) streams on demand through a FIFO without buffering to disk; `passthrough` (alias `pass_through`) leaves the raw URI untouched for tools with native cloud I/O. Also accepted per-rule and in `[defaults]`; resolution is rule ← `[defaults]` ← `[engine]`. See [Remote staging and upload](cloud-storage.md#remote-staging-and-upload) |
 | `tier0_ram_scratch` | String | — | Tier 0 scratch root: RAM disk or tmpfs (e.g. `/dev/shm`) — lowest latency, capacity-constrained. Only used for small scratch requests (see [Scratch tier ladder](#scratch-tier-ladder)) |
@@ -3315,8 +3313,7 @@ following hold: the rule is marked `temporary = true`, it is not a leaf (it
 has dependents), every dependent has completed **and each dependent's own
 declared outputs still exist on disk** — a completed rule whose outputs went
 missing will re-execute and needs its inputs in place, so reclaiming them
-underneath it would break the re-run (the reclaim-vs-resume race, fixed
-under issue #843), the paths are not `protected_output`, and the files
+underneath it would break the re-run (the reclaim-vs-resume race), the paths are not `protected_output`, and the files
 exist on disk. Reclaimed rules get a tombstone in `checkpoint.json` — the
 same mechanism the success-path `temporary` cleanup uses — so a later run
 that needs the outputs regenerates them first (lazy cascade-up). See
@@ -3357,7 +3354,7 @@ Notes:
   to the workflow file's directory.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution
-  (issue #846): the recorded instance combos from
+  (full instance attribution): the recorded instance combos from
   `checkpoint.output_pattern_domains` are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any
@@ -3371,8 +3368,8 @@ Notes:
   explicitly (e.g. a `genome.fa` rule also declaring `genome.fa.fai`) so
   reclaim + cleanup can track them.
 - When `[engine]` thresholds are configured, the success-path `temporary`
-  sweep is gated on the same reclaim floor as mid-run reclaim (issue
-  #893): if free space at the workdir is at/above `reclaim_free_disk`
+  sweep is gated on the same reclaim floor as mid-run reclaim:
+  if free space at the workdir is at/above `reclaim_free_disk`
   when the run finishes, temporary outputs are **kept** (a one-line ℹ
   note names both numbers) so the next run skips the completed producers
   instead of re-materializing them. The sweep only fires when the run

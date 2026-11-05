@@ -22,8 +22,7 @@ list).
 
 - `stderr_patterns` are **case-insensitive regular expressions**, compiled
   once per engine and shared process-wide. Entries must stay specific
-  (loader lines, tool error prefixes) — near-miss words must not fire
-  (issue #708).
+  (loader lines, tool error prefixes) — near-miss words must not fire.
 - A pattern **without exit codes** fires on any non-zero or unknown exit
   code — never on exit 0. A rule that exited 0 has nothing to diagnose.
 - The AI monitor's failure classifier (`monitor_agent::classify_failure`)
@@ -118,7 +117,7 @@ Response:
 ```
 
 `resource_bottlenecks` lists rules whose measured memory use pressed against
-their declared limit (issue #67 §4):
+their declared limit:
 
 ```json
 resource_bottlenecks: [{
@@ -162,8 +161,7 @@ Pattern {
 }
 ```
 
-Every new pattern must ship with two test rows in the module's tests
-(issue #708):
+Every new pattern must ship with two test rows in the module's tests:
 
 - a canonical trigger line in `CANONICAL_TRIGGERS` (proves the pattern is
   not dead — the test fails if a pattern has no row, or a row no pattern),

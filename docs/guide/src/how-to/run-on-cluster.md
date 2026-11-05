@@ -82,7 +82,7 @@ One engine-wide parser reads both `memory` and `disk`, so what you see in
   suffix (`"4096"`, `"8G"`, `"16384M"`, `"1T"`). Fractional (`"16.5G"`)
   and multi-letter-suffix (`"4096MB"`, `"2GB"`) figures parse to nothing
   engine-wide and are **rejected at validate time** — the same predicate
-  `check`'s E004 diagnostic applies, so a config that loads is a config
+  `check`'s [E004](../reference/glossary.md#diagnostic-codes) diagnostic applies, so a config that loads is a config
   the pool, the quota, and every scheduler render agree on. Because
   PBS `mem=` and SGE `h_vmem=` default to their own units (words/bytes),
   those two backends receive the figure with an **explicit unit**
@@ -513,7 +513,7 @@ Cluster submission honors the same fairness contract as local execution:
   (every round a ready rule spends beyond the `max_submitted` cap gains
   +1). A producer parked at the cap therefore outranks fresh
   high-priority rules after `priority gap` rounds — priority-inversion
-  starvation cannot persist (issue #134).
+  starvation cannot persist.
 - **In-flight jobs are cancelled on failure**: when a required rule
   fails, the driver cancels every job already submitted
   (`scancel`/`qdel`/`bkill`) before the run exits — no orphaned cluster

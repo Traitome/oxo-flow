@@ -273,7 +273,7 @@ itself is an audit-trail anchor. When the workflow lives in a git
 repository the report also names its HEAD SHA, and each pinned git
 `[[include]]` gets its own row (`Include <repo>@<ref> <path>` → the
 checkout's resolved HEAD SHA at parse time) — comparable across a
-run/resume pair to prove module content did not drift (issue #899).
+run/resume pair to prove module content did not drift.
 
 ---
 

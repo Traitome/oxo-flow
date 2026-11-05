@@ -97,7 +97,7 @@ markdown_extensions:
 
 extra:
   version:
-    # mike-based doc versioning (issue #176): every release tag gets a
+    # mike-based doc versioning: every release tag gets a
     # frozen version, `latest` aliases the newest release, main pushes
     # update `dev`. The Material theme renders the version selector.
     provider: mike

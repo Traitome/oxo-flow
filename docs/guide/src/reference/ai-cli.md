@@ -256,7 +256,7 @@ is fail-closed end to end:
 - **Offline replay for tests**: a scripted provider replays serialized
   completions (tool calls, errors, delays) through the real code path, so CI
   covers multi-turn tool-calling and error recovery without an API key.
-- **Ollama tool-calls are parsed, not dropped** (issue #948 P3-3): the Ollama
+- **Ollama tool-calls are parsed, not dropped**: the Ollama
   backend now surfaces the model's `tool_calls` (ids synthesized positionally,
   object-or-string arguments both accepted), maps
   `prompt_eval_count`/`eval_count` into token usage, and echoes

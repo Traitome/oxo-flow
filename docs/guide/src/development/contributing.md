@@ -34,7 +34,7 @@ cargo test --test web_role_matrix   # deployment + 3-role simulation matrix (aut
 cargo test --test web_integration   # web API integration tests
 ```
 
-#### Flaky-test policy (issue #249)
+#### Flaky-test policy
 
 CI runs the full suite once; if it fails, ONLY the failed tests are
 re-run a single time — passing then classifies the failure as a
@@ -56,7 +56,7 @@ make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
 #       cargo build, cargo test, schema-drift, version-check, cargo audit,
 #       cargo-deny, aws-legacy-tripwire (fails if the legacy AWS TLS stack
-#       re-enters the s3-storage graph, #876), secrets scan, docs build,
+#       re-enters the s3-storage graph), secrets scan, docs build,
 #       frontend-lint, eval-tests
 ```
 

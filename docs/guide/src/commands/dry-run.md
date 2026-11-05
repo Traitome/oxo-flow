@@ -14,12 +14,12 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 [KEY=VALUE]...` is byte-identical, flag for flag. The documentation speaks
 of the execution **plan** (this page's "Plan:" headline, the checkpoint
 preview's `plan` array in `--json`); the subcommand now matches that
-vocabulary (issue #831).
+vocabulary.
 
 `dry-run` accepts the same configuration inputs as `run` — `--arg`,
 trailing `KEY=VALUE` overrides, `--profile`, `--rerun`, and
 `--resume-failed` — and predicts the execution set with the exact same
-machinery (issue #77 parity contract). The preview also mirrors the
+machinery. The preview also mirrors the
 executor's freshness gate: a rule with no checkpoint entry whose outputs
 are up to date is predicted as skipped, exactly as `run` would skip it.
 
@@ -65,7 +65,7 @@ model for a plain-language explanation.
 The `SCI-FEATURECOUNTS-STRAND` check fires only when featureCounts is
 actually **invoked** (a command word) without a strandness flag — a rule
 that merely passes a `.../featurecounts` output *path* to another tool
-stays silent (issue #441). It also stays silent when the config declares
+stays silent. It also stays silent when the config declares
 `strandedness = "unstranded"` (the default `-s 0` is then deliberate), and
 its advice is evidence-driven: determine strandedness with RSeQC
 `infer_experiment.py` or the samplesheet's strandedness column before
@@ -75,8 +75,7 @@ The `SCI-AGG-RACE` check flags an aggregation rule whose inputs/shell/when
 (or `expand_inputs` patterns) activate a fan-out dimension — `{sample}` /
 `{group}`, a pair wildcard, a `[[values]]` table name, or an
 `output_pattern` producer's fresh wildcard — while the declared outputs
-are **not keyed by that dimension** (issue #443; per-dimension keying
-since #829). Expansion creates one instance per fan-out element; every
+are **not keyed by that dimension** (the check is per-dimension). Expansion creates one instance per fan-out element; every
 instance of an unkeyed dimension bakes the SAME concrete output path:
 concurrently they race, sequentially they duplicate work N−1 times. The
 check is per-dimension, so a rule whose outputs carry one dimension's
@@ -193,9 +192,9 @@ The headline (`Plan: would run: N | skip: M | completed: K`) answers the
 question that matters before any run: **what happens next** — how many
 rules execute, how many are skipped, and how much completed work the
 checkpoint holds. The total rule count in the DAG is shown as
-`DAG size`, not as the headline number (issue #432: `DAG: 391 rules would
-execute` read as "everything re-runs" while 381 of them were actually
-up to date — a costly misread during triage). The summary line also
+`DAG size`, not as the headline number — the headline answers "what
+happens next", while a bare rule count could read as "everything
+re-runs" when most rules are actually up to date. The summary line also
 answers how much prior work survives (`protected`): rules outside this
 execution set stay untouched. The cascade line makes the infection chain
 visible — one sample's data change reaching the queue-level rules is
@@ -242,7 +241,7 @@ Top-level fields: `"profile"` (the `--profile` name, when given) and
 `--skip-ref-build` empties the list).
 
 Pixi manifests declared by pending rules are preflighted exactly like
-`run` does at start-up (issue #848): every non-skip rule's `pixi = "…"`
+`run` does at start-up: every non-skip rule's `pixi = "…"`
 spec is resolved against the workflow directory and existence-checked.
 Missing manifests appear under the top-level key
 `"env_manifest_issues"` (an array of `{"rule", "spec"}` objects, `spec`

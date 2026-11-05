@@ -92,6 +92,3 @@ shell = "arriba ..."
   this environment*, not bare carrier egress; a geo-gated mirror (Aliyun)
   reporting 403 here does not prove it is dead from a mainland IP.
 - Single-machine, single-day snapshot: latency and availability drift.
-- The issue thread lives in
-  [#67](https://github.com/Traitome/oxo-flow/issues/67) (China network
-  environment checklist).

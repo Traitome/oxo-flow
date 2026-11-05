@@ -252,7 +252,7 @@ Team/HPC modes scope every resource to the acting user:
 - **Anonymous surface**: `/api/system`, `/api/metrics`, `/api/ai/test`,
   and `/api/hpc` require authentication; `GET /api/ai/config` stays
   public; `/api/events` requires a one-time `?ticket=` from
-  `POST /api/events/ticket` (EventSource cannot set headers; #522) and
+  `POST /api/events/ticket` (EventSource cannot set headers) and
   streams only the subscriber's runs; `/api/share/{token}`
   is public by design (the token is the credential).
 - **Env-password logins** auto-provision a real users row (previously any
@@ -415,7 +415,7 @@ OXO_FLOW_TRUSTED_PROXY=1
 
 For TLS-terminating proxies (the common public deployment), also declare
 the public origin so minted share URLs tell the truth about the transport
-(#907 R16) — by default they carry `oxo+http://` with the local bind
+— by default they carry `oxo+http://` with the local bind
 host/port, which is unreachable from outside the proxy:
 
 ```bash

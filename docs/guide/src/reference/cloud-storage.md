@@ -219,7 +219,7 @@ re-execute) instead of using the cache.
   only the local filesystem backend. The `s3-storage` feature compiles and
   is tested (unit fixtures + a live S3-compatible E2E suite, see
   `crates/oxo-flow-cli/tests/remote_staging.rs`; verified against RustFS).
-  Since #876, the `aws-sdk-s3` dependency is declared with
+  The `aws-sdk-s3` dependency is declared with
   `default-features = false` (minus the `rustls` feature), so the legacy
   hyper-0.14 / rustls-0.21 / h2-0.3 TLS stack never enters the graph — TLS
   is provided by the modern rustls 0.23 + aws-lc-rs path only.

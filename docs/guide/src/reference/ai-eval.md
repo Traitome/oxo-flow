@@ -5,8 +5,7 @@ oxo-flow's AI surfaces (tool lookup, `template --ai` workflow generation,
 benchmark in the `eval/` directory of the repository. The judge is
 oxo-flow's own fresh knowledge base plus its own validators
 (`validate`, `lint`) — a closed loop an external MCQ benchmark cannot
-provide (see [issue #167](https://github.com/Traitome/oxo-flow/issues/167)
-for the design rationale).
+provide.
 
 > Terminology: **pass@1 / pass@k**, **fidelity**, and **seed** are defined
 > in the [Glossary](glossary.md#benchmark-terms); diagnostic codes in
@@ -91,9 +90,8 @@ empty report.
 > (`reviewer = wangshx`, 2026-10-31, AI-assisted verification baseline under
 > maintainer supervision). Automated reviewer placeholders (`*-automated`) are
 > permanently barred by CI.
-> Issue [#172](https://github.com/Traitome/oxo-flow/issues/172) remains OPEN
-> by design as the publication-track standing marker for independent double-blind
-> human review and PABAK concordance reporting prior to manuscript submission.
+> Independent double-blind human review and PABAK concordance reporting
+> remain standing requirements prior to manuscript submission.
 > `python3 eval/scripts/verify_gold.py` audits cryptographic ledger consistency,
 > and `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards consistency
 > rules on every push. Complete methodology and statistical design are

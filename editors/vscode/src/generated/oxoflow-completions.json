@@ -1,13 +1,13 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "05add9b9c3505f1f85ce8b2cbdb70867877fe9cda76c362a0351f54460c5b908",
+  "schemaSha256": "4188d061db7ea934c8faf8ca28bd9b8b7d2561cc8af4eb209bfe02e855e9576f",
   "contexts": {
     "root": {
       "keys": [
         {
           "key": "ai",
-          "description": "AI companion activation and tuning (issue #634); credentials stay in env/config files, never here",
+          "description": "AI companion activation and tuning; credentials stay in env/config files, never here",
           "type": "object"
         },
         {
@@ -32,7 +32,7 @@
         },
         {
           "key": "engine",
-          "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843), the global scratch directory (issue #907), and protected-tree drift baselines (issue #935). Sizes use T/G/M/K suffixes; a bare number means MiB.",
+          "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, and protected-tree drift baselines. Sizes use T/G/M/K suffixes; a bare number means MiB.",
           "type": "object"
         },
         {
@@ -111,7 +111,7 @@
         },
         {
           "key": "webhook",
-          "description": "Workflow-level webhook notifications (issue #227)",
+          "description": "Workflow-level webhook notifications",
           "type": "object"
         },
         {
@@ -539,7 +539,7 @@
         },
         {
           "key": "cache_key",
-          "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)",
+          "description": "Content-based cache key: enables content-addressed output reuse across runs",
           "type": "string"
         },
         {
@@ -780,7 +780,7 @@
         },
         {
           "key": "temporary",
-          "description": "Delete the rule's outputs after a fully successful run once every dependent rule has completed, recording a checkpoint tombstone so a future run regenerates them on demand. Leaf rules (no dependents) keep their outputs; with [engine] disk thresholds configured, deletion only fires when free space is below reclaim_free_disk at run end (issue #893)",
+          "description": "Delete the rule's outputs after a fully successful run once every dependent rule has completed, recording a checkpoint tombstone so a future run regenerates them on demand. Leaf rules (no dependents) keep their outputs; with [engine] disk thresholds configured, deletion only fires when free space is below reclaim_free_disk at run end",
           "type": "boolean"
         },
         {

@@ -285,7 +285,7 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 1. **DAG is naturally sequential**: Run `oxo-flow graph workflow.oxoflow` and check **Width** in the header. If width=1, every rule depends on the previous one — no parallelism is possible. Consider splitting large rules into independent sub-tasks.
 2. **Resource constraints**: If rules declare high thread/memory requirements (e.g., 32 threads each on a 64-thread machine), the resource pool may only allow 1-2 concurrent jobs. Either reduce declarations or increase `--max-threads`/`--max-memory`.
-3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two rules write the same output path, one silently overwrites the other (the engine does not refuse to run; `oxo-flow lint` flags it as [W033](../commands/lint.md)).
+3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two rules write the same output path, one silently overwrites the other (the engine does not refuse to run; `oxo-flow lint` flags it as [W033](../reference/glossary.md#diagnostic-codes)).
 
 ### Orphan rules (rules that never connect)
 
@@ -337,8 +337,8 @@ common complementary shape — one rule gated `X != ''` and the other
 `X == ''` on the same expression — and reports the pair as an **info**
 instead of a warning ("output collision (unreachable): ... their `when`
 gates are complementary on 'X' — collision is not reachable at runtime"),
-so the intent stays visible without flagging a race that cannot happen
-(issue #860). Any other gating shape still reports the warning.
+so the intent stays visible without flagging a race that cannot happen.
+Any other gating shape still reports the warning.
 
 ### Deadlock detected
 

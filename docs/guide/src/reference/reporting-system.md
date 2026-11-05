@@ -30,7 +30,7 @@ The top-level report container:
 
 ```rust
 pub struct Report {
-    pub schema_version: u32,                 // = 1 (issue #83 WS3)
+    pub schema_version: u32,                 // = 1
     pub command: String,                     // = "report"
     pub title: String,
     pub generated_at: Option<DateTime<Utc>>, // None under --no-timestamps;

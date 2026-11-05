@@ -155,14 +155,14 @@ be reachable over HTTP (stdio servers are not supported).
 MCP tools execute under the same approval policy as all agent tools:
 
 - The server-asserted `annotations.readOnlyHint` is **advisory only** —
-  it never authorizes auto-execution (#518: a hostile server can claim it
+  it never authorizes auto-execution (a hostile server can claim it
   for an effectful tool).
 - **Every MCP tool invocation is refused unless a human approves that
   specific call** — the AI prompts on the terminal (`Allow execution?
   [y/N]`); non-interactive sessions (CI, `--json`, redirected stdin)
   always refuse.
 
-The endpoint itself is SSRF-screened at connect time (#518): internal
+The endpoint itself is SSRF-screened at connect time: internal
 address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges,
 CGNAT 100.64/10, benchmarking 198.18/15, NAT64 `64:ff9b::/96`, 6to4
 `2002::/16`) and site-local names (`localhost`, `.local`, `.internal`) are refused
@@ -171,7 +171,7 @@ same opt-out documented for `fetch_url`. A trusted in-house MCP server on
 a private address must be listed there explicitly.
 
 When the endpoint resolves through DNS, the vetted address is pinned for
-the connection (#948): the client connects to exactly what was screened,
+the connection: the client connects to exactly what was screened,
 closing the DNS-rebinding window between screening and connecting
 (allowlisted hosts and IP literals skip DNS and need no pin). Redirect
 hops are re-screened the same way — a hop that lands in internal space is
@@ -196,7 +196,7 @@ request.
 
 MCP servers requiring bearer authentication read the token from the
 environment — never from a skill manifest, which is attacker-influenced
-text (#518):
+text:
 
 - `OXO_FLOW_MCP_TOKEN` — generic token sent to every MCP server unless a
   per-server override is present
@@ -221,7 +221,7 @@ endpoint sends the credential unencrypted on the wire.
 ### Bounded Agent Tools
 
 The agent's built-in `read_file` tool refuses files larger than **256 KiB**
-(#948) — a model-directed read of a huge data file would otherwise be
+— a model-directed read of a huge data file would otherwise be
 buffered whole and dumped into the model transcript (an OOM and
 prompt-injection vector). The error steers the model to targeted reads
 (`head`, `grep` over a shell channel) or a smaller summary file.

@@ -66,16 +66,17 @@ Summary: 0 errors, 1 warning, 3 info
 ```
 
 Each diagnostic prints a `hint:` line (when a suggestion exists) showing
-the fix, matching the style of `validate` and `run` output. W007
+the fix, matching the style of `validate` and `run` output.
+[W007](../reference/glossary.md#diagnostic-codes)
 suggests `target = true`: a rule marked as a target is built by default
 when `oxo-flow run` is invoked without an explicit `-t`, so marking the
 final leaf rules (like `fastqc` above) makes them part of the default
 run — see [Workflow Format: Priority and Targeting](../reference/workflow-format.md#priority-and-targeting).
-W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
+[W025](../reference/glossary.md#diagnostic-codes) flags the deprecated rule-level `threads = N` / `memory = "8G"`
 fields (superseded by `[rules.resources]` in v0.4) so old workflows
 surface the migration instead of silently keeping their old settings —
 see [Workflow Format: Rule resources](../reference/workflow-format.md#resources-extended).
-W031 flags a consumer rule that reads the output of a `when`-gated
+[W031](../reference/glossary.md#diagnostic-codes) flags a consumer rule that reads the output of a `when`-gated
 producer without a `when` gate of its own: when the producer's gate is
 off, its files never appear and the consumer's inputs cannot be resolved
 at plan time (dry-run `input ✗`) or the run fails outright. Wildcard
@@ -87,7 +88,7 @@ on the consumer or splitting it into `when`-gated variants (the
 tolerance for a missing producer are not flagged: `optional = true` /
 `"any"` rules, `input_groups` disk-discovery fallbacks, and consumers
 that already carry any `when` gate.
-W033 flags two rules that write the same output path — including
+[W033](../reference/glossary.md#diagnostic-codes) flags two rules that write the same output path — including
 differently-named wildcards over the same template (`variants/{smp}.vcf`
 vs `variants/{sample}.vcf`) and identical literal paths. The engine does
 not refuse to run: both rules execute and the second to finish silently
@@ -104,7 +105,7 @@ not collide with `{config.alt_dir}/{sample}.vcf` when the values differ.
 
 When both writers carry meaningful `when` gates that are *complementary
 empty-string checks on the same expression* — `X != ''` on one and
-`X == ''` on the other (issue #860; the paired/tumor-only
+`X == ''` on the other (the paired/tumor-only
 `mutect2_paired`/`mutect2_tumoronly` shape) — each rule runs exactly when
 the other does not, so the pair can never race and the collision is not
 reachable at runtime. W033 then downgrades to an **info** note naming the
@@ -125,7 +126,7 @@ executor cannot parse as a reference falls through to its default-true
 verdict).
 See
 [Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
-W034 flags an `{input[N]}` / `{output[N]}` placeholder whose index is out
+[W034](../reference/glossary.md#diagnostic-codes) flags an `{input[N]}` / `{output[N]}` placeholder whose index is out
 of range, or a named `{input.key}` / `{output.key}` whose key the rule
 does not declare. The substitution loop only renders indices `0..len`
 (list-form: declaration order; map-form: keys in sorted order; dir-form:
@@ -140,7 +141,7 @@ role-bearing IO — declare a map and use named access (`tumor = "..."` +
 `{input.tumor}`), which also survives reordering. Lines that are comments
 in the rendered script are exempt, and `script` paths are checked the
 same way as inline `shell`.
-W032 flags a `[config]` key whose *name* looks like a secret
+[W032](../reference/glossary.md#diagnostic-codes) flags a `[config]` key whose *name* looks like a secret
 (`token`, `secret`, `passwd`, `password`, `credential`, `api_key`,
 `access_key`, `private_key`, `ssh_key`, `key` — matched at word/segment
 boundaries, so names that merely contain these as a substring, like
@@ -157,7 +158,7 @@ api_token = { default = "sk-...", sensitive = true }
 Declared-sensitive keys are env-routed and masked on disk, so W032
 never flags them — see
 [`[config]` — Configuration Variables](../reference/workflow-format.md#config-configuration-variables).
-W035 flags a command that reads a shell glob — e.g. `cat
+[W035](../reference/glossary.md#diagnostic-codes) flags a command that reads a shell glob — e.g. `cat
 stats/*.count.txt` — in a rule that declares no inputs. The shell
 expands the glob at run time, so the DAG builder never sees the
 individual files: the rule gets no edges against the rules that
