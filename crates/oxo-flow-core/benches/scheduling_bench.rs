@@ -54,29 +54,6 @@ fn ready_chain_1000(c: &mut Criterion) {
     });
 }
 
-fn strategies_1000(c: &mut Criterion) {
-    let (dag, state, rules) = setup(1000);
-    let mut group = c.benchmark_group("scheduler/strategies_1000");
-    group.bench_function("ready_rules", |b| {
-        b.iter(|| state.ready_rules(black_box(&dag)).unwrap())
-    });
-    group.bench_function("prioritised", |b| {
-        b.iter(|| {
-            state
-                .ready_rules_prioritized(black_box(&dag), black_box(&rules))
-                .unwrap()
-        })
-    });
-    group.bench_function("critical_path", |b| {
-        b.iter(|| {
-            state
-                .ready_rules_critical_path(black_box(&dag), black_box(&rules))
-                .unwrap()
-        })
-    });
-    group.finish();
-}
-
 fn simulate_100(c: &mut Criterion) {
     let rules = chain_rules(100);
     let dag = WorkflowDag::from_rules(&rules).unwrap();
@@ -121,7 +98,6 @@ criterion_group!(
     ready_chain_10,
     ready_chain_100,
     ready_chain_1000,
-    strategies_1000,
     simulate_100
 );
 criterion_main!(benches);

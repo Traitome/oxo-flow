@@ -162,19 +162,9 @@ let path: Vec<String> = dag.critical_path()?;
 
 #### Critical-Path-Prioritized Scheduling
 
-The scheduler can prioritize rules on the critical path so they execute before non-critical rules at the same level:
-
-```rust
-let ready: Vec<String> = state.ready_rules_critical_path(&dag, &rules)?;
-```
-
-Sort order:
-
-1. **Critical path membership** — critical rules first
-2. **Explicit priority** (`priority` field, higher first)
-3. **Alphabetical name** (deterministic tie-breaker)
-
-This minimizes total workflow wall-clock time by ensuring the bottleneck chain never waits.
+Rules on the critical path determine the minimum total execution time, so
+priority should be spent on them: mark bottleneck rules with a high
+`priority` field and the run loop schedules them before other ready rules.
 
 #### Example
 
@@ -248,11 +238,6 @@ Rules can declare a `priority` field (integer, default `0`). When multiple rules
 [[rules]]
 name = "critical_qc"
 priority = 10   # Runs before other ready rules
-```
-
-```rust
-let ready: Vec<String> = state.ready_rules_prioritized(&dag, &rules)?;
-// ["critical_qc", "fastqc", "trim_reads"]  — sorted by priority desc, then name asc
 ```
 
 **Important:** Priority only affects ordering *among ready rules at the same time*. A low-priority rule with all dependencies satisfied will still run before a high-priority rule waiting on a dependency. Priority does not override topological constraints.
