@@ -253,6 +253,7 @@ where
                     provider,
                     status.as_u16(),
                     &describe(e),
+                    secret,
                     None,
                 ));
             }
@@ -554,8 +555,13 @@ fn gateway_error_message(json: &serde_json::Value) -> String {
         .unwrap_or_else(|| truncate_utf8_from_start(&json.to_string(), 300).to_string())
 }
 
-pub fn classify_http_error(provider: &str, status: u16, body: &str) -> AiError {
-    classify_http_error_with_retry_after(provider, status, body, None)
+pub fn classify_http_error(
+    provider: &str,
+    status: u16,
+    body: &str,
+    api_key: Option<&str>,
+) -> AiError {
+    classify_http_error_with_retry_after(provider, status, body, api_key, None)
 }
 
 /// [`classify_http_error`] carrying the response's `Retry-After` value (as
@@ -565,8 +571,15 @@ pub fn classify_http_error_with_retry_after(
     provider: &str,
     status: u16,
     body: &str,
+    api_key: Option<&str>,
     retry_after: Option<u64>,
 ) -> AiError {
+    // Single masking choke point (audit L-6): every variant built from the
+    // body carries masked text, so no backend has to remember to scrub —
+    // the per-call-site mask_secret calls this replaced were exactly the
+    // discipline the next backend forgets. `None` passes through unchanged
+    // (mask_secret leaves short/empty secrets alone).
+    let body = &mask_secret(body, api_key.unwrap_or(""));
     let body_lower = body.to_lowercase();
     if status == 429 {
         return AiError::RateLimited {
@@ -770,7 +783,8 @@ impl ClaudeBackend {
             return Err(classify_http_error_with_retry_after(
                 "claude",
                 status.as_u16(),
-                &mask_secret(&err_msg, &self.api_key),
+                &err_msg,
+                Some(&self.api_key),
                 retry_after,
             ));
         }
@@ -930,31 +944,38 @@ fn parse_context_tokens(value: Option<&str>) -> Option<u32> {
 /// OpenAI `max_tokens`/`max_completion_tokens` field has provider-specific
 /// semantics, and inventing a mapping is out of scope.
 fn warn_claude_only_knobs_once(backend: &'static str) {
-    static WARN_MAX_TOKENS: std::sync::Once = std::sync::Once::new();
-    static WARN_CONTEXT_TOKENS: std::sync::Once = std::sync::Once::new();
+    // Keyed by (knob, backend): the `Once` statics this replaced were
+    // process-global, so a user running both a Claude and an OpenAI/Ollama
+    // backend saw the warning only for whichever backend was constructed
+    // first — the `backend` parameter was decorative (audit L-5).
+    static WARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<(&'static str, &'static str)>>,
+    > = std::sync::OnceLock::new();
+    let warned = WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    // A poisoned mutex (a prior holder panicked) recovers its data — the
+    // guarded set is plain diagnostics bookkeeping.
+    let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(value) = std::env::var("OXO_FLOW_AI_MAX_TOKENS")
         && !value.trim().is_empty()
+        && warned.insert(("max_tokens", backend))
     {
-        WARN_MAX_TOKENS.call_once(|| {
-            tracing::warn!(
-                provider = backend,
-                env = "OXO_FLOW_AI_MAX_TOKENS",
-                "OXO_FLOW_AI_MAX_TOKENS only applies to the Claude/Anthropic backend; \
+        tracing::warn!(
+            provider = backend,
+            env = "OXO_FLOW_AI_MAX_TOKENS",
+            "OXO_FLOW_AI_MAX_TOKENS only applies to the Claude/Anthropic backend; \
                  it is ignored on this backend and no max_tokens field is sent"
-            );
-        });
+        );
     }
     if let Ok(value) = std::env::var("OXO_FLOW_AI_CONTEXT_TOKENS")
         && !value.trim().is_empty()
+        && warned.insert(("context_tokens", backend))
     {
-        WARN_CONTEXT_TOKENS.call_once(|| {
-            tracing::warn!(
-                provider = backend,
-                env = "OXO_FLOW_AI_CONTEXT_TOKENS",
-                "OXO_FLOW_AI_CONTEXT_TOKENS only applies to the Claude backend's \
+        tracing::warn!(
+            provider = backend,
+            env = "OXO_FLOW_AI_CONTEXT_TOKENS",
+            "OXO_FLOW_AI_CONTEXT_TOKENS only applies to the Claude backend's \
                  context-window clamping; it is ignored on this backend"
-            );
-        });
+        );
     }
 }
 
@@ -1247,7 +1268,8 @@ impl OpenAiBackend {
             return Err(classify_http_error_with_retry_after(
                 &self.label,
                 status.as_u16(),
-                &mask_secret(&err_msg, &self.api_key),
+                &err_msg,
+                Some(&self.api_key),
                 retry_after,
             ));
         }
@@ -1416,6 +1438,7 @@ impl OllamaBackend {
                 "ollama",
                 status.as_u16(),
                 err_msg,
+                None,
                 retry_after_header(&headers),
             ));
         }
@@ -2787,7 +2810,7 @@ mod tests {
         // from the body (including Auth) carries masked text.
         let key = "sk-fake-51b482c0abcd1234";
         let body = format!("invalid key {key}");
-        let err = classify_http_error("openai", 401, &mask_secret(&body, key));
+        let err = classify_http_error("openai", 401, &body, Some(key));
         let rendered = err.to_string();
         assert!(!rendered.contains(key));
         assert!(rendered.contains(MASKED_KEY));
@@ -3546,38 +3569,45 @@ mod tests {
             classify_http_error(
                 "openai",
                 400,
-                "This model's maximum context length is 65536 tokens."
+                "This model's maximum context length is 65536 tokens.",
+                None
             ),
             AiError::ContextOverflow { .. }
         ));
         assert!(matches!(
-            classify_http_error("openai", 413, "payload too large"),
+            classify_http_error("openai", 413, "payload too large", None),
             AiError::ContextOverflow { .. }
         ));
         assert!(matches!(
             classify_http_error(
                 "openai",
                 400,
-                "context_length_exceeded: input exceeds limit"
+                "context_length_exceeded: input exceeds limit",
+                None
             ),
             AiError::ContextOverflow { .. }
         ));
         // Output-limit errors mention max_tokens.
         assert!(matches!(
-            classify_http_error("openai", 400, "max_tokens is too large: 100000 > 8192"),
+            classify_http_error(
+                "openai",
+                400,
+                "max_tokens is too large: 100000 > 8192",
+                None
+            ),
             AiError::OutputLimit { .. }
         ));
         // Existing classifications are preserved.
         assert!(matches!(
-            classify_http_error("openai", 429, "rate limit"),
+            classify_http_error("openai", 429, "rate limit", None),
             AiError::RateLimited { .. }
         ));
         assert!(matches!(
-            classify_http_error("openai", 401, "bad key"),
+            classify_http_error("openai", 401, "bad key", None),
             AiError::Auth { .. }
         ));
         assert!(matches!(
-            classify_http_error("openai", 500, "server exploded"),
+            classify_http_error("openai", 500, "server exploded", None),
             AiError::Provider { .. }
         ));
     }
@@ -4016,6 +4046,7 @@ mod tests {
             "openai",
             429,
             "slow down",
+            None,
             retry_after_header(&headers),
         ) {
             AiError::RateLimited { retry_after, .. } => assert_eq!(retry_after, Some(30)),
@@ -4032,7 +4063,7 @@ mod tests {
         assert!(retry_after_header(&reqwest::header::HeaderMap::new()).is_none());
         // Callers that classify without a header keep the old behavior.
         assert!(matches!(
-            classify_http_error("openai", 429, "rate limit"),
+            classify_http_error("openai", 429, "rate limit", None),
             AiError::RateLimited {
                 retry_after: None,
                 ..
