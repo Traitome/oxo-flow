@@ -372,7 +372,7 @@ pub fn expand_pattern_with_glob(
 /// variables.insert("sample".to_string(), vec!["S1".to_string(), "S2".to_string()]);
 /// variables.insert("read".to_string(), vec!["1".to_string(), "2".to_string()]);
 ///
-/// let results = cartesian_expand("{sample}_R{read}.fastq.gz", &variables);
+/// let results = cartesian_expand("{sample}_R{read}.fastq.gz", &variables).unwrap();
 /// assert_eq!(results.len(), 4);
 /// assert!(results.contains(&"S1_R1.fastq.gz".to_string()));
 /// assert!(results.contains(&"S2_R2.fastq.gz".to_string()));
