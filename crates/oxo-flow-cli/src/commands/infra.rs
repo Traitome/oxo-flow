@@ -176,41 +176,49 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
 
             match backend.as_str() {
                 "conda" => {
-                    // Use conda/mamba to create environment
-                    // Prefer mamba for speed, fall back to conda
-                    let tool = {
-                        let mamba_exists = std::process::Command::new("mamba")
-                            .arg("--version")
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .is_ok();
-                        let micromamba_exists = std::process::Command::new("micromamba")
-                            .arg("--version")
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .is_ok();
-                        if mamba_exists {
-                            "mamba"
-                        } else if micromamba_exists {
-                            "micromamba"
-                        } else {
-                            "conda"
-                        }
+                    // M-8: tool probes + `env create` block for minutes —
+                    // off-thread so this async command body never parks a
+                    // tokio worker.
+                    let (tool, status) = {
+                        let spec = spec.clone();
+                        let name_str = name_str.clone();
+                        tokio::task::spawn_blocking(move || {
+                            // Prefer mamba for speed, fall back to conda
+                            let mamba_exists = std::process::Command::new("mamba")
+                                .arg("--version")
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .status()
+                                .is_ok();
+                            let micromamba_exists = std::process::Command::new("micromamba")
+                                .arg("--version")
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .status()
+                                .is_ok();
+                            let tool = if mamba_exists {
+                                "mamba"
+                            } else if micromamba_exists {
+                                "micromamba"
+                            } else {
+                                "conda"
+                            };
+                            let status = std::process::Command::new(tool)
+                                .args([
+                                    "env",
+                                    "create",
+                                    "-f",
+                                    &spec.to_string_lossy(),
+                                    "-n",
+                                    &name_str,
+                                ])
+                                .status()
+                                .with_context(|| format!("failed to run {tool} env create"))?;
+                            anyhow::Ok((tool.to_string(), status))
+                        })
+                        .await
+                        .context("env create task failed")??
                     };
-
-                    let status = std::process::Command::new(tool)
-                        .args([
-                            "env",
-                            "create",
-                            "-f",
-                            &spec.to_string_lossy(),
-                            "-n",
-                            &name_str,
-                        ])
-                        .status()
-                        .with_context(|| format!("failed to run {} env create", tool))?;
 
                     if !status.success() {
                         anyhow::bail!(
@@ -251,11 +259,19 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     std::fs::write(project_dir.join("pixi.toml"), &pixi_toml)
                         .with_context(|| "failed to write pixi.toml")?;
 
-                    let status = std::process::Command::new("pixi")
-                        .args(["install"])
-                        .current_dir(&project_dir)
-                        .status()
-                        .with_context(|| "failed to run pixi install")?;
+                    // M-8: `pixi install` blocks for minutes — off-thread.
+                    let status = {
+                        let project_dir = project_dir.clone();
+                        tokio::task::spawn_blocking(move || {
+                            std::process::Command::new("pixi")
+                                .args(["install"])
+                                .current_dir(&project_dir)
+                                .status()
+                                .with_context(|| "failed to run pixi install")
+                        })
+                        .await
+                        .context("pixi install task failed")?
+                    }?;
 
                     if !status.success() {
                         anyhow::bail!("pixi install failed");
