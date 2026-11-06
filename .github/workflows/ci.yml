@@ -2009,7 +2009,7 @@ jobs:
           # the promotion — an empty LATEST_TAG used to satisfy the guard
           # and re-published an old release onto :latest in a green run.
           LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" \
-            | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 || true)
+            | jq -r .tag_name || true)
           if [ -z "$LATEST_TAG" ]; then
             echo "::error::could not determine the repo's latest release — refusing to promote :latest on unknown state"
             exit 1

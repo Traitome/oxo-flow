@@ -845,7 +845,13 @@ impl McpClient for McpHttpClient {
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized",
             }));
-        let _ = self.attach_session_headers(note_req).send().await;
+        // Fire-and-forget by spec (no id, no response), but a transport
+        // failure here is the client-side signal that the session was not
+        // established — downstream errors would otherwise surface as
+        // confusing "unknown session" replies from the server (L-4).
+        if let Err(error) = self.attach_session_headers(note_req).send().await {
+            tracing::debug!("MCP initialized-notification send failed: {error}");
+        }
 
         // tools/list is paginated: the first page carries `nextCursor` when
         // more tools exist. Ignoring it silently exposed only the first page
