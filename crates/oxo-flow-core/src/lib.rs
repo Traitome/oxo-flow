@@ -54,6 +54,7 @@ pub mod format;
 pub mod git;
 pub mod hardware;
 pub mod plugin;
+pub mod protected;
 pub mod readiness;
 pub mod reentry;
 pub mod references;

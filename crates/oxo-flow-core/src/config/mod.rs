@@ -78,6 +78,21 @@ impl WorkflowConfig {
             rule.validate_field_formats()?;
         }
 
+        // `protected_output` patterns must parse as globs (H-4): a
+        // protection typo (`***`, mid-component `**`, invalid `[a-b]`) must
+        // fail at load time, never silently degrade to "unprotected" on a
+        // destroy path. `{wildcard}` chunks convert to `*` first — the same
+        // conversion every matcher applies.
+        for rule in &self.rules {
+            for pattern in &rule.protected_output {
+                if let Err(reason) = crate::protected::validate_protected_pattern(pattern) {
+                    return Err(OxoFlowError::Config {
+                        message: format!("rule '{}': {reason}", rule.name),
+                    });
+                }
+            }
+        }
+
         // Ensure each rule has either shell, script, or transform
         for rule in &self.rules {
             if rule.shell.is_none()

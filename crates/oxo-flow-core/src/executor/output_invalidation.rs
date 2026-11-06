@@ -58,21 +58,12 @@ pub fn is_protected_path(
         .iter()
         .map(|p| super::checkpoint::expand_config_in_path(p, wildcard_values))
         .collect();
-    // `require_literal_separator` pins `*` to a single path component —
-    // the same semantics the filesystem-walking `glob::glob` (clean
-    // path) applies, so a pattern cannot protect more in one destroy
-    // path than in the other.
-    let opts = glob::MatchOptions {
-        case_sensitive: true,
-        require_literal_separator: true,
-        require_literal_leading_dot: false,
-    };
-    protected.iter().any(|pattern| {
-        pattern == expanded
-            || glob::Pattern::new(pattern)
-                .map(|pat| pat.matches_with(expanded, opts))
-                .unwrap_or(false)
-    })
+    // The shared matcher (H-4): one protection semantics for every destroy
+    // path, and an unparseable pattern fails closed (protects) instead of
+    // silently reading as "unprotected".
+    protected
+        .iter()
+        .any(|pattern| crate::protected::protected_pattern_matches(pattern, expanded))
 }
 
 /// Snapshot a rule's declared outputs (config placeholders expanded using
