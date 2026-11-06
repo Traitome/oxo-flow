@@ -359,7 +359,7 @@ def check_version_intent(tool_rows):
     for row in tool_rows:
         if row.get("negative_sample") == "1":
             continue
-        if row.get("expected_version") and "version" not in (row.get("query") or "").lower():
+        if row.get("expected_version") and not common.asks_about_version(row):
             warnings.append(row["id"])
     return warnings
 

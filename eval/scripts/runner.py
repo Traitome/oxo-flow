@@ -551,13 +551,7 @@ def judge_tool(gold_rows, captures_path):
             scores = {}
             if row["expected_tool"]:
                 scores["name_match"] = 1.0 if common.name_present(row["expected_tool"], answer) else 0.0
-            # schema.md: expected_version is empty when the query does not ask
-            # for a version, and version_match is scored only when it is asked
-            # (#172: 45 rows carried a version on non-version queries and
-            # penalised correct answers). Rows without a query keep the old
-            # behaviour for synthetic inputs.
-            query = row.get("query", "")
-            asks_version = "version" in query.lower() if query else True
+            asks_version = common.asks_about_version(row)
             if row["expected_version"] and asks_version:
                 # Boundary-checked match: "2.0.4" must not be satisfied by
                 # "2.0.40" or "12.0.4" (#172 audit), while "v2.0.4" still is.

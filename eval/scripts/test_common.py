@@ -14,6 +14,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 
 
+class AsksAboutVersionTests(unittest.TestCase):
+    def test_query_mentioning_version_is_version_intent(self):
+        self.assertTrue(common.asks_about_version({"query": "what is the latest VERSION of fastp"}))
+
+    def test_query_without_version_is_not_version_intent(self):
+        self.assertFalse(common.asks_about_version({"query": "adapter trimming"}))
+
+    def test_missing_query_is_deliberately_lenient_version_intent(self):
+        self.assertTrue(common.asks_about_version({}))
+
+
+class KnowledgeDigestTests(unittest.TestCase):
+    def _write_tree(self, root, order):
+        for relpath in order:
+            path = os.path.join(root, relpath)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(relpath.encode())
+
+    def test_digest_is_independent_of_directory_creation_order(self):
+        # os.walk yields entries in filesystem order; the sorted walk must
+        # make the digest identical for two trees built in opposite orders
+        # (M-18: persisted artifacts are order-independent).
+        files = ["b/2.txt", "a/1.txt", "a/z/9.txt", "c.txt", "b/10.txt"]
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            self._write_tree(first, files)
+            self._write_tree(second, list(reversed(files)))
+            with mock.patch("common.KNOWLEDGE_DIR", first):
+                digest_first = common.knowledge_digest()
+            with mock.patch("common.KNOWLEDGE_DIR", second):
+                digest_second = common.knowledge_digest()
+        self.assertEqual(digest_first, digest_second)
+
+
 class ResolveProviderTests(unittest.TestCase):
     def test_openai_env_resolution_uses_provider_defaults(self):
         env = {
