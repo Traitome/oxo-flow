@@ -796,7 +796,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             );
 
             let cancel_status = {
-
                 let job_ids = job_ids.clone();
                 tokio::task::spawn_blocking(move || {
                     std::process::Command::new(cancel_cmd)
