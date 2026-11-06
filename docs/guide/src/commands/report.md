@@ -33,7 +33,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--format` | `-f` | inferred | Output format: `html`, `json`, `md`, `pdf`, or `pdf-command`. Inferred from the `-o` extension when omitted, else `html` |
+| `--format` | `-f` | inferred | Output format: `html`, `json`, `md`, `pdf`, or `pdf-command`. Inferred from the `-o` extension when omitted, else from the first `[report].format` entry, else `html` |
 | `--output` | `-o` | stdout | Output file path (`-` writes to stdout). For auto-discovered runs, defaults to `.oxo-flow/reports/report-<UTC timestamp>.<ext>` — the extension follows the requested format (`md`/`json`/`pdf`/`html`) |
 | `--checkpoint` | — | `.oxo-flow/checkpoint.json` | Path to checkpoint file for execution metrics |
 | `--run` | — | — | `DIR` — workdir of a previous run: the workflow and checkpoint are auto-discovered there. Conflicts with an explicit `WORKFLOW` |
@@ -58,7 +58,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | Code | Meaning |
 |---|---|
 | `0` | Report generated (including template-only reports without a checkpoint; `--diff` always exits 0) |
-| `1` | Rendering/usage error (e.g. unsupported format, `[report].format` set under `--strict`, `--diff` without both checkpoints) |
+| `1` | Rendering/usage error (e.g. unsupported format, multiple `[report].format` entries under `--strict`, `--diff` without both checkpoints) |
 | `2` | Data source unavailable — under `--strict` when the checkpoint is missing or the configured template fails to render |
 
 ---

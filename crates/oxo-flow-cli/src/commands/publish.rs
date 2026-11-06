@@ -12,11 +12,16 @@ use crate::commands::compute_sha256;
 ///
 /// With `--with-lockfiles`, generates deterministic conda lockfiles for each
 /// conda/mamba environment YAML, ensuring exact reproducibility across time.
+///
+/// With `sign_key`, the manifest is ed25519-signed (see `bundle_signing`);
+/// the signature covers the manifest sans `signatures`, and consumers
+/// re-verify it during `run --bundle` extraction.
 pub fn publish_command(
     workflow: PathBuf,
     output: Option<PathBuf>,
     with_lockfiles: bool,
     format: Option<String>,
+    sign_key: Option<PathBuf>,
 ) -> Result<()> {
     let bundle_format = match format.as_deref() {
         Some(f) => crate::commands::bundle::BundleFormat::parse(f)?,
@@ -218,12 +223,17 @@ pub fn publish_command(
             "rules": &resource_summary,
             "recommendations": &recommendations,
         },
-        // Reserved for bundle signing. Always empty today — present so that adding
-        // signatures later is an additive change rather than a manifest format bump.
-        // Consumers read the manifest field-by-field, so an empty array is ignored
-        // by older versions of oxo-flow.
+        // Empty for unsigned bundles; one ed25519 entry when --sign-key is
+        // given. Verifiers treat an empty array as unsigned (checksums
+        // only) and any present signature as mandatory — see bundle_signing.
         "signatures": serde_json::Value::Array(Vec::new()),
     });
+
+    let mut manifest = manifest;
+    if let Some(key_path) = &sign_key {
+        let signing_key = crate::commands::bundle_signing::load_signing_key(key_path)?;
+        crate::commands::bundle_signing::sign_manifest(&mut manifest, &signing_key)?;
+    }
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     let manifest_path = temp_dir.join("manifest.json");
@@ -300,6 +310,9 @@ pub fn publish_command(
         referenced_files.len() + 1
     );
     eprintln!("  checksums: {} files verified (SHA-256)", checksum_count);
+    if sign_key.is_some() {
+        eprintln!("  signature: ed25519 (manifest signed)");
+    }
 
     Ok(())
 }

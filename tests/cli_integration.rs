@@ -6068,6 +6068,155 @@ fn cli_run_blocked_rule_is_not_checkpointed() {
     }
 }
 
+/// Per-rule `checksum = "sha256"` / `checksum = "md5"` (issue #1013 E6):
+/// an opted-in rule records output checksums into the checkpoint WITHOUT
+/// `--provenance`, keyed by expanded output path and prefixed with the
+/// declared algorithm; rules without the field stay unrecorded.
+#[test]
+fn cli_run_per_rule_checksum_records_without_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("sum.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"sum\"\nversion = \"1.0\"\n\n\
+         [[rules]]\nname = \"sha_rule\"\noutput = [\"sha.txt\"]\nchecksum = \"sha256\"\n\
+         shell = \"echo sha-payload > {output[0]}\"\n\n\
+         [[rules]]\nname = \"md5_rule\"\noutput = [\"md5.txt\"]\nchecksum = \"md5\"\n\
+         shell = \"echo md5-payload > {output[0]}\"\n\n\
+         [[rules]]\nname = \"plain\"\noutput = [\"plain.txt\"]\n\
+         shell = \"echo plain-payload > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Deliberately WITHOUT --provenance: the per-rule opt-in must be enough.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let raw = fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let checksums = parsed["checksums"].as_object().expect("checksums map");
+
+    // Keys are EXPANDED OUTPUT PATHS (not rule names), values are
+    // "<algo>:<hex>" records.
+    let sha_record = checksums
+        .get("sha.txt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!("sha.txt must be recorded without --provenance; checksums={checksums:?}")
+        });
+    assert!(
+        sha_record.starts_with("sha256:"),
+        "sha256 rule records with sha256 prefix: {sha_record}"
+    );
+    let md5_record = checksums
+        .get("md5.txt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!("md5.txt must be recorded without --provenance; checksums={checksums:?}")
+        });
+    assert!(
+        md5_record.starts_with("md5:") && md5_record.len() == "md5:".len() + 32,
+        "md5 rule records a 32-hex md5 digest: {md5_record}"
+    );
+    assert!(
+        !checksums.contains_key("plain.txt"),
+        "rules without the checksum field stay unrecorded: {raw}"
+    );
+}
+
+/// Per-rule `checksum` must gate the scheduler's pre-process skip
+/// (issue #1013 E6): a checkpoint-completed rule whose recorded checksum
+/// no longer matches the on-disk content must NOT be pre-skipped as
+/// "(already completed)" — it must flow to the executor's freshness gate,
+/// which re-executes it. Covers both a plain rule and a `[[values]]`
+/// fan-out instance (whose outputs only expand with per-instance
+/// bindings).
+#[test]
+fn cli_run_per_rule_checksum_gates_preprocess_skip() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tamper.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "tamper"
+version = "1.0.0"
+
+[[values]]
+name = "smp"
+values = ["a", "b"]
+
+[[rules]]
+name = "hash_me"
+output = ["results/{smp}.txt"]
+checksum = "md5"
+shell = "mkdir -p results && echo payload-{smp} > {output}"
+
+[[rules]]
+name = "plain"
+output = ["plain.txt"]
+shell = "echo plain > {output}"
+"#,
+    )
+    .unwrap();
+
+    // Run 1: everything executes and checksums are recorded per rule.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("3 succeeded"), "first run: {stderr}");
+
+    // Tamper with one output of the checksum rule (an expanded instance)
+    // and one output of the plain rule. The plain rule has no checksum
+    // record, so its skip decision stays mtime/existence-based; the
+    // checksum rule must re-execute.
+    fs::write(dir.path().join("results/a.txt"), "TAMPERED").unwrap();
+    fs::write(dir.path().join("plain.txt"), "TAMPERED").unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "rerun failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("hash_me_smp_a (already completed)"),
+        "tampered checksum-rule instance must not be pre-skipped: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 succeeded"),
+        "exactly the tampered instance re-executes: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("results/a.txt")).unwrap(),
+        "payload-a\n",
+        "checksum divergence must re-execute and restore the output"
+    );
+    // Tampered instance is re-recorded with its fresh digest.
+    let raw = fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let rec = parsed["checksums"]["results/a.txt"].as_str().unwrap();
+    assert!(
+        rec.starts_with("md5:"),
+        "re-recorded after divergence: {rec}"
+    );
+    // The plain (no checksum) rule keeps its existence-based skip.
+    assert!(
+        stderr.contains("plain (already completed)"),
+        "non-checksum rule still skips by existence: {stderr}"
+    );
+}
+
 /// Full `temporary = true` lifecycle: after a successful run the intermediate
 /// is deleted and tombstoned; a plain rerun skips the whole chain; deleting a
 /// dependent's output lazily regenerates the producer first.
@@ -10541,6 +10690,167 @@ shell = "exit 3"
     );
 }
 
+/// Rule-level webhook events: a `[webhook]` endpoint subscribed to
+/// `rule_completed`/`rule_failed` receives one payload per rule terminal
+/// state — with the rule name, exit code, and error text — and the default
+/// subscription (`workflow_completed` only) stays silent on rule events.
+#[test]
+fn cli_webhook_rule_events_reach_subscribed_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    // Minimal HTTP receiver: one request per connection, record the JSON
+    // body, answer 200 with `Connection: close` so the CLI's client
+    // reconnects for the next event. The thread dies with the test process.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break None,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(pos);
+                }
+            };
+            let Some(header_end) = header_end else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+            let content_length: usize = headers
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let body_start = header_end + 4;
+            while buf.len() < body_start + content_length {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let body = buf.get(body_start..).unwrap_or(&[]);
+            if tx.send(String::from_utf8_lossy(body).to_string()).is_err() {
+                break;
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+
+    // good produces boom's input, so the order is deterministic:
+    // rule_completed lands before rule_failed.
+    let wf = dir.path().join("hook-rules.oxoflow");
+    fs::write(
+        &wf,
+        format!(
+            r#"[workflow]
+name = "hook-rules"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:{port}/hook"
+events = ["rule_completed", "rule_failed"]
+timeout_secs = 5
+max_retries = 0
+
+[[rules]]
+name = "good"
+output = ["good.txt"]
+shell = "echo ok > {{output}}"
+
+[[rules]]
+name = "boom"
+input = ["good.txt"]
+output = ["never.txt"]
+shell = "echo kaboom >&2; exit 7"
+"#
+        ),
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the failing rule must still fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let payload = |name: &str| -> serde_json::Value {
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("no webhook payload arrived for '{name}'"));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("payload for '{name}' is not JSON ({e}): {raw}"))
+    };
+
+    let completed = payload("rule_completed");
+    assert_eq!(completed["event"], "rule_completed");
+    assert_eq!(completed["workflow_name"], "hook-rules");
+    assert_eq!(completed["data"]["rule"], "good");
+
+    let failed = payload("rule_failed");
+    assert_eq!(failed["event"], "rule_failed");
+    assert_eq!(failed["data"]["rule"], "boom");
+    assert_eq!(failed["data"]["exit_code"], 7);
+    let error = failed["data"]["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("kaboom"),
+        "error must carry the rule failure, got: {error}"
+    );
+
+    // Exactly the two subscribed events: the workflow-level events are not
+    // in this run's subscription and must not be sent either.
+    assert!(
+        rx.try_recv().is_err(),
+        "unsubscribed events must not be sent"
+    );
+
+    // Default subscription (`workflow_completed` only): a failing rule must
+    // produce no payload at all — rule events are strictly opt-in.
+    let wf2 = dir.path().join("hook-default.oxoflow");
+    fs::write(
+        &wf2,
+        format!(
+            r#"[workflow]
+name = "hook-default"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:{port}/hook"
+timeout_secs = 5
+max_retries = 0
+
+[[rules]]
+name = "boom2"
+output = ["never2.txt"]
+shell = "exit 3"
+"#
+        ),
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        rx.try_recv().is_err(),
+        "the default subscription must stay silent on rule events"
+    );
+}
+
 #[test]
 fn validate_rejects_sample_pattern_with_extra_wildcards() {
     // `{read}` used to be discovered as part of the sample name, so
@@ -11281,4 +11591,84 @@ fn e017_message_no_longer_claims_silent_ignoral() {
         !stderr.contains("silently ignored"),
         "contradictory 'silently ignored' claim must be gone: {stderr}"
     );
+}
+
+#[test]
+fn cli_run_resource_budget_max_jobs_serializes_local_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("budget.oxoflow");
+    let log = dir.path().join("order.log");
+
+    // Three independent branches; each marks its begin/end in a shared log
+    // with a sleep between them. If the scheduler ever runs two at once, a
+    // BEGIN will appear before the previous END and the adjacency assertion
+    // below fails.
+    let branch = |name: &str| {
+        format!(
+            r#"
+[[rules]]
+name = "{name}"
+output = ["{root}/{name}.txt"]
+shell = "echo BEGIN {name} >> {log} && sleep 0.3 && echo END {name} >> {log} && echo done > {root}/{name}.txt"
+"#,
+            root = dir.path().to_str().unwrap(),
+            log = log.to_str().unwrap(),
+            name = name,
+        )
+    };
+
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+[workflow]
+name = "budget-capped"
+version = "1.0.0"
+
+[resource_budget]
+max_jobs = 1
+{}
+{}
+{}
+[[rules]]
+name = "merge_all"
+input = ["{root}/branch_a.txt", "{root}/branch_b.txt", "{root}/branch_c.txt"]
+output = ["{root}/merged.txt"]
+shell = "cat {root}/branch_a.txt {root}/branch_b.txt {root}/branch_c.txt > {root}/merged.txt"
+"#,
+            branch("branch_a"),
+            branch("branch_b"),
+            branch("branch_c"),
+            root = dir.path().to_str().unwrap(),
+        ),
+    )
+    .unwrap();
+
+    // -j 3 asks for full parallelism; the budget must clamp it to 1.
+    let assert = oxo_flow_cmd()
+        .args(["run", workflow.to_str().unwrap(), "-j", "3"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("[resource_budget] max_jobs = 1 caps the requested -j 3"),
+        "expected the max_jobs clamp warning on stderr, got: {stderr}"
+    );
+
+    let content = fs::read_to_string(&log).unwrap();
+    let markers: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        markers.len(),
+        6,
+        "expected 3 BEGIN/END pairs in the log, got: {markers:?}"
+    );
+    for pair in markers.chunks(2) {
+        let begin = pair[0].split_whitespace().nth(1).unwrap();
+        let end = pair[1].split_whitespace().nth(1).unwrap();
+        assert_eq!(
+            begin, end,
+            "BEGIN/END interleaved — max_jobs = 1 did not serialize the run: {markers:?}"
+        );
+    }
 }

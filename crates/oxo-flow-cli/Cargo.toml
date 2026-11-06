@@ -49,6 +49,7 @@ walkdir = "2"
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 csv = "1.4.0"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 
 [dev-dependencies]
 oxo-flow-core = { workspace = true }

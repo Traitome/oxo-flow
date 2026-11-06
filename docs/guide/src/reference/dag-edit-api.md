@@ -325,7 +325,7 @@ Malformed commands (unknown operation, missing required payload fields such as t
 
 ## Important Notes
 
-- **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules, which the edit API cannot currently modify.
+- **File-based edges are rewired through `update_rule`, not `connect`/`disconnect`.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules: `update_rule` patches those fields like any other, so editing a rule's `input` (or `output`) list is how the edit API adds or removes an implicit edge. There is no dedicated edge command for them — an edit that changes what a rule reads changes the inferred edges with it.
 - **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a `depends_on` entry naming an unknown rule) are
 returned in `validation_errors` with `success: false`, and the edit is rolled
 back atomically — `toml_content` echoes the caller's unchanged input and the

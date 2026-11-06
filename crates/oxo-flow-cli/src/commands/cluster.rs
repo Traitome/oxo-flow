@@ -519,20 +519,38 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     .get_rule(rule_name)
                     .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))?;
 
+                // `localrule = true` promises the rule never leaves this
+                // machine. A generated cluster script breaks that promise the
+                // moment it is submitted — refuse to render one, naming the
+                // rule, instead of letting the promise fail silently (issue
+                // #1013 E2).
+                if rule.localrule {
+                    return Err(anyhow::anyhow!(
+                        "`localrule = true` cannot be honored by `cluster submit` — rule '{rule_name}' \
+                         would leave this machine the moment its script is submitted; remove \
+                         `localrule = true` or run the workflow on the local path (`oxo-flow run`) instead"
+                    ));
+                }
+
                 let shell_cmd = match oxo_flow_core::executor::process::build_execution_command(
                     rule,
                     &wildcard_values,
                     &config.workflow.interpreter_map,
                     oxo_flow_core::scheduler::detect_system_limits(),
                 ) {
-                    Some(cmd) => cmd,
-                    None => {
+                    Ok(Some(cmd)) => cmd,
+                    Ok(None) => {
                         eprintln!(
                             "  {} {} — no shell command or script, skipping",
                             "⊘".yellow(),
                             rule_name
                         );
                         continue;
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("rule '{rule_name}' command construction failed")
+                        });
                     }
                 };
 
@@ -847,6 +865,17 @@ mod tests {
         path
     }
 
+    fn localrule_workflow_file(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("local.oxoflow");
+        std::fs::write(
+            &path,
+            "[workflow]\nname = \"wf\"\n[[rules]]\nname = \"stage_refs\"\n\
+             localrule = true\nshell = \"true\"\noutput = [\"out.txt\"]\n",
+        )
+        .unwrap();
+        path
+    }
+
     fn submit_action(
         workflow: PathBuf,
         output: PathBuf,
@@ -1116,6 +1145,30 @@ mod tests {
         std::fs::remove_dir_all(&scripts).unwrap();
         run(submit_action(workflow, scripts.clone(), "slurm", false)).unwrap();
         assert!(scripts.join("submit.sh").exists());
+    }
+
+    #[test]
+    fn cluster_submit_refuses_a_localrule_workflow() {
+        // E2: a `localrule = true` rule used to get a rendered cluster
+        // script like any other — the directive's whole promise broken by
+        // the next `bash submit.sh`. Submit must refuse instead.
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("scripts");
+        let workflow = localrule_workflow_file(dir.path());
+        let err = run(submit_action(workflow, scripts.clone(), "slurm", false)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("stage_refs") && msg.contains("localrule"),
+            "the refusal must name the rule and the directive: {msg}"
+        );
+        assert!(
+            msg.contains("oxo-flow run"),
+            "the refusal must point at the local path: {msg}"
+        );
+        assert!(
+            !scripts.join("stage_refs.sh").exists(),
+            "no cluster script may be written for a localrule rule"
+        );
     }
 
     /// SLURM-only: straight array chains go element-wise via `aftercorr`;

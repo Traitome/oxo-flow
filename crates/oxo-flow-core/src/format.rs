@@ -1708,6 +1708,82 @@ pub fn lint_format(
             }
         }
 
+        // W036: `input_function` declared but never called. The field is
+        // parsed, round-tripped, and impact-tracked, but no dynamic input
+        // resolution exists — its only effect today is to suppress W035
+        // above, which reads as if the engine would fill the input list at
+        // run time. It never does, so a workflow author relying on it gets
+        // neither edges nor inputs (issue #1013 E3). Fires alongside the
+        // W035 suppression rather than instead of it: the glob read is
+        // still real even though the nominal escape hatch is not.
+        if rule.input_function.is_some() && executes && !can_never_run {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "input_function `{}` is parsed but no dynamic input resolution is performed by the engine — the input list will stay as declared",
+                    rule.input_function.as_deref().unwrap_or_default()
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W036".to_string(),
+                suggestion: Some(
+                    "declare the inputs statically (`input = [...]`, glob inputs, or `expand_inputs`) — dynamic input functions are not supported yet"
+                        .to_string(),
+                ),
+            });
+        }
+
+        // W037: `resource_hint.runtime` / `resource_hint.io_bound` are
+        // parsed and round-tripped but consumed by nothing — the memory
+        // estimator reads only `input_size` and `memory_scale`. A workflow
+        // author setting them expects scheduler behavior that does not
+        // exist; naming the reserved knobs at lint time keeps the gap
+        // visible (issue #1013 E7).
+        if let Some(hint) = &rule.resource_hint
+            && (hint.runtime.is_some() || hint.io_bound.is_some())
+            && executes
+            && !can_never_run
+        {
+            let fields = match (hint.runtime.is_some(), hint.io_bound.is_some()) {
+                (true, true) => "runtime and io_bound",
+                (true, false) => "runtime",
+                _ => "io_bound",
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "resource_hint {fields} parsed but not consumed — the scheduler only uses input_size and memory_scale today"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W037".to_string(),
+                suggestion: Some(
+                    "declare enforced limits instead (resources.time_limit, resources.memory, resources.threads) — runtime and io_bound are reserved for future scheduler work"
+                        .to_string(),
+                ),
+            });
+        }
+
+        // W038: `format_hint` is parsed and round-tripped but consumed by
+        // nothing — no I/O optimization or validation reads it. An author
+        // setting it expects behavior that does not exist; naming the
+        // reserved knob at lint time keeps the gap visible (issue #1013
+        // E4). `pipe` is NOT flagged: since #997 it selects
+        // `staging_mode = "stream_fifo"` by default for remote inputs.
+        let has_format_hint = !rule.format_hint.is_empty();
+        if has_format_hint && executes && !can_never_run {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message:
+                    "format_hint parsed but not consumed — the engine performs no format-specific I/O today"
+                        .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W038".to_string(),
+                suggestion: Some(
+                    "remove the directive, or rely on staging_mode = \"stream_fifo\" for real FIFO staging — format_hint is reserved for future I/O work"
+                        .to_string(),
+                ),
+            });
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -6474,7 +6550,233 @@ shell = "samtools faidx {{config.reference}}"
         let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W035"),
-            "input_function fills the input list at run time — no warning: {diagnostics:?}"
+            "input_function suppresses the glob-only heuristic (W035) — but W036 must fire instead: {diagnostics:?}"
+        );
+    }
+
+    // ---- W036: input_function declared but never called ----
+    // The engine parses `input_function` and carries it through
+    // round-trips and impact fingerprints, but nothing resolves inputs
+    // dynamically at run time — the field's only effect today is to
+    // suppress W035, which reads like the engine will fill the input
+    // list later and it never will. W036 says so at lint time (issue
+    // #1013 E3).
+
+    #[test]
+    fn lint_w036_flags_declared_but_uncallable_input_function() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "merge"
+            input_function = "get_inputs"
+            output = ["merged.counts.txt"]
+            shell = "cat stats/*.count.txt > merged.counts.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w036: Vec<_> = diagnostics.iter().filter(|d| d.code == "W036").collect();
+        assert_eq!(w036.len(), 1, "exactly one W036: {diagnostics:?}");
+        assert_eq!(w036[0].rule.as_deref(), Some("merge"));
+        assert!(
+            w036[0].message.contains("get_inputs"),
+            "message names the declared function: {}",
+            w036[0].message
+        );
+        assert!(
+            w036[0].message.contains("no dynamic input resolution"),
+            "message states the actual engine behavior: {}",
+            w036[0].message
+        );
+    }
+
+    #[test]
+    fn lint_no_w036_without_input_function() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "plain"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat in.txt > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W036"),
+            "no input_function declared — no W036: {diagnostics:?}"
+        );
+    }
+
+    // ---- W037: resource_hint.runtime / io_bound parsed but not consumed ----
+    // The memory estimator reads only `input_size` and `memory_scale`;
+    // `runtime` and `io_bound` are reserved knobs with no scheduler
+    // behavior behind them. W037 names the gap at lint time (issue
+    // #1013 E7).
+
+    #[test]
+    fn lint_w037_flags_reserved_resource_hint_fields() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+
+            [rules.resource_hint]
+            input_size = "medium"
+            memory_scale = 2.0
+            runtime = "slow"
+            io_bound = false
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w037: Vec<_> = diagnostics.iter().filter(|d| d.code == "W037").collect();
+        assert_eq!(w037.len(), 1, "exactly one W037: {diagnostics:?}");
+        assert_eq!(w037[0].rule.as_deref(), Some("align"));
+        assert!(
+            w037[0].message.contains("runtime and io_bound"),
+            "message names both reserved fields: {}",
+            w037[0].message
+        );
+        assert!(
+            w037[0].message.contains("input_size and memory_scale"),
+            "message states what IS consumed: {}",
+            w037[0].message
+        );
+    }
+
+    #[test]
+    fn lint_w037_names_only_the_declared_reserved_field() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "fastqc"
+            input = ["sample.fq"]
+            output = ["fastqc.html"]
+            shell = "fastqc sample.fq"
+
+            [rules.resource_hint]
+            runtime = "fast"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w037: Vec<_> = diagnostics.iter().filter(|d| d.code == "W037").collect();
+        assert_eq!(w037.len(), 1, "exactly one W037: {diagnostics:?}");
+        assert!(
+            w037[0].message.contains("runtime")
+                && !w037[0].message.contains("and io_bound")
+                && !w037[0].message.contains("io_bound"),
+            "message names only runtime: {}",
+            w037[0].message
+        );
+    }
+
+    #[test]
+    fn lint_no_w037_with_only_consumed_hint_fields() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+
+            [rules.resource_hint]
+            input_size = "large"
+            memory_scale = 4.0
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W037"),
+            "only consumed hint fields — no W037: {diagnostics:?}"
+        );
+    }
+
+    // ---- W038: format_hint parsed but not consumed ----
+    // No I/O optimization or validation reads format_hint; only staging_mode
+    // delivers real FIFO staging — and `pipe = true` IS consumed: since #997
+    // it defaults the rule to `staging_mode = "stream_fifo"` for remote
+    // inputs, so it stays lint-silent (issue #1013 E4/E5, corrected after
+    // af4929c53 landed effective_staging_mode()).
+
+    #[test]
+    fn lint_w038_flags_format_hint_only() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+            format_hint = ["fastq", "bam"]
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w038: Vec<_> = diagnostics.iter().filter(|d| d.code == "W038").collect();
+        assert_eq!(w038.len(), 1, "exactly one W038: {diagnostics:?}");
+        assert_eq!(w038[0].rule.as_deref(), Some("align"));
+        assert!(
+            w038[0].message.contains("format_hint") && !w038[0].message.contains("pipe"),
+            "message names only format_hint: {}",
+            w038[0].message
+        );
+    }
+
+    #[test]
+    fn lint_w038_does_not_flag_pipe_alone() {
+        // `pipe = true` is consumed since #997: effective_staging_mode()
+        // maps it to StreamFifo for remote inputs — flagging it would
+        // false-positive on exactly the rules it benefits.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "qc"
+            input = ["sample.fq"]
+            output = ["qc.html"]
+            shell = "fastqc sample.fq"
+            pipe = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W038"),
+            "pipe selects real staging behavior — no W038: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w038_without_reserved_io_directives() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem reads.fq > aligned.bam"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W038"),
+            "no reserved I/O directives — no W038: {diagnostics:?}"
         );
     }
 

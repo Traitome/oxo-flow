@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::backend::ScheduledPlan;
 use oxo_flow_core::backend::cluster::ClusterExecutor;
-use oxo_flow_core::backend::driver::{BackendDriver, DriverConfig, DriverOptions};
+use oxo_flow_core::backend::driver::{BackendDriver, CancelSignal, DriverConfig, DriverOptions};
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::{ClusterProfile, WorkflowConfig};
 use oxo_flow_core::dag::WorkflowDag;
@@ -57,6 +57,11 @@ pub(crate) struct ClusterRunArgs<'a> {
     /// has no AI recovery. A request is announced at submit time, never
     /// silently accepted.
     pub ai_recover: bool,
+    /// Resolved run scratch directory (`[engine] tmp_dir` /
+    /// `OXO_FLOW_TMPDIR`, issues #907 + #1013 C2): exported as
+    /// `TMPDIR`/`TMP`/`TEMP` into every cluster job shell, matching the
+    /// local executor's process-env injection.
+    pub tmp_dir: Option<&'a Path>,
 }
 
 /// Outcome of a cluster run, mirroring what the local loop reports.
@@ -194,6 +199,66 @@ fn reject_checkpoint_reentry(plan: &ScheduledPlan, to_run: &HashSet<String>) -> 
     ))
 }
 
+/// `localrule = true` is a promise that a rule never leaves this machine.
+/// The cluster path has no local executor to honor it with, and skipping
+/// the rule instead would unblock its dependents while its outputs never
+/// materialize (the driver treats anything outside the run set as
+/// satisfied) — under-execution. Reject at plan time, naming every
+/// offender, and point at the path that does honor the directive (issue
+/// #1013 E2).
+fn reject_localrules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        if sr.rule.localrule {
+            offenders.push(name.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "`localrule = true` cannot be honored on the cluster path — {} would \
+         be submitted to the scheduler anyway; remove `localrule = true` or run \
+         the workflow on the local path (`oxo-flow run`) instead:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
+/// `scratch = true` promises each instance a private scratch directory with
+/// its outputs moved back on success. The scratch machinery (per-instance
+/// dir selection via the storage-tier ladder, cwd swap, absolute input
+/// rendering, output move-back) lives in the local executor only — the
+/// cluster path would submit the job into the shared workdir, where tools
+/// writing fixed filenames collide across concurrent instances
+/// (issue #1013 C3). Reject at plan time, naming every offender, and point
+/// at the path that does honor the directive.
+fn reject_scratch_rules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        if sr.rule.scratch {
+            offenders.push(name.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "`scratch = true` cannot be honored on the cluster path — {} would \
+         run directly in the shared workdir, where fixed-filename outputs \
+         collide across concurrent instances; remove `scratch = true` or run \
+         the workflow on the local path (`oxo-flow run`) instead:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -302,6 +367,15 @@ async fn record_outcome(
             ck.record_run(record, output_tail_bytes);
             ck.mark_failed(&record.rule);
         }
+        // A signal-interrupted job arrives as Failed (handled above) — the
+        // driver only ever produces Cancelled records from the scheduler
+        // itself reporting a cancelled job, which counts as neither success
+        // nor failure but must still persist to the checkpoint.
+        JobStatus::Cancelled => {
+            summary.skipped += 1;
+            ck.record_run(record, output_tail_bytes);
+            ck.mark_failed(&record.rule);
+        }
         _ => {
             summary.skipped += 1;
         }
@@ -398,12 +472,17 @@ pub(crate) async fn run_on_cluster(
             "Warning:".bold().yellow()
         );
     }
-    let mut plan = ScheduledPlan::build(
+    // issue #1013 C2: honor the run's scratch directory on the cluster
+    // path — export it into every job shell (build_with_scratch), since
+    // jobs start from the scheduler's clean environment. `merge` is None
+    // on this path, so nothing re-expands the prefixed commands.
+    let mut plan = ScheduledPlan::build_with_scratch(
         args.config,
         args.dag,
         args.workdir,
         &env_resolver,
         args.wildcard_values,
+        args.tmp_dir,
     )
     .map_err(|e| anyhow::anyhow!("failed to build the execution plan: {e}"))?;
 
@@ -416,14 +495,37 @@ pub(crate) async fn run_on_cluster(
         check_budget(&plan, &to_run, budget)?;
     }
     reject_checkpoint_reentry(&plan, &to_run)?;
+    reject_localrules(&plan, &to_run)?;
+    reject_scratch_rules(&plan, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
-    let driver_config = DriverConfig {
+    let mut max_submitted = args
+        .max_submitted
+        .or(cluster.max_submitted)
+        .unwrap_or(driver_defaults.max_submitted);
+    // `[resource_budget] max_jobs` caps the total concurrently running jobs;
+    // on the cluster path the in-flight cap IS max_submitted, so the budget
+    // clamps the resolved cap the same way the local path clamps `-j`
+    // (issue #1013 E1). max_memory/max_threads stay hard per-rule errors in
+    // check_budget above.
+    if let Some(max_jobs) = args
+        .config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_jobs)
+        && max_submitted > max_jobs
+    {
+        eprintln!(
+            "  {} [resource_budget] max_jobs = {} caps the requested submission concurrency — submitting at most {} jobs in flight",
+            "Warning:".bold().yellow(),
+            max_jobs,
+            max_jobs
+        );
+        max_submitted = max_jobs;
+    }
+    let mut driver_config = DriverConfig {
         // CLI flag beats the profile, which beats the driver default.
-        max_submitted: args
-            .max_submitted
-            .or(cluster.max_submitted)
-            .unwrap_or(driver_defaults.max_submitted),
+        max_submitted,
         max_array_size: cluster
             .max_array_size
             .unwrap_or(driver_defaults.max_array_size),
@@ -433,10 +535,25 @@ pub(crate) async fn run_on_cluster(
             .map(std::time::Duration::from_secs)
             .unwrap_or(driver_defaults.poll_interval),
         // No wall-clock budget: cluster jobs legitimately sit in the queue
-        // for hours. Cancellation is the user's call (phase 2 follow-up).
+        // for hours. Cancellation is the user's signal call (below).
         poll_timeout: None,
         unknown_settle_grace: std::time::Duration::from_secs(90),
+        // Wired below, after the watch channel exists.
+        cancel: None,
     };
+    // Wire OS signals into the driver: SIGINT/SIGTERM/SIGHUP cancel every
+    // in-flight scheduler job and surface as a Cancelled error carrying the
+    // interrupted records (issue #1013 C1).
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+    let signal_task = tokio::spawn(async move {
+        if let Some(signal) = crate::commands::run::signals::wait_for_termination_signal().await {
+            let _ = cancel_tx.send(Some(CancelSignal {
+                signal_name: signal.name,
+                signum: signal.signum,
+            }));
+        }
+    });
+    driver_config.cancel = Some(cancel_rx);
 
     eprintln!(
         "{} submitting {} to {} (max {} in flight)",
@@ -488,7 +605,7 @@ pub(crate) async fn run_on_cluster(
             ck.save_to_file(&path)
         })
     };
-    let records = driver
+    let run_result = driver
         .run(
             &mut plan,
             &to_run,
@@ -500,8 +617,20 @@ pub(crate) async fn run_on_cluster(
                 on_submit: Some(Box::new(on_submit)),
             },
         )
-        .await
-        .map_err(|e| anyhow::anyhow!("cluster execution failed: {e}"))?;
+        .await;
+    signal_task.abort();
+    // A cancellation must persist its interrupted records like any terminal
+    // state — dropping them through map_err would lose the only truthful
+    // account of what the signal stopped (and skip the failed-count
+    // summary the webhook + exit contract below rely on).
+    let records = match run_result {
+        Ok(records) => records,
+        Err(oxo_flow_core::error::OxoFlowError::Cancelled {
+            records: interrupted,
+            ..
+        }) => interrupted,
+        Err(e) => return Err(anyhow::anyhow!("cluster execution failed: {e}")),
+    };
 
     for record in &records {
         record_outcome(&args, record, &mut summary).await;
@@ -533,6 +662,8 @@ mod tests {
     use super::check_budget;
     use super::cluster_env_cache_dir;
     use super::reject_checkpoint_reentry;
+    use super::reject_localrules;
+    use super::reject_scratch_rules;
     use oxo_flow_core::backend::ScheduledPlan;
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
@@ -637,6 +768,31 @@ mod tests {
     }
 
     #[test]
+    fn max_jobs_caps_the_resolved_max_submitted() {
+        // E1: `[resource_budget] max_jobs` caps the cluster path's in-flight
+        // submission cap. The precedence chain (CLI flag > profile > driver
+        // default) resolves first; the budget then clamps the result — the
+        // same clamp semantics the local path applies to `-j`.
+        let budget = |max_jobs: Option<usize>| ResourceBudget {
+            max_threads: None,
+            max_memory: None,
+            max_jobs,
+        };
+        let resolved = 50_usize; // driver default, as if no flag/profile set
+
+        // Budget below the resolved cap: clamped down.
+        let clamped = resolved.min(budget(Some(4)).max_jobs.unwrap_or(resolved));
+        assert_eq!(clamped, 4);
+
+        // Budget above the resolved cap (or absent): no change.
+        assert_eq!(
+            resolved.min(budget(Some(100)).max_jobs.unwrap_or(resolved)),
+            50
+        );
+        assert_eq!(resolved.min(budget(None).max_jobs.unwrap_or(resolved)), 50);
+    }
+
+    #[test]
     fn budget_ignores_rules_outside_this_run() {
         // Only what this run submits is gated: a stale rule kept out of
         // `to_run` by the invalidation analysis must not block the run.
@@ -700,6 +856,119 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = checkpoint_plan(dir.path());
         assert!(reject_checkpoint_reentry(&plan, &std::collections::HashSet::new()).is_ok());
+    }
+
+    /// A plan whose single rule pins itself to local execution.
+    fn localrule_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"localrule\"\n[[rules]]\nname = \"stage_refs\"\n\
+                    localrule = true\nshell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn localrule_rules_are_rejected_on_the_cluster_plan() {
+        // E2: `localrule = true` used to be parsed and ignored — the rule
+        // went to the scheduler anyway. The directive must be honored by
+        // refusing the submission, naming the rule, before anything leaves.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = localrule_plan(dir.path());
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_localrules(&plan, &to_run).unwrap_err().to_string();
+        assert!(
+            msg.contains("stage_refs") && msg.contains("oxo-flow run"),
+            "the rejection must name the rule and the local path: {msg}"
+        );
+        assert!(
+            msg.contains("localrule"),
+            "the rejection must name the directive being dishonored: {msg}"
+        );
+    }
+
+    #[test]
+    fn localrule_gate_passes_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_localrules(&plan, &to_run).is_ok());
+    }
+
+    #[test]
+    fn localrule_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = localrule_plan(dir.path());
+        assert!(reject_localrules(&plan, &std::collections::HashSet::new()).is_ok());
+    }
+
+    /// A plan whose single rule declares `scratch = true`.
+    fn scratch_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"scratch\"\n[[rules]]\nname = \"sort_bam\"\n\
+                    scratch = true\nshell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scratch_rules_are_rejected_on_the_cluster_plan() {
+        // C3: `scratch = true` exists to run each instance in a private
+        // scratch directory whose outputs are moved back. The cluster path
+        // never consulted it — the job ran directly in the shared workdir,
+        // where fixed-filename tools collide across concurrent instances.
+        // The directive must be honored by refusing the submission, naming
+        // the rule, before anything leaves (issue #1013 C3).
+        let dir = tempfile::tempdir().unwrap();
+        let plan = scratch_plan(dir.path());
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_scratch_rules(&plan, &to_run)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("sort_bam") && msg.contains("oxo-flow run"),
+            "the rejection must name the rule and the local path: {msg}"
+        );
+        assert!(
+            msg.contains("scratch"),
+            "the rejection must name the directive being dishonored: {msg}"
+        );
+    }
+
+    #[test]
+    fn scratch_gate_passes_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_scratch_rules(&plan, &to_run).is_ok());
+    }
+
+    #[test]
+    fn scratch_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = scratch_plan(dir.path());
+        assert!(reject_scratch_rules(&plan, &std::collections::HashSet::new()).is_ok());
     }
 
     #[test]

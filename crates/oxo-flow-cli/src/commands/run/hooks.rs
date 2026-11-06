@@ -79,6 +79,42 @@ pub(crate) async fn notify_webhook(
     }
 }
 
+/// Rule-level webhook notification: posts `rule_completed` / `rule_failed`
+/// to the `[webhook]` endpoint as each scheduled rule reaches a terminal
+/// state, carrying the rule name, exit code, and masked error text. Same
+/// best-effort contract as [`notify_webhook`] — a failing endpoint logs a
+/// warning and never changes the run status. Subscription filtering lives
+/// in the client (`WebhookConfig.events`), so configs that only subscribe
+/// to workflow-level events stay silent here with zero network traffic.
+pub(crate) async fn notify_webhook_rule(
+    webhook: Option<&oxo_flow_core::webhook::WebhookConfig>,
+    workflow_name: &str,
+    event: oxo_flow_core::webhook::WebhookEvent,
+    rule: &str,
+    exit_code: Option<i32>,
+    error: Option<String>,
+) {
+    let Some(webhook) = webhook else {
+        return;
+    };
+    let payload = oxo_flow_core::webhook::WebhookPayload {
+        event,
+        workflow_name: workflow_name.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        data: oxo_flow_core::webhook::WebhookData {
+            rule: Some(rule.to_string()),
+            exit_code,
+            error,
+            ..Default::default()
+        },
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let client = oxo_flow_core::webhook::WebhookClient::new(webhook.clone());
+    if let Err(e) = client.send(&payload).await {
+        tracing::warn!(error = %e, event = %event, "webhook notification failed (run continues)");
+    }
+}
+
 /// Terminal run counters shared by the `--json` summary and the workflow
 /// terminal hooks. Grouped so the summary emitter stays under clippy's
 /// argument-count lint.

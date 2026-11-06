@@ -34,7 +34,7 @@ mod refs;
 pub mod resume;
 mod run_log;
 mod scheduler_loop;
-mod signals;
+pub(crate) mod signals;
 pub mod status;
 mod task;
 
@@ -214,7 +214,7 @@ pub async fn run_command(
     // the run-loop semaphore, and the executor's own semaphore (which
     // would otherwise be a zero-permit gate that hangs the first
     // submission) — sees a consistent value (issue #136 fix 1).
-    let jobs = jobs.max(1);
+    let mut jobs = jobs.max(1);
 
     // ── Repository-URL workflows (nextflow-style `run <repo>`) ──────────
     // `oxo-flow run gh:owner/repo[@ref]` / `owner/repo[@ref]` (or a *.git
@@ -349,6 +349,28 @@ pub async fn run_command(
     config
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
+
+    // ── [resource_budget] max_jobs clamp (issue #1013 E1) ───────────────
+    // max_jobs caps the TOTAL concurrently running jobs for the run, so the
+    // faithful semantics are a clamp of the requested `-j` concurrency, not
+    // a per-rule breach error (a single rule cannot "exceed" a job count —
+    // per-rule language applies only to max_memory/max_threads, which stay
+    // hard errors in validate_resource_budget / check_budget). Both local
+    // consumers below (ExecutorConfig.max_jobs and SchedulerLoopContext
+    // .jobs) read this same variable, so one reassignment covers both.
+    // Cluster-path parity lives in run_cluster.rs (max_submitted clamp).
+    if let Some(max_jobs) = config.resource_budget.as_ref().and_then(|b| b.max_jobs)
+        && jobs > max_jobs
+    {
+        eprintln!(
+            "  {} [resource_budget] max_jobs = {} caps the requested -j {} — running at most {} jobs concurrently",
+            "Warning:".bold().yellow(),
+            max_jobs,
+            jobs,
+            max_jobs
+        );
+        jobs = max_jobs;
+    }
 
     // ── Undefined `{config.*}` gate (issue #142 H1) ───────────────────────
     // Runs AFTER expansion so engine-generated rules are covered too, and
@@ -873,6 +895,10 @@ pub async fn run_command(
                 cache_dir: cache_dir.clone(),
                 skip_env_setup,
                 ai_recover,
+                // [engine] tmp_dir / OXO_FLOW_TMPDIR follow the job onto
+                // the cluster (issue #1013 C2) — the same resolved value
+                // the local path injects into its process envs.
+                tmp_dir: tmp_dir_resolved.as_deref(),
             },
             &mut json_summary,
             &workflow,

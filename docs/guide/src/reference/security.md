@@ -83,9 +83,17 @@ Output paths are validated to prevent file system escape:
 |-------|----------|------------|
 | `..` in path | Blocked — prevents directory traversal | E009 |
 | Absolute paths outside workdir | Lint warning (W017); blocked at runtime when they escape the workdir | W017 |
-| Interpreter paths | Only simple names or paths under `/usr/bin`, `/usr/local/bin`, `/opt`, `/home`, `/Users` | Run time (script execution) |
+| Interpreter paths | Only simple names or paths under `/usr/bin`, `/usr/local/bin`, `/opt`, `/home`, `/Users` | Parse/validate (E002) + run time |
 
-Interpreter paths are enforced at **run time**, when a script rule's `interpreter` override is resolved (`validate_interpreter_path`): a rejected path is logged as a warning and the override is ignored, so the script runs without its declared interpreter. `validate` does not check interpreter paths.
+Interpreter paths are enforced at **two points** (`validate_interpreter_path`):
+
+- **Parse/validate time**: an `interpreter` override that fails the checks
+  fails workflow validation (`Rule::validate_field_formats`), so `oxo-flow
+  validate` reports it as E002 and the workflow refuses to load — the script
+  can never silently run under a different interpreter.
+- **Run time** (defense in depth): command construction re-checks the
+  override and fails the rule with the validation error instead of falling
+  back to auto-detection.
 
 ---
 

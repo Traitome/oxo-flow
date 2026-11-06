@@ -264,6 +264,40 @@ impl ScheduledPlan {
         })
     }
 
+    /// Build the plan with the run's scratch directory exported into every
+    /// job shell (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issues #907 +
+    /// #1013 C2). Cluster job scripts start from the scheduler's clean
+    /// environment, so the scratch exports must be part of the rendered
+    /// command itself — placed after the `cd` guard and OUTSIDE the
+    /// environment wrapper so wrapped child processes (conda/pixi/venv
+    /// run, containers with host mounts) inherit `TMPDIR`. The local
+    /// executor instead injects `TMPDIR`/`TMP`/`TEMP` into the process
+    /// env directly (`insert_tmpdir_vars`) and must keep using
+    /// [`ScheduledPlan::build`].
+    pub fn build_with_scratch(
+        config: &WorkflowConfig,
+        dag: &WorkflowDag,
+        workdir: &Path,
+        env_resolver: &EnvironmentResolver,
+        wildcard_values: &HashMap<String, String>,
+        tmp_dir: Option<&Path>,
+    ) -> Result<Self> {
+        let mut plan = Self::build(config, dag, workdir, env_resolver, wildcard_values)?;
+        if let Some(tmp) = tmp_dir {
+            let quoted = crate::environment::escape_for_sh_single_quote(&tmp.display().to_string());
+            let exports = format!("export TMPDIR='{q}' TMP='{q}' TEMP='{q}' && ", q = quoted);
+            for rule in plan.rules.values_mut() {
+                // Every shell_cmd carries the `cd '<workdir>' && ` guard
+                // from build_rule — prefix the exports right after it so a
+                // failed cd still aborts before the scratch redirection.
+                rule.shell_cmd = rule
+                    .shell_cmd
+                    .replacen(" && ", &format!(" && {exports}"), 1);
+            }
+        }
+        Ok(plan)
+    }
+
     /// Append newly created instances after a checkpoint re-entry (P3).
     pub fn merge_new_instances(
         &mut self,
@@ -302,7 +336,8 @@ fn build_rule(
         wildcard_values,
         &config.workflow.interpreter_map,
         crate::scheduler::detect_system_limits(),
-    ) else {
+    )?
+    else {
         return Ok(None); // no shell/script — not schedulable
     };
     // The prelude goes INSIDE the environment wrapper, matching the local
@@ -396,6 +431,52 @@ mod tests {
                 .starts_with("cd '/tmp/wf' && set -euo pipefail\n"),
             "prelude must sit inside the wrapped command, after the cd guard: {}",
             r.shell_cmd
+        );
+    }
+
+    #[test]
+    fn build_with_scratch_exports_tmpdir_after_cd_guard() {
+        // issue #1013 C2: cluster job shells start from the scheduler's
+        // clean environment, so the run's scratch directory (issue #907)
+        // must be exported into every job script — after the cd guard and
+        // OUTSIDE the environment wrapper, so wrapped child processes
+        // (conda/pixi/venv run) inherit TMPDIR. `build` (no scratch) must
+        // stay byte-identical to the pre-#1013 output.
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = demo_config(dir.path());
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build_with_scratch(
+            &config,
+            &dag,
+            std::path::Path::new("/tmp/wf"),
+            &EnvironmentResolver::new(),
+            &values(),
+            Some(std::path::Path::new("/scratch/oxo")),
+        )
+        .unwrap();
+        let r = &plan.rules["preprocess"];
+        assert!(
+            r.shell_cmd.starts_with(
+                "cd '/tmp/wf' && export TMPDIR='/scratch/oxo' TMP='/scratch/oxo' \
+                 TEMP='/scratch/oxo' && "
+            ),
+            "exports must follow the cd guard and precede the wrapped command: {}",
+            r.shell_cmd
+        );
+        let plain = ScheduledPlan::build(
+            &config,
+            &dag,
+            std::path::Path::new("/tmp/wf"),
+            &EnvironmentResolver::new(),
+            &values(),
+        )
+        .unwrap();
+        assert!(
+            !plain.rules["preprocess"].shell_cmd.contains("TMPDIR"),
+            "no-scratch build must leave the ambient environment untouched: {}",
+            plain.rules["preprocess"].shell_cmd
         );
     }
 

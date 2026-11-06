@@ -49,7 +49,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [[values]]          # Optional: named value lists for parameter wildcards
 [metadata]          # Optional: per-sample metadata columns ({meta.<column>})
-[resource_budget]   # Optional: resource limits (enforced on cluster submissions; local runs use `--max-threads`/`--max-memory`)
+[resource_budget]   # Optional: resource limits (max_jobs clamps concurrency on both paths; max_threads/max_memory enforced on cluster submissions — local runs use `--max-threads`/`--max-memory`)
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
@@ -589,7 +589,7 @@ sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 | Field | Type | Description |
 |---|---|---|
 | `template` | String | Report template: the built-in name `"report.html"`, or a template file path (workflow directory first, then cwd). Applies to HTML output only; a render failure warns and falls back to the default renderer |
-| `format` | Array | Parsed but **not supported yet** — setting it makes `report` warn (or fail under `--strict`); select the output format with `-f` instead |
+| `format` | Array | Default output format for `oxo-flow report`. Precedence: explicit `-f` wins; else a recognizable `-o` extension (`json`, `md`, `pdf`); else the **first** `format` entry (`html`, `json`, `md`, `pdf`); else `html`. Multiple entries use the first and warn about the extras (fail under `--strict`) |
 | `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`, `software-versions`, `rule-captions`, `aggregate-metrics` — 15 in total (run `oxo-flow report --list-sections` for the live list) |
 
 ### How Sections Work
@@ -639,7 +639,12 @@ At render time each executed rule instance contributes one markdown subsection, 
 - Without an execution record (dry run, or a checkpoint from before this feature), the declared annotation is resolved at report time: inline caption first, then `report.file` relative to the workdir.
 - A missing or unreadable `report.file` never fails the report — the rule simply contributes no caption.
 
-Captions are text/markdown only; embedding figures is not supported in v1.
+Captions render as literal text/markdown, not interpreted HTML: in the
+Markdown report they appear as a fenced block, and in the HTML report as an
+escaped `<pre>` — deliberately XSS-safe, so image links, scripts, and other
+inline HTML inside a caption are shown verbatim rather than executed.
+Embedding figures is not supported in v1 (the report's own aggregate-metrics
+section can render inline SVG charts from declared metrics).
 
 ---
 
@@ -700,7 +705,7 @@ memory = "32G"
 | `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs |
 | `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run |
-| `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
+| `input_function` | String | No | Declared function name for dynamic input resolution — **not yet called**: the engine performs no dynamic input resolution, so the input list stays exactly as declared, and `lint` flags every use with `W036`. Declare inputs statically (`input`, glob inputs, `expand_inputs`) instead |
 | `rule_metadata` | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
 | `types` | Table | No | Biological type contracts for the rule's channels: `inputs` / `outputs` maps from a channel name (or `default`) to a type expression. Violations fail validation and abort `run` before any compute — see [Biological Type Contracts](#biological-type-contracts-types) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
@@ -709,15 +714,15 @@ memory = "32G"
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
-| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder) |
+| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder). Local-executor-only: cluster paths reject workflows whose runnable rules declare `scratch = true` before any submission |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
-| `localrule` | Boolean | No | Parsed but **not enforced yet** — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see [Resource Tuning](../how-to/resource-tuning.md)) |
-| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
-| `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
-| `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
-| `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
+| `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
+| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
+| `pipe` | Boolean | No | Selects `staging_mode = "stream_fifo"` by default for **remote** inputs: each remote input is downloaded and streamed into a named FIFO while the rule runs (local inputs are unaffected — they are read in place); an explicit `staging_mode` on the same rule wins. Equivalent to `staging_mode = "stream_fifo"` |
+| `checksum` | String | No | Opt the rule's outputs into checksum recording and content verification: `"sha256"` or `"md5"`. The expanded outputs are hashed at completion and recorded in the checkpoint's `checksums` map (`<algorithm>:<hex>`) — **without** needing `--provenance`. The freshness gate recomputes each recorded output with its declared algorithm, so tampered content re-executes even when the mtime looks fresh, and `oxo-flow provenance verify` re-verifies with the recorded algorithm. Invalid algorithms are rejected at parse time. Rules without the field are only recorded under `--provenance` (sha256) |
+| `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling — `input_size` and `memory_scale` feed the memory estimator; `runtime` and `io_bound` are parsed but **not consumed** by anything today, and `lint` flags them with `W037` |
 
 > **Run-path field validation.** Rule *names* (charset:
 > alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
@@ -883,12 +888,14 @@ interpreter = "python3" # Optional: overrides auto-detection
 path separator is validated before use. Bare command names (`python`,
 `Rscript`) are always allowed; absolute paths must live under a safe
 directory (`/usr/bin`, `/usr/local/bin`, `/bin`, `/opt`, `/home`, `/Users`).
-Rejected (the engine falls back to auto-detection with a warning):
-relative paths containing a separator (`./evil`, `bin/evil`), paths whose
-prefix merely resembles a safe directory (`/home_evil/x`, `/opt_bad/x`),
-Windows drive-letter/backslash paths, and anything containing `..`.
-A rejected interpreter never aborts the run — the engine logs
-`interpreter override rejected` and uses the detection order above.
+Rejected: relative paths containing a separator (`./evil`, `bin/evil`),
+paths whose prefix merely resembles a safe directory (`/home_evil/x`,
+`/opt_bad/x`), Windows drive-letter/backslash paths, and anything
+containing `..`.
+A rejected interpreter is a **hard error**: workflow validation fails (E002
+from `oxo-flow validate`) and the workflow refuses to load; at run time the
+rule fails with the same validation error rather than silently running the
+script under an auto-detected interpreter.
 
 ### Lifecycle Hooks
 
@@ -1063,13 +1070,15 @@ When exact requirements unknown, provide hints for estimation:
 [rules.resource_hint]
 input_size = "medium"     # small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)
 memory_scale = 2.0        # Estimated memory = input_size × scale
-runtime = "slow"          # reserved: parsed, not yet consumed by the scheduler
-io_bound = true           # reserved: parsed, not yet consumed by the scheduler
+runtime = "slow"          # reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037
+io_bound = true           # reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037
 ```
 
 Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`. The
 `runtime` and `io_bound` hints are reserved scheduler knobs: only
-`input_size` and `memory_scale` are consumed today.
+`input_size` and `memory_scale` are consumed today, and `lint` flags every
+use of the reserved two with `W037`. For enforced limits declare
+`resources.time_limit` / `resources.memory` / `resources.threads` instead.
 
 ### NUMA pinning
 
@@ -1220,7 +1229,7 @@ resume.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
-| `localrule` | Boolean | `false` | Parsed but **not enforced yet** — every schedulable rule can currently be submitted to the cluster |
+| `localrule` | Boolean | `false` | Pin the rule to local execution — cluster paths refuse to submit it (fail fast before any submission, naming the rule) |
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 **DAG edge inference** — edges form when a rule's `input` paths match
@@ -1253,7 +1262,7 @@ depends_on = []  # Run first, before file-based dependencies
 [[rules]]
 name = "local_only"
 shell = "echo 'local task'"
-localrule = true  # NOTE: not yet enforced — every schedulable rule can be submitted
+localrule = true  # never submitted by cluster paths; run this workflow via `oxo-flow run`
 ```
 
 ### Input Groups (`input_groups`)
@@ -1281,9 +1290,15 @@ shell = "cat {input} > {output}"
   `raw/{sample}_*_R1.fastq.gz` groups every lane file of a
   sample without enumerating lane names — the CAT_FASTQ shape, where the
   per-sample file count is not known ahead of time and no `[[values]]`
-  table can list it. `**` (cross-segment recursion) is rejected. Note a
-  `{wildcard}` span may span a separator by design (`\S+`); the segment
-  locality applies to bare `*` only.
+  table can list it. `**` (issue #1013) is **cross-segment recursion**:
+  `raw/{sample}/**.fq` groups every fq of a sample at any depth. The
+  idiomatic `**/` form also matches zero directories (`raw/**/{sample}.fq`
+  matches `raw/S1.fq` with an empty star value), and inside a `**`
+  pattern a `{wildcard}` span is pinned to a single segment — so the
+  recursive star, not the group key, absorbs the extra path components.
+  In star-free patterns a `{wildcard}` span may still span a separator by
+  design (`\S+`); segment locality applies to bare `*` and `**` patterns
+  only.
 - `group_by` — the wildcard that names each group. One instance is
   created per discovered group value. May also be a metadata column,
   `group_by = "meta.<column>"` — see below.
@@ -1315,8 +1330,8 @@ shell = "cat {input} > {output}"
   folds by base id, the same convention the group pattern itself uses.
 
 v1 constraints: at most **one** `input_groups` entry per rule;
-`**` recursion is not supported in `pattern` (bare `*` globs within one
-segment are supported);
+`**` recursion is supported in `pattern` (a bare `*` stays within one
+segment; `**/` also matches zero directories);
 producers must be declared **before** their `input_groups` consumer;
 the `keep` wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via
@@ -1395,16 +1410,17 @@ retry_delay = "30s"
 | Field | Type | Description |
 |-------|------|-------------|
 | `ancient` | Array | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution |
-| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization) |
-| `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
-| `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
+| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
+| `pipe` | Boolean | Defaults the rule to `staging_mode = "stream_fifo"` for remote inputs (real FIFO streaming); explicit `staging_mode` wins |
+| `checksum` | String | `"sha256"` or `"md5"` — records the rule's output checksums (prefixed with the algorithm) without `--provenance`; the freshness gate and `provenance verify` re-verify with the recorded algorithm |
 
 ```toml
 [[rules]]
 name = "align"
 input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
 ancient = ["ref/hg38.fa"]  # never triggers rebuild, however new the file is
-# format_hint and checksum are accepted but currently have no effect
+# format_hint is accepted but has no effect yet — `oxo-flow lint` flags it
+# with W038; `pipe = true` selects stream_fifo staging for remote inputs
 ```
 
 ### Organization
@@ -1506,7 +1522,7 @@ cache_key = "vc_v2.0"           # Content cache key — outputs are reused when 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_function` | String | Parsed and included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today (use `expand_inputs` or `output_pattern` for dynamic inputs) |
+| `input_function` | String | Included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today, and `lint` flags every use with `W036` (use `expand_inputs` or `output_pattern` for dynamic inputs) |
 
 ### Arbitrary Metadata
 
@@ -3241,7 +3257,7 @@ url = "https://hooks.example.com/oxo"
 |---|---|---|---|
 | `url` | String | — (required) | Webhook endpoint URL |
 | `method` | String | `POST` | HTTP method (`POST`/`PUT`/`GET`) |
-| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed` (`rule_completed`/`rule_failed` are defined but not yet dispatched) |
+| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed`, plus the rule-level `rule_completed`/`rule_failed` (one payload per scheduled rule terminal state) |
 | `headers` | Table | `{}` | Custom request headers |
 | `secret` | String | — | HMAC key for the `X-OxoFlow-Signature` header |
 | `signature_scheme` | String | `hmac-sha256` | `hmac-sha256` (RFC 2104) or the legacy `sha256-keyed` |
@@ -3346,8 +3362,10 @@ Notes:
   Container backends (docker/singularity) do not see host environment
   variables by default; point the container image's temp setting at a
   mounted path, or wait for explicit `-e` pass-through support. Cluster
-  submissions (`run --profile` with `[cluster]`) do not yet honor
-  `tmp_dir`/`OXO_FLOW_TMPDIR` — the same gap as output-tail bytes there.
+  submissions (`run --profile` with `[cluster]`) honor it too: each job
+  script exports `TMPDIR`/`TMP`/`TEMP` to the resolved directory before
+  the rule's command (the directory must exist on the nodes' shared
+  filesystem — see [Cluster submission](../commands/run.md#cluster-submission)).
   The `OXO_FLOW_TMPDIR` override is used verbatim: it must already be
   absolute, `~` and `..` are not expanded, and a relative value anchors to
   the process working directory — unlike the config value, which anchors
@@ -3396,8 +3414,12 @@ disk. The required size comes from the rule's `resources.disk` value
 (1 GiB when unset). If no tier qualifies, the scratch directory falls back
 to `<workdir>/.oxo-flow/scratch/` as before; without any tier configured
 the ladder is inert. Outputs are moved back to their declared paths after
-the rule completes. On cluster backends scratch tiers are not yet consulted
-(jobs run directly in the shared workdir).
+the rule completes. The scratch machinery is local-executor-only: the
+cluster path (`oxo-flow cluster submit` / `oxo-flow run --cluster` **rejects
+workflows whose runnable rules declare `scratch = true`** at plan time,
+naming each offender, instead of silently running the job in the shared
+workdir where fixed-filename outputs collide across concurrent instances.
+Remove the directive or run those rules on the local path).
 
 ## See Also
 

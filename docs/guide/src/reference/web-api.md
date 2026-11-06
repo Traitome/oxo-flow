@@ -226,7 +226,9 @@ POST /api/license/upload
 ```
 Admin-only outside personal mode; the payload is bounded (64 KiB). The
 raw blob is **not** stored — only its size and SHA-256 land in the audit
-trail (the endpoint does not yet activate licenses).
+trail (the endpoint does not yet activate licenses — no license format or
+verification machinery exists yet; `GET /api/license` reports the built-in
+academic license regardless of any upload).
 
 ### Users (admin)
 ```

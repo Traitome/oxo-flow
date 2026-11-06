@@ -312,23 +312,62 @@ pub(crate) async fn handle_run_failure_abort(
             match result {
                 Ok(diag) => {
                     if let Some(ref toml) = diag.modified_toml {
-                        // Only write AI-generated TOML when the model itself
-                        // assessed it safe AND it parses as a valid workflow.
-                        // Anything else is shown, never auto-applied — the
-                        // content can carry injected instructions just like
-                        // any other model output.
-                        if !diag.safe_to_auto_apply {
-                            narrate_console_line(format_args!(
-                                "  AI fix not auto-applied: flagged unsafe by the \
-                                         safety assessment. Review the suggestion manually."
-                            ));
-                        } else if let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
+                        // Layered authorization for writing AI-generated TOML
+                        // (issue #1013 O1): the resolved `[ai] auto_fix` mode
+                        // decides who may write — `never` never does, `ask`
+                        // (the documented default) prompts on an interactive
+                        // terminal and is denied elsewhere so a headless run
+                        // can never rewrite the workflow silently, and
+                        // `always` applies safe fixes automatically. In every
+                        // mode the model's own safety verdict still gates the
+                        // write, and the generated TOML must still parse as a
+                        // valid workflow before it lands.
+                        let mode = crate::commands::ai_recover::resolve_auto_fix_mode(ctx.workflow);
+                        let interactive = {
+                            use std::io::IsTerminal as _;
+                            std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+                        };
+                        let decision = crate::commands::ai_recover::auto_fix_decision(
+                            mode,
+                            diag.safe_to_auto_apply,
+                        );
+                        // Only an explicit `Apply` (or an interactive y/N
+                        // confirmation) reaches the writer; every other
+                        // outcome is narration, never a write.
+                        let apply_ready = match decision {
+                            crate::commands::ai_recover::AutoFixDecision::ShowOnly(reason) => {
+                                narrate_console_line(format_args!(
+                                    "  AI fix not auto-applied ({reason}): review the \
+                                             suggestion manually."
+                                ));
+                                false
+                            }
+                            crate::commands::ai_recover::AutoFixDecision::Prompt => {
+                                if !interactive {
+                                    narrate_console_line(format_args!(
+                                        "  AI fix not auto-applied: auto_fix = \"ask\" needs \
+                                                 confirmation, but this session is not \
+                                                 interactive. Review the suggestion manually or \
+                                                 set auto_fix = \"always\"."
+                                    ));
+                                    false
+                                } else {
+                                    crate::commands::ai_recover::confirm_auto_fix_blocking()
+                                }
+                            }
+                            crate::commands::ai_recover::AutoFixDecision::Apply => true,
+                        };
+                        if apply_ready && let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
                             narrate_console_line(format_args!(
                                 "  AI fix not auto-applied: generated TOML failed \
                                          validation ({e}). Review the suggestion manually."
                             ));
-                        } else if let Err(e) =
-                            crate::commands::ai_recover::apply_fix(ctx.workflow, toml, "recovery")
+                        } else if apply_ready
+                            && let Err(e) = crate::commands::ai_recover::apply_fix(
+                                ctx.workflow,
+                                toml,
+                                "recovery",
+                            )
                         {
                             narrate_console_line(format_args!("  Failed to apply AI fix: {e}"));
                         }

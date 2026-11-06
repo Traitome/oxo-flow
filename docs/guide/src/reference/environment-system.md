@@ -278,7 +278,12 @@ per-process — on a multi-user server each user who opts in gets their own
 store unless an operator deliberately points everyone at a shared path.
 Maintenance is `oxo-flow env gc` (checkpoint-reference + age gated,
 `--dry-run` first); a broken link is detected on the next run and the env
-is rebuilt automatically. Details: [`env` command](../commands/env.md#env-gc).
+is rebuilt automatically. The store deliberately covers **pixi and venv
+only**: conda/mamba name-based environments already live in a shared central
+prefix, conda prefix environments are not relocatable (absolute paths baked
+into the env), containers pull images into their own registries, and HPC
+modules are provided by the cluster — none of them benefit from a
+content-keyed store. Details: [`env` command](../commands/env.md#env-gc).
 
 ---
 

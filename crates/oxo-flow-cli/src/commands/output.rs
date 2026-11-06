@@ -526,14 +526,21 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // [report].format is parsed but not consumed — say so instead of
-    // silently ignoring user configuration (issue #83 P0-9). [report].
-    // template IS consumed now (see below).
+    // [report].format is consumed now (issue #1013 H2): its first entry
+    // supplies the default output format when neither -f nor a recognizable
+    // -o extension selects one. A single entry is used silently; multiple
+    // entries can only be honored one-at-a-time, so the extras warn instead
+    // of being silently dropped (issue #83 P0-9's "say so" principle).
     if let Some(report_cfg) = &config.report
-        && !report_cfg.format.is_empty()
+        && report_cfg.format.len() > 1
     {
-        let msg = "[report].format is declared in the workflow but not supported yet — \
-                   use -f to select the output format";
+        let msg = format!(
+            "[report].format lists {} formats ({}) — only the first ('{}') is used; \
+             pass -f to select one explicitly",
+            report_cfg.format.len(),
+            report_cfg.format.join(", "),
+            report_cfg.format[0]
+        );
         if strict {
             anyhow::bail!(msg);
         }
@@ -541,20 +548,20 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     }
 
     // Format: explicit -f wins; otherwise infer from the -o extension;
-    // otherwise html (issue #83 P2-2).
-    let format = match format {
-        Some(f) => f,
-        None => match output
+    // otherwise the first [report].format entry; otherwise html
+    // (issue #83 P2-2; the config tier added by issue #1013 H2).
+    let format = resolve_report_format(
+        format,
+        output
             .as_deref()
             .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-        {
-            Some("json") => "json".to_string(),
-            Some("md") | Some("markdown") => "md".to_string(),
-            Some("pdf") => "pdf".to_string(),
-            _ => "html".to_string(),
-        },
-    };
+            .and_then(|e| e.to_str()),
+        config
+            .report
+            .as_ref()
+            .map(|r| r.format.as_slice())
+            .unwrap_or(&[]),
+    );
 
     // Determine checkpoint path: explicit --checkpoint > discovery-loaded >
     // base-relative (#541 — the old precedence rendered the WRONG run's
@@ -1147,6 +1154,30 @@ fn report_extension(format: &str) -> &str {
         "pdf" => "pdf",
         _ => "html",
     }
+}
+
+/// Resolve the report output format (issue #1013 H2): an explicit `-f` wins;
+/// otherwise the `-o` extension is recognized (`json`, `md`/`markdown`,
+/// `pdf`); otherwise the first `[report].format` entry is used; otherwise
+/// `html` (issue #83 P2-2).
+fn resolve_report_format(
+    explicit: Option<String>,
+    output_ext: Option<&str>,
+    config_formats: &[String],
+) -> String {
+    if let Some(f) = explicit {
+        return f;
+    }
+    match output_ext {
+        Some("json") => return "json".to_string(),
+        Some("md") | Some("markdown") => return "md".to_string(),
+        Some("pdf") => return "pdf".to_string(),
+        _ => {}
+    }
+    if let Some(first) = config_formats.first() {
+        return first.clone();
+    }
+    "html".to_string()
 }
 
 /// Abbreviate a `sha256:<hex>` checksum for diff lines.
@@ -1829,7 +1860,7 @@ async fn interpret_report_with_ai(
 mod tests {
     use super::{
         build_interpretation_prompt, parse_hms_to_secs, parse_maxrss_to_mb, report_extension,
-        resolve_report_workflow, short_checksum,
+        resolve_report_format, resolve_report_workflow, short_checksum,
     };
 
     fn config_for(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
@@ -1917,6 +1948,45 @@ mod tests {
         assert_eq!(report_extension("pdf"), "pdf");
         assert_eq!(report_extension("html"), "html");
         assert_eq!(report_extension("htm"), "html");
+    }
+
+    #[test]
+    fn resolve_report_format_precedence_explicit_flag_then_extension_then_config() {
+        // Issue #1013 H2: [report].format supplies the default when neither
+        // -f nor a recognizable -o extension selects one.
+        let f = |s: &str| s.to_string();
+        // Explicit -f beats everything.
+        assert_eq!(
+            resolve_report_format(Some("md".to_string()), Some("json"), &[f("json"), f("pdf")]),
+            "md"
+        );
+        // Recognized -o extension beats [report].format.
+        assert_eq!(
+            resolve_report_format(None, Some("json"), &[f("pdf")]),
+            "json"
+        );
+        assert_eq!(
+            resolve_report_format(None, Some("markdown"), &[f("pdf")]),
+            "md"
+        );
+        assert_eq!(
+            resolve_report_format(None, Some("pdf"), &[f("json")]),
+            "pdf"
+        );
+        // Unrecognized extension falls through to the config default.
+        assert_eq!(
+            resolve_report_format(None, Some("txt"), &[f("json")]),
+            "json"
+        );
+        // First config entry wins; the rest warn (multi-entry case).
+        assert_eq!(
+            resolve_report_format(None, Some("txt"), &[f("md"), f("json")]),
+            "md"
+        );
+        // No flag, no extension, no config — html (issue #83 P2-2).
+        assert_eq!(resolve_report_format(None, None, &[]), "html");
+        // A config entry survives an absent -o entirely.
+        assert_eq!(resolve_report_format(None, None, &[f("json")]), "json");
     }
 
     #[test]

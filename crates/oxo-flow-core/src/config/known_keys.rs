@@ -877,7 +877,7 @@ mod tests {
             provider = "deepseek"
             model = "deepseek-chat"
             max_retries = 6
-            auto_fix = "suggest"
+            auto_fix = "ask"
             temperature = 0.2
             skills = ["my-skill"]
             team_profile = "compact"

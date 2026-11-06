@@ -62,14 +62,14 @@ pub fn detect_interpreter(
     script_path: &str,
     interpreter_override: Option<&str>,
     custom_map: &HashMap<String, String>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if let Some(interp) = interpreter_override {
+        // A declared interpreter is a security decision, not a hint: a
+        // rejected override aborts the rule instead of silently running the
+        // script under an auto-detected (or no) interpreter (issue #1013).
         return match super::security::validate_interpreter_path(interp) {
-            Ok(()) => Some(interp.to_string()),
-            Err(e) => {
-                tracing::warn!("interpreter override rejected: {e}");
-                None
-            }
+            Ok(()) => Ok(Some(interp.to_string())),
+            Err(e) => Err(e),
         };
     }
     let ext = Path::new(script_path)
@@ -88,13 +88,13 @@ pub fn detect_interpreter(
 
     if let Some(ref extension) = ext {
         if let Some(interp) = custom_map.get(extension) {
-            return Some(interp.clone());
+            return Ok(Some(interp.clone()));
         }
         if let Some(interp) = DEFAULT_INTERPRETER_MAP.get(extension) {
-            return Some(interp.clone());
+            return Ok(Some(interp.clone()));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Build command from interpreter and script path.
@@ -2041,12 +2041,26 @@ impl LocalExecutor {
                 },
             )
         };
+        // A rejected interpreter override (or any other command-construction
+        // failure) fails the rule instead of silently running the script
+        // under a different interpreter (issue #1013). The error text embeds
+        // the declared path — mask it like every other captured surface.
         let base_cmd = match base_cmd {
-            Some(cmd) => cmd,
-            None => {
+            Ok(Some(cmd)) => cmd,
+            Ok(None) => {
                 record.status = JobStatus::Skipped;
                 record.finished_at = Some(Utc::now());
                 record.skip_reason = Some("no shell or script defined".to_string());
+                return Ok(record);
+            }
+            Err(e) => {
+                record.status = JobStatus::Failed;
+                record.finished_at = Some(Utc::now());
+                record.exit_code = Some(-1);
+                record.stderr = Some(mask_sensitive(
+                    &format!("\n[oxo-flow] {e}"),
+                    &self.config.sensitive_values,
+                ));
                 return Ok(record);
             }
         };
@@ -3090,7 +3104,7 @@ pub fn build_execution_command(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
     limits: crate::scheduler::ResourceLimits,
-) -> Option<String> {
+) -> Result<Option<String>> {
     build_execution_command_inner(rule, wildcard_values, interpreter_map, None, None, limits)
 }
 
@@ -3107,7 +3121,7 @@ pub(crate) fn build_execution_command_with_root(
     interpreter_map: &HashMap<String, String>,
     workflow_root: &Path,
     limits: crate::scheduler::ResourceLimits,
-) -> Option<String> {
+) -> Result<Option<String>> {
     build_execution_command_inner(
         rule,
         wildcard_values,
@@ -3127,7 +3141,7 @@ pub(crate) fn build_execution_command_in_scratch(
     interpreter_map: &HashMap<String, String>,
     workdir: &Path,
     limits: crate::scheduler::ResourceLimits,
-) -> Option<String> {
+) -> Result<Option<String>> {
     build_execution_command_inner(
         rule,
         wildcard_values,
@@ -3145,40 +3159,45 @@ fn build_execution_command_inner(
     input_root: InputRoot<'_>,
     script_root: Option<&Path>,
     limits: crate::scheduler::ResourceLimits,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let shell_cmd = rule
         .shell
         .as_ref()
         .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, input_root, limits));
 
-    let script_cmd = rule.script.as_ref().map(|script_path| {
-        let expanded_script =
-            render_shell_command_inner(script_path, rule, wildcard_values, input_root, limits);
-        // Issue #427: a bare script path carries no placeholders, so the
-        // renderer above cannot anchor it — do it here. In scratch mode
-        // script_root is the MAIN workdir (scripts live there, not in the
-        // scratch dir), and with workflow_root set it is the workflow
-        // directory; without a root the raw path already resolves from the
-        // execution cwd.
-        let anchored_script = match script_root {
-            Some(root) if !Path::new(&expanded_script).is_absolute() => {
-                root.join(&expanded_script).display().to_string()
-            }
-            _ => expanded_script.clone(),
-        };
-        let base_script = anchored_script
-            .split_whitespace()
-            .next()
-            .unwrap_or(&anchored_script);
+    let script_cmd = rule
+        .script
+        .as_ref()
+        .map(|script_path| -> Result<String> {
+            let expanded_script =
+                render_shell_command_inner(script_path, rule, wildcard_values, input_root, limits);
+            // Issue #427: a bare script path carries no placeholders, so the
+            // renderer above cannot anchor it — do it here. In scratch mode
+            // script_root is the MAIN workdir (scripts live there, not in the
+            // scratch dir), and with workflow_root set it is the workflow
+            // directory; without a root the raw path already resolves from the
+            // execution cwd.
+            let anchored_script = match script_root {
+                Some(root) if !Path::new(&expanded_script).is_absolute() => {
+                    root.join(&expanded_script).display().to_string()
+                }
+                _ => expanded_script.clone(),
+            };
+            let base_script = anchored_script
+                .split_whitespace()
+                .next()
+                .unwrap_or(&anchored_script);
 
-        match detect_interpreter(base_script, rule.interpreter.as_deref(), interpreter_map) {
-            Some(interp) => build_script_command(&interp, &anchored_script),
-            None => anchored_script,
-        }
-    });
+            match detect_interpreter(base_script, rule.interpreter.as_deref(), interpreter_map) {
+                Ok(Some(interp)) => Ok(build_script_command(&interp, &anchored_script)),
+                Ok(None) => Ok(anchored_script),
+                Err(e) => Err(e),
+            }
+        })
+        .transpose()?;
 
     if shell_cmd.is_none() && script_cmd.is_none() {
-        return None;
+        return Ok(None);
     }
 
     let mut base_cmd = match (&shell_cmd, &script_cmd) {
@@ -3240,7 +3259,7 @@ fn build_execution_command_inner(
         base_cmd = format!("{}{}", env_prefix, base_cmd);
     }
 
-    Some(base_cmd)
+    Ok(Some(base_cmd))
 }
 
 /// Spawn a rule command under `bash -c`, falling back to `sh -c` on
@@ -6385,7 +6404,8 @@ mod tests {
             std::path::Path::new("/wf"),
             limits,
         )
-        .expect("script rule renders");
+        .unwrap_or_else(|e| panic!("script rule renders: {e}"))
+        .expect("script rule renders a command");
         assert!(
             rendered.contains("/wf/scripts/calc.py"),
             "script must be workflow-absolute: {rendered}"
@@ -6414,7 +6434,8 @@ mod tests {
             std::path::Path::new("/wf"),
             limits,
         )
-        .expect("shell rule renders");
+        .unwrap_or_else(|e| panic!("shell rule renders: {e}"))
+        .expect("shell rule renders a command");
         assert!(
             rendered_shell.contains("cat data/S1.fq.gz"),
             "input must stay workdir-relative: {rendered_shell}"
@@ -6429,12 +6450,14 @@ mod tests {
         );
         // No root → historical raw rendering (workdir == workflow dir).
         let raw = build_execution_command(&shell_rule, &values, &HashMap::new(), limits)
-            .expect("shell rule renders");
+            .unwrap_or_else(|e| panic!("shell rule renders: {e}"))
+            .expect("shell rule renders a command");
         assert!(raw.contains("cat data/S1.fq.gz"));
         assert!(raw.contains("out/S1.txt"));
         assert!(!raw.contains("/wf/"));
         let raw_script = build_execution_command(&rule, &values, &HashMap::new(), limits)
-            .expect("script rule renders");
+            .unwrap_or_else(|e| panic!("script rule renders: {e}"))
+            .expect("script rule renders a command");
         assert!(raw_script.contains("scripts/calc.py") && !raw_script.contains("/wf/"));
     }
 

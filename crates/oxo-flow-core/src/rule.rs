@@ -1712,6 +1712,40 @@ impl Rule {
                 ),
             });
         }
+        // A declared interpreter is a security decision (issue #1013): a
+        // path the engine would reject at run time (traversal, unsafe
+        // location) must fail parse/validate instead of silently running
+        // the script under an auto-detected interpreter.
+        if let Some(interp) = self.interpreter.as_deref() {
+            crate::executor::security::validate_interpreter_path(interp).map_err(|e| {
+                // Re-nest with the rule attributed; keep the original
+                // message (and its suggestion when present) intact.
+                crate::error::OxoFlowError::Validation {
+                    message: format!("rule '{}': {e}", self.name),
+                    rule: Some(self.name.clone()),
+                    suggestion: match &e {
+                        crate::error::OxoFlowError::Validation { suggestion, .. } => {
+                            suggestion.clone()
+                        }
+                        _ => None,
+                    },
+                }
+            })?;
+        }
+        // The per-rule `checksum` spec (issue #1013 E6) must name a supported
+        // digest algorithm — reject at parse time instead of silently recording
+        // nothing at run time.
+        if let Some(spec) = self.checksum.as_deref()
+            && crate::executor::checkpoint::OutputChecksumAlgorithm::from_rule_spec(spec).is_none()
+        {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!("rule '{}' has invalid checksum '{}'", self.name, spec),
+                rule: Some(self.name.clone()),
+                suggestion: Some(
+                    "supported algorithms: checksum = \"sha256\" or checksum = \"md5\"".to_string(),
+                ),
+            });
+        }
         Ok(())
     }
 
@@ -2172,6 +2206,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// E6: the per-rule `checksum` spec is validated at parse time — a
+    /// supported algorithm passes, an unknown spelling fails with a
+    /// validation error naming the allowed values.
+    #[test]
+    fn validate_field_formats_rejects_unknown_checksum_spec() {
+        let mut rule = Rule {
+            name: "hash".to_string(),
+            ..Default::default()
+        };
+        rule.checksum = Some("sha256".to_string());
+        assert!(rule.validate_field_formats().is_ok());
+        rule.checksum = Some("md5".to_string());
+        assert!(rule.validate_field_formats().is_ok());
+        rule.checksum = Some("crc32".to_string());
+        let err = rule.validate_field_formats().unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid checksum 'crc32'"), "got: {msg}");
+        let suggestion = err.suggestion().unwrap_or_default();
+        assert!(
+            suggestion.contains("sha256") && suggestion.contains("md5"),
+            "suggestion must name allowed values: {suggestion}"
+        );
+        rule.checksum = None;
+        assert!(rule.validate_field_formats().is_ok());
+    }
 
     #[test]
     fn resolve_relative_paths_anchors_file_backed_env_specs() {

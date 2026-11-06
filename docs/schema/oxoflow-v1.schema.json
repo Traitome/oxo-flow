@@ -455,13 +455,16 @@
       "description": "Global resource limits",
       "properties": {
         "max_threads": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Reject any rule that declares more threads (cluster submissions)."
         },
         "max_memory": {
-          "type": "string"
+          "type": "string",
+          "description": "Reject any rule that declares more memory, e.g. \"256G\" (cluster submissions)."
         },
         "max_jobs": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Cap on concurrently running jobs; clamps the requested -j concurrency (local) or the in-flight submission cap (cluster)."
         }
       }
     },
@@ -770,7 +773,14 @@
           "type": "integer"
         },
         "auto_fix": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "ask",
+            "always",
+            "never"
+          ],
+          "description": "What the AI recovery path may do with a proposed workflow patch: ask (default) prompts before writing on an interactive terminal, always auto-applies safe fixes, never only reports.",
+          "default": "ask"
         },
         "temperature": {
           "type": "number"
@@ -1460,7 +1470,7 @@
         "localrule": {
           "type": "boolean",
           "default": false,
-          "description": "Always run locally"
+          "description": "Pin the rule to local execution; cluster paths refuse to submit it"
         },
         "checkpoint": {
           "type": "boolean",
@@ -1523,7 +1533,7 @@
         "pipe": {
           "type": "boolean",
           "default": false,
-          "description": "Enable FIFO streaming mode"
+          "description": "Default the rule's remote input staging to stream_fifo (real FIFO streaming); an explicit staging_mode wins. Local inputs are read in place"
         },
         "staging_mode": {
           "type": "string",
@@ -1544,7 +1554,7 @@
             "md5",
             "sha256"
           ],
-          "description": "Output integrity verification algorithm"
+          "description": "Output integrity algorithm for this rule: records each expanded output's digest (prefixed, e.g. 'md5:<hex>') in the checkpoint without --provenance; the freshness gate and provenance verify re-verify with this algorithm"
         },
         "cache_key": {
           "type": "string",
@@ -1552,7 +1562,7 @@
         },
         "input_function": {
           "type": "string",
-          "description": "Dynamic input resolver function name"
+          "description": "Declared name for dynamic input resolution; not called by the engine yet (lint flags it as W036)"
         },
         "benchmark": {
           "type": "string",

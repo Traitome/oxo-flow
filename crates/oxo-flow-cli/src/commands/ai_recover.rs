@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
+use oxo_flow_ai::config::AutoFixMode;
 use oxo_flow_ai::{knowledge::builtin, provider::AiProvider, session::archive_before_modify};
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,96 @@ fn parse_safe_to_auto_apply(response_text: &str) -> bool {
         }
     }
     false
+}
+
+/// What the recovery path may do with an AI-proposed workflow patch.
+///
+/// The verdict is layered ON TOP of workflow validation (`WorkflowConfig::parse`)
+/// — it never bypasses it. `ShowOnly` carries the reason the patch is only
+/// displayed, so the console message can name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoFixDecision {
+    /// Write the patch (still subject to TOML validation).
+    Apply,
+    /// Prompt the user on an interactive terminal; denied elsewhere.
+    Prompt,
+    /// Display the proposal, never write it. The payload is the reason.
+    ShowOnly(&'static str),
+}
+
+/// Decide what the recovery path may do with an AI-proposed patch, per the
+/// resolved `[ai] auto_fix` mode (issue #1013 O1; audit RB-14/AI-08).
+///
+/// RB-14 exit evidence: `never`, `ask`, and `always` produce distinct write
+/// behavior. The design-spec permission table
+/// (`docs/superpowers/specs/2026-08-09-ai-native-cli-design.md`) is the
+/// source of the semantics:
+///
+/// - `never` — only report, never modify (`ShowOnly` always)
+/// - `ask` (documented default) — propose and wait for user confirmation
+///   (`Prompt`; non-interactive sessions are denied, the same safe default
+///   as tool-call approval)
+/// - `always` — apply safe changes automatically (the pre-O1 behavior,
+///   now opt-in instead of the silent default)
+pub(crate) fn auto_fix_decision(mode: AutoFixMode, safe_to_auto_apply: bool) -> AutoFixDecision {
+    match mode {
+        AutoFixMode::Never => {
+            AutoFixDecision::ShowOnly("auto_fix = \"never\" disables automatic writes")
+        }
+        AutoFixMode::Ask => AutoFixDecision::Prompt,
+        // `always` still honors the model's own safety verdict — a patch
+        // flagged unsafe is shown, never written, in every mode.
+        AutoFixMode::Always if safe_to_auto_apply => AutoFixDecision::Apply,
+        AutoFixMode::Always => AutoFixDecision::ShowOnly("flagged unsafe by the safety assessment"),
+    }
+}
+
+/// Resolve the effective `[ai] auto_fix` mode for a workflow, mirroring the
+/// `AiRuntime::new` config chain (global → project `.oxo-flow/ai.toml` →
+/// workflow `[ai]`) so both surfaces agree on precedence. Missing layers
+/// fall through to the documented `ask` default.
+pub(crate) fn resolve_auto_fix_mode(workflow_path: &Path) -> AutoFixMode {
+    let global = oxo_flow_ai::config::AiConfig::from_global_file();
+    let project = workflow_path
+        .parent()
+        .and_then(oxo_flow_ai::config::AiConfig::from_project_file);
+    let workflow = std::fs::read_to_string(workflow_path).ok().and_then(|c| {
+        c.parse::<toml::Table>()
+            .ok()
+            .and_then(|t| oxo_flow_ai::config::AiConfig::from_workflow_toml(&t))
+    });
+    oxo_flow_ai::config::AiConfig::resolve_chain(
+        global.as_ref(),
+        project.as_ref(),
+        workflow.as_ref(),
+        None,
+        None,
+    )
+    .auto_fix
+}
+
+/// Interactive confirmation for writing an AI-proposed workflow patch under
+/// `auto_fix = "ask"` — the y/N pattern of `prompt_tool_approval_blocking`
+/// (tool-call approval). The caller gates on interactivity first
+/// (`stdin`/`stderr` `is_terminal`) and only prompts when both are
+/// terminals; non-interactive sessions are denied before this runs — the
+/// safe default, matching the trust boundary that AI never rewrites the
+/// workflow autonomously. A `false` return here means the user (or EOF)
+/// said no.
+pub(crate) fn confirm_auto_fix_blocking() -> bool {
+    use std::io::Write as _;
+
+    eprintln!("  {} AI proposes a workflow fix:", "⚠".yellow());
+    eprint!("  Apply the fix? [y/N] ");
+    std::io::stderr().flush().ok();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_ok() {
+        let trimmed = input.trim();
+        trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
+    } else {
+        false
+    }
 }
 
 /// Analyze a pipeline failure using AI.
@@ -311,7 +402,9 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::apply_fix;
-    use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
+    use super::{AutoFixDecision, resolve_auto_fix_mode};
+    use super::{auto_fix_decision, extract_section, extract_toml_block, parse_safe_to_auto_apply};
+    use oxo_flow_ai::config::AutoFixMode;
     use std::path::Path;
 
     #[test]
@@ -330,6 +423,74 @@ mod tests {
             "## Root Cause\nbwa ran out of memory"
         ));
         assert!(!parse_safe_to_auto_apply(""));
+    }
+
+    /// RB-14 exit evidence: `never`, `ask`, and `always` produce distinct
+    /// write behavior for the same (safe) proposal.
+    #[test]
+    fn auto_fix_modes_produce_distinct_write_behavior() {
+        // never: the patch is never written, whatever the model says.
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Never, true),
+            AutoFixDecision::ShowOnly("auto_fix = \"never\" disables automatic writes")
+        );
+        // ask (the documented default): distinct from both — the patch is
+        // held for an interactive confirmation, not written outright and
+        // not hard-blocked.
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Ask, true),
+            AutoFixDecision::Prompt
+        );
+        // always: the only mode that reaches a write — and only when the
+        // model's own safety verdict passed.
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Always, true),
+            AutoFixDecision::Apply
+        );
+        // always does NOT bypass the safety verdict: a patch flagged unsafe
+        // is shown, never written, in every mode.
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Always, false),
+            AutoFixDecision::ShowOnly("flagged unsafe by the safety assessment")
+        );
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Never, false),
+            AutoFixDecision::ShowOnly("auto_fix = \"never\" disables automatic writes")
+        );
+    }
+
+    /// The documented default is `ask` — a workflow with no `[ai]` section
+    /// at all must not silently upgrade to auto-apply.
+    #[test]
+    fn resolve_auto_fix_mode_defaults_to_ask_without_ai_section() {
+        with_temp_cwd("autofix-default", |_| {
+            let wf = Path::new("workflow.oxoflow");
+            std::fs::write(wf, "[workflow]\nname = \"t\"\n").unwrap();
+            assert_eq!(resolve_auto_fix_mode(wf), AutoFixMode::Ask);
+        });
+    }
+
+    /// Precedence chain: workflow `[ai]` beats project `.oxo-flow/ai.toml`
+    /// beats global config; a missing layer falls through (mirrors
+    /// `AiRuntime::new`).
+    #[test]
+    fn resolve_auto_fix_mode_follows_config_chain_precedence() {
+        with_temp_cwd("autofix-chain", |_| {
+            let wf = Path::new("workflow.oxoflow");
+            std::fs::write(wf, "[ai]\nauto_fix = \"never\"\n").unwrap();
+            assert_eq!(resolve_auto_fix_mode(wf), AutoFixMode::Never);
+
+            // Project layer wins when the workflow is silent.
+            std::fs::write(wf, "[workflow]\nname = \"t\"\n").unwrap();
+            std::fs::create_dir_all(".oxo-flow").unwrap();
+            std::fs::write(".oxo-flow/ai.toml", "[ai]\nauto_fix = \"always\"\n").unwrap();
+            assert_eq!(resolve_auto_fix_mode(wf), AutoFixMode::Always);
+
+            // An invalid workflow value parses as the default (ask), so the
+            // project layer's non-default setting survives.
+            std::fs::write(wf, "[ai]\nauto_fix = \"suggest\"\n").unwrap();
+            assert_eq!(resolve_auto_fix_mode(wf), AutoFixMode::Always);
+        });
     }
 
     /// A fully-conforming reply uses the heading format the prompt mandates.

@@ -146,6 +146,27 @@ pub async fn stage_remote_io(
     {
         return Err(remote_wildcard_error("output", path));
     }
+    // Remote `temp_output` entries are rejected up front (issue #1013 S2):
+    // the failure-path cleanup joins them onto the LOCAL workdir, so a
+    // remote URI would silently never be deleted — and the engine has no
+    // remote-delete path on any `StorageBackend`. Failing fast keeps the
+    // stale-partial guarantee honest instead of a silent no-op.
+    for temp in &rule.temp_output {
+        let expanded = expand_patterns(temp, wildcard_values);
+        if StoragePath::parse(&expanded).is_remote() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares remote temp_output '{expanded}' — remote scratch \
+                     cleanup is not implemented, so a failed rule would leave the stale \
+                     artifact in the bucket indefinitely; keep temp_output paths local \
+                     (inside the workdir) or drop the field",
+                    rule.name
+                ),
+                rule: Some(rule.name.clone()),
+                suggestion: None,
+            });
+        }
+    }
 
     let staging_mode = rule.effective_staging_mode();
     // ── inputs ─────────────────────────────────────────────────────────────
@@ -664,6 +685,27 @@ output = { result = "s3://b/out.txt" }
             .await
             .unwrap_err();
         assert!(err.to_string().contains("wildcard"));
+    }
+
+    #[tokio::test]
+    async fn remote_temp_output_is_rejected() {
+        let (resolver, _) = resolver_with("s3://b/k.fq", b"x", "e1");
+        let rule: Rule = toml::from_str(
+            r#"
+name = "t"
+shell = "samtools sort -o scratch.tmp && mv scratch.tmp {output[0]}"
+input = ["s3://b/k.fq"]
+output = ["out.txt"]
+temp_output = ["s3://b/scratch.tmp"]
+"#,
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let err = stage_remote_io(&rule, dir.path(), &HashMap::new(), &resolver)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("temp_output"));
+        assert!(err.to_string().contains("s3://b/scratch.tmp"));
     }
 
     #[tokio::test]

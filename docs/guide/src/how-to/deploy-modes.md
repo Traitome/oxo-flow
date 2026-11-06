@@ -79,9 +79,11 @@ the **Users** page (or `POST /api/users`) carry a bcrypt-hashed password in
 the database and sign in through the same `/api/auth/login` endpoint.
 State-changing requests attempt an audit entry visible on the **Audit** page
 or through `GET /api/audit`, with the acting user and recorded outcome. Audit
-writes are not yet a durable, fail-closed compliance ledger, so do not treat a
-missing entry as proof that no action occurred. The trail spans all users and
-is admin-only outside personal mode.
+writes are not yet a durable, fail-closed compliance ledger: a failed insert
+is logged and the request still succeeds, so do not treat a missing entry as
+proof that no action occurred (the structured event stream still emits an
+`audit` event for machine consumers when the database insert fails). The
+trail spans all users and is admin-only outside personal mode.
 
 **Workspace isolation**:
 ```
@@ -319,7 +321,9 @@ prototype-grade:
   process groups can leave the database state inconsistent with the process.
 - **Crash restart** attempts to probe and re-attach unfinished runs. The
   backend does not yet provide restart-safe multi-instance ownership or proof
-  that a terminal state cannot be overwritten in every race.
+  that a terminal state cannot be overwritten in every race. There is no
+  cross-instance lease: two servers pointed at the same database can both
+  adopt the same run after a restart.
 
 Do not present these controls as crash-consistent or compliance-grade. The
 release blockers and required tests are tracked in the audit ledger.

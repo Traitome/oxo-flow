@@ -285,7 +285,10 @@ environment instead of re-downloading it ten times, and a deleted store dir
 heals itself — the next run detects the broken link and rebuilds. Clean up
 unreferenced environments with [`oxo-flow env gc`](env.md#env-gc). Conda,
 Docker, and Singularity environments keep their native cache layouts and are
-unaffected.
+unaffected — the store is pixi/venv-only by design (see the [`env`
+command](env.md#notes) for the rationale: conda name envs already share a
+central prefix, conda prefixes are not relocatable, containers use their own
+registries, modules come from the cluster).
 
 ### Backend preflight: fail fast on a missing environment backend
 
@@ -499,6 +502,25 @@ checkpoint exactly as a local run does — `status`, `resume`, and re-run
 invalidation behave identically, and a second `run --profile slurm` with
 nothing changed submits nothing.
 
+The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
+#907) travels onto the cluster too: every submitted job script exports
+`TMPDIR`/`TMP`/`TEMP` to the resolved directory before the rule's command
+runs (issue #1013). Cluster jobs start from the scheduler's clean
+environment, so the exports are baked into each job's rendered command —
+after the workdir `cd` guard and outside the environment wrapper, so
+wrapped child processes (`conda run`, `pixi run`, venv activation) and
+tools honoring `TMPDIR` all land in the scratch volume. The directory must
+exist on the shared filesystem the nodes see; it is created on the submit
+host at run start (the same fail-fast mkdir the local path performs) and
+the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
+
+Like `localrule = true` and `checkpoint = true`, the `scratch = true`
+directive is local-executor-only: workflows whose runnable rules declare it
+are **rejected at plan time** on the cluster path (naming every offender)
+instead of silently running those jobs in the shared workdir, where tools
+writing fixed filenames collide across concurrent instances. See
+[Scratch tier ladder](../reference/workflow-format.md#scratch-tier-ladder).
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every
@@ -624,12 +646,23 @@ real code could not be read, instead of defaulting to `1`.
 Outputs, the working directory, and logs are assumed to live on storage
 shared between the submitting host and the compute nodes.
 
-> **Not yet implemented.** The driver polls until every job reaches a
-> terminal state; it does not yet re-attach to jobs still in flight if the
-> driver exits, and Ctrl-C does not yet cancel submitted jobs. Until then,
-> use `oxo-flow cluster status` (no ids: lists your queued jobs) and
-> `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean up an
-> interrupted run.
+Interrupting a cluster run cancels its in-flight scheduler jobs: on
+Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
+every job still in the queue or running, records each interrupted rule as
+failed with an `interrupted by <SIG...>` skip reason, and exits with
+`128 + <signal number>` — the same shape the local executor reports.
+Signals are watched on the cluster path only; the local executor has its
+own (pre-existing) signal handling.
+
+What remains out of scope is *re-attaching*: a driver that died without a
+signal (crash, OOM) cannot adopt the scheduler job ids of a previous
+process. Those jobs keep running under the scheduler, and a subsequent
+`resume` / `--resume-failed` re-queues their rules from the checkpoint's
+RUNNING entries rather than reusing the live job ids — completed work on
+shared storage is still honored by the invalidation analysis. Until a
+re-attach path exists, use `oxo-flow cluster status` (no ids: lists your
+queued jobs) and `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean
+up jobs orphaned by a crashed driver.
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured
@@ -653,6 +686,11 @@ oxo-flow run --bundle pipeline-bundle.tar.gz -j 16 --yes
 # Pull from remote and execute in one step
 oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
 ```
+
+Bundles published with `publish --sign-key` carry an ed25519 manifest
+signature. `run --bundle` verifies it after the checksums and aborts before
+execution if the manifest or signature was altered; unsigned bundles keep
+the checksums-only behavior (see `publish` → Bundle Signing).
 
 ### Pilot runs and scale-up
 

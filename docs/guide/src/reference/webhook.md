@@ -2,7 +2,7 @@
 
 oxo-flow includes a webhook client (`oxo_flow_core::webhook`, behind the `webhook` cargo feature — enabled by default) that can send JSON notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.
 
-> **Status note:** `oxo-flow run` dispatches the workflow-level events — `workflow_started` at the beginning and `workflow_completed`/`workflow_failed` at the end — whenever a `[webhook]` table is present. Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. The rule-level events (`rule_completed`, `rule_failed`) are defined in the config model but **not yet dispatched** during execution; subscribing to them currently has no effect.
+> **Status note:** `oxo-flow run` dispatches the workflow-level events — `workflow_started` at the beginning and `workflow_completed`/`workflow_failed` at the end — whenever a `[webhook]` table is present, plus the rule-level events `rule_completed`/`rule_failed` as each scheduled rule reaches a terminal state (success, executed failure, or a spawn/staging error). Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. Rule events are only delivered when listed in `events`; the default subscription is `workflow_completed` alone.
 
 ## Configuration
 
@@ -39,13 +39,14 @@ Events are serialized in snake_case. You can subscribe by listing them in the `e
 | `workflow_started` | Fired when the workflow execution begins. |
 | `workflow_completed` | Fired when the workflow finishes successfully. |
 | `workflow_failed` | Fired when the workflow fails. |
-| `rule_completed` | *Not yet dispatched* — defined for future rule-level notifications. |
-| `rule_failed` | *Not yet dispatched* — defined for future rule-level notifications. |
+| `rule_completed` | Fired when a scheduled rule finishes successfully. `data.rule` carries the rule name. |
+| `rule_failed` | Fired when a scheduled rule fails — an executed failure (with exit code) or a spawn/staging error (exit code `-1`). `data.rule` names the rule; `data.error` carries the last stderr line (sensitive-value masked), matching the checkpoint record. |
 
-There is no `RuleStarted` or `RuleSkipped` event in the webhook module. (The
+There is no `RuleStarted` or `RuleSkipped` event in the webhook module: rules
+skipped by a `when` gate or checkpoint adoption send nothing (the
 `ExecutionEvent` log stream in the core executor likewise has no
 `workflow_cancelled` variant — an interruption surfaces as `rule_failed`
-records with an `interrupted by <signal>` skip reason.)
+records with an `interrupted by <signal>` skip reason).
 
 If the `events` array is omitted, the default subscription is `["workflow_completed"]` only.
 

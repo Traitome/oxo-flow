@@ -958,6 +958,12 @@ pub enum Commands {
             help = "Bundle archive format: tar.zst (default) or tar.gz"
         )]
         format: Option<String>,
+        #[arg(
+            long = "sign-key",
+            value_name = "KEY_FILE",
+            help = "Ed25519 signing key (64 hex chars or 32 raw bytes) — signs the manifest so `run --bundle` verifies it"
+        )]
+        sign_key: Option<PathBuf>,
     },
     /// Verify or display license status.
     License {
@@ -2123,7 +2129,8 @@ async fn main() -> Result<()> {
             output,
             with_lockfiles,
             format,
-        } => publish_command(workflow, output, with_lockfiles, format)?,
+            sign_key,
+        } => publish_command(workflow, output, with_lockfiles, format, sign_key)?,
         Commands::License { path } => handle_license(path, cli.json)?,
     }
 

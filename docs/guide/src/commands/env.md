@@ -195,4 +195,10 @@ oxo-flow env gc --dry-run
 - To check that environment **definition files** exist (conda YAML, venv
   directories, `pixi.toml`), use
   [`oxo-flow test --deep`](test.md#deep-checks-deep) (finding [D002](../reference/glossary.md#diagnostic-codes))
-- Only **pixi** and **venv** environments participate in the shared store today; conda/docker/singularity keep their native cache layouts. See [`env gc`](#env-gc) for store maintenance
+- Only **pixi** and **venv** environments participate in the shared store — by
+  design, not an omission. Conda/mamba name-based environments already live in
+  a shared central prefix (the engine's store could not deduplicate them
+  further), conda prefix environments are not relocatable (absolute paths are
+  baked into the env, so moving breaks activation), Docker and Singularity
+  pull images into their own registries, and HPC modules are provided by the
+  cluster. See [`env gc`](#env-gc) for store maintenance

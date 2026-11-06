@@ -228,8 +228,10 @@ value `"report.html"` selects the built-in template, anything else is a
 template file path resolved relative to the workflow file's directory
 first, then the current directory. A render failure warns and falls back
 to the default renderer (exit 2 under `--strict`). `[report].format`
-remains unsupported — setting it makes the command warn (or fail under
-`--strict`); the output format is selected with `-f`.
+supplies the default output format: when `report` runs without `-f` and
+the `-o` extension does not name a format, its first entry is used
+(`html`, `json`, `md`, or `pdf`); extra entries warn (fail under
+`--strict`).
 
 ### Software-versions section
 

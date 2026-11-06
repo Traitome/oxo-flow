@@ -461,15 +461,24 @@ fn rule_fingerprint_impl(
 
     // Resolved interpreter mirrors build_execution_command: the override
     // wins (if valid), otherwise the extension is looked up in the map.
-    let resolved_interpreter = rule.script.as_ref().and_then(|script_path| {
-        let base = script_path.split_whitespace().next().unwrap_or(script_path);
-        crate::executor::process::detect_interpreter(
-            base,
-            rule.interpreter.as_deref(),
-            interpreter_map,
-        )
-    });
-    add("interpreter", resolved_interpreter.as_deref().unwrap_or(""));
+    // The fingerprint stays infallible: a rejected override contributes ""
+    // (parse-time validation rejects the workflow before a fingerprint
+    // would ever be computed for it).
+    let resolved_interpreter = rule
+        .script
+        .as_ref()
+        .and_then(|script_path| {
+            let base = script_path.split_whitespace().next().unwrap_or(script_path);
+            crate::executor::process::detect_interpreter(
+                base,
+                rule.interpreter.as_deref(),
+                interpreter_map,
+            )
+            .ok()
+            .flatten()
+        })
+        .unwrap_or_default();
+    add("interpreter", &resolved_interpreter);
 
     // EnvironmentSpec is a fixed-field struct (no maps) — toml serialization
     // is deterministic. Environment changes alter tool versions and results.

@@ -286,6 +286,7 @@ fn backend_driver_executes_reentry_rounds() {
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(30)),
             unknown_settle_grace: std::time::Duration::from_secs(90),
+            cancel: None,
         },
     );
 

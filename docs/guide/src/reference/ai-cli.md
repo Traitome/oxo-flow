@@ -285,15 +285,25 @@ is fail-closed end to end:
 [ai]
 enabled = true
 max_retries = 5
-auto_fix = "ask"    # parsed but not enforced by the current recovery path
+auto_fix = "ask"    # recovery write mode: "ask" (default) | "always" | "never"
 model = "deepseek-v4-flash"
 team_profile = "compact"    # "compact" | "full"
 ```
 
-> **Current safety limitation**: `auto_fix` is parsed but has no runtime consumer in the repair
-> path. Workflow-level provider/model selection is also not guaranteed to reconfigure the CLI
-> runtime. Do not treat either setting as an authorization or data-governance control until the
-> audit gates for AI remediation are closed.
+`auto_fix` controls what the recovery path may do with an AI-proposed workflow
+patch. The mode gates on top of the model's own safety verdict and TOML
+validation — it never bypasses either:
+
+- `ask` (default) — prompt y/N before writing on an interactive terminal;
+  non-interactive sessions (CI, scripts) are denied with an explanation, so a
+  headless run can never rewrite the workflow silently
+- `always` — apply safe fixes automatically (a patch flagged unsafe by the
+  safety assessment is only displayed, never written)
+- `never` — only report, never modify
+
+Workflow-level provider/model selection is still not guaranteed to reconfigure
+the CLI runtime — treat that setting as advisory until the remaining audit
+gates close.
 
 ### Generation team profiles
 
@@ -523,9 +533,12 @@ oxo-flow run workflow.oxoflow --ai-recover
 1. Rule fails → capture error signature
 2. AI matches against known error patterns (OOM, segfault, missing files, etc.)
 3. AI proposes a root cause and bounded patch
-4. Current behavior may display or apply a proposal, but `auto_fix` is not yet
-   an enforced authorization control and a partial replacement block can
-   overwrite a complete workflow
+4. The resolved `auto_fix` mode decides who may write: `ask` (the default)
+   prompts y/N on an interactive terminal and is denied in non-interactive
+   sessions, `always` auto-applies safe fixes, `never` only reports. In every
+   mode the generated TOML must still validate as a complete workflow before
+   it is written; a patch flagged unsafe by the safety assessment is only
+   displayed
 5. A repair is not described as fixed until the complete workflow validates,
    the applied diff is reviewed, and a rerun verifies its outputs
 
