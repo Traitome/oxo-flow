@@ -917,6 +917,14 @@ retries = 3
 
 Hook commands support the same `{config.x}` / `{input}` / `{output}` placeholder expansion as `shell`.
 
+Hooks are bounded like rule shells: their stdout/stderr is captured through the same
+capped collector (a chatty hook can no longer grow the engine's memory without
+limit), and each hook gets a timeout — 300 s by default, overridable with
+`OXO_FLOW_HOOK_TIMEOUT_SECS` (invalid or `0` values fall back to the default).
+A `pre_exec` hook that trips the timeout aborts the rule (same as a failed
+`pre_exec`); rule-level and workflow-level hooks time out as a warning, since
+they are best-effort.
+
 **Output validation:** After a rule's shell command exits successfully (exit code 0),
 oxo-flow verifies that all declared `output` files exist on disk. If any declared output
 is missing — for example, because a multi-step shell script's cleanup step masked an
