@@ -721,7 +721,7 @@ memory = "32G"
 | `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
 | `pipe` | Boolean | No | Selects `staging_mode = "stream_fifo"` by default for **remote** inputs: each remote input is downloaded and streamed into a named FIFO while the rule runs (local inputs are unaffected — they are read in place); an explicit `staging_mode` on the same rule wins. Equivalent to `staging_mode = "stream_fifo"` |
-| `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
+| `checksum` | String | No | Opt the rule's outputs into checksum recording and content verification: `"sha256"` or `"md5"`. The expanded outputs are hashed at completion and recorded in the checkpoint's `checksums` map (`<algorithm>:<hex>`) — **without** needing `--provenance`. The freshness gate recomputes each recorded output with its declared algorithm, so tampered content re-executes even when the mtime looks fresh, and `oxo-flow provenance verify` re-verifies with the recorded algorithm. Invalid algorithms are rejected at parse time. Rules without the field are only recorded under `--provenance` (sha256) |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling — `input_size` and `memory_scale` feed the memory estimator; `runtime` and `io_bound` are parsed but **not consumed** by anything today, and `lint` flags them with `W037` |
 
 > **Run-path field validation.** Rule *names* (charset:
@@ -1412,7 +1412,7 @@ retry_delay = "30s"
 | `ancient` | Array | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution |
 | `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
 | `pipe` | Boolean | Defaults the rule to `staging_mode = "stream_fifo"` for remote inputs (real FIFO streaming); explicit `staging_mode` wins |
-| `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
+| `checksum` | String | `"sha256"` or `"md5"` — records the rule's output checksums (prefixed with the algorithm) without `--provenance`; the freshness gate and `provenance verify` re-verify with the recorded algorithm |
 
 ```toml
 [[rules]]
