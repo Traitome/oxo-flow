@@ -4220,7 +4220,13 @@ and exits — there is nothing to collect.</p>
 <li>To check that environment <strong>definition files</strong> exist (conda YAML, venv
   directories, <code>pixi.toml</code>), use
   <a href="../test/#deep-checks-deep"><code>oxo-flow test --deep</code></a> (finding <a href="../../reference/glossary/#diagnostic-codes">D002</a>)</li>
-<li>Only <strong>pixi</strong> and <strong>venv</strong> environments participate in the shared store today; conda/docker/singularity keep their native cache layouts. See <a href="#env-gc"><code>env gc</code></a> for store maintenance</li>
+<li>Only <strong>pixi</strong> and <strong>venv</strong> environments participate in the shared store — by
+  design, not an omission. Conda/mamba name-based environments already live in
+  a shared central prefix (the engine's store could not deduplicate them
+  further), conda prefix environments are not relocatable (absolute paths are
+  baked into the env, so moving breaks activation), Docker and Singularity
+  pull images into their own registries, and HPC modules are provided by the
+  cluster. See <a href="#env-gc"><code>env gc</code></a> for store maintenance</li>
 </ul>
 
 

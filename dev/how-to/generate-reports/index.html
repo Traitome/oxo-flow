@@ -4260,10 +4260,10 @@ which registered sections the report includes, by generator <strong>name</strong
 <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>,
 <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
 <code>task-summary</code>, <code>software-versions</code>, <code>rule-captions</code>,
-<code>aggregate-metrics</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code> is
-parsed but still unsupported: setting it makes the command warn (or fail
-under <code>--strict</code>) instead of silently ignoring it — output formats are
-selected via the CLI <code>-f</code> flag.</p>
+<code>aggregate-metrics</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code>
+is <strong>consumed</strong> as the default output format: when <code>report</code> runs
+without <code>-f</code> and the <code>-o</code> extension does not name a format, the first
+<code>format</code> entry is used.</p>
 </blockquote>
 <h3 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">#</a></h3>
 <table>
@@ -4283,7 +4283,7 @@ selected via the CLI <code>-f</code> flag.</p>
 <tr>
 <td><code>format</code></td>
 <td>Array</td>
-<td>Parsed but not supported yet — setting it warns (or fails under <code>--strict</code>); use <code>-f</code> to select the output format</td>
+<td>Default output format. Precedence: explicit <code>-f</code> wins; else a recognizable <code>-o</code> extension (<code>json</code>, <code>md</code>, <code>pdf</code>); else the <strong>first</strong> <code>format</code> entry (<code>html</code>, <code>json</code>, <code>md</code>, <code>pdf</code>); else <code>html</code>. Listing multiple entries uses the first and warns about the extras (fails under <code>--strict</code>)</td>
 </tr>
 <tr>
 <td><code>sections</code></td>

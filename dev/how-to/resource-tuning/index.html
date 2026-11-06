@@ -4557,11 +4557,11 @@
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[resource_budget]</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">max_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="w">        </span><span class="c1"># Reject any rule that declares more than 64 threads</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">max_memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"256G"</span><span class="w">     </span><span class="c1"># Reject any rule that declares more than 256GB</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">max_jobs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">           </span><span class="c1"># Parsed, but not yet enforced by any command</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">max_jobs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">           </span><span class="c1"># Cap concurrently running jobs (clamp; see below)</span>
 </span></code></pre></div>
 <div class="admonition warning">
-<p class="admonition-title"><code>[resource_budget]</code> is enforced only on the cluster path</p>
-<p>A per-rule breach check runs where jobs leave for a scheduler —
+<p class="admonition-title"><code>max_memory</code>/<code>max_threads</code> are enforced only on the cluster path</p>
+<p>The per-rule breach check runs where jobs leave for a scheduler —
 <code>oxo-flow run --profile &lt;name&gt;</code> with a <code>[cluster]</code> profile present. A
 rule whose declared <code>memory</code>/<code>threads</code> exceeds the cap aborts the run
 <strong>before anything is submitted</strong>, naming every offender:</p>
@@ -4570,20 +4570,28 @@ rule whose declared <code>memory</code>/<code>threads</code> exceeds the cap abo
 </span></code></pre></div>
 <p>Two consequences worth knowing:</p>
 <ul>
-<li>A plain local <code>oxo-flow run</code> <strong>does not read</strong> <code>[resource_budget]</code> —
-  a 64G rule runs under a 32G cap. To cap a local run, use the CLI
-  flags instead: <code>--max-threads &lt;N&gt;</code> and <code>--max-memory &lt;MB&gt;</code> (integer
-  megabytes, e.g. <code>--max-memory 32768</code>; they fail fast the same way
-  before any rule executes).</li>
+<li>A plain local <code>oxo-flow run</code> <strong>does not read</strong> the per-rule
+  <code>max_memory</code>/<code>max_threads</code> limits — a 64G rule runs under a 32G cap.
+  To cap a local run, use the CLI flags instead: <code>--max-threads &lt;N&gt;</code>
+  and <code>--max-memory &lt;MB&gt;</code> (integer megabytes, e.g. <code>--max-memory
+  32768</code>; they fail fast the same way before any rule executes).</li>
 <li><code>oxo-flow cluster submit</code> currently generates scripts without the
   budget check — only the <code>run --profile</code> cluster path enforces it.</li>
 </ul>
-<p><code>max_jobs</code> is accepted by the parser but no command consumes it yet.</p>
 </div>
-<p>The cap is per-rule, not a running total: it rejects a workflow in which a
-<em>single</em> rule cannot fit under the declared ceiling (which the scheduler
-would otherwise reject — or run into swap — long after the submit). It is
-not a meter of concurrent usage across jobs.</p>
+<p><code>max_jobs</code> is a run-wide concurrency cap and <strong>is enforced on both paths</strong>:</p>
+<ul>
+<li><strong>Local</strong> (<code>oxo-flow run</code>): it clamps the requested <code>-j/--jobs</code>
+  concurrency. Asking for <code>-j 16</code> under <code>max_jobs = 4</code> runs at most 4 jobs
+  at once and prints a warning saying so — it never errors, since a job
+  count is a total, not a per-rule request.</li>
+<li><strong>Cluster</strong> (<code>oxo-flow run --profile &lt;name&gt;</code>): it clamps the resolved
+  in-flight submission cap (<code>--max-submitted</code> &gt; profile value &gt; driver
+  default) the same way, with the same warning style.</li>
+</ul>
+<p>The per-rule sentence above applies only to <code>max_threads</code>/<code>max_memory</code>: a
+cap on jobs is a total, so there is no "single rule exceeds it" condition —
+the budget throttles how much runs at once instead.</p>
 <h2 id="hpc-vs-local-best-practices">HPC vs Local Best Practices<a class="headerlink" href="#hpc-vs-local-best-practices" title="Permanent link">#</a></h2>
 <table>
 <thead>

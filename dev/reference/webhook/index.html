@@ -3954,7 +3954,7 @@
 <h1 id="webhook-notifications">Webhook Notifications<a class="headerlink" href="#webhook-notifications" title="Permanent link">#</a></h1>
 <p>oxo-flow includes a webhook client (<code>oxo_flow_core::webhook</code>, behind the <code>webhook</code> cargo feature — enabled by default) that can send JSON notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.</p>
 <blockquote>
-<p><strong>Status note:</strong> <code>oxo-flow run</code> dispatches the workflow-level events — <code>workflow_started</code> at the beginning and <code>workflow_completed</code>/<code>workflow_failed</code> at the end — whenever a <code>[webhook]</code> table is present. Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. The rule-level events (<code>rule_completed</code>, <code>rule_failed</code>) are defined in the config model but <strong>not yet dispatched</strong> during execution; subscribing to them currently has no effect.</p>
+<p><strong>Status note:</strong> <code>oxo-flow run</code> dispatches the workflow-level events — <code>workflow_started</code> at the beginning and <code>workflow_completed</code>/<code>workflow_failed</code> at the end — whenever a <code>[webhook]</code> table is present, plus the rule-level events <code>rule_completed</code>/<code>rule_failed</code> as each scheduled rule reaches a terminal state (success, executed failure, or a spawn/staging error). Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. Rule events are only delivered when listed in <code>events</code>; the default subscription is <code>workflow_completed</code> alone.</p>
 </blockquote>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
 <p>A webhook is described by the <code>WebhookConfig</code> struct:</p>
@@ -4045,18 +4045,19 @@
 </tr>
 <tr>
 <td><code>rule_completed</code></td>
-<td><em>Not yet dispatched</em> — defined for future rule-level notifications.</td>
+<td>Fired when a scheduled rule finishes successfully. <code>data.rule</code> carries the rule name.</td>
 </tr>
 <tr>
 <td><code>rule_failed</code></td>
-<td><em>Not yet dispatched</em> — defined for future rule-level notifications.</td>
+<td>Fired when a scheduled rule fails — an executed failure (with exit code) or a spawn/staging error (exit code <code>-1</code>). <code>data.rule</code> names the rule; <code>data.error</code> carries the last stderr line (sensitive-value masked), matching the checkpoint record.</td>
 </tr>
 </tbody>
 </table>
-<p>There is no <code>RuleStarted</code> or <code>RuleSkipped</code> event in the webhook module. (The
+<p>There is no <code>RuleStarted</code> or <code>RuleSkipped</code> event in the webhook module: rules
+skipped by a <code>when</code> gate or checkpoint adoption send nothing (the
 <code>ExecutionEvent</code> log stream in the core executor likewise has no
 <code>workflow_cancelled</code> variant — an interruption surfaces as <code>rule_failed</code>
-records with an <code>interrupted by &lt;signal&gt;</code> skip reason.)</p>
+records with an <code>interrupted by &lt;signal&gt;</code> skip reason).</p>
 <p>If the <code>events</code> array is omitted, the default subscription is <code>["workflow_completed"]</code> only.</p>
 <h2 id="payload">Payload<a class="headerlink" href="#payload" title="Permanent link">#</a></h2>
 <p>The <code>json</code> payload is a standard HTTP POST request with <code>Content-Type: application/json</code>. The body is a <code>WebhookPayload</code>:</p>

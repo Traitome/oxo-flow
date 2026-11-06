@@ -6711,7 +6711,7 @@
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="k">[[sample_groups]]</span><span class="w">   </span><span class="c1"># Optional: multi-sample groups (WC-02)</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="k">[[values]]</span><span class="w">          </span><span class="c1"># Optional: named value lists for parameter wildcards</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">[metadata]</span><span class="w">          </span><span class="c1"># Optional: per-sample metadata columns ({meta.&lt;column&gt;})</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">[resource_budget]</span><span class="w">   </span><span class="c1"># Optional: resource limits (enforced on cluster submissions; local runs use `--max-threads`/`--max-memory`)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">[resource_budget]</span><span class="w">   </span><span class="c1"># Optional: resource limits (max_jobs clamps concurrency on both paths; max_threads/max_memory enforced on cluster submissions — local runs use `--max-threads`/`--max-memory`)</span>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">[env_groups]</span><span class="w">        </span><span class="c1"># Optional: named reusable environment specs</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">[resource_groups]</span><span class="w">   </span><span class="c1"># Optional: shared resource pools (API limits, DB connections)</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">[wildcard_constraints]</span><span class="w"> </span><span class="c1"># Optional: regex patterns to constrain wildcard values</span>
@@ -7486,7 +7486,7 @@ disk space matters.</p>
 <tr>
 <td><code>format</code></td>
 <td>Array</td>
-<td>Parsed but <strong>not supported yet</strong> — setting it makes <code>report</code> warn (or fail under <code>--strict</code>); select the output format with <code>-f</code> instead</td>
+<td>Default output format for <code>oxo-flow report</code>. Precedence: explicit <code>-f</code> wins; else a recognizable <code>-o</code> extension (<code>json</code>, <code>md</code>, <code>pdf</code>); else the <strong>first</strong> <code>format</code> entry (<code>html</code>, <code>json</code>, <code>md</code>, <code>pdf</code>); else <code>html</code>. Multiple entries use the first and warn about the extras (fail under <code>--strict</code>)</td>
 </tr>
 <tr>
 <td><code>sections</code></td>
@@ -7583,7 +7583,12 @@ disk space matters.</p>
 <li>Without an execution record (dry run, or a checkpoint from before this feature), the declared annotation is resolved at report time: inline caption first, then <code>report.file</code> relative to the workdir.</li>
 <li>A missing or unreadable <code>report.file</code> never fails the report — the rule simply contributes no caption.</li>
 </ul>
-<p>Captions are text/markdown only; embedding figures is not supported in v1.</p>
+<p>Captions render as literal text/markdown, not interpreted HTML: in the
+Markdown report they appear as a fenced block, and in the HTML report as an
+escaped <code>&lt;pre&gt;</code> — deliberately XSS-safe, so image links, scripts, and other
+inline HTML inside a caption are shown verbatim rather than executed.
+Embedding figures is not supported in v1 (the report's own aggregate-metrics
+section can render inline SVG charts from declared metrics).</p>
 <hr />
 <h2 id="rules-rule-definitions"><code>[[rules]]</code> — Rule Definitions<a class="headerlink" href="#rules-rule-definitions" title="Permanent link">#</a></h2>
 <p>Each <code>[[rules]]</code> entry defines a pipeline step. The double brackets indicate a TOML array of tables.</p>
@@ -7818,7 +7823,7 @@ disk space matters.</p>
 <td><code>input_function</code></td>
 <td>String</td>
 <td>No</td>
-<td>Parsed but <strong>not yet called</strong> — no dynamic input resolution is performed today</td>
+<td>Declared function name for dynamic input resolution — <strong>not yet called</strong>: the engine performs no dynamic input resolution, so the input list stays exactly as declared, and <code>lint</code> flags every use with <code>W036</code>. Declare inputs statically (<code>input</code>, glob inputs, <code>expand_inputs</code>) instead</td>
 </tr>
 <tr>
 <td><code>rule_metadata</code></td>
@@ -7872,7 +7877,7 @@ disk space matters.</p>
 <td><code>scratch</code></td>
 <td>Boolean</td>
 <td>No</td>
-<td>Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured <code>[engine]</code> scratch tier — see <a href="#scratch-tier-ladder">Scratch tier ladder</a></td>
+<td>Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured <code>[engine]</code> scratch tier — see <a href="#scratch-tier-ladder">Scratch tier ladder</a>. Local-executor-only: cluster paths reject workflows whose runnable rules declare <code>scratch = true</code> before any submission</td>
 </tr>
 <tr>
 <td><code>protected_output</code></td>
@@ -7896,31 +7901,31 @@ disk space matters.</p>
 <td><code>localrule</code></td>
 <td>Boolean</td>
 <td>No</td>
-<td>Parsed but <strong>not enforced yet</strong> — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see <a href="../../how-to/resource-tuning/">Resource Tuning</a>)</td>
+<td>Pin the rule to local execution: cluster paths (<code>run --profile</code> with a <code>[cluster]</code> block, <code>oxo-flow cluster submit</code>) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use <code>localrule</code> on the local path (<code>oxo-flow run</code>); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see <a href="../../how-to/resource-tuning/">Resource Tuning</a>)</td>
 </tr>
 <tr>
 <td><code>format_hint</code></td>
 <td>Array</td>
 <td>No</td>
-<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization)</td>
+<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization); <code>oxo-flow lint</code> flags every use with <strong>W038</strong></td>
 </tr>
 <tr>
 <td><code>pipe</code></td>
 <td>Boolean</td>
 <td>No</td>
-<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today)</td>
+<td>Selects <code>staging_mode = "stream_fifo"</code> by default for <strong>remote</strong> inputs: each remote input is downloaded and streamed into a named FIFO while the rule runs (local inputs are unaffected — they are read in place); an explicit <code>staging_mode</code> on the same rule wins. Equivalent to <code>staging_mode = "stream_fifo"</code></td>
 </tr>
 <tr>
 <td><code>checksum</code></td>
 <td>String</td>
 <td>No</td>
-<td>Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today</td>
+<td>Opt the rule's outputs into checksum recording and content verification: <code>"sha256"</code> or <code>"md5"</code>. The expanded outputs are hashed at completion and recorded in the checkpoint's <code>checksums</code> map (<code>&lt;algorithm&gt;:&lt;hex&gt;</code>) — <strong>without</strong> needing <code>--provenance</code>. The freshness gate recomputes each recorded output with its declared algorithm, so tampered content re-executes even when the mtime looks fresh, and <code>oxo-flow provenance verify</code> re-verifies with the recorded algorithm. Invalid algorithms are rejected at parse time. Rules without the field are only recorded under <code>--provenance</code> (sha256)</td>
 </tr>
 <tr>
 <td><code>resource_hint</code></td>
 <td>Table</td>
 <td>No</td>
-<td>Resource estimation hints for dynamic scheduling</td>
+<td>Resource estimation hints for dynamic scheduling — <code>input_size</code> and <code>memory_scale</code> feed the memory estimator; <code>runtime</code> and <code>io_bound</code> are parsed but <strong>not consumed</strong> by anything today, and <code>lint</code> flags them with <code>W037</code></td>
 </tr>
 </tbody>
 </table>
@@ -8059,12 +8064,14 @@ named group. The <code>env_group</code> spec takes precedence over an inline
 path separator is validated before use. Bare command names (<code>python</code>,
 <code>Rscript</code>) are always allowed; absolute paths must live under a safe
 directory (<code>/usr/bin</code>, <code>/usr/local/bin</code>, <code>/bin</code>, <code>/opt</code>, <code>/home</code>, <code>/Users</code>).
-Rejected (the engine falls back to auto-detection with a warning):
-relative paths containing a separator (<code>./evil</code>, <code>bin/evil</code>), paths whose
-prefix merely resembles a safe directory (<code>/home_evil/x</code>, <code>/opt_bad/x</code>),
-Windows drive-letter/backslash paths, and anything containing <code>..</code>.
-A rejected interpreter never aborts the run — the engine logs
-<code>interpreter override rejected</code> and uses the detection order above.</p>
+Rejected: relative paths containing a separator (<code>./evil</code>, <code>bin/evil</code>),
+paths whose prefix merely resembles a safe directory (<code>/home_evil/x</code>,
+<code>/opt_bad/x</code>), Windows drive-letter/backslash paths, and anything
+containing <code>..</code>.
+A rejected interpreter is a <strong>hard error</strong>: workflow validation fails (E002
+from <code>oxo-flow validate</code>) and the workflow refuses to load; at run time the
+rule fails with the same validation error rather than silently running the
+script under an auto-detected interpreter.</p>
 <h3 id="lifecycle-hooks">Lifecycle Hooks<a class="headerlink" href="#lifecycle-hooks" title="Permanent link">#</a></h3>
 <p>Hooks allow you to run auxiliary logic at different stages of a rule's life:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">[[rules]]</span>
@@ -8270,12 +8277,14 @@ to whatever remains:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="k">[rules.resource_hint]</span>
 </span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="n">input_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"medium"</span><span class="w">     </span><span class="c1"># small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)</span>
 </span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="n">memory_scale</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.0</span><span class="w">        </span><span class="c1"># Estimated memory = input_size × scale</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">          </span><span class="c1"># reserved: parsed, not yet consumed by the scheduler</span>
-</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="n">io_bound</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># reserved: parsed, not yet consumed by the scheduler</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">          </span><span class="c1"># reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="n">io_bound</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037</span>
 </span></code></pre></div>
 <p>Memory estimation formula: <code>estimated_mb = input_size_mb × memory_scale</code>. The
 <code>runtime</code> and <code>io_bound</code> hints are reserved scheduler knobs: only
-<code>input_size</code> and <code>memory_scale</code> are consumed today.</p>
+<code>input_size</code> and <code>memory_scale</code> are consumed today, and <code>lint</code> flags every
+use of the reserved two with <code>W037</code>. For enforced limits declare
+<code>resources.time_limit</code> / <code>resources.memory</code> / <code>resources.threads</code> instead.</p>
 <h3 id="numa-pinning">NUMA pinning<a class="headerlink" href="#numa-pinning" title="Permanent link">#</a></h3>
 <p>On multi-socket hosts, rules can be pinned to a NUMA node so memory
 bandwidth stays local to the cores running the job:</p>
@@ -8484,7 +8493,7 @@ resume.</p>
 <td><code>localrule</code></td>
 <td>Boolean</td>
 <td><code>false</code></td>
-<td>Parsed but <strong>not enforced yet</strong> — every schedulable rule can currently be submitted to the cluster</td>
+<td>Pin the rule to local execution — cluster paths refuse to submit it (fail fast before any submission, naming the rule)</td>
 </tr>
 <tr>
 <td><code>checkpoint</code></td>
@@ -8522,7 +8531,7 @@ and duplicate edges are deduplicated.</p>
 </span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a><span class="k">[[rules]]</span>
 </span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7" href="#__codelineno-39-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"local_only"</span>
 </span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8" href="#__codelineno-39-8"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"echo 'local task'"</span>
-</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9" href="#__codelineno-39-9"></a><span class="n">localrule</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c1"># NOTE: not yet enforced — every schedulable rule can be submitted</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9" href="#__codelineno-39-9"></a><span class="n">localrule</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c1"># never submitted by cluster paths; run this workflow via `oxo-flow run`</span>
 </span></code></pre></div>
 <h3 id="input-groups-input_groups">Input Groups (<code>input_groups</code>)<a class="headerlink" href="#input-groups-input_groups" title="Permanent link">#</a></h3>
 <p>Group many files of one sample (or any pattern key) into a <strong>single</strong>
@@ -8546,9 +8555,15 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
   <code>raw/{sample}_*_R1.fastq.gz</code> groups every lane file of a
   sample without enumerating lane names — the CAT_FASTQ shape, where the
   per-sample file count is not known ahead of time and no <code>[[values]]</code>
-  table can list it. <code>**</code> (cross-segment recursion) is rejected. Note a
-  <code>{wildcard}</code> span may span a separator by design (<code>\S+</code>); the segment
-  locality applies to bare <code>*</code> only.</li>
+  table can list it. <code>**</code> (issue #1013) is <strong>cross-segment recursion</strong>:
+  <code>raw/{sample}/**.fq</code> groups every fq of a sample at any depth. The
+  idiomatic <code>**/</code> form also matches zero directories (<code>raw/**/{sample}.fq</code>
+  matches <code>raw/S1.fq</code> with an empty star value), and inside a <code>**</code>
+  pattern a <code>{wildcard}</code> span is pinned to a single segment — so the
+  recursive star, not the group key, absorbs the extra path components.
+  In star-free patterns a <code>{wildcard}</code> span may still span a separator by
+  design (<code>\S+</code>); segment locality applies to bare <code>*</code> and <code>**</code> patterns
+  only.</li>
 <li><code>group_by</code> — the wildcard that names each group. One instance is
   created per discovered group value. May also be a metadata column,
   <code>group_by = "meta.&lt;column&gt;"</code> — see below.</li>
@@ -8580,8 +8595,8 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
   folds by base id, the same convention the group pattern itself uses.</li>
 </ul>
 <p>v1 constraints: at most <strong>one</strong> <code>input_groups</code> entry per rule;
-<code>**</code> recursion is not supported in <code>pattern</code> (bare <code>*</code> globs within one
-segment are supported);
+<code>**</code> recursion is supported in <code>pattern</code> (a bare <code>*</code> stays within one
+segment; <code>**/</code> also matches zero directories);
 producers must be declared <strong>before</strong> their <code>input_groups</code> consumer;
 the <code>keep</code> wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via
@@ -8683,17 +8698,17 @@ antibody is wanted:</p>
 <tr>
 <td><code>format_hint</code></td>
 <td>Array</td>
-<td>Parsed but <strong>not yet used</strong> by the engine (planned for I/O optimization)</td>
+<td>Parsed but <strong>not yet used</strong> by the engine (planned for I/O optimization); <code>oxo-flow lint</code> flags every use with <strong>W038</strong></td>
 </tr>
 <tr>
 <td><code>pipe</code></td>
 <td>Boolean</td>
-<td>Parsed but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today)</td>
+<td>Defaults the rule to <code>staging_mode = "stream_fifo"</code> for remote inputs (real FIFO streaming); explicit <code>staging_mode</code> wins</td>
 </tr>
 <tr>
 <td><code>checksum</code></td>
 <td>String</td>
-<td>Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless</td>
+<td><code>"sha256"</code> or <code>"md5"</code> — records the rule's output checksums (prefixed with the algorithm) without <code>--provenance</code>; the freshness gate and <code>provenance verify</code> re-verify with the recorded algorithm</td>
 </tr>
 </tbody>
 </table>
@@ -8701,7 +8716,8 @@ antibody is wanted:</p>
 </span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{sample}.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span>
 </span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a><span class="n">ancient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span><span class="w">  </span><span class="c1"># never triggers rebuild, however new the file is</span>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a><span class="c1"># format_hint and checksum are accepted but currently have no effect</span>
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a><span class="c1"># format_hint is accepted but has no effect yet — `oxo-flow lint` flags it</span>
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6" href="#__codelineno-44-6"></a><span class="c1"># with W038; `pipe = true` selects stream_fifo staging for remote inputs</span>
 </span></code></pre></div>
 <h3 id="organization">Organization<a class="headerlink" href="#organization" title="Permanent link">#</a></h3>
 <table>
@@ -8875,7 +8891,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>input_function</code></td>
 <td>String</td>
-<td>Parsed and included in the rule fingerprint but <strong>not yet called</strong> — no dynamic input resolution is performed today (use <code>expand_inputs</code> or <code>output_pattern</code> for dynamic inputs)</td>
+<td>Included in the rule fingerprint but <strong>not yet called</strong> — no dynamic input resolution is performed today, and <code>lint</code> flags every use with <code>W036</code> (use <code>expand_inputs</code> or <code>output_pattern</code> for dynamic inputs)</td>
 </tr>
 </tbody>
 </table>
@@ -10726,7 +10742,7 @@ the transport counterpart of the <code>on_complete</code> / <code>on_error</code
 <td><code>events</code></td>
 <td>Array of String</td>
 <td><code>["workflow_completed"]</code></td>
-<td>Which events fire: <code>workflow_started</code>, <code>workflow_completed</code>, <code>workflow_failed</code> (<code>rule_completed</code>/<code>rule_failed</code> are defined but not yet dispatched)</td>
+<td>Which events fire: <code>workflow_started</code>, <code>workflow_completed</code>, <code>workflow_failed</code>, plus the rule-level <code>rule_completed</code>/<code>rule_failed</code> (one payload per scheduled rule terminal state)</td>
 </tr>
 <tr>
 <td><code>headers</code></td>
@@ -10925,8 +10941,10 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   Container backends (docker/singularity) do not see host environment
   variables by default; point the container image's temp setting at a
   mounted path, or wait for explicit <code>-e</code> pass-through support. Cluster
-  submissions (<code>run --profile</code> with <code>[cluster]</code>) do not yet honor
-  <code>tmp_dir</code>/<code>OXO_FLOW_TMPDIR</code> — the same gap as output-tail bytes there.
+  submissions (<code>run --profile</code> with <code>[cluster]</code>) honor it too: each job
+  script exports <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> to the resolved directory before
+  the rule's command (the directory must exist on the nodes' shared
+  filesystem — see <a href="../../commands/run/#cluster-submission">Cluster submission</a>).
   The <code>OXO_FLOW_TMPDIR</code> override is used verbatim: it must already be
   absolute, <code>~</code> and <code>..</code> are not expanded, and a relative value anchors to
   the process working directory — unlike the config value, which anchors
@@ -10974,8 +10992,12 @@ disk. The required size comes from the rule's <code>resources.disk</code> value
 (1 GiB when unset). If no tier qualifies, the scratch directory falls back
 to <code>&lt;workdir&gt;/.oxo-flow/scratch/</code> as before; without any tier configured
 the ladder is inert. Outputs are moved back to their declared paths after
-the rule completes. On cluster backends scratch tiers are not yet consulted
-(jobs run directly in the shared workdir).</p>
+the rule completes. The scratch machinery is local-executor-only: the
+cluster path (<code>oxo-flow cluster submit</code> / <code>oxo-flow run --cluster</code> <strong>rejects
+workflows whose runnable rules declare <code>scratch = true</code></strong> at plan time,
+naming each offender, instead of silently running the job in the shared
+workdir where fixed-filename outputs collide across concurrent instances.
+Remove the directive or run those rules on the local path).</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../how-to/create-workflow/">Create a Workflow</a> — practical authoring guide</li>

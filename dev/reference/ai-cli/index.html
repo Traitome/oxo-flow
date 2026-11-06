@@ -4942,16 +4942,24 @@ is fail-closed end to end:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">[ai]</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">    </span><span class="c1"># parsed but not enforced by the current recovery path</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">    </span><span class="c1"># recovery write mode: "ask" (default) | "always" | "never"</span>
 </span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
 </span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># "compact" | "full"</span>
 </span></code></pre></div>
-<blockquote>
-<p><strong>Current safety limitation</strong>: <code>auto_fix</code> is parsed but has no runtime consumer in the repair
-path. Workflow-level provider/model selection is also not guaranteed to reconfigure the CLI
-runtime. Do not treat either setting as an authorization or data-governance control until the
-audit gates for AI remediation are closed.</p>
-</blockquote>
+<p><code>auto_fix</code> controls what the recovery path may do with an AI-proposed workflow
+patch. The mode gates on top of the model's own safety verdict and TOML
+validation — it never bypasses either:</p>
+<ul>
+<li><code>ask</code> (default) — prompt y/N before writing on an interactive terminal;
+  non-interactive sessions (CI, scripts) are denied with an explanation, so a
+  headless run can never rewrite the workflow silently</li>
+<li><code>always</code> — apply safe fixes automatically (a patch flagged unsafe by the
+  safety assessment is only displayed, never written)</li>
+<li><code>never</code> — only report, never modify</li>
+</ul>
+<p>Workflow-level provider/model selection is still not guaranteed to reconfigure
+the CLI runtime — treat that setting as advisory until the remaining audit
+gates close.</p>
 <h3 id="generation-team-profiles">Generation team profiles<a class="headerlink" href="#generation-team-profiles" title="Permanent link">#</a></h3>
 <p><code>template --ai</code> runs one generation agent with the engine-gate correction
 loop (the <strong>compact</strong> profile, default). The <strong>full</strong> profile adds three
@@ -5396,9 +5404,12 @@ unchanged.</p>
 <li>Rule fails → capture error signature</li>
 <li>AI matches against known error patterns (OOM, segfault, missing files, etc.)</li>
 <li>AI proposes a root cause and bounded patch</li>
-<li>Current behavior may display or apply a proposal, but <code>auto_fix</code> is not yet
-   an enforced authorization control and a partial replacement block can
-   overwrite a complete workflow</li>
+<li>The resolved <code>auto_fix</code> mode decides who may write: <code>ask</code> (the default)
+   prompts y/N on an interactive terminal and is denied in non-interactive
+   sessions, <code>always</code> auto-applies safe fixes, <code>never</code> only reports. In every
+   mode the generated TOML must still validate as a complete workflow before
+   it is written; a patch flagged unsafe by the safety assessment is only
+   displayed</li>
 <li>A repair is not described as fixed until the complete workflow validates,
    the applied diff is reviewed, and a rerun verifies its outputs</li>
 </ol>

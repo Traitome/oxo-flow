@@ -4539,7 +4539,7 @@ code <code>NO_REDO</code>.</p>
 <hr />
 <h2 id="important-notes">Important Notes<a class="headerlink" href="#important-notes" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>File-based edges are immutable via the edit API.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules, which the edit API cannot currently modify.</li>
+<li><strong>File-based edges are rewired through <code>update_rule</code>, not <code>connect</code>/<code>disconnect</code>.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules: <code>update_rule</code> patches those fields like any other, so editing a rule's <code>input</code> (or <code>output</code>) list is how the edit API adds or removes an implicit edge. There is no dedicated edge command for them — an edit that changes what a rule reads changes the inferred edges with it.</li>
 <li>
 <p><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are
 returned in <code>validation_errors</code> with <code>success: false</code>, and the edit is rolled

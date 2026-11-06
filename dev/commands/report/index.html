@@ -4670,7 +4670,7 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 <td><code>--format</code></td>
 <td><code>-f</code></td>
 <td>inferred</td>
-<td>Output format: <code>html</code>, <code>json</code>, <code>md</code>, <code>pdf</code>, or <code>pdf-command</code>. Inferred from the <code>-o</code> extension when omitted, else <code>html</code></td>
+<td>Output format: <code>html</code>, <code>json</code>, <code>md</code>, <code>pdf</code>, or <code>pdf-command</code>. Inferred from the <code>-o</code> extension when omitted, else from the first <code>[report].format</code> entry, else <code>html</code></td>
 </tr>
 <tr>
 <td><code>--output</code></td>
@@ -4797,7 +4797,7 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 </tr>
 <tr>
 <td><code>1</code></td>
-<td>Rendering/usage error (e.g. unsupported format, <code>[report].format</code> set under <code>--strict</code>, <code>--diff</code> without both checkpoints)</td>
+<td>Rendering/usage error (e.g. unsupported format, multiple <code>[report].format</code> entries under <code>--strict</code>, <code>--diff</code> without both checkpoints)</td>
 </tr>
 <tr>
 <td><code>2</code></td>

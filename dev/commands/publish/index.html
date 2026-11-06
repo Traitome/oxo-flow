@@ -2382,6 +2382,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#bundle-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bundle Signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#reproducibility-caveats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3903,6 +3914,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#bundle-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bundle Signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#reproducibility-caveats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4004,6 +4026,11 @@ each environment YAML, ensuring exact reproducibility across time.</p>
 <td>Archive format: <code>tar.zst</code> (default, better compression) or <code>tar.gz</code> (universal compatibility)</td>
 </tr>
 <tr>
+<td><code>--sign-key</code></td>
+<td></td>
+<td>Ed25519 signing key (64 hex chars or 32 raw bytes) — signs the manifest so <code>run --bundle</code> verifies it</td>
+</tr>
+<tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
 <td>Enable verbose (debug-level) logging</td>
@@ -4038,15 +4065,18 @@ each environment YAML, ensuring exact reproducibility across time.</p>
 </span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># Publish with deterministic lockfiles</span>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>oxo-flow<span class="w"> </span>publish<span class="w"> </span>my_pipeline.oxoflow<span class="w"> </span>--with-lockfiles
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># Run a published bundle (extract → verify → confirm → execute)</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>my_pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># Publish a signed bundle (ed25519; key = 64 hex chars or 32 raw bytes)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>oxo-flow<span class="w"> </span>publish<span class="w"> </span>my_pipeline.oxoflow<span class="w"> </span>--sign-key<span class="w"> </span>~/.oxo-flow/bundle-signing.key
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="c1"># Run with --yes to skip confirmation (CI/scripts)</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>my_pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="c1"># Run a published bundle (extract → verify → confirm → execute)</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>my_pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
 </span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="c1"># Pull a remote bundle and run it</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>oxo-flow<span class="w"> </span>pull<span class="w"> </span>gh:user/repo@v0.28.0
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>repo-bundle.tar.zst<span class="w"> </span>--yes
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="c1"># Run with --yes to skip confirmation (CI/scripts)</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>my_pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="c1"># Pull a remote bundle and run it</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>oxo-flow<span class="w"> </span>pull<span class="w"> </span>gh:user/repo@v0.28.0
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>repo-bundle.tar.zst<span class="w"> </span>--yes
 </span></code></pre></div>
 <h2 id="manifest-format">Manifest Format<a class="headerlink" href="#manifest-format" title="Permanent link">#</a></h2>
 <p>Bundle members keep the workflow's own relative paths (an environment declared as
@@ -4091,9 +4121,30 @@ archive root), so the bundled workflow's references resolve unchanged.</p>
 </span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a><span class="w">  </span><span class="nt">"signatures"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
 </span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a><span class="p">}</span>
 </span></code></pre></div>
-<p><code>signatures</code> is reserved for future bundle signing and is always empty today.
-It is present so that adding signatures later is an additive change rather than
-a manifest format bump.</p>
+<p><code>signatures</code> carries one entry per ed25519 signature over the manifest. It is
+empty for unsigned bundles and stays an array so old manifests remain valid.</p>
+<h2 id="bundle-signing">Bundle Signing<a class="headerlink" href="#bundle-signing" title="Permanent link">#</a></h2>
+<p><code>publish --sign-key &lt;file&gt;</code> signs the manifest with ed25519: the key file
+holds the 32-byte seed, either raw or as 64 hex characters. The signature
+covers the manifest JSON with the <code>signatures</code> field removed — and since the
+manifest carries a SHA-256 checksum for every archived file, one signature
+transitively attests the whole bundle.</p>
+<p>On the consumer side, <code>oxo-flow run --bundle</code> (and <code>pull</code>, which hands the
+downloaded bundle to the same verifier) checks checksums first, then verifies
+every signature entry:</p>
+<ul>
+<li>an empty <code>signatures</code> array keeps the old behavior — checksums only, valid;</li>
+<li>a bundle that <em>claims</em> a signature must have it verify — a present but
+  wrong, malformed, or algorithm-unsupported signature aborts the run before
+  execution, even when every file checksum matches.</li>
+</ul>
+<p>Generate a key once and reuse it per publisher identity (the public key in
+the manifest is what consumers can pin against):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>openssl<span class="w"> </span>genpkey<span class="w"> </span>-algorithm<span class="w"> </span>ed25519<span class="w"> </span>-outform<span class="w"> </span>DER<span class="w"> </span>-out<span class="w"> </span>seed.der<span class="w"> </span><span class="m">2</span>&gt;/dev/null
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># or any 32 random bytes:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>head<span class="w"> </span>-c<span class="w"> </span><span class="m">32</span><span class="w"> </span>/dev/urandom<span class="w"> </span>&gt;<span class="w"> </span>~/.oxo-flow/bundle-signing.key
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>oxo-flow<span class="w"> </span>publish<span class="w"> </span>my_pipeline.oxoflow<span class="w"> </span>--sign-key<span class="w"> </span>~/.oxo-flow/bundle-signing.key
+</span></code></pre></div>
 <h2 id="reproducibility-caveats">Reproducibility Caveats<a class="headerlink" href="#reproducibility-caveats" title="Permanent link">#</a></h2>
 <p>A bundle captures the workflow, its environment specifications, and checksums for
 every file. That makes a bundle <em>verifiable</em> — you can prove you received exactly

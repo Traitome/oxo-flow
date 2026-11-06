@@ -5103,8 +5103,10 @@ much completed work stays protected.</p>
 <p><strong>Use caching</strong>: a rule with <code>cache_key</code> reuses its outputs from the
    content cache when the key, inputs, outputs, and rendered command hash
    identically to a previous run — bump the key when a dependency's
-   behavior changes without touching the declared inputs. (<code>pipe</code> is
-   parsed but not wired up yet — do not rely on it.)</p>
+   behavior changes without touching the declared inputs. (<code>pipe =
+   true</code> selects <code>staging_mode = "stream_fifo"</code> for remote inputs —
+   real FIFO streaming; <code>format_hint</code> is still a no-op and <code>lint</code>
+   flags it with W038.)</p>
 </li>
 </ol>
 <h3 id="memory-issues-with-large-workflows">Memory issues with large workflows<a class="headerlink" href="#memory-issues-with-large-workflows" title="Permanent link">#</a></h3>

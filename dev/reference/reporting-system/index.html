@@ -4414,8 +4414,10 @@ value <code>"report.html"</code> selects the built-in template, anything else is
 template file path resolved relative to the workflow file's directory
 first, then the current directory. A render failure warns and falls back
 to the default renderer (exit 2 under <code>--strict</code>). <code>[report].format</code>
-remains unsupported — setting it makes the command warn (or fail under
-<code>--strict</code>); the output format is selected with <code>-f</code>.</p>
+supplies the default output format: when <code>report</code> runs without <code>-f</code> and
+the <code>-o</code> extension does not name a format, its first entry is used
+(<code>html</code>, <code>json</code>, <code>md</code>, or <code>pdf</code>); extra entries warn (fail under
+<code>--strict</code>).</p>
 <h3 id="software-versions-section">Software-versions section<a class="headerlink" href="#software-versions-section" title="Permanent link">#</a></h3>
 <p>The <code>software-versions</code> section renders an nf-core-style table of
 <strong>declared</strong> software per rule: docker <code>image:tag</code> (registry as its own

@@ -5677,7 +5677,9 @@ Returns license type, validity, commercial use flag, and contact info.</p>
 </span></code></pre></div>
 Admin-only outside personal mode; the payload is bounded (64 KiB). The
 raw blob is <strong>not</strong> stored — only its size and SHA-256 land in the audit
-trail (the endpoint does not yet activate licenses).</p>
+trail (the endpoint does not yet activate licenses — no license format or
+verification machinery exists yet; <code>GET /api/license</code> reports the built-in
+academic license regardless of any upload).</p>
 <h3 id="users-admin">Users (admin)<a class="headerlink" href="#users-admin" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET    /api/users          # List users (admin only)
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>POST   /api/users          # Create user

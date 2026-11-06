@@ -5331,6 +5331,14 @@ below list every code the engine currently emits.</p>
 <td><code>W035</code></td>
 <td>A command reads a shell glob (e.g. <code>cat stats/*.count.txt</code>) while the rule declares no inputs — globs are expanded by the shell at run time and create no DAG dependency, so the rule may run before the files it reads exist</td>
 </tr>
+<tr>
+<td><code>W036</code></td>
+<td>A rule declares <code>input_function</code>, but the engine performs no dynamic input resolution — the field is parsed and round-tripped yet never called, so the input list stays exactly as declared (the declared function name does not fill it at run time)</td>
+</tr>
+<tr>
+<td><code>W037</code></td>
+<td>A <code>resource_hint</code> sets <code>runtime</code> or <code>io_bound</code> — both are parsed but consumed by nothing; the scheduler only uses <code>input_size</code> and <code>memory_scale</code> today</td>
+</tr>
 </tbody>
 </table>
 <p>Schema-check codes (<code>S001</code>–<code>S007</code>) come from the raw-file schema pass,

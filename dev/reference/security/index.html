@@ -4206,11 +4206,20 @@ command).</p>
 <tr>
 <td>Interpreter paths</td>
 <td>Only simple names or paths under <code>/usr/bin</code>, <code>/usr/local/bin</code>, <code>/opt</code>, <code>/home</code>, <code>/Users</code></td>
-<td>Run time (script execution)</td>
+<td>Parse/validate (E002) + run time</td>
 </tr>
 </tbody>
 </table>
-<p>Interpreter paths are enforced at <strong>run time</strong>, when a script rule's <code>interpreter</code> override is resolved (<code>validate_interpreter_path</code>): a rejected path is logged as a warning and the override is ignored, so the script runs without its declared interpreter. <code>validate</code> does not check interpreter paths.</p>
+<p>Interpreter paths are enforced at <strong>two points</strong> (<code>validate_interpreter_path</code>):</p>
+<ul>
+<li><strong>Parse/validate time</strong>: an <code>interpreter</code> override that fails the checks
+  fails workflow validation (<code>Rule::validate_field_formats</code>), so <code>oxo-flow
+  validate</code> reports it as E002 and the workflow refuses to load — the script
+  can never silently run under a different interpreter.</li>
+<li><strong>Run time</strong> (defense in depth): command construction re-checks the
+  override and fails the rule with the validation error instead of falling
+  back to auto-detection.</li>
+</ul>
 <hr />
 <h2 id="layer-3-secret-credential-scanning">Layer 3 — Secret &amp; Credential Scanning<a class="headerlink" href="#layer-3-secret-credential-scanning" title="Permanent link">#</a></h2>
 <p>Hardcoded credentials in workflow TOML content are detected by the <code>oxo-flow lint</code> command (<code>format::scan_for_secrets</code>), which emits S008 warnings; it does not block execution.</p>
