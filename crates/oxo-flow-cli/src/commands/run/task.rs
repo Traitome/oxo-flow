@@ -342,7 +342,7 @@ pub(crate) async fn execute_rule_task(
                 if let Some(ref manifest) = input_manifest {
                     ck.record_input_manifest(&rule_name, manifest.clone());
                 }
-                if ctx.provenance {
+                if ctx.provenance || rule.checksum.is_some() {
                     // Expand `{config.*}` (and wildcards) exactly
                     // like the output-verification pass does —
                     // recording the UNEXPANDED template stored a
@@ -352,28 +352,58 @@ pub(crate) async fn execute_rule_task(
                     // workflow (issue #276). Keys stay consistent
                     // with `should_skip_rule_with_checksums`,
                     // which looks up EXPANDED paths.
+                    // E6 (issue #1013): a rule with an explicit
+                    // `checksum = "sha256"|"md5"` records its
+                    // outputs even without `--provenance`, hashed
+                    // with the algorithm the rule declared; the
+                    // recorded value carries the algorithm prefix
+                    // so verification recomputes with the same one.
+                    // Per-instance wildcard outputs (which still
+                    // contain `{`) resolve only at fan-out, exactly
+                    // as under --provenance. Fan-out bindings live in
+                    // instance_bindings, so they are merged into the
+                    // expansion map here — the same merge the
+                    // executor performs for its own path handling.
+                    let checksum_algorithm = rule
+                        .checksum
+                        .as_deref()
+                        .and_then(
+                            oxo_flow_core::executor::checkpoint::OutputChecksumAlgorithm::from_rule_spec,
+                        );
+                    let mut wildcard_scope: HashMap<String, String> = (*wildcard_values).clone();
+                    for (k, v) in &instance_bindings {
+                        wildcard_scope.insert(k.clone(), v.clone());
+                    }
                     let mut recorded_here = 0usize;
                     for output in &rule.output {
                         let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
                             output,
-                            &wildcard_values,
+                            &wildcard_scope,
                         );
                         if expanded.contains('{') {
                             continue; // per-instance wildcard: resolved only at fan-out
                         }
                         let output_path = ctx.workdir_actual.join(&expanded);
-                        if output_path.exists()
-                            && let Ok(checksum) =
-                                oxo_flow_core::executor::checkpoint::compute_file_checksum(
-                                    &output_path,
-                                )
-                        {
+                        if !output_path.exists() {
+                            continue;
+                        }
+                        let checksum_result = if let Some(alg) = checksum_algorithm {
+                            oxo_flow_core::executor::checkpoint::hash_file_with_algorithm(
+                                &output_path,
+                                alg,
+                            )
+                        } else {
+                            oxo_flow_core::executor::checkpoint::compute_file_checksum(&output_path)
+                        };
+                        if let Ok(checksum) = checksum_result {
                             ck.record_checksum(&expanded, checksum);
                             recorded_here += 1;
                         }
                     }
-                    ctx.provenance_recorded
-                        .fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
+                    if ctx.provenance {
+                        ctx.provenance_recorded
+                            .fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 if let Err(e) = ck.save_to_file_async(&ctx.checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {e}");

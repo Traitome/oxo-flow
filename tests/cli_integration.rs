@@ -6068,6 +6068,65 @@ fn cli_run_blocked_rule_is_not_checkpointed() {
     }
 }
 
+/// Per-rule `checksum = "sha256"` / `checksum = "md5"` (issue #1013 E6):
+/// an opted-in rule records output checksums into the checkpoint WITHOUT
+/// `--provenance`, keyed by expanded output path and prefixed with the
+/// declared algorithm; rules without the field stay unrecorded.
+#[test]
+fn cli_run_per_rule_checksum_records_without_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("sum.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"sum\"\nversion = \"1.0\"\n\n\
+         [[rules]]\nname = \"sha_rule\"\noutput = [\"sha.txt\"]\nchecksum = \"sha256\"\n\
+         shell = \"echo sha-payload > {output[0]}\"\n\n\
+         [[rules]]\nname = \"md5_rule\"\noutput = [\"md5.txt\"]\nchecksum = \"md5\"\n\
+         shell = \"echo md5-payload > {output[0]}\"\n\n\
+         [[rules]]\nname = \"plain\"\noutput = [\"plain.txt\"]\n\
+         shell = \"echo plain-payload > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Deliberately WITHOUT --provenance: the per-rule opt-in must be enough.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let raw = fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let checksums = parsed["checksums"].as_object().expect("checksums map");
+
+    // Keys are EXPANDED OUTPUT PATHS (not rule names), values are
+    // "<algo>:<hex>" records.
+    let sha_record = checksums
+        .get("sha.txt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!("sha.txt must be recorded without --provenance; checksums={checksums:?}")
+        });
+    assert!(
+        sha_record.starts_with("sha256:"),
+        "sha256 rule records with sha256 prefix: {sha_record}"
+    );
+    let md5_record = checksums
+        .get("md5.txt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!("md5.txt must be recorded without --provenance; checksums={checksums:?}")
+        });
+    assert!(
+        md5_record.starts_with("md5:") && md5_record.len() == "md5:".len() + 32,
+        "md5 rule records a 32-hex md5 digest: {md5_record}"
+    );
+    assert!(
+        !checksums.contains_key("plain.txt"),
+        "rules without the checksum field stay unrecorded: {raw}"
+    );
+}
+
 /// Full `temporary = true` lifecycle: after a successful run the intermediate
 /// is deleted and tombstoned; a plain rerun skips the whole chain; deleting a
 /// dependent's output lazily regenerates the producer first.
