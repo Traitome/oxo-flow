@@ -384,13 +384,21 @@ async function runQualityCommand(
   if (kind === "validate") {
     const ok = res.exitCode === 0;
     const pick = await vscode.window.showInformationMessage(
-      ok ? "Pipeline is valid." : "Validation failed — see the oxo-flow output panel.",
+      ok
+        ? "Pipeline is valid."
+        : res.timedOut
+          ? "Validation timed out — the CLI hung or the machine is overloaded (see the oxo-flow output panel)."
+          : "Validation failed — see the oxo-flow output panel.",
       "Show Problems"
     );
     if (pick === "Show Problems") void vscode.commands.executeCommand("workbench.actions.view.problems");
   } else {
     void vscode.window.showInformationMessage(
-      res.exitCode === 0 ? "Lint passed." : "Lint found issues — see the oxo-flow output panel."
+      res.exitCode === 0
+        ? "Lint passed."
+        : res.timedOut
+          ? "Lint timed out — the CLI hung or the machine is overloaded (see the oxo-flow output panel)."
+          : "Lint found issues — see the oxo-flow output panel."
     );
   }
 }
@@ -627,7 +635,11 @@ async function exportSchema(statusBar: StatusBar): Promise<void> {
     runCli(executable, schemaArgs(), { cwd: folder.uri.fsPath })
   );
   if (res.spawnError || res.exitCode !== 0) {
-    void showErrorWithReport(`oxo-flow schema failed: ${res.spawnError ?? res.stderr}`);
+    void showErrorWithReport(
+      res.timedOut
+        ? "oxo-flow schema timed out — the CLI hung or the machine is overloaded."
+        : `oxo-flow schema failed: ${res.spawnError ?? res.stderr}`
+    );
     return;
   }
   const dest = vscode.Uri.joinPath(folder.uri, "oxo-flow-schema.json");

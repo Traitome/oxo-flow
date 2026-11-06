@@ -29,6 +29,11 @@ export class OxoflowFormattingProvider implements vscode.DocumentFormattingEditP
       if (res.spawnError) {
         throw new Error(`cannot run ${executable}: ${res.spawnError}`);
       }
+      if (res.timedOut) {
+        throw new Error(
+          `oxo-flow format timed out after 30s — the CLI hung or the machine is overloaded`
+        );
+      }
       if (res.exitCode !== 0) {
         throw new Error(`oxo-flow format failed (exit ${res.exitCode}): ${tail(res.stderr)}`);
       }
