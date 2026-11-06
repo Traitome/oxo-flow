@@ -73,6 +73,7 @@ export default function Settings() {
   const [webhookSecret, setWebhookSecret] = useState('');
   const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>([]);
   const [newKeyName, setNewKeyName] = useState('');
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
 
   const loadApiKeys = async () => {
     try { setApiKeys(await api.listApiKeys()); } catch { setApiKeys([]); }
@@ -81,10 +82,18 @@ export default function Settings() {
 
 
   useEffect(() => {
-    api.health().then(setHealth).catch(() => {});
-    api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
-    api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed')));
-    api.referenceStatus().then(setRefs).catch(() => {});
+    // Load failures must not read as "loaded, and these are the values"
+    // (M-5): the operator cannot otherwise tell "no webhook configured"
+    // from "the webhook endpoint 500'd". Collect every failure and
+    // surface the list once all loaders settle — the same treatment the
+    // quota loader already gets via setNotice.
+    const failures: string[] = [];
+    const loadFailed = (key: string) => () => { failures.push(t(key)); };
+    Promise.allSettled([
+      api.health().then(setHealth).catch(loadFailed('settings.loadFailed.health')),
+      api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(loadFailed('settings.loadFailed.aiConfig')),
+      api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed'))),
+      api.referenceStatus().then(setRefs).catch(loadFailed('settings.loadFailed.references')),
     api.aiConfigUser().then((c) => {
       const u = c.user_config as Partial<typeof adv> | undefined;
       if (u) setAdv({
@@ -93,9 +102,10 @@ export default function Settings() {
         auto_retry_enabled: u.auto_retry_enabled ?? false,
         max_correction_rounds: u.max_correction_rounds ?? 3,
       });
-    }).catch(() => {});
-    api.webhookConfig().then(setWebhook).catch(() => {});
-    api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([]));
+    }).catch(loadFailed('settings.loadFailed.aiConfigUser')),
+      api.webhookConfig().then(setWebhook).catch(loadFailed('settings.loadFailed.webhook')),
+      api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([])),
+    ]).then(() => setLoadErrors(failures));
 
   }, [t]);
 
@@ -160,6 +170,11 @@ export default function Settings() {
     <div className="page">
       <h1 className="page-title">{t('settings.title')}</h1>
       {notice && <div className="result-bar success" style={{ cursor: 'pointer' }} onClick={() => setNotice(null)}>{notice}</div>}
+      {loadErrors.length > 0 && (
+        <div className="result-bar error" style={{ cursor: 'pointer' }} onClick={() => setLoadErrors([])}>
+          {loadErrors.join(' · ')}
+        </div>
+      )}
       <p className="page-subtitle">{t('settings.subtitle')}</p>
 
       {/* ── AI Provider ── */}
