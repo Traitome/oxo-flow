@@ -780,6 +780,16 @@ nf-core-derived images ship bash, and their scripts rely on bash features
 (`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.
 
+**Stale pixi.lock fallback:** a rule declared with
+`environment = { pixi = "envs/pixi.toml" }` installs from the committed
+`pixi.lock` beside that manifest. When the pinned package builds have
+vanished upstream (fetch 404/410), the engine re-solves from the manifest,
+parks the fresh solution as `pixi.lock.new` beside the committed lock
+(never silently overwriting it), and marks the run's environment
+reproducibility as **degraded** in the report. Adoption, the package-level
+diff warning, and the `--strict-envs` opt-out are covered in
+[Stale pixi.lock fallback](../commands/run.md#stale-pixilock-fallback).
+
 **Inline conda package lists:** besides a YAML path, a conda/mamba spec may
 be a channel-qualified **package list** — the concise form for rules whose
 environment is a handful of pinned tools:

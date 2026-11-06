@@ -2321,19 +2321,31 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let mut pairs = vec![
+            ("oxo-flow Version".into(), env!("CARGO_PKG_VERSION").into()),
+            (
+                "Platform".into(),
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            ("Declared Rule Environments".into(), declared),
+        ];
+        // Issue #1011 P1: disclose a degraded reproducibility state. The
+        // one-way checkpoint flag flips only when a stale pixi.lock forced a
+        // re-solve, so reports can never silently omit that a run's
+        // environment diverged from the committed lock.
+        if ctx.checkpoint.is_some_and(|ck| ck.env_repro_degraded) {
+            pairs.push((
+                "Environment Reproducibility".into(),
+                "degraded — a stale pixi.lock was re-solved from the manifest during this \
+                 run; review the parked pixi.lock.new beside the manifest and commit it to \
+                 restore reproducibility"
+                    .into(),
+            ));
+        }
         vec![ReportSection {
             title: "Environment".into(),
             id: "environment".into(),
-            content: ReportContent::KeyValue {
-                pairs: vec![
-                    ("oxo-flow Version".into(), env!("CARGO_PKG_VERSION").into()),
-                    (
-                        "Platform".into(),
-                        format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-                    ),
-                    ("Declared Rule Environments".into(), declared),
-                ],
-            },
+            content: ReportContent::KeyValue { pairs },
             subsections: vec![],
         }]
     }
@@ -3597,6 +3609,54 @@ mod tests {
             workflow_path,
             checkpoint_path: None,
         }
+    }
+
+    #[test]
+    fn environment_section_discloses_degraded_reproducibility() {
+        // Issue #1011 P1: a run whose stale pixi.lock was re-solved must
+        // carry the disclosure in the environment section…
+        let config = workflow_config(
+            r#"[[rules]]
+name = "quantify"
+shell = "salmon quant"
+[rules.environment]
+pixi = "pixi/pixi.toml"
+"#,
+        );
+        let mut ck = fixture_checkpoint();
+        ck.env_repro_degraded = true;
+        let ctx = ctx_for(&config, Some(&ck), None);
+        let section = EnvironmentInfoGenerator
+            .generate(&ctx)
+            .into_iter()
+            .find(|s| s.id == "environment")
+            .unwrap();
+        let ReportContent::KeyValue { pairs } = &section.content else {
+            panic!("environment section must be KeyValue");
+        };
+        let degraded = pairs
+            .iter()
+            .find(|(k, _)| k == "Environment Reproducibility")
+            .unwrap_or_else(|| panic!("degraded disclosure missing: {pairs:?}"));
+        assert!(degraded.1.contains("degraded"), "got: {}", degraded.1);
+
+        // …and stays silent when the flag never flipped.
+        let clean_ck = CheckpointState::new();
+        let ctx = ctx_for(&config, Some(&clean_ck), None);
+        let section = EnvironmentInfoGenerator
+            .generate(&ctx)
+            .into_iter()
+            .find(|s| s.id == "environment")
+            .unwrap();
+        let ReportContent::KeyValue { pairs } = &section.content else {
+            panic!("environment section must be KeyValue");
+        };
+        assert!(
+            pairs
+                .iter()
+                .all(|(k, _)| k != "Environment Reproducibility"),
+            "no disclosure expected on a clean run: {pairs:?}"
+        );
     }
 
     #[test]

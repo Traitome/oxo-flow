@@ -234,6 +234,13 @@ pub enum Commands {
         /// Without this flag `run` refuses to execute.
         #[arg(long)]
         allow_protected_drift: bool,
+        /// Strict environment mode (issue #1011): a stale pixi.lock install
+        /// failure hard-fails instead of gracefully re-solving from the
+        /// manifest (re-solve is the default for reproducibility-sensitive
+        /// GxP-style deployments that must never proceed on a divergent
+        /// solution).
+        #[arg(long)]
+        strict_envs: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -1445,6 +1452,7 @@ async fn main() -> Result<()> {
             background,
             allow_protected_drift,
             from_rule,
+            strict_envs,
         } => {
             // ── Background runs (issue #158) ─────────────────────────────
             // The foreground process never executes the workflow: it spawns
@@ -1604,6 +1612,7 @@ async fn main() -> Result<()> {
                 // run derives the workdir default
                 checkpoint_override: None,
                 allow_protected_drift,
+                strict_envs,
             })
             .await?
         }
@@ -2110,6 +2119,8 @@ async fn main() -> Result<()> {
                         // test mode runs the full upstream closure; it has
                         // no mid-chain re-run root to invalidate.
                         from_rule: None,
+                        // test keeps the graceful env fallback
+                        strict_envs: false,
                     })
                     .await
                 );

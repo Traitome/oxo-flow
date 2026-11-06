@@ -386,6 +386,12 @@ pub struct ExecutorConfig {
     pub hardware_topology: Option<crate::hardware::HardwareTopology>,
     /// Multi-tier scratch storage ladder (Tier 0 RAM, Tier 1 NVMe, Tier 2 Shared).
     pub storage_tiers: Option<crate::hardware::StorageTierLadder>,
+    /// Strict environment mode (`--strict-envs`, issue #1011 P2): disables
+    /// the stale-pixi.lock graceful fallback so a lock-based install failure
+    /// hard-fails exactly as before — for GxP-style deployments where a run
+    /// must never proceed on a solution that diverges from the committed
+    /// lock. Default off = graceful re-solve with disclosure.
+    pub strict_envs: bool,
 }
 
 impl Default for ExecutorConfig {
@@ -416,6 +422,7 @@ impl Default for ExecutorConfig {
             tmp_dir: None,
             hardware_topology: None,
             storage_tiers: None,
+            strict_envs: false,
         }
     }
 }
@@ -839,6 +846,13 @@ impl LocalExecutor {
                         "pixi is not installed. Install: https://pixi.sh/latest/#installation"
                             .into(),
                     )
+                } else if crate::executor::pixi_lock_fallback::is_stale_lock_fetch_failure(stderr) {
+                    Some(
+                        "the committed pixi.lock pins a package build that no longer exists \
+                         upstream (stale lock). oxo-flow will re-solve from the manifest and \
+                         park the fresh solution in pixi.lock.new for review."
+                            .into(),
+                    )
                 } else {
                     None
                 }
@@ -1226,7 +1240,34 @@ impl LocalExecutor {
             }
             Ok(o) => {
                 let stderr = o.stderr;
-                let hint = Self::env_setup_hint(env_spec.kind(), &stderr);
+                // Issue #1011 P0: a stale committed pixi.lock (upstream build
+                // vanished from the channel) is recoverable — re-solve from
+                // the manifest with loud disclosure instead of failing the
+                // run. --strict-envs skips the fallback and keeps the hard
+                // failure below.
+                if self
+                    .try_pixi_stale_lock_recovery(
+                        rule, env_spec, &key, &setup_cmd, &stderr, store_kind, store_base,
+                    )
+                    .await
+                {
+                    return Ok(());
+                }
+                let hint = if self.config.strict_envs
+                    && env_spec.kind() == "pixi"
+                    && crate::executor::pixi_lock_fallback::is_stale_lock_fetch_failure(&stderr)
+                {
+                    Some(
+                        "the committed pixi.lock pins a package build that no longer exists \
+                         upstream (stale lock). --strict-envs disables the automatic re-solve, \
+                         so the run fails here; refresh the lock by hand (delete pixi.lock, \
+                         `pixi install`, commit the re-solved lock) or rerun without \
+                         --strict-envs to use the graceful fallback"
+                            .to_string(),
+                    )
+                } else {
+                    Self::env_setup_hint(env_spec.kind(), &stderr)
+                };
                 Err(OxoFlowError::Environment {
                     kind: env_spec.kind().to_string(),
                     message: if let Some(h) = hint {
@@ -1247,6 +1288,135 @@ impl LocalExecutor {
                         format!("setup command failed: {}", err_msg)
                     },
                 })
+            }
+        }
+    }
+
+    /// Issue #1011 P0: attempt graceful recovery from a stale committed
+    /// `pixi.lock` (an upstream channel removed a pinned package build).
+    ///
+    /// Fires only when all of these hold:
+    ///
+    /// - the failing backend is pixi
+    /// - `--strict-envs` is off (GxP-style deployments keep the hard fail)
+    /// - stderr matches the stale-lock fetch signature — a deterministic
+    ///   solver conflict re-solves into the same conflict and must not
+    ///   trigger this
+    /// - a committed `pixi.lock` sits beside the manifest
+    ///
+    /// On success: parks the fresh solution in `pixi.lock.new`, warns loudly
+    /// with the package-level diff, flips the one-way `env_repro_degraded`
+    /// checkpoint disclosure, and mirrors the normal pixi success path
+    /// (re-home + cache mark-ready). Returns `true` and the caller returns
+    /// `Ok(())`. Any failure returns `false` so the caller surfaces the
+    /// ORIGINAL setup error — the fallback must never mask the root cause.
+    #[allow(clippy::too_many_arguments)] // mirrors the setup-failure call site's existing context bundle
+    async fn try_pixi_stale_lock_recovery(
+        &self,
+        rule: &Rule,
+        env_spec: &crate::rule::EnvironmentSpec,
+        key: &str,
+        setup_cmd: &str,
+        stderr: &str,
+        store_kind: Option<super::env_store::StoreKind>,
+        store_base: Option<&std::path::Path>,
+    ) -> bool {
+        if self.config.strict_envs || env_spec.kind() != "pixi" {
+            return false;
+        }
+        if !crate::executor::pixi_lock_fallback::is_stale_lock_fetch_failure(stderr) {
+            return false;
+        }
+        // The lock lives beside the manifest (mirrors
+        // PixiBackend::cache_key's derivation). Pixi specs stay relative at
+        // this site when no --workdir override is active, and rule shells
+        // run with cwd = workdir, so a relative spec anchors at the workdir
+        // — the same base store_base uses; absolute specs pass through.
+        let Some(manifest) = env_spec.pixi.as_deref().filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        let manifest_path = Path::new(manifest);
+        let lock_path = if manifest_path.is_absolute() {
+            manifest_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("pixi.lock")
+        } else {
+            self.config
+                .workdir
+                .join(manifest_path.parent().unwrap_or_else(|| Path::new(".")))
+                .join("pixi.lock")
+        };
+        if !lock_path.is_file() {
+            tracing::debug!(
+                rule = %rule.name,
+                lock = %lock_path.display(),
+                "pixi setup failed with a stale-lock signature but no committed pixi.lock exists beside the manifest — no fallback to attempt"
+            );
+            return false;
+        }
+        let Ok(old_lock) = std::fs::read_to_string(&lock_path) else {
+            tracing::warn!(
+                rule = %rule.name,
+                lock = %lock_path.display(),
+                "stale pixi.lock suspected but it could not be read for diffing — surfacing the original setup failure"
+            );
+            return false;
+        };
+
+        // Re-run the exact setup command the executor already built (same
+        // Command shape as the primary attempt, #524 kill_on_drop included)
+        // so the re-solve exercises the identical pixi invocation.
+        let reinstall = || async {
+            let mut cmd = Command::new("sh");
+            cmd.kill_on_drop(true)
+                .arg("-c")
+                .arg(setup_cmd)
+                .current_dir(&self.config.workdir);
+            match cmd.output().await {
+                Ok(o) if o.status.success() => Ok(()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
+                Err(e) => Err(e.to_string()),
+            }
+        };
+        match crate::executor::pixi_lock_fallback::re_solve_in_place(&lock_path, reinstall).await {
+            Ok(fresh) => {
+                let diff =
+                    crate::executor::pixi_lock_fallback::package_diff(&old_lock, &fresh.content);
+                tracing::warn!(
+                    rule = %rule.name,
+                    env = %key,
+                    manifest = %manifest,
+                    "STALE pixi.lock: the committed lock pinned package build(s) no longer \
+                     present upstream — re-solved from the manifest and parked the fresh \
+                     solution in {} for review; the committed lock was restored byte-identical, \
+                     so this run proceeded on a re-solved environment (environment \
+                     reproducibility: degraded). Adopt by replacing pixi.lock with the \
+                     side-car and committing.\n{}",
+                    crate::executor::pixi_lock_fallback::NEW_LOCK_NAME,
+                    crate::executor::pixi_lock_fallback::format_package_diff(&diff)
+                );
+                // P1 disclosure: one-way flag persisted in the checkpoint so
+                // report layers can disclose the degraded reproducibility.
+                if let Some(ck) = &self.config.checkpoint {
+                    ck.lock().await.env_repro_degraded = true;
+                }
+                // Mirror the normal pixi success path: re-home into the
+                // shared store (best-effort), then mark the cache entry
+                // ready — the committed-lock restore kept the cache key
+                // (which folds in the lock content) stable.
+                self.rehome_store_managed_env(rule, env_spec, store_kind, store_base, key)
+                    .await;
+                self.env_resolver.cache_mark_ready(key).await;
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    error = %e,
+                    "stale pixi.lock fallback did not succeed — surfacing the original setup failure"
+                );
+                false
             }
         }
     }
@@ -6684,8 +6854,53 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
     }
 
     #[test]
+    fn hint_pixi_stale_lock_404_fires_fallback_hint() {
+        // Live pixi 0.84.1 stderr: lock pinned a python build that vanished
+        // from conda-forge. Must classify as stale-lock, not leave hintless.
+        let stderr = r#"
+ WARN Encountered 1 warning while parsing the manifest:
+  ⚠ The `project` field is deprecated. Use `workspace` instead.
+   ╭─[/tmp/oxo-resolve2/pixi.toml:1:1]
+ 1 │ ╭─▶ [project]
+ 2 │ │   name = "probe"
+ 3 │ │   channels = ["conda-forge"]
+ 4 │ ├─▶ platforms = ["osx-arm64"]
+   · ╰──── replace this with 'workspace'
+ 5 │
+   ╰────
+
+Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
+  ├─▶ failed to interact with the package cache layer.
+  ╰─▶ HTTP status client error (404 Not Found) for url (https://
+      conda.anaconda.org/conda-forge/osx-arm64/python-3.12.16-
+      hDEADBEEF_0_cpython.conda)
+"#;
+        let hint = LocalExecutor::env_setup_hint("pixi", stderr).unwrap();
+        assert!(
+            hint.contains("stale lock"),
+            "pixi 404 stderr must produce the stale-lock hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn hint_pixi_solver_conflict_does_not_fire_stale_lock_hint() {
+        // Deterministic manifest conflict: the fallback cannot fix it, so
+        // the stale-lock hint must stay silent.
+        let stderr = "Error:   × failed to solve requirements\n  \
+                      ├─▶ No candidates were found for python-3.13\n";
+        assert!(LocalExecutor::env_setup_hint("pixi", stderr).is_none());
+    }
+
+    #[test]
+    fn hint_pixi_deprecation_warning_alone_is_hintless() {
+        let stderr = " WARN Encountered 1 warning while parsing the manifest:\n  \
+                      ⚠ The `project` field is deprecated. Use `workspace` instead.\n";
+        assert!(LocalExecutor::env_setup_hint("pixi", stderr).is_none());
+    }
+
+    #[test]
     fn hint_existing_arms_unchanged() {
-        let cases: [(&str, &str, &str); 4] = [
+        let cases: [(&str, &str, &str); 5] = [
             (
                 "conda",
                 "zsh: command not found: conda",
@@ -6705,6 +6920,11 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
                 "mamba",
                 "mkdir /wf/.oxo-flow/env: permission denied",
                 "permission denied",
+            ),
+            (
+                "pixi",
+                "zsh: command not found: pixi",
+                "pixi is not installed",
             ),
         ];
         for (kind, stderr, expect) in cases {
@@ -6763,5 +6983,254 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
             scratch.starts_with(&nvme_scratch),
             "expected scratch under nvme: {scratch:?}"
         );
+    }
+
+    /// Builds a manifest dir with a committed lock and returns an
+    /// ExecutorConfig anchored so the fallback's relative-lock resolution
+    /// (workdir + manifest dir) lands on it.
+    fn recovery_env(
+        tmp: &tempfile::TempDir,
+        lock_bytes: &str,
+    ) -> (ExecutorConfig, crate::rule::EnvironmentSpec) {
+        let manifest_dir = tmp.path().join("wf/pixi");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join("pixi.toml"),
+            "[workspace]\nname = \"probe\"\n",
+        )
+        .unwrap();
+        std::fs::write(manifest_dir.join("pixi.lock"), lock_bytes).unwrap();
+        let env_spec = crate::rule::EnvironmentSpec {
+            pixi: Some("wf/pixi/pixi.toml".to_string()),
+            ..Default::default()
+        };
+        let config = ExecutorConfig {
+            workdir: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
+        (config, env_spec)
+    }
+
+    fn recovery_rule() -> Rule {
+        Rule {
+            name: "quantify".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_rewrites_and_restores() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_lock = "- conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.12.16-hDEADBEEF_0_cpython.conda\n";
+        let (config, env_spec) = recovery_env(&tmp, old_lock);
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+
+        let fresh_lock = "- conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.13.7-hNEW_0_cpython.conda\n";
+        // Fake "re-solve": the setup command's manifest dir currently holds a
+        // committed pixi.lock — remove it and write the fresh lock, exactly
+        // what a real re-solve run does after the executor deletes the lock.
+        // The trailing newline is added by the shell printf, so the side-car
+        // content ends with one too.
+        let reinstall_script = format!(
+            "rm -f {0}/pixi.lock && printf '%s\\n' '{1}' > {0}/pixi.lock",
+            tmp.path().join("wf/pixi").display(),
+            fresh_lock.trim_end_matches('\n')
+        );
+
+        let key = ex.env_resolver.cache_key(&env_spec);
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key,
+                &format!("echo would-install; {reinstall_script}"),
+                &stale_404_stderr(),
+                Some(crate::executor::env_store::StoreKind::Pixi),
+                Some(tmp.path()),
+            )
+            .await;
+        assert!(recovered, "stale-lock 404 must trigger recovery");
+
+        // Committed lock restored byte-identical…
+        let restored = std::fs::read_to_string(tmp.path().join("wf/pixi/pixi.lock")).unwrap();
+        assert_eq!(restored, old_lock);
+        // …fresh solution parked in the side-car…
+        let side_car = std::fs::read_to_string(tmp.path().join("wf/pixi/pixi.lock.new")).unwrap();
+        assert_eq!(side_car, fresh_lock);
+        // …and the cache entry marked ready.
+        assert!(ex.env_resolver.cache_is_ready(&key).await);
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_sets_checkpoint_disclosure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old\n");
+        let ck = Arc::new(Mutex::new(
+            crate::executor::checkpoint::CheckpointState::new(),
+        ));
+        let config = ExecutorConfig {
+            checkpoint: Some(ck.clone()),
+            ..config
+        };
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+        let key = ex.env_resolver.cache_key(&env_spec);
+
+        let ok = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key,
+                &format!(
+                    "printf '%s' 'fresh lock content' > {}/pixi.lock",
+                    tmp.path().join("wf/pixi").display()
+                ),
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(ok);
+        assert!(
+            ck.lock().await.env_repro_degraded,
+            "checkpoint disclosure must flip after a successful re-solve"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_strict_envs_skips_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old\n");
+        let config = ExecutorConfig {
+            strict_envs: true,
+            ..config
+        };
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+        let key = ex.env_resolver.cache_key(&env_spec);
+
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key,
+                "true",
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(!recovered, "--strict-envs must keep the hard failure");
+
+        // Committed lock untouched, no side-car.
+        assert!(tmp.path().join("wf/pixi/pixi.lock").is_file());
+        assert!(!tmp.path().join("wf/pixi/pixi.lock.new").exists());
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_ignores_solver_conflict_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old\n");
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                "true",
+                "Error:   × failed to solve requirements\n  ├─▶ No candidates were found for python-3.13\n",
+                None,
+                None,
+            )
+            .await;
+        assert!(
+            !recovered,
+            "deterministic solver conflict must not re-solve"
+        );
+        assert!(tmp.path().join("wf/pixi/pixi.lock").is_file());
+        assert!(!tmp.path().join("wf/pixi/pixi.lock.new").exists());
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_needs_committed_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_dir = tmp.path().join("wf/pixi");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join("pixi.toml"),
+            "[workspace]\nname = \"probe\"\n",
+        )
+        .unwrap();
+        let config = ExecutorConfig {
+            workdir: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let ex = LocalExecutor::new(config);
+        let env_spec = crate::rule::EnvironmentSpec {
+            pixi: Some("wf/pixi/pixi.toml".to_string()),
+            ..Default::default()
+        };
+        let rule = recovery_rule();
+
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                "true",
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(
+            !recovered,
+            "no committed pixi.lock — nothing to fall back from"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_failed_resolve_falls_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old\n");
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+
+        // Re-solve command fails: original setup error must surface (the
+        // caller returns false → the outer arm reports the root cause).
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                "exit 42",
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(!recovered, "a failed re-solve must not report success");
+        // The committed lock must still be back in place.
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("wf/pixi/pixi.lock")).unwrap(),
+            "old\n"
+        );
+    }
+
+    /// The live pixi 404 stderr fixture (shared with the pure-logic tests in
+    /// the fallback module) reduced to the essentials for orchestration tests.
+    fn stale_404_stderr() -> String {
+        "Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda\n  \
+         ╰─▶ HTTP status client error (404 Not Found) for url (https://conda.anaconda.org/conda-forge/noarch/python-3.12.16-hDEADBEEF_0_cpython.conda)\n"
+            .to_string()
+    }
+
+    /// Cache key helper: mirrors the production keying so the lock-derived
+    /// spec content stays part of the key in these tests too.
+    fn key_of(ex: &LocalExecutor, env_spec: &crate::rule::EnvironmentSpec) -> String {
+        ex.env_resolver.cache_key(env_spec)
     }
 }
