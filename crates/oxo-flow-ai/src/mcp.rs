@@ -452,8 +452,8 @@ impl McpHttpClient {
     }
 
     /// Async variant of [`McpHttpClient::new_with_allowlist`] using
-    /// [`screen_mcp_endpoint_async`] so callers already inside async
-    /// contexts do not block worker threads on DNS resolution.
+    /// tokio DNS resolution so callers already inside async contexts do
+    /// not block worker threads.
     pub async fn new_with_allowlist_async(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
         let base_url = normalize_mcp_url(url)?;
         let pin = screen_mcp_endpoint_async(&base_url, &allow).await?;
