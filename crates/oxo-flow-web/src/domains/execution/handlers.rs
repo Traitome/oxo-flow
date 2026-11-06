@@ -726,6 +726,10 @@ pub async fn create_run(
                 config_overrides: validated_overrides,
                 allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
                 provenance: req.provenance.unwrap_or(false),
+                // Create never carries a from-rule origin: a fresh run has
+                // no checkpoint to invalidate. Mid-chain re-entry lives on
+                // the retry path only (issue #1017).
+                from_rule: None,
             },
         );
     }
@@ -1353,21 +1357,17 @@ pub async fn retry_run(
         ));
     }
 
-    // `from_rule` is documented in the API reference, but the engine has no
-    // "re-execute from rule X downstream" mode: the retry spawns the CLI with
-    // --resume-failed --rerun, which re-runs the checkpoint's failed set. A
-    // plan computed from an arbitrary origin would be a promise the spawned
-    // run cannot keep, so the field is rejected instead of silently ignored.
-    if req.get("from_rule").is_some_and(|v| !v.is_null()) {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "UNSUPPORTED_FIELD",
-            "from_rule is not supported: a retry re-executes the rules that failed in the \
-             previous run (plus their downstream dependents). To re-run a specific rule, \
-             remove its outputs or use `oxo-flow run --rerun`."
-                .into(),
-        ));
-    }
+    // Issue #1017: `from_rule` on retry is now supported — the engine
+    // computes the transitive-dependent closure of the named rule and
+    // invalidates their checkpoint entries, so downstream rules re-execute
+    // with the new upstream outputs. The web layer does not need to
+    // pre-compute the closure here: the CLI's `--from-rule` flag does the
+    // same DAG walk and checkpoint invalidation at run start, one engine,
+    // two surfaces. The value is forwarded verbatim to the spawned run.
+    let from_rule: Option<String> = req
+        .get("from_rule")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let skip_succeeded = req
         .get("skip_succeeded")
         .and_then(|v| v.as_bool())
@@ -1395,7 +1395,7 @@ pub async fn retry_run(
             )
         })?;
 
-    let plan = service::compute_retry_plan(&node_items, &dag, skip_succeeded)
+    let plan = service::compute_retry_plan(&node_items, &dag, skip_succeeded, from_rule.as_deref())
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))?;
 
     // Honesty note (issue #760): an empty plan on a FAILED run means the
@@ -1480,6 +1480,20 @@ pub async fn retry_run(
     );
     crate::infra::quota::reserve(&new_run_id, &user.id, quota_usage.0, quota_usage.1);
 
+    // Issue #1017: when `from_rule` is set the retry semantics change from
+    // "re-run the failed set" to "re-run from this rule downstream". The
+    // CLI's `--from-rule` flag computes the transitive-dependent closure
+    // and invalidates those checkpoint entries, so downstream rules
+    // re-execute with the new upstream outputs. `--resume-failed` and
+    // `--rerun` are suppressed in this path: the closure invalidation
+    // subsumes them (the from-rule itself is always re-executed, and every
+    // transitive dependent is invalidated before the freshness gate runs).
+    let (resume_failed, rerun) = if from_rule.is_some() {
+        (false, false)
+    } else {
+        (true, true)
+    };
+
     // Same workdir → checkpoint-driven partial re-execution.
     crate::executor::spawn_background_run(
         new_run_id.clone(),
@@ -1493,8 +1507,8 @@ pub async fn retry_run(
             max_jobs: None,
             samples: vec![],
             targets: vec![],
-            resume_failed: true,
-            rerun: true,
+            resume_failed,
+            rerun,
             config_overrides: retry_overrides,
             // Retry keeps the protection gate (issue #935): only the
             // original create request may relax it, mirroring the CLI's
@@ -1503,6 +1517,9 @@ pub async fn retry_run(
             // Checksums are recorded by the original create request only;
             // resume inherits whatever the checkpoint carries.
             provenance: false,
+            // Issue #1017: forward the from-rule origin so the CLI's
+            // closure invalidation runs before the freshness gate.
+            from_rule,
         },
     );
 

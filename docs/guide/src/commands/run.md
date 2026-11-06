@@ -31,6 +31,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
+| `--from-rule` | — | — | Re-run from RULE downstream: invalidates the transitive-dependent closure of RULE in the checkpoint, then runs RULE and everything downstream of it (issue #1017). Unlike `--target` (upstream closure), `--from-rule` propagates downstream — stale downstream outputs are invalidated before the freshness gate so they re-execute with the new upstream results |
 | `--module` | — | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem (see [Partial module runs](#partial-module-runs-module)) |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds, or a duration like `1h`/`30m` |

@@ -309,6 +309,12 @@ pub struct RunFlags {
     /// can later audit output integrity. Run-only — the dry-run branch
     /// never carries it (the CLI rejects the flag for dry-run).
     pub provenance: bool,
+    /// Forward `--from-rule <RULE>` (issue #1017): re-run from RULE
+    /// downstream, invalidating the transitive-dependent closure so stale
+    /// downstream outputs cannot silently pass the freshness gate. When
+    /// set, the engine computes the closure in the DAG and forces
+    /// re-execution of the whole downstream chain. `None` = full run.
+    pub from_rule: Option<String>,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -383,6 +389,15 @@ pub fn build_cli_args(
         for target in &flags.targets {
             args.push("-t".into());
             args.push(target.into());
+        }
+        if let Some(ref from_rule) = flags.from_rule {
+            // Issue #1017: the CLI computes the transitive-dependent closure
+            // and invalidates their checkpoint entries, so downstream rules
+            // re-execute with the new upstream outputs. This is the same
+            // closure computation the CLI's own `--from-rule` path runs —
+            // one engine, two surfaces.
+            args.push("--from-rule".into());
+            args.push(from_rule.into());
         }
         // Config overrides ride the shared `--arg KEY=VALUE` flag in
         // equals form (mirrors the CLI's own flag/positional merge in
@@ -1154,6 +1169,7 @@ mod tests {
             config_overrides: vec!["min_quality=30".into()],
             allow_protected_drift: false,
             provenance: false,
+            from_rule: None,
         };
         let args = build_cli_args(
             std::path::Path::new("wf.oxoflow"),
