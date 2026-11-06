@@ -436,32 +436,58 @@ impl WorkflowDag {
         stack: &mut Vec<NodeIndex>,
         on_stack: &mut HashSet<NodeIndex>,
     ) -> Option<Vec<String>> {
+        // Iterative DFS (M-4): the recursion depth grew with the longest
+        // chain, so a deep generated workflow overflowed the stack — a
+        // crash where the contract is a cycle diagnostic. The explicit
+        // worklist visits in the same order (neighbors are pushed
+        // reversed so `pop` yields the first edge first).
         visited.insert(node);
         stack.push(node);
         on_stack.insert(node);
-
-        for neighbor in self
-            .graph
-            .neighbors_directed(node, petgraph::Direction::Outgoing)
-        {
-            if !visited.contains(&neighbor) {
-                if let Some(cycle) = self.dfs_find_cycle(neighbor, visited, stack, on_stack) {
-                    return Some(cycle);
+        let mut frames: Vec<(NodeIndex, Vec<NodeIndex>)> = vec![(
+            node,
+            self.graph
+                .neighbors_directed(node, petgraph::Direction::Outgoing)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+        )];
+        while let Some(&(current, _)) = frames.last() {
+            let neighbors = &mut frames.last_mut().expect("frame just peeked").1;
+            match neighbors.pop() {
+                Some(neighbor) => {
+                    if !visited.contains(&neighbor) {
+                        visited.insert(neighbor);
+                        stack.push(neighbor);
+                        on_stack.insert(neighbor);
+                        frames.push((
+                            neighbor,
+                            self.graph
+                                .neighbors_directed(neighbor, petgraph::Direction::Outgoing)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect(),
+                        ));
+                    } else if on_stack.contains(&neighbor) {
+                        // Found a cycle - extract it
+                        let cycle_start = stack.iter().position(|&n| n == neighbor).unwrap_or(0);
+                        let mut cycle: Vec<String> = stack[cycle_start..]
+                            .iter()
+                            .map(|&n| self.graph[n].name.clone())
+                            .collect();
+                        cycle.push(self.graph[neighbor].name.clone()); // Close the cycle
+                        return Some(cycle);
+                    }
                 }
-            } else if on_stack.contains(&neighbor) {
-                // Found a cycle - extract it
-                let cycle_start = stack.iter().position(|&n| n == neighbor).unwrap_or(0);
-                let mut cycle: Vec<String> = stack[cycle_start..]
-                    .iter()
-                    .map(|&n| self.graph[n].name.clone())
-                    .collect();
-                cycle.push(self.graph[neighbor].name.clone()); // Close the cycle
-                return Some(cycle);
+                None => {
+                    frames.pop();
+                    stack.pop();
+                    on_stack.remove(&current);
+                }
             }
         }
-
-        stack.pop();
-        on_stack.remove(&node);
         None
     }
 
@@ -3387,6 +3413,34 @@ mod tests {
             dag.dependencies("combine_gvcfs").unwrap(),
             vec!["call_gvcf"]
         );
+    }
+
+    #[test]
+    fn deep_cycle_reports_a_diagnostic_instead_of_overflowing_the_stack() {
+        // M-4: the recursive DFS grew one frame per node in the chain, so
+        // a cycle at the end of a deep generated workflow overflowed the
+        // stack — a crash where the contract is a cycle diagnostic. The
+        // iterative walk must survive a 50k-rule chain with a back edge.
+        let count = 50_000usize;
+        let mut rules: Vec<Rule> = (0..count)
+            .map(|i| {
+                let input = if i == 0 {
+                    format!("out{}.txt", count - 1)
+                } else {
+                    format!("out{}.txt", i - 1)
+                };
+                make_rule(
+                    Box::leak(format!("rule{i}").into_boxed_str()),
+                    vec![Box::leak(input.into_boxed_str())],
+                    vec![Box::leak(format!("out{i}.txt").into_boxed_str())],
+                )
+            })
+            .collect();
+        rules.reverse();
+        let result = WorkflowDag::from_rules(&rules);
+        assert!(result.is_err(), "the back edge must close the cycle");
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains('→'), "{message}");
     }
 
     #[test]
