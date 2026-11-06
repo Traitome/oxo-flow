@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "996ab13d6f71745d65a63699573f9ef9394ea2a90d56087c469f80b06721a257",
+  "schemaSha256": "4b1e44cabc9e4fb8865d5e47af6238d18b18cb606d6d25e0f06da7db8c167186",
   "contexts": {
     "root": {
       "keys": [
@@ -680,7 +680,7 @@
         },
         {
           "key": "pipe",
-          "description": "Enable FIFO streaming mode",
+          "description": "Default the rule's remote input staging to stream_fifo (real FIFO streaming); an explicit staging_mode wins. Local inputs are read in place",
           "type": "boolean"
         },
         {

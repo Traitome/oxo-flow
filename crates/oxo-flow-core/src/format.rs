@@ -1762,27 +1762,23 @@ pub fn lint_format(
             });
         }
 
-        // W038: `format_hint` and `pipe` are parsed and round-tripped but
-        // consumed by nothing — no I/O optimization, validation, or FIFO
-        // wiring reads them. An author setting them expects behavior that
-        // does not exist; naming the reserved knobs at lint time keeps the
-        // gap visible (issue #1013 E4/E5).
+        // W038: `format_hint` is parsed and round-tripped but consumed by
+        // nothing — no I/O optimization or validation reads it. An author
+        // setting it expects behavior that does not exist; naming the
+        // reserved knob at lint time keeps the gap visible (issue #1013
+        // E4). `pipe` is NOT flagged: since #997 it selects
+        // `staging_mode = "stream_fifo"` by default for remote inputs.
         let has_format_hint = !rule.format_hint.is_empty();
-        if (has_format_hint || rule.pipe) && executes && !can_never_run {
-            let fields = match (has_format_hint, rule.pipe) {
-                (true, true) => "format_hint and pipe",
-                (true, false) => "format_hint",
-                _ => "pipe",
-            };
+        if has_format_hint && executes && !can_never_run {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 message: format!(
-                    "{fields} parsed but not consumed — the engine performs no format-specific I/O or FIFO streaming today"
+                    "format_hint parsed but not consumed — the engine performs no format-specific I/O today"
                 ),
                 rule: Some(rule.name.clone()),
                 code: "W038".to_string(),
                 suggestion: Some(
-                    "remove the directive, or rely on staging_mode = \"stream_fifo\" for real FIFO staging — format_hint and pipe are reserved for future I/O work"
+                    "remove the directive, or rely on staging_mode = \"stream_fifo\" for real FIFO staging — format_hint is reserved for future I/O work"
                         .to_string(),
                 ),
             });
@@ -6708,13 +6704,15 @@ shell = "samtools faidx {{config.reference}}"
         );
     }
 
-    // ---- W038: format_hint / pipe parsed but not consumed ----
-    // No I/O optimization, validation, or FIFO wiring reads either field;
-    // only staging_mode delivers real FIFO staging. W038 names the gap at
-    // lint time (issue #1013 E4/E5).
+    // ---- W038: format_hint parsed but not consumed ----
+    // No I/O optimization or validation reads format_hint; only staging_mode
+    // delivers real FIFO staging — and `pipe = true` IS consumed: since #997
+    // it defaults the rule to `staging_mode = "stream_fifo"` for remote
+    // inputs, so it stays lint-silent (issue #1013 E4/E5, corrected after
+    // af4929c53 landed effective_staging_mode()).
 
     #[test]
-    fn lint_w038_flags_format_hint_and_pipe() {
+    fn lint_w038_flags_format_hint_only() {
         let toml = r#"
             [workflow]
             name = "test"
@@ -6725,7 +6723,6 @@ shell = "samtools faidx {{config.reference}}"
             output = ["aligned.bam"]
             shell = "bwa mem reads.fq > aligned.bam"
             format_hint = ["fastq", "bam"]
-            pipe = true
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
@@ -6733,14 +6730,17 @@ shell = "samtools faidx {{config.reference}}"
         assert_eq!(w038.len(), 1, "exactly one W038: {diagnostics:?}");
         assert_eq!(w038[0].rule.as_deref(), Some("align"));
         assert!(
-            w038[0].message.contains("format_hint and pipe"),
-            "message names both reserved fields: {}",
+            w038[0].message.contains("format_hint") && !w038[0].message.contains("pipe"),
+            "message names only format_hint: {}",
             w038[0].message
         );
     }
 
     #[test]
-    fn lint_w038_names_only_the_declared_reserved_field() {
+    fn lint_w038_does_not_flag_pipe_alone() {
+        // `pipe = true` is consumed since #997: effective_staging_mode()
+        // maps it to StreamFifo for remote inputs — flagging it would
+        // false-positive on exactly the rules it benefits.
         let toml = r#"
             [workflow]
             name = "test"
@@ -6750,18 +6750,13 @@ shell = "samtools faidx {{config.reference}}"
             input = ["sample.fq"]
             output = ["qc.html"]
             shell = "fastqc sample.fq"
-            format_hint = ["fastq"]
+            pipe = true
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
-        let w038: Vec<_> = diagnostics.iter().filter(|d| d.code == "W038").collect();
-        assert_eq!(w038.len(), 1, "exactly one W038: {diagnostics:?}");
         assert!(
-            w038[0].message.contains("format_hint")
-                && !w038[0].message.contains("and pipe")
-                && !w038[0].message.contains(" pipe"),
-            "message names only format_hint: {}",
-            w038[0].message
+            !diagnostics.iter().any(|d| d.code == "W038"),
+            "pipe selects real staging behavior — no W038: {diagnostics:?}"
         );
     }
 

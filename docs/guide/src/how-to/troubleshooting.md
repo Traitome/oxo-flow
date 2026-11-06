@@ -421,10 +421,10 @@ much completed work stays protected.
 3. **Use caching**: a rule with `cache_key` reuses its outputs from the
    content cache when the key, inputs, outputs, and rendered command hash
    identically to a previous run — bump the key when a dependency's
-   behavior changes without touching the declared inputs. (`pipe` is
-   parsed but not wired up yet — do not rely on it; `oxo-flow lint`
-   flags every use with W038. `staging_mode = "stream_fifo"` is the
-   real FIFO staging path.)
+   behavior changes without touching the declared inputs. (`pipe =
+   true` selects `staging_mode = "stream_fifo"` for remote inputs —
+   real FIFO streaming; `format_hint` is still a no-op and `lint`
+   flags it with W038.)
 
 ### Memory issues with large workflows
 

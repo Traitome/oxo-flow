@@ -1533,7 +1533,7 @@
         "pipe": {
           "type": "boolean",
           "default": false,
-          "description": "Enable FIFO streaming mode"
+          "description": "Default the rule's remote input staging to stream_fifo (real FIFO streaming); an explicit staging_mode wins. Local inputs are read in place"
         },
         "staging_mode": {
           "type": "string",
