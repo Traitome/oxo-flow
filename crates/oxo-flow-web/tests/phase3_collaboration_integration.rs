@@ -300,6 +300,22 @@ async fn test_team_mode_health() {
 }
 
 #[tokio::test]
+async fn test_team_mode_server_ai_config_read_requires_admin() {
+    // The server AI config read must not be world-readable in team mode:
+    // unauthenticated callers are refused at the auth middleware (the
+    // role gate itself is covered in ai_config_server_gate.rs, which owns
+    // the process-global mode).
+    common::ensure_db().await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/ai/config/server")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app_team().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn test_hpc_mode_health() {
     common::ensure_db().await;
     let req = Request::builder()

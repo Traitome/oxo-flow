@@ -643,10 +643,23 @@ pub async fn get_ai_config_effective(
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
+        (status = 403, description = "Error", body = ApiError),
     )
 )]
 /// GET /api/ai/config/server
-pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
+pub async fn get_server_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<serde_json::Value> {
+    // The server read is admin-only outside personal mode (web-api.md's
+    // contract): the configured endpoint URL identifies the internal AI
+    // proxy/gateway — exactly the reconnaissance input a hardened team
+    // deployment must not expose to unauthenticated callers.
+    let user = resolve(authenticated.as_ref());
+    current_user::require_role_outside_personal(
+        &user,
+        "admin",
+        "Admin role required to read the server AI provider config",
+    )?;
     let row = get_backend()?
         .get_ai_provider_config(None)
         .await
