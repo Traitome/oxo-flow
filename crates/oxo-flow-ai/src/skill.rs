@@ -257,11 +257,33 @@ fn scan_skill_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
             && path
                 .file_stem()
                 .is_some_and(|s| s.to_string_lossy().ends_with(".skill"))
-            && let Ok(content) = std::fs::read_to_string(&path)
-            && let Ok(manifest) = toml::from_str::<SkillManifest>(&content)
-            && manifest.validate().is_ok()
         {
-            manifests.push(manifest);
+            // A manifest the user dropped in that silently never loads is
+            // a support ticket generator — say why it was skipped, the
+            // same rule the SKILL.md path already applies (M-10).
+            match std::fs::read_to_string(&path) {
+                Err(e) => {
+                    tracing::warn!("skipping unreadable skill manifest {}: {e}", path.display());
+                }
+                Ok(content) => match toml::from_str::<SkillManifest>(&content) {
+                    Err(e) => {
+                        tracing::warn!(
+                            "skipping skill manifest {}: malformed TOML ({e})",
+                            path.display()
+                        );
+                    }
+                    Ok(manifest) => {
+                        if let Err(e) = manifest.validate() {
+                            tracing::warn!(
+                                "skipping skill manifest {}: failed validation ({e})",
+                                path.display()
+                            );
+                        } else {
+                            manifests.push(manifest);
+                        }
+                    }
+                },
+            }
         }
     }
 
