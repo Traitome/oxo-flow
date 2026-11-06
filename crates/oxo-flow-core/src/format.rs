@@ -1772,9 +1772,9 @@ pub fn lint_format(
         if has_format_hint && executes && !can_never_run {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
-                message: format!(
+                message:
                     "format_hint parsed but not consumed — the engine performs no format-specific I/O today"
-                ),
+                        .to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W038".to_string(),
                 suggestion: Some(

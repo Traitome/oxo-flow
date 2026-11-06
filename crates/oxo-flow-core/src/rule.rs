@@ -1735,21 +1735,16 @@ impl Rule {
         // The per-rule `checksum` spec (issue #1013 E6) must name a supported
         // digest algorithm — reject at parse time instead of silently recording
         // nothing at run time.
-        if let Some(spec) = self.checksum.as_deref() {
-            if crate::executor::checkpoint::OutputChecksumAlgorithm::from_rule_spec(spec).is_none()
-            {
-                return Err(crate::error::OxoFlowError::Validation {
-                    message: format!(
-                        "rule '{}' has invalid checksum '{}'",
-                        self.name, spec
-                    ),
-                    rule: Some(self.name.clone()),
-                    suggestion: Some(
-                        "supported algorithms: checksum = \"sha256\" or checksum = \"md5\""
-                            .to_string(),
-                    ),
-                });
-            }
+        if let Some(spec) = self.checksum.as_deref()
+            && crate::executor::checkpoint::OutputChecksumAlgorithm::from_rule_spec(spec).is_none()
+        {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!("rule '{}' has invalid checksum '{}'", self.name, spec),
+                rule: Some(self.name.clone()),
+                suggestion: Some(
+                    "supported algorithms: checksum = \"sha256\" or checksum = \"md5\"".to_string(),
+                ),
+            });
         }
         Ok(())
     }

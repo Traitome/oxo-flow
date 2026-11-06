@@ -103,7 +103,24 @@ fn verify_files(
             continue;
         }
 
-        match oxo_flow_core::executor::checkpoint::compute_file_checksum(&full_path) {
+        // E6 (issue #1013): the record declares its algorithm as a prefix
+        // ("sha256:<hex>" / "md5:<hex>") — recompute with the SAME
+        // algorithm. An unknown prefix is reported honestly as an error
+        // rather than silently re-hashed with sha256.
+        let verification =
+            match oxo_flow_core::executor::checkpoint::OutputChecksumAlgorithm::from_recorded_prefix(
+                expected,
+            ) {
+                Some(algorithm) => oxo_flow_core::executor::checkpoint::hash_file_with_algorithm(
+                    &full_path, algorithm,
+                ),
+                None => Err(oxo_flow_core::OxoFlowError::Validation {
+                    rule: None,
+                    message: format!("unknown checksum algorithm prefix in record '{expected}'"),
+                    suggestion: None,
+                }),
+            };
+        match verification {
             Ok(actual) if actual == *expected => {
                 entries.push(VerifyEntry::matched(file, expected, &actual));
                 matched += 1;

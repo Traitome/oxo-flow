@@ -481,8 +481,7 @@ output = ["finish.txt"]
                 memory_mb: 8192,
             },
         )
-        .expect("rule command construction succeeds")
-        else {
+        .expect("rule command construction succeeds") else {
             continue;
         };
         let wrapped = env_resolver
