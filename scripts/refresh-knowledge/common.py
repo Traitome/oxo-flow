@@ -113,15 +113,21 @@ def write_jsonl(out_dir: str, name: str, rows: list) -> tuple[str, int, int]:
 
 
 def load_meta(out_dir: str) -> dict:
-    """Load the (optional) knowledge_meta.json accumulator."""
+    """Load the (optional) knowledge_meta.json accumulator.
+
+    Absent file → `{}` (fresh start). An unreadable or corrupt file raises
+    instead of returning `{}`: update_meta writes back the merged result,
+    so a silently-empty base would drop every other source's metadata on
+    the next run — that overwrite is the failure, not the recovery.
+    """
     path = os.path.join(out_dir, META_FILENAME)
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        meta = json.load(f)
+    if not isinstance(meta, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    return meta
 
 
 # Data file for each source key; defaults to "<key>.jsonl".
@@ -156,7 +162,7 @@ def update_meta(out_dir: str, key: str, value: dict) -> None:
     meta.setdefault("sources", {})[key] = record
     meta["generated_at"] = now
     path = os.path.join(out_dir, META_FILENAME)
-    write_text_atomic(path, json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    write_text_atomic(path, json.dumps(meta, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def default_out_dir() -> str:
