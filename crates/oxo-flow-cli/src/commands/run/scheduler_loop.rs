@@ -160,9 +160,9 @@ fn mark_pre_completed(
         skip_reason: None,
         max_rss_mb: None,
         cpu_seconds: None,
-        caption: config.get_rule(rule_name).and_then(|r| {
-            oxo_flow_core::executor::process::rule_report_caption(r, workdir)
-        }),
+        caption: config
+            .get_rule(rule_name)
+            .and_then(|r| oxo_flow_core::executor::process::rule_report_caption(r, workdir)),
     });
     skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if !is_tty {
@@ -289,7 +289,9 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                 .map(|o| oxo_flow_core::executor::checkpoint::expand_config_in_path(o, &scope))
                 .collect();
             let full_coverage = !expanded_outputs.is_empty()
-                && expanded_outputs.iter().all(|o| ck.checksums.contains_key(o));
+                && expanded_outputs
+                    .iter()
+                    .all(|o| ck.checksums.contains_key(o));
             if full_coverage {
                 // Submap clone (#268 item 4): only this rule's entries
                 // travel to the verifier, not the whole checkpoint map.
