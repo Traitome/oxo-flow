@@ -192,9 +192,12 @@ impl RssSampler {
             cpu_micros: AtomicU64::new(0),
             seen: AtomicBool::new(false),
         });
+        // Same poison recovery the tick path documents (issue #194 §3.5):
+        // `track` runs on the rule launch path — converting poisoning into
+        // a panic there turned a degraded-but-running run into a crash (M-3).
         self.tracked
             .lock()
-            .expect("rss sampler lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(pid, tracked_process.clone());
         self.wake.notify_one();
         RssHandle {

@@ -244,7 +244,8 @@ def materialize_community_reference(ref_repo, ref_file, workdir):
         except (urllib.error.URLError, OSError, ValueError) as exc:
             return None, f"{url}: {exc}"
         try:
-            data = tomllib.loads(open(dest, encoding="utf-8").read())
+            with open(dest, encoding="utf-8") as fh:
+                data = tomllib.loads(fh.read())
         except (tomllib.TOMLDecodeError, UnicodeDecodeError):
             continue  # engine (and the graph step) will surface parse errors
         for entry in data.get("include", []):
