@@ -3671,8 +3671,22 @@ async fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
     match tokio::fs::rename(src, dest).await {
         Ok(()) => Ok(()),
         Err(_) => {
-            copy_tree_atomic(src, dest)?;
-            remove_tree(src).await
+            // The rename failure IS the cross-filesystem case (M-2): the
+            // copy is exactly the unbounded, not-local work the sync
+            // recursion must not run on a tokio worker. Off-thread with
+            // owned paths; an aborted task drops the future (the spawn is
+            // best-effort, the copy is the payload).
+            let src = src.to_path_buf();
+            let dest = dest.to_path_buf();
+            let src_after_copy = src.clone();
+            tokio::task::spawn_blocking(move || copy_tree_atomic(&src, &dest))
+                .await
+                .unwrap_or_else(|join_error| {
+                    Err(std::io::Error::other(format!(
+                        "cross-filesystem output copy task failed: {join_error}"
+                    )))
+                })?;
+            remove_tree(&src_after_copy).await
         }
     }
 }
@@ -3751,9 +3765,12 @@ fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Recursively copy a file or directory tree (synchronous: output moves
-/// touch bounded local files; `std::fs` avoids an infinitely sized future
-/// that a recursive `async fn` would need to box).
+/// Recursively copy a file or directory tree. Synchronous `std::fs`
+/// avoids an infinitely sized future that a recursive `async fn` would
+/// need to box — and every production caller (`move_path`'s
+/// cross-filesystem fallback, the atomic copy) runs under
+/// `spawn_blocking`, so the blocking recursion never sits on a tokio
+/// worker (M-2). Callers that add new production paths must do the same.
 pub(super) fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
     let meta = std::fs::metadata(src)?;
     if meta.is_dir() {
