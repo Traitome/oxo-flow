@@ -12,6 +12,7 @@ description = "Core library for the oxo-flow bioinformatics pipeline engine"
 # Cloud storage backends (opt-in)
 s3-storage = ["aws-sdk-s3", "dep:aws-config"]
 gcs-storage = ["dep:sha1"]
+azure-storage = []
 # NOTE: there are deliberately no other feature gates. The former
 # `container`/`webhook`/`report`/`cluster` markers gated nothing (every
 # dependency behind them is non-optional) and their cfg gates drifted

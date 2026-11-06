@@ -236,5 +236,15 @@ re-execute) instead of using the cache.
   `OXO_S3_FORCE_PATH_STYLE=1` (path-style addressing).
 - **UTF-8 only** — `read_to_string` requires the content to be valid
   UTF-8.  Binary files should use `stage` instead.
-- **Azure Blob Storage** — Not yet supported.  Contributions are
-  welcome via the `StorageBackend` trait.
+- **Azure Blob Storage** — Supported via the `azure-storage` feature flag.
+  Uses the Azure Blob REST API directly via `reqwest` (no Azure SDK
+  dependency, issue #1020). Credentials come from the environment:
+
+  | Variable | Purpose |
+  |---|---|
+  | `AZURE_STORAGE_ACCOUNT_NAME` | Storage account name |
+  | `AZURE_STORAGE_ACCOUNT_KEY` | Base64-encoded account key (SharedKey) |
+  | `AZURE_STORAGE_SAS_TOKEN` | Pre-signed SAS token (alternative to SharedKey) |
+  | `AZURE_STORAGE_CONNECTION_STRING` | Fallback: parsed into account+key or account+SAS |
+
+  Use `az://container/blob` URIs in workflow inputs/outputs.
