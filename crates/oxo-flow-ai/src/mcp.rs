@@ -37,6 +37,12 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on `tools/list` pages followed per server: a server that
 /// loops on `nextCursor` must not spin the engine forever.
 const MAX_TOOL_PAGES: usize = 50;
+/// Upper bound on TOTAL tools accumulated across pages (M-11): pages
+/// bound requests, not memory — a server answering every page with an
+/// unbounded tool list and no cursor was never flagged. The tool
+/// registry also hands each entry to the human approver, so past a few
+/// thousand nothing is usable anyway.
+const MAX_TOTAL_TOOLS: usize = 10_000;
 
 // ── MCP Client trait ───────────────────────────────────────────────────────
 
@@ -391,6 +397,23 @@ pub(crate) async fn screen_mcp_endpoint_async(
 /// a hung MCP server must fail the tool call (fail-safe), never block the
 /// AI command indefinitely — and follows NO redirects automatically;
 /// `rpc` re-screens each hop manually (#642).
+/// Canonical `http(s)://` form of an MCP endpoint URL: `mcp://` maps to
+/// `http://`; anything else must already be http(s). One helper so the
+/// sync and async constructors cannot drift apart.
+fn normalize_mcp_url(url: &str) -> Result<String, AiError> {
+    if let Some(rest) = url.strip_prefix("mcp://") {
+        Ok(format!("http://{rest}"))
+    } else if url.starts_with("http://") || url.starts_with("https://") {
+        Ok(url.to_string())
+    } else {
+        Err(AiError::Config {
+            message: format!(
+                "invalid MCP endpoint '{url}' — expected mcp://host:port[/path] or http(s)://..."
+            ),
+        })
+    }
+}
+
 fn pinned_client(pin: Option<(&str, std::net::SocketAddr)>) -> Result<reqwest::Client, AiError> {
     let builder = reqwest::Client::builder();
     let builder = match pin {
@@ -417,17 +440,7 @@ impl McpHttpClient {
     /// Build a client with an explicit exemption list (test seam; the
     /// crate forbids unsafe code so tests cannot set process env).
     pub fn new_with_allowlist(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
-        let base_url = if let Some(rest) = url.strip_prefix("mcp://") {
-            format!("http://{rest}")
-        } else if url.starts_with("http://") || url.starts_with("https://") {
-            url.to_string()
-        } else {
-            return Err(AiError::Config {
-                message: format!(
-                    "invalid MCP endpoint '{url}' — expected mcp://host:port[/path] or http(s)://..."
-                ),
-            });
-        };
+        let base_url = normalize_mcp_url(url)?;
         // #518: a skill manifest is attacker-influenced text, so its
         // mcp:// target gets the same SSRF screen as fetch_url — internal
         // address space is unreachable unless explicitly allowlisted.
@@ -435,13 +448,34 @@ impl McpHttpClient {
         // with the client (#948 P2-1): DNS-resolved endpoints connect to
         // the exact address that was screened.
         let pin = screen_mcp_endpoint(&base_url, &allow)?;
+        Self::build(url, base_url, allow, pin)
+    }
+
+    /// Async variant of [`McpHttpClient::new_with_allowlist`] using
+    /// [`screen_mcp_endpoint_async`] so callers already inside async
+    /// contexts do not block worker threads on DNS resolution.
+    pub async fn new_with_allowlist_async(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
+        let base_url = normalize_mcp_url(url)?;
+        let pin = screen_mcp_endpoint_async(&base_url, &allow).await?;
+        Self::build(url, base_url, allow, pin)
+    }
+
+    /// Shared constructor after URL normalization and SSRF screening:
+    /// identity derivation, pinned client build and token resolution are
+    /// identical for the sync and async paths, so they live in one place.
+    fn build(
+        original_url: &str,
+        base_url: String,
+        allow: Vec<String>,
+        pin: Option<(String, std::net::SocketAddr)>,
+    ) -> Result<Self, AiError> {
         // Identity used for the per-server token variable and error
         // messages: the URL minus scheme and trailing slash, with `:` and
         // `/` folded to `_`. The whole tail — host, port AND path — is
         // part of the identity (two MCP servers can share a host on
         // different paths), so `mcp://fs-gdrive:9000/v1` consults
         // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
-        let server_name = url
+        let server_name = original_url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
             .trim_start_matches("http://")
@@ -473,7 +507,6 @@ impl McpHttpClient {
             pin,
         })
     }
-
     /// Reserve the next monotonically increasing request id. A fresh id per
     /// call keeps the replay guard (`extract_rpc_result` id check) sound:
     /// hardcoded ids collided with the `tools/list` pagination ids and let
@@ -876,6 +909,14 @@ impl McpClient for McpHttpClient {
             .map_err(|e| AiError::Protocol {
                 message: format!("invalid tools/list payload: {e}"),
             })?;
+            if tools.len() + page.len() > MAX_TOTAL_TOOLS {
+                return Err(AiError::Protocol {
+                    message: format!(
+                        "server listed more than {MAX_TOTAL_TOOLS} tools — refusing an \
+                         unbounded tool catalog"
+                    ),
+                });
+            }
             tools.extend(page);
             pages += 1;
             cursor = result
