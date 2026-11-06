@@ -615,9 +615,17 @@ the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
 Like every `ApiResult` error, the 429 carries no `Retry-After` header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error `message` instead (`retry in {wait_secs}s`).
-`from_rule` is **not supported**: the engine has no "re-run from rule X
-downstream" mode (`--target` selects the *upstream* closure), so the field is
-rejected with `400 UNSUPPORTED_FIELD` instead of being silently ignored.
+`from_rule` (issue #1017): when set to a rule name (e.g. `"b"`), the retry
+re-runs from that rule **downstream** — the engine computes the
+transitive-dependent closure of the named rule in the DAG and invalidates
+their checkpoint entries before the freshness gate runs, so downstream rules
+re-execute with the new upstream outputs instead of silently passing the
+freshness gate with stale artifacts. The spawned CLI receives
+`--from-rule <name>` directly (the same closure computation the CLI's own
+`--from-rule` flag runs — one engine, two surfaces). When `from_rule` is
+absent the retry uses the default failed-set semantics (`--resume-failed
+--rerun`). A `from_rule` naming a rule not in the DAG surfaces as a
+`400 RuleNotFound` from the spawned CLI's own DAG walk.
 
 The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with `--resume-failed
@@ -632,6 +640,10 @@ Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }` — plus an
 optional `note` when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
 re-fails identically unless the error is fixed).
+When `from_rule` is set, the plan's `will_rerun` list contains the named
+rule plus every transitive dependent (the downstream closure), and
+`will_skip` contains the remaining completed rules — the same closure the
+engine will invalidate at run start.
 
 ### Cancel
 ```

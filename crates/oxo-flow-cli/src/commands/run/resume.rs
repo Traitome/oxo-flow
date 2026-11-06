@@ -186,6 +186,9 @@ pub async fn resume_command(
         checkpoint_override: Some(checkpoint),
         // resume honors the protection gate
         allow_protected_drift: false,
+        // resume never re-derives a from-rule closure: it continues the
+        // recorded checkpoint's pending set exactly as-is.
+        from_rule: None,
     })
     .await
 }

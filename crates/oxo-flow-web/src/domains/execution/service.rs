@@ -286,7 +286,41 @@ pub fn compute_retry_plan(
     run_nodes: &[NodeStatusItem],
     dag: &WorkflowDag,
     skip_succeeded: bool,
+    from_rule: Option<&str>,
 ) -> Result<RetryResponse, String> {
+    // Issue #1017: when `from_rule` is set the plan is not "re-run the
+    // failed set" but "re-run from this rule downstream". The transitive-
+    // dependent closure of the from-rule root replaces the failed-set
+    // closure; the named rule itself is always in the re-run set.
+    if let Some(rule) = from_rule {
+        let mut will_rerun: Vec<String> = vec![rule.to_string()];
+        if let Ok(closure) = dag.transitive_dependents(rule) {
+            for dep in closure {
+                if !will_rerun.contains(&dep) {
+                    will_rerun.push(dep);
+                }
+            }
+        }
+        let will_skip: Vec<String> = if skip_succeeded {
+            run_nodes
+                .iter()
+                .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
+                .map(|n| n.rule.clone())
+                .collect()
+        } else {
+            vec![]
+        };
+        return Ok(RetryResponse {
+            new_run_id: uuid::Uuid::new_v4().to_string(),
+            will_rerun,
+            will_skip,
+            note: Some(format!(
+                "from-rule: re-running from '{rule}' downstream — the transitive-dependent \
+                 closure is invalidated and re-executed regardless of checkpoint state."
+            )),
+        });
+    }
+
     let mut will_rerun: Vec<String> = run_nodes
         .iter()
         .filter(|n| n.status == NodeStatus::Failed)
@@ -812,7 +846,7 @@ output = ["b.txt"]
                 stdout_tail: None,
             },
         ];
-        let plan = compute_retry_plan(&nodes, &dag, true).unwrap();
+        let plan = compute_retry_plan(&nodes, &dag, true, None).unwrap();
         assert!(plan.will_rerun.contains(&"step1".to_string()));
         assert!(plan.will_rerun.contains(&"step2".to_string()));
     }

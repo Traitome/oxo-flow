@@ -80,21 +80,26 @@ async fn pause_refuses_a_run_without_a_process_group() {
     );
 }
 
-/// `from_rule` on retry is documented but the engine cannot honour it; it
-/// must be rejected, not echoed back as an applied option.
+/// `from_rule` on retry is now supported (issue #1017): the engine computes
+/// the transitive-dependent closure of the named rule and invalidates their
+/// checkpoint entries, so downstream rules re-execute with the new upstream
+/// outputs. The spawned CLI receives `--from-rule <name>` directly. A run
+/// whose pipeline_snapshot cannot be parsed into a DAG surfaces a 500
+/// DAG_ERROR (the snapshot is corrupt — not a from_rule rejection).
 #[tokio::test]
-async fn retry_rejects_the_unsupported_from_rule() {
+async fn retry_from_rule_on_corrupt_snapshot_is_a_500_not_a_silent_noop() {
     common::ensure_db().await;
     seed_run("run-retry", "failed").await;
 
     let (status, body) = post("/api/runs/run-retry/retry", json!({"from_rule": "fastqc"})).await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "UNSUPPORTED_FIELD", "{body}");
-    assert!(
-        body["message"].as_str().unwrap_or("").contains("from_rule"),
-        "the error must name the unsupported field: {body}"
-    );
+    // The seeded run's pipeline_snapshot is empty, so DAG reconstruction
+    // fails — this is a corrupt-row 500, not a from_rule rejection.
+    // The important invariant: from_rule must NOT be silently swallowed
+    // (the old UNSUPPORTED_FIELD 400 was honest; a 200 with no effect
+    // would be the silent-ignore failure mode issue #1017 was filed to fix).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body["code"], "DAG_ERROR", "{body}");
 }
 
 /// Resuming unfreezes a process in place — a `from_rule` origin cannot

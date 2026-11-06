@@ -165,6 +165,12 @@ pub struct RunRequest {
     /// Issue #935 P1: proceed despite protected-tree drift (the fail-gate
     /// above exists so damaged vendor data never silently poisons a run).
     pub allow_protected_drift: bool,
+    /// Issue #1017: when set, the engine computes the transitive-dependent
+    /// closure of this rule in the DAG and invalidates their checkpoint
+    /// entries before planning, so downstream rules re-execute with the
+    /// new upstream outputs instead of silently passing the freshness
+    /// gate with stale artifacts.
+    pub from_rule: Option<String>,
 }
 
 pub async fn run_command(
@@ -196,6 +202,7 @@ pub async fn run_command(
         max_submitted,
         checkpoint_override,
         allow_protected_drift,
+        from_rule,
     }: RunRequest,
 ) -> Result<()> {
     print_banner();
@@ -587,6 +594,36 @@ pub async fn run_command(
         );
     }
     let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
+
+    // ── Issue #1017: downstream-closure invalidation for --from-rule ─────
+    // When the user asks to re-run from a specific rule (`--from-rule X`),
+    // every transitive dependent of X must re-execute with X's new outputs —
+    // not silently pass the freshness gate with artifacts built from the
+    // old X. Compute the closure in the DAG, invalidate those checkpoint
+    // entries, and persist the invalidated state before any scheduling
+    // decision is made. Runs BEFORE the freshness gate so checksum-verified
+    // outputs (E6 machinery) also re-derive.
+    if let Some(ref from_rule_name) = from_rule {
+        let closure: Vec<String> = dag.transitive_dependents(from_rule_name)?;
+        if !closure.is_empty() {
+            let mut ck = checkpoint.lock().await;
+            ck.invalidate_closure(&closure);
+            drop(ck);
+            // Persist the invalidation so a concurrent reader or a crash
+            // before the first save still sees the closure as un-done.
+            checkpoint.lock().await.save_to_file(&checkpoint_path)?;
+            diagnostic_narrate(
+                format_args!(
+                    "  {} --from-rule: invalidated checkpoint for {} downstream \
+                     of '{}' — they will re-execute.",
+                    "Info:".bold().cyan(),
+                    oxo_flow_core::plural(closure.len(), "rule", "rules"),
+                    from_rule_name,
+                ),
+                Some(&run_log),
+            );
+        }
+    }
 
     // Sensitive keys are needed by the snapshot-drift warning below and by
     // config-change detection.

@@ -2073,3 +2073,129 @@ fn input_function_via_rule_builder() {
     rule.output = vec!["result.txt".to_string()].into();
     assert_eq!(rule.input_function.as_deref(), Some("find_fastq_pairs"));
 }
+
+// ── Issue #1017: --from-rule downstream-closure semantics ────────────────
+
+/// 4-node chain A → B → C → D: `--from-rule B` must identify C and D as the
+/// transitive-dependent closure, and `invalidate_closure` must clear their
+/// checkpoint records so they re-execute even when their outputs exist.
+#[test]
+fn from_rule_closure_invalidates_downstream_checkpoints() {
+    use oxo_flow_core::executor::checkpoint::{BenchmarkRecord, CheckpointState};
+
+    let toml = r#"
+        [workflow]
+        name = "from-rule-test"
+
+        [[rules]]
+        name = "a"
+        output = ["a.txt"]
+        shell = "echo a > a.txt"
+
+        [[rules]]
+        name = "b"
+        input = ["a.txt"]
+        output = ["b.txt"]
+        shell = "echo b > b.txt"
+
+        [[rules]]
+        name = "c"
+        input = ["b.txt"]
+        output = ["c.txt"]
+        shell = "echo c > c.txt"
+
+        [[rules]]
+        name = "d"
+        input = ["c.txt"]
+        output = ["d.txt"]
+        shell = "echo d > d.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+
+    // transitive_dependents("b") = ["c", "d"] in topological order.
+    let closure = dag.transitive_dependents("b").unwrap();
+    assert_eq!(closure, vec!["c".to_string(), "d".to_string()]);
+
+    // Simulate a completed checkpoint: all four rules ran.
+    let mut ck = CheckpointState::new();
+    for rule in &["a", "b", "c", "d"] {
+        ck.mark_completed(
+            rule,
+            BenchmarkRecord {
+                rule: rule.to_string(),
+                wall_time_secs: 0.1,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+    }
+
+    // The freshness gate would skip all four rules at this point.
+    assert!(ck.should_skip("a"));
+    assert!(ck.should_skip("b"));
+    assert!(ck.should_skip("c"));
+    assert!(ck.should_skip("d"));
+
+    // --from-rule b: invalidate the downstream closure.
+    ck.invalidate_closure(&closure);
+
+    // a and b stay completed (b is the from-rule root; it is re-executed
+    // by the planner via --target semantics, not by the closure gate).
+    assert!(ck.should_skip("a"));
+    // c and d are invalidated: the freshness gate must re-execute them.
+    assert!(!ck.should_skip("c"));
+    assert!(!ck.should_skip("d"));
+}
+
+/// No-change steady state: when `--from-rule` names a leaf, the closure is
+/// empty and the checkpoint is untouched.
+#[test]
+fn from_rule_leaf_node_no_invalidation() {
+    use oxo_flow_core::executor::checkpoint::{BenchmarkRecord, CheckpointState};
+
+    let toml = r#"
+        [workflow]
+        name = "from-rule-leaf"
+
+        [[rules]]
+        name = "x"
+        output = ["x.txt"]
+        shell = "echo x > x.txt"
+
+        [[rules]]
+        name = "y"
+        input = ["x.txt"]
+        output = ["y.txt"]
+        shell = "echo y > y.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+
+    let closure = dag.transitive_dependents("y").unwrap();
+    assert!(
+        closure.is_empty(),
+        "leaf node has no downstream: {closure:?}"
+    );
+
+    let mut ck = CheckpointState::new();
+    ck.mark_completed(
+        "x",
+        BenchmarkRecord {
+            rule: "x".to_string(),
+            wall_time_secs: 0.1,
+            max_memory_mb: None,
+            memory_limit_mb: None,
+            cpu_seconds: None,
+            retries: 0,
+            recorded_as: None,
+        },
+    );
+    ck.invalidate_closure(&closure);
+    assert!(ck.should_skip("x"));
+}

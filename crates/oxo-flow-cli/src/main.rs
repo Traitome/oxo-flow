@@ -111,6 +111,12 @@ pub enum Commands {
         target: Vec<String>,
         #[arg(
             long,
+            value_name = "RULE",
+            help = "Re-run from RULE downstream: invalidates the transitive-dependent closure of RULE in the checkpoint, then runs RULE and everything downstream of it. Unlike --target (upstream closure), --from-rule propagates downstream."
+        )]
+        from_rule: Option<String>,
+        #[arg(
+            long,
             help = "Run one include module and the producers of its declared inputs (repeatable; unions with --target). Module names are the include's `name` field or its file stem"
         )]
         module: Vec<String>,
@@ -1438,6 +1444,7 @@ async fn main() -> Result<()> {
             max_submitted,
             background,
             allow_protected_drift,
+            from_rule,
         } => {
             // ── Background runs (issue #158) ─────────────────────────────
             // The foreground process never executes the workflow: it spawns
@@ -1565,7 +1572,16 @@ async fn main() -> Result<()> {
                 keep_going,
                 workdir: wd,
                 log_file,
-                target,
+                // --from-rule acts as a --target on the named rule plus a
+                // downstream-closure invalidation; passing it through the
+                // target slot lets the planner reuse the exact same
+                // upstream-closure resolution without a mirrored copy.
+                target: if let Some(ref from) = from_rule {
+                    vec![from.clone()]
+                } else {
+                    target
+                },
+                from_rule,
                 module,
                 retry,
                 timeout,
@@ -2091,6 +2107,9 @@ async fn main() -> Result<()> {
                         checkpoint_override: None,
                         // test honors the protection gate
                         allow_protected_drift: false,
+                        // test mode runs the full upstream closure; it has
+                        // no mid-chain re-run root to invalidate.
+                        from_rule: None,
                     })
                     .await
                 );

@@ -831,6 +831,47 @@ impl WorkflowDag {
             .collect())
     }
 
+    /// Returns the names of all rules that transitively depend on `rule_name`
+    /// (i.e. the full downstream closure, not just direct dependents).
+    ///
+    /// The returned list excludes `rule_name` itself and is in topological
+    /// order (a rule always appears after its dependencies).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OxoFlowError::RuleNotFound`] if `rule_name` does not exist
+    /// in the DAG.
+    pub fn transitive_dependents(&self, rule_name: &str) -> Result<Vec<String>> {
+        let node = self
+            .name_to_node
+            .get(rule_name)
+            .ok_or(OxoFlowError::RuleNotFound {
+                name: rule_name.to_string(),
+                available_rules: self.name_to_node.keys().cloned().collect(),
+            })?;
+
+        let mut included: HashSet<NodeIndex> = HashSet::new();
+        let mut stack: Vec<NodeIndex> = vec![*node];
+
+        while let Some(n) = stack.pop() {
+            for dep in self
+                .graph
+                .neighbors_directed(n, petgraph::Direction::Outgoing)
+            {
+                if included.insert(dep) {
+                    stack.push(dep);
+                }
+            }
+        }
+
+        let full_order = self.topological_order()?;
+        Ok(full_order
+            .into_iter()
+            .filter(|n| included.contains(&self.name_to_node[&n.name]))
+            .map(|n| n.name.clone())
+            .collect())
+    }
+
     /// Returns the number of rules in the DAG.
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
@@ -4279,5 +4320,72 @@ mod tests {
         assert_eq!(metro_section_title("", "stage"), "stage");
         assert_eq!(metro_section_title("   ", "stage"), "stage");
         assert_eq!(metro_section_title("Read QC", "x"), "Read QC");
+    }
+
+    // ── Issue #1017: transitive-dependent closure ────────────────────────
+
+    #[test]
+    fn transitive_dependents_linear_chain() {
+        // A → B → C → D: transitive_dependents(B) = [C, D].
+        let mut a = make_rule("a", vec![], vec!["a.txt"]);
+        a.shell = Some("echo a".into());
+        let mut b = make_rule("b", vec!["a.txt"], vec!["b.txt"]);
+        b.shell = Some("echo b".into());
+        let mut c = make_rule("c", vec!["b.txt"], vec!["c.txt"]);
+        c.shell = Some("echo c".into());
+        let mut d = make_rule("d", vec!["c.txt"], vec!["d.txt"]);
+        d.shell = Some("echo d".into());
+        let dag = WorkflowDag::from_rules(&[a, b, c, d]).unwrap();
+
+        let closure = dag.transitive_dependents("b").unwrap();
+        assert_eq!(closure, vec!["c".to_string(), "d".to_string()]);
+
+        let closure_a = dag.transitive_dependents("a").unwrap();
+        assert_eq!(
+            closure_a,
+            vec!["b".to_string(), "c".to_string(), "d".to_string()]
+        );
+
+        // Leaf node: no downstream.
+        let closure_d = dag.transitive_dependents("d").unwrap();
+        assert!(closure_d.is_empty());
+    }
+
+    #[test]
+    fn transitive_dependents_diamond() {
+        //     B
+        //   ↙   ↘
+        //  C     D
+        //   ↘   ↙
+        //     E
+        let mut a = make_rule("a", vec![], vec!["a.txt"]);
+        a.shell = Some("echo a".into());
+        let mut b = make_rule("b", vec!["a.txt"], vec!["b.txt"]);
+        b.shell = Some("echo b".into());
+        let mut c = make_rule("c", vec!["b.txt"], vec!["c.txt"]);
+        c.shell = Some("echo c".into());
+        let mut d = make_rule("d", vec!["b.txt"], vec!["d.txt"]);
+        d.shell = Some("echo d".into());
+        let mut e = make_rule("e", vec!["c.txt", "d.txt"], vec!["e.txt"]);
+        e.shell = Some("echo e".into());
+        let dag = WorkflowDag::from_rules(&[a, b, c, d, e]).unwrap();
+
+        let closure = dag.transitive_dependents("b").unwrap();
+        // Topological order: C and D both appear before E.
+        assert!(closure.contains(&"c".to_string()));
+        assert!(closure.contains(&"d".to_string()));
+        assert!(closure.contains(&"e".to_string()));
+        let pos_c = closure.iter().position(|r| r == "c").unwrap();
+        let pos_d = closure.iter().position(|r| r == "d").unwrap();
+        let pos_e = closure.iter().position(|r| r == "e").unwrap();
+        assert!(pos_c < pos_e, "C before E: {closure:?}");
+        assert!(pos_d < pos_e, "D before E: {closure:?}");
+    }
+
+    #[test]
+    fn transitive_dependents_unknown_rule_errors() {
+        let rules = vec![make_rule("only", vec![], vec!["x.txt"])];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        assert!(dag.transitive_dependents("ghost").is_err());
     }
 }

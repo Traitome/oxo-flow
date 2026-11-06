@@ -806,6 +806,34 @@ impl CheckpointState {
         self.cleaned_checksums.clear();
     }
 
+    /// Invalidate checkpoint records for a set of rules so that they will be
+    /// re-executed even if their outputs appear fresh (issue #1017).
+    ///
+    /// Called when an ancestor rule is re-run via `--from-rule`: the transitive
+    /// downstream closure of the re-run root must not silently pass the
+    /// freshness gate with outputs built from the old ancestor. This clears the
+    /// completed/failed/running status, benchmarks, checksums, fingerprints,
+    /// input manifests, and recorded run details for every rule in
+    /// `closure_rules`, forcing re-execution of the entire closure.
+    ///
+    /// Tombstones are left intact: they describe on-disk state, not the
+    /// lineage of the data that produced it, so they remain accurate.
+    pub fn invalidate_closure(&mut self, closure_rules: &[String]) {
+        for rule in closure_rules {
+            self.completed_rules.remove(rule);
+            self.failed_rules.remove(rule);
+            self.running.remove(rule);
+            self.benchmarks.remove(rule);
+            self.checksums.remove(rule);
+            self.rule_fingerprints.remove(rule);
+            self.rule_fingerprints_no_input.remove(rule);
+            self.input_manifests.remove(rule);
+            self.when_verdicts.remove(rule);
+            self.rule_runs.remove(rule);
+            self.reentries.retain(|r| r.rule != *rule);
+        }
+    }
+
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
     pub fn set_workflow_git_sha(&mut self, sha: String) {
         self.workflow_git_sha = Some(sha);
@@ -4292,5 +4320,65 @@ mod optional_tests {
         assert_eq!(new_names, vec!["collect_1", "collect_2"]);
         let c = resumed.get_rule("collect_1").unwrap();
         assert_eq!(c.input.to_vec(), vec!["results/chunks/1.txt"]);
+    }
+
+    // ── Issue #1017: invalidate_closure ───────────────────────────────────
+
+    #[test]
+    fn invalidate_closure_removes_records_and_forces_rerun() {
+        let mut ck = CheckpointState::new();
+        // Simulate three completed rules: A, B (the from-rule root), C and D
+        // (downstream of B that must be invalidated).
+        for rule in &["a", "b", "c", "d"] {
+            ck.mark_completed(
+                rule,
+                BenchmarkRecord {
+                    rule: rule.to_string(),
+                    wall_time_secs: 0.1,
+                    max_memory_mb: Some(10),
+                    memory_limit_mb: None,
+                    cpu_seconds: Some(1.0),
+                    retries: 0,
+                    recorded_as: None,
+                },
+            );
+        }
+        // Record checksums so we can verify they are gone.
+        ck.checksums.insert("c".into(), "abc123".into());
+        ck.checksums.insert("d".into(), "def456".into());
+
+        // Invalidate C and D (transitive dependents of B).
+        ck.invalidate_closure(&["c".to_string(), "d".to_string()]);
+
+        // A and B stay completed.
+        assert!(ck.is_completed("a"));
+        assert!(ck.is_completed("b"));
+        // C and D are no longer completed → freshness gate will re-execute.
+        assert!(!ck.is_completed("c"));
+        assert!(!ck.is_completed("d"));
+        // Their checksums are gone too.
+        assert!(!ck.checksums.contains_key("c"));
+        assert!(!ck.checksums.contains_key("d"));
+        // A's checksums untouched (we didn't add any, but the map exists).
+        assert!(!ck.checksums.contains_key("a"));
+    }
+
+    #[test]
+    fn invalidate_closure_empty_is_noop() {
+        let mut ck = CheckpointState::new();
+        ck.mark_completed(
+            "x",
+            BenchmarkRecord {
+                rule: "x".to_string(),
+                wall_time_secs: 0.05,
+                max_memory_mb: Some(5),
+                memory_limit_mb: None,
+                cpu_seconds: Some(0.0),
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        ck.invalidate_closure(&[]);
+        assert!(ck.is_completed("x"));
     }
 }
