@@ -804,6 +804,10 @@
       }
     }
   },
+  "x-cli-graph-formats": {
+    "description": "Formats accepted by `oxo-flow graph -f` (clap GraphFormat enum). Non-standard extension consumed by the VS Code extension's generator.",
+    "enum": ["ascii", "dot", "dot-clustered", "tree", "mermaid", "metro"]
+  },
   "$defs": {
     "environmentSpec": {
       "type": "object",

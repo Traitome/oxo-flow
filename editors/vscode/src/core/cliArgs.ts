@@ -48,8 +48,11 @@ export function dryRunArgs(opts: RunOptions): string[] {
   return args;
 }
 
-/** Formats accepted by `oxo-flow graph -f` (clap `GraphFormat`). */
-export type GraphFormat = "ascii" | "dot" | "dot-clustered" | "tree" | "mermaid" | "metro";
+// Formats accepted by `oxo-flow graph -f` — generated from the schema
+// (x-cli-graph-formats), drift-checked by `npm run generate:check` (L-13).
+import type { GraphFormat } from "../generated/graph-formats";
+
+export type { GraphFormat };
 
 export function graphArgs(file: string, format?: GraphFormat): string[] {
   const args = ["graph", file];
