@@ -6002,9 +6002,17 @@ the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</cod
 Like every <code>ApiResult</code> error, the 429 carries no <code>Retry-After</code> header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error <code>message</code> instead (<code>retry in {wait_secs}s</code>).
-<code>from_rule</code> is <strong>not supported</strong>: the engine has no "re-run from rule X
-downstream" mode (<code>--target</code> selects the <em>upstream</em> closure), so the field is
-rejected with <code>400 UNSUPPORTED_FIELD</code> instead of being silently ignored.</p>
+<code>from_rule</code> (issue #1017): when set to a rule name (e.g. <code>"b"</code>), the retry
+re-runs from that rule <strong>downstream</strong> — the engine computes the
+transitive-dependent closure of the named rule in the DAG and invalidates
+their checkpoint entries before the freshness gate runs, so downstream rules
+re-execute with the new upstream outputs instead of silently passing the
+freshness gate with stale artifacts. The spawned CLI receives
+<code>--from-rule &lt;name&gt;</code> directly (the same closure computation the CLI's own
+<code>--from-rule</code> flag runs — one engine, two surfaces). When <code>from_rule</code> is
+absent the retry uses the default failed-set semantics (<code>--resume-failed
+--rerun</code>). A <code>from_rule</code> naming a rule not in the DAG surfaces as a
+<code>400 RuleNotFound</code> from the spawned CLI's own DAG walk.</p>
 <p>The retry <strong>really executes</strong>: the returned <code>new_run_id</code> is a real run in
 the database (same workdir, same owner), spawned with <code>--resume-failed
 --rerun</code> so the failed rules re-execute despite their existing outputs and
@@ -6017,7 +6025,11 @@ defaults.
 Returns <code>{ new_run_id, will_rerun: [...], will_skip: [...] }</code> — plus an
 optional <code>note</code> when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
-re-fails identically unless the error is fixed).</p>
+re-fails identically unless the error is fixed).
+When <code>from_rule</code> is set, the plan's <code>will_rerun</code> list contains the named
+rule plus every transitive dependent (the downstream closure), and
+<code>will_skip</code> contains the remaining completed rules — the same closure the
+engine will invalidate at run start.</p>
 <h3 id="cancel">Cancel<a class="headerlink" href="#cancel" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>POST /api/runs/{id}/cancel
 </span></code></pre></div>

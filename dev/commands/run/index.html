@@ -4344,6 +4344,12 @@
 <td>Run only specific target rules</td>
 </tr>
 <tr>
+<td><code>--from-rule</code></td>
+<td>—</td>
+<td>—</td>
+<td>Re-run from RULE downstream: invalidates the transitive-dependent closure of RULE in the checkpoint, then runs RULE and everything downstream of it (issue #1017). Unlike <code>--target</code> (upstream closure), <code>--from-rule</code> propagates downstream — stale downstream outputs are invalidated before the freshness gate so they re-execute with the new upstream results</td>
+</tr>
+<tr>
 <td><code>--module</code></td>
 <td>—</td>
 <td>—</td>
