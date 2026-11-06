@@ -1197,17 +1197,11 @@ impl LocalExecutor {
                                 .arg("-c")
                                 .arg(&setup_cmd)
                                 .current_dir(&self.config.workdir);
-                            match retry_cmd.spawn() {
-                                Ok(child) => {
-                                    if let Ok(waited) = wait_bounded(child, None).await
-                                        && waited
-                                            .status
-                                            .is_some_and(|s| s.success())
-                                    {
-                                        verified = Self::env_verify(self, &verify).await;
-                                    }
-                                }
-                                Err(_) => {}
+                            if let Ok(child) = retry_cmd.spawn()
+                                && let Ok(waited) = wait_bounded(child, None).await
+                                && waited.status.is_some_and(|s| s.success())
+                            {
+                                verified = Self::env_verify(self, &verify).await;
                             }
                         }
                         if verified {
@@ -2541,7 +2535,6 @@ impl LocalExecutor {
                         message: format!("failed to spawn pre_exec hook: {e}"),
                     });
                 }
-                _ => {}
             }
         }
 
@@ -3470,7 +3463,6 @@ fn hook_timeout_duration() -> std::time::Duration {
 struct BoundedWait {
     /// `None` when the timeout tripped before the child exited.
     status: Option<std::process::ExitStatus>,
-    stdout: String,
     stderr: String,
     timed_out: bool,
 }
@@ -3486,6 +3478,8 @@ async fn wait_bounded(
     mut child: tokio::process::Child,
     timeout: Option<std::time::Duration>,
 ) -> std::io::Result<BoundedWait> {
+    // stdout is drained (a full pipe would deadlock the child) but only
+    // stderr is rendered — hooks and env setup diagnose through stderr.
     let mut stdout_cap = CappedCapture::default();
     let mut stderr_cap = CappedCapture::default();
     let wait = async {
@@ -3508,7 +3502,6 @@ async fn wait_bounded(
     let status = waited?;
     let timed_out = status.is_none();
     Ok(BoundedWait {
-        stdout: stdout_cap.into_string(),
         stderr: stderr_cap.into_string(),
         status,
         timed_out,
@@ -4060,15 +4053,15 @@ async fn run_hook(
             rule = %rule.name,
             "rule hook timed out (best-effort) — increase OXO_FLOW_HOOK_TIMEOUT_SECS if it is legitimate"
         );
-    } else if let Some(status) = result.status {
-        if !status.success() {
-            tracing::warn!(
-                rule = %rule.name,
-                code = %status.code().unwrap_or(-1),
-                stderr = %result.stderr.trim(),
-                "rule hook failed (best-effort)"
-            );
-        }
+    } else if let Some(status) = result.status
+        && !status.success()
+    {
+        tracing::warn!(
+            rule = %rule.name,
+            code = %status.code().unwrap_or(-1),
+            stderr = %result.stderr.trim(),
+            "rule hook failed (best-effort)"
+        );
     }
 }
 
@@ -4112,14 +4105,14 @@ pub async fn run_workflow_hook(
         tracing::warn!(
             "workflow hook timed out (best-effort) — increase OXO_FLOW_HOOK_TIMEOUT_SECS if it is legitimate"
         );
-    } else if let Some(status) = result.status {
-        if !status.success() {
-            tracing::warn!(
-                code = %status.code().unwrap_or(-1),
-                stderr = %result.stderr.trim(),
-                "workflow hook failed (best-effort)"
-            );
-        }
+    } else if let Some(status) = result.status
+        && !status.success()
+    {
+        tracing::warn!(
+            code = %status.code().unwrap_or(-1),
+            stderr = %result.stderr.trim(),
+            "workflow hook failed (best-effort)"
+        );
     }
 }
 
@@ -5649,13 +5642,17 @@ mod tests {
         // H-3: hooks and env setup used `wait_with_output()` — a chatty
         // child buffered unbounded and OOMed the engine. The bounded wait
         // must finish with a status and truncated capture.
-        let child = spawn_rule_shell("seq 1 2000000", std::path::Path::new("/tmp"), &HashMap::new())
-            .unwrap();
+        let child = spawn_rule_shell(
+            "seq 1 2000000 >&2",
+            std::path::Path::new("/tmp"),
+            &HashMap::new(),
+        )
+        .unwrap();
         let waited = wait_bounded(child, None).await.unwrap();
         let status = waited.status.expect("no timeout was set");
         assert!(status.success());
         assert!(
-            waited.stdout.contains("output truncated"),
+            waited.stderr.contains("output truncated"),
             "a multi-MB stream must be capped, not buffered whole"
         );
     }
