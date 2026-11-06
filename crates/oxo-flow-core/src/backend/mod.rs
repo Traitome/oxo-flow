@@ -272,7 +272,8 @@ impl ScheduledPlan {
     /// environment wrapper so wrapped child processes (conda/pixi/venv
     /// run, containers with host mounts) inherit `TMPDIR`. The local
     /// executor instead injects `TMPDIR`/`TMP`/`TEMP` into the process
-    /// env directly (`insert_tmpdir_vars`) and must keep using [`build`].
+    /// env directly (`insert_tmpdir_vars`) and must keep using
+    /// [`ScheduledPlan::build`].
     pub fn build_with_scratch(
         config: &WorkflowConfig,
         dag: &WorkflowDag,

@@ -311,10 +311,10 @@ fn push_glob_star_runs(
 /// spans render their combo values, each star renders the text its
 /// `__star<N>` capture matched. A `**` run consumes one `star_values`
 /// entry and — when the run is immediately followed by `/`, mirroring
-/// [`push_glob_literal`] — folds that slash into the rendered value, so
-/// slash-inclusive star values round-trip exactly. Mirrors
-/// [`expand_pattern`] for glob-bearing discovery patterns (issue #246,
-/// `**` recursion issue #1013 O4).
+/// the private `push_glob_literal` helper — folds that slash into the
+/// rendered value, so slash-inclusive star values round-trip exactly.
+/// Mirrors [`expand_pattern`] for glob-bearing discovery patterns
+/// (issue #246, `**` recursion issue #1013 O4).
 pub fn expand_pattern_with_glob(
     pattern: &str,
     combo: &WildcardValues,
