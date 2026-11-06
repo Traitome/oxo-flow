@@ -71,14 +71,25 @@ fn provider_http_client() -> reqwest::Client {
         .build()
     {
         Ok(client) => client,
-        // A default client carries NO timeout — the "a hung endpoint must
-        // not stall the agent loop forever" guarantee dies silently
-        // without this being on the record.
         Err(e) => {
+            // M-13: the fallback MUST still carry the timeouts — the old
+            // path installed reqwest::Client::default(), which has NO
+            // timeout, voiding the "a hung endpoint must not stall the
+            // agent loop forever" guarantee while logging that it did.
             tracing::error!(
-                "failed to build the AI HTTP client with timeouts ({e});                  falling back to an UNBOUNDED default client"
+                "failed to build the AI HTTP client with timeouts ({e}); retrying with a minimal-timeout client"
             );
-            reqwest::Client::default()
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(request_timeout_secs()))
+                .build()
+                .unwrap_or_else(|retry_error| {
+                    panic!(
+                        "no usable AI HTTP client can be built ({e}, then {retry_error}) — \
+                         a timeout-less client would silently violate the agent-loop \
+                         stall guarantee, so startup fails instead"
+                    )
+                })
         }
     }
 }

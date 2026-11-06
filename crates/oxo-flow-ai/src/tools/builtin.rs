@@ -462,9 +462,11 @@ impl CappedBody {
 }
 
 /// Fetch content from a URL.
-#[derive(Default)]
 pub struct FetchUrlTool {
-    client: reqwest::Client,
+    /// `Err` = the security-screened client could not be built — the tool
+    /// is DISABLED (M-9): the old fallback installed a working client with
+    /// no timeout, voiding exactly the guarantee the builder exists for.
+    client: Result<reqwest::Client, String>,
 }
 
 impl FetchUrlTool {
@@ -477,16 +479,17 @@ impl FetchUrlTool {
             // pinned-hop re-screening this tool exists to enforce (#642).
             // A builder failure therefore disables the tool rather than
             // silently downgrading to an unfiltered client.
-            client: fetch_client(None).unwrap_or_else(|e| {
-                tracing::error!(
-                    "failed to build the fetch HTTP client ({e}); URL fetch is disabled"
-                );
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .expect("a no-redirect client builds on every TLS backend")
+            client: fetch_client(None).map_err(|e| {
+                tracing::error!("failed to build the fetch HTTP client ({e}); URL fetch is disabled");
+                e.to_string()
             }),
         }
+    }
+}
+
+impl Default for FetchUrlTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -524,14 +527,17 @@ impl Tool for FetchUrlTool {
             tool: "fetch_url".into(),
             message: "missing 'url' argument".into(),
         })?;
+        let client = self.client.as_ref().map_err(|error| AiError::ToolError {
+            tool: "fetch_url".into(),
+            message: format!("URL fetch is disabled: {error}"),
+        })?;
 
-        let response =
-            validated_get(&self.client, url)
-                .await
-                .map_err(|reason| AiError::ToolError {
-                    tool: "fetch_url".into(),
-                    message: format!("blocked: {reason}"),
-                })?;
+        let response = validated_get(client, url)
+            .await
+            .map_err(|reason| AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("blocked: {reason}"),
+            })?;
         if let Some(reason) = status_failure(response.status()) {
             return Err(AiError::ToolError {
                 tool: "fetch_url".into(),
