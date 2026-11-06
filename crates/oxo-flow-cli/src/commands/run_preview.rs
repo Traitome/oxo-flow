@@ -951,10 +951,17 @@ fn engine_expanded_inputs_from_injected(
                 variables.insert(var_name.clone(), vec![var_ref.clone()]);
             }
         }
-        expanded.extend(oxo_flow_core::wildcard::cartesian_expand(
-            &exp.pattern,
-            &variables,
-        ));
+        match oxo_flow_core::wildcard::cartesian_expand(&exp.pattern, &variables) {
+            Ok(paths) => expanded.extend(paths),
+            Err(error) => {
+                // The preview comparison is best-effort: an expansion past
+                // the shared combination cap falls back to normal
+                // invalidation (conservative by construction, same as the
+                // per-instance-bindings gap below).
+                tracing::warn!("expand_inputs preview skipped: {error}");
+                return None;
+            }
+        }
     }
     touched_injected.then_some(expanded)
 }

@@ -1531,7 +1531,7 @@ impl WorkflowConfig {
                 );
             }
             let variables = self.expand_pattern_variables(exp, &rule.name);
-            let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+            let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables)?;
             // A pattern WITH wildcards that contributes zero inputs
             // means every wildcard lacked a provided value — usually
             // an author oversight (config key left empty), never a
@@ -2490,6 +2490,26 @@ impl WorkflowConfig {
                 None => table.values.clone(),
             };
             let mut next = Vec::with_capacity(value_combos.len() * effective.len());
+            // Same ceiling `cartesian_expand` enforces (H-8): the
+            // [[values]] table product is another pre-DAG expansion path —
+            // refuse the order of magnitude with a diagnostic instead of
+            // exhausting memory.
+            let projected = value_combos
+                .len()
+                .saturating_mul(effective.len().max(1));
+            if projected > crate::wildcard::MAX_COMBINATIONS {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "[[values]] fan-out would produce {projected} combinations \
+                         (limit {})",
+                        crate::wildcard::MAX_COMBINATIONS
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "reduce the [[values]] tables' sizes or split the workflow".to_string(),
+                    ),
+                });
+            }
             for combo in &value_combos {
                 for value in &effective {
                     let mut c = combo.clone();

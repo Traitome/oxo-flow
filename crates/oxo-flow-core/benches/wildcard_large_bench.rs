@@ -20,7 +20,7 @@ fn bench_wildcard_large(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("expand", "10_combos"), |b| {
         b.iter(|| {
-            let result = wildcard::cartesian_expand("{sample}", &vars_small);
+            let result = wildcard::cartesian_expand("{sample}", &vars_small).unwrap();
             black_box(result)
         })
     });
@@ -35,7 +35,7 @@ fn bench_wildcard_large(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("expand", "200_combos"), |b| {
         b.iter(|| {
-            let result = wildcard::cartesian_expand("{sample}_{lane}", &vars_large);
+            let result = wildcard::cartesian_expand("{sample}_{lane}", &vars_large).unwrap();
             black_box(result)
         })
     });
