@@ -1122,7 +1122,60 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
 /// Returns the hex-encoded SHA-256 hash string prefixed with "sha256:",
 /// or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
+    hash_file_with_algorithm(path, OutputChecksumAlgorithm::Sha256)
+}
+
+/// The digest algorithm a rule's outputs are checksummed with (issue #1013
+/// E6): the per-rule `checksum` field opts individual rules into recorded
+/// output integrity, and verification must recompute with the SAME
+/// algorithm the record used — a sha256 recompute can never equal an md5
+/// record, so the algorithm travels inside the recorded value's prefix
+/// (`"sha256:<hex>"` / `"md5:<hex>"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputChecksumAlgorithm {
+    Sha256,
+    Md5,
+}
+
+impl OutputChecksumAlgorithm {
+    /// Parse a rule-level `checksum = "…"` spec. Exact lowercase spellings
+    /// as documented (workflow-format.md); anything else is rejected at
+    /// parse time — this constructor stays total for the caller that wants
+    /// to attach rule context to the error.
+    pub fn from_rule_spec(spec: &str) -> Option<Self> {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "sha256" => Some(Self::Sha256),
+            "md5" => Some(Self::Md5),
+            _ => None,
+        }
+    }
+
+    /// Parse the algorithm of an already-recorded value from its
+    /// `"algo:hex"` prefix. Unknown or missing prefixes return `None` —
+    /// verification degrades (never fails) on records it cannot interpret.
+    pub fn from_recorded_prefix(recorded: &str) -> Option<Self> {
+        let (algo, _) = recorded.split_once(':')?;
+        Self::from_rule_spec(algo)
+    }
+
+    /// The prefix every recorded value of this algorithm carries.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Sha256 => "sha256",
+            Self::Md5 => "md5",
+        }
+    }
+}
+
+/// Hash a regular file with the requested algorithm, returning
+/// `"<algo>:<hex>"`. Streaming with a 64KB buffer — avoids loading entire
+/// files into memory (BAM, FASTQ can be >100GB).
+///
+/// Refuses special files before opening: `File::open` on a writer-less
+/// FIFO blocks forever (seen with STAR's leftover `tmp.fifo.read*`
+/// under `.oxo-flow/tmp/` after a killed run, issue #695), and sockets /
+/// char devices have no meaningful content checksum.
+pub fn hash_file_with_algorithm(path: &Path, algorithm: OutputChecksumAlgorithm) -> Result<String> {
     use std::io::Read;
 
     // Refuse special files before opening: `File::open` on a writer-less
@@ -1145,25 +1198,47 @@ pub fn compute_file_checksum(path: &Path) -> Result<String> {
         message: format!("failed to open {} for checksum: {e}", path.display()),
     })?;
 
-    // Streaming SHA-256 with 64KB buffer — avoids loading entire file into memory.
+    // Streaming hash with 64KB buffer — avoids loading entire file into memory.
     // Critical for large bioinformatics files (BAM, FASTQ can be >100GB).
     let mut reader = std::io::BufReader::with_capacity(65536, file);
-    let mut hasher = Sha256::new();
     let mut buffer = [0u8; 65536];
-    loop {
-        let n = reader
-            .read(&mut buffer)
-            .map_err(|e| OxoFlowError::Execution {
-                rule: String::new(),
-                message: format!("failed to read {} for checksum: {e}", path.display()),
-            })?;
-        if n == 0 {
-            break;
+    let hash_hex = match algorithm {
+        OutputChecksumAlgorithm::Sha256 => {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            loop {
+                let n = reader
+                    .read(&mut buffer)
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: String::new(),
+                        message: format!("failed to read {} for checksum: {e}", path.display()),
+                    })?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            hex::encode(hasher.finalize())
         }
-        hasher.update(&buffer[..n]);
-    }
-    let hash = hasher.finalize();
-    Ok(format!("sha256:{}", hex::encode(hash)))
+        OutputChecksumAlgorithm::Md5 => {
+            use md5::Digest;
+            let mut hasher = md5::Md5::new();
+            loop {
+                let n = reader
+                    .read(&mut buffer)
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: String::new(),
+                        message: format!("failed to read {} for checksum: {e}", path.display()),
+                    })?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            hex::encode(hasher.finalize())
+        }
+    };
+    Ok(format!("{}:{}", algorithm.prefix(), hash_hex))
 }
 
 /// mtime in nanoseconds since the UNIX epoch, for change detection.
@@ -2520,6 +2595,62 @@ mod tests {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(bytes);
         digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// MD5 hex for the E6 per-rule checksum tests (production hashing is
+    /// `hash_file_with_algorithm`; hashing bytes directly keeps the test
+    /// free of file-format coupling).
+    fn md5_hex(bytes: &[u8]) -> String {
+        use md5::Digest;
+        let digest = md5::Md5::digest(bytes);
+        digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// E6: the algorithm dispatch parses documented specs, round-trips the
+    /// recorded prefix, and refuses unknown spellings.
+    #[test]
+    fn output_checksum_algorithm_parses_specs_and_prefixes() {
+        use OutputChecksumAlgorithm::{Md5, Sha256};
+        assert_eq!(OutputChecksumAlgorithm::from_rule_spec("sha256"), Some(Sha256));
+        assert_eq!(OutputChecksumAlgorithm::from_rule_spec("md5"), Some(Md5));
+        assert_eq!(
+            OutputChecksumAlgorithm::from_recorded_prefix("sha256:deadbeef"),
+            Some(Sha256)
+        );
+        assert_eq!(
+            OutputChecksumAlgorithm::from_recorded_prefix("md5:deadbeef"),
+            Some(Md5)
+        );
+        // Unknown spec and unknown/missing recorded prefix degrade to None.
+        assert_eq!(OutputChecksumAlgorithm::from_rule_spec("crc32"), None);
+        assert_eq!(
+            OutputChecksumAlgorithm::from_recorded_prefix("crc32:deadbeef"),
+            None
+        );
+        assert_eq!(OutputChecksumAlgorithm::from_recorded_prefix("deadbeef"), None);
+        assert_eq!(Sha256.prefix(), "sha256");
+        assert_eq!(Md5.prefix(), "md5");
+    }
+
+    /// E6: per-algorithm hashing produces the documented `algo:hex` record
+    /// shape, and the sha256 wrapper keeps its exact legacy output.
+    #[test]
+    fn hash_file_with_algorithm_matches_reference_digests() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        std::fs::write(&path, b"checksum-algorithm-content").unwrap();
+
+        let sha = hash_file_with_algorithm(&path, OutputChecksumAlgorithm::Sha256).unwrap();
+        assert_eq!(
+            sha,
+            format!("sha256:{}", sha256_hex(b"checksum-algorithm-content"))
+        );
+        // `compute_file_checksum` must stay the exact sha256 wrapper it has
+        // always been — provenance flows and input manifests depend on it.
+        assert_eq!(compute_file_checksum(&path).unwrap(), sha);
+
+        let md5 = hash_file_with_algorithm(&path, OutputChecksumAlgorithm::Md5).unwrap();
+        assert_eq!(md5, format!("md5:{}", md5_hex(b"checksum-algorithm-content")));
     }
 
     /// Bump `path`'s mtime forward one second (test helper; production
