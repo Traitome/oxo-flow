@@ -1262,9 +1262,7 @@ impl LocalExecutor {
         match cmd.spawn() {
             Ok(child) => wait_bounded(child, None)
                 .await
-                .is_ok_and(|waited| {
-                    waited.status.is_some_and(|s| s.success())
-                }),
+                .is_ok_and(|waited| waited.status.is_some_and(|s| s.success())),
             Err(_) => false,
         }
     }
@@ -2508,11 +2506,7 @@ impl LocalExecutor {
                         ),
                     });
                 }
-                Ok(waited)
-                    if !waited
-                        .status
-                        .is_some_and(|s| s.success()) =>
-                {
+                Ok(waited) if !waited.status.is_some_and(|s| s.success()) => {
                     // The hook ran and may have written diagnostic files —
                     // preserve the scratch dir and name its path (matches
                     // the "preserved on failure" contract).
@@ -5661,8 +5655,8 @@ mod tests {
     async fn wait_bounded_times_out_a_hung_child() {
         // H-3: a hook that hangs must not hang the run forever — the
         // deadline abandons the wait (the child dies via kill_on_drop).
-        let child = spawn_rule_shell("sleep 30", std::path::Path::new("/tmp"), &HashMap::new())
-            .unwrap();
+        let child =
+            spawn_rule_shell("sleep 30", std::path::Path::new("/tmp"), &HashMap::new()).unwrap();
         let waited = wait_bounded(child, Some(std::time::Duration::from_millis(100)))
             .await
             .unwrap();

@@ -3573,11 +3573,9 @@ mod tests {
             "#,
         )
         .unwrap();
-        let dag = WorkflowDag::from_rules_with_config(
-            &config.rules,
-            &config.config_placeholder_values(),
-        )
-        .unwrap();
+        let dag =
+            WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+                .unwrap();
         assert_eq!(dag.dependencies("consume").unwrap(), vec!["produce"]);
     }
 

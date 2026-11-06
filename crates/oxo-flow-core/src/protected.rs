@@ -93,13 +93,22 @@ mod tests {
 
     #[test]
     fn exact_literal_matches_only_itself() {
-        assert!(protected_pattern_matches("results/final.bam", "results/final.bam"));
-        assert!(!protected_pattern_matches("results/final.bam", "results/other.bam"));
+        assert!(protected_pattern_matches(
+            "results/final.bam",
+            "results/final.bam"
+        ));
+        assert!(!protected_pattern_matches(
+            "results/final.bam",
+            "results/other.bam"
+        ));
     }
 
     #[test]
     fn wildcard_form_matches_concrete_instances_within_one_component() {
-        assert!(protected_pattern_matches("results/{sample}.bam", "results/S1.bam"));
+        assert!(protected_pattern_matches(
+            "results/{sample}.bam",
+            "results/S1.bam"
+        ));
         assert!(!protected_pattern_matches(
             "results/{sample}.bam",
             "results/S1/extra.bam"
@@ -109,7 +118,10 @@ mod tests {
     #[test]
     fn shell_glob_stays_within_one_path_component() {
         assert!(protected_pattern_matches("results/*.bam", "results/S1.bam"));
-        assert!(!protected_pattern_matches("results/*.bam", "results/S1/extra.bam"));
+        assert!(!protected_pattern_matches(
+            "results/*.bam",
+            "results/S1/extra.bam"
+        ));
     }
 
     #[test]

@@ -480,7 +480,9 @@ impl FetchUrlTool {
             // A builder failure therefore disables the tool rather than
             // silently downgrading to an unfiltered client.
             client: fetch_client(None).map_err(|e| {
-                tracing::error!("failed to build the fetch HTTP client ({e}); URL fetch is disabled");
+                tracing::error!(
+                    "failed to build the fetch HTTP client ({e}); URL fetch is disabled"
+                );
                 e.to_string()
             }),
         }

@@ -3303,8 +3303,7 @@ mod tests {
         // directory form was unreachable from documented TOML. The
         // reordered untagged variants make `Dir` win on `path` tables while
         // every other named map still parses as `Map`.
-        let dir: FilePatterns =
-            toml::from_str("path = \"data\"\npattern = \"*.txt\"").unwrap();
+        let dir: FilePatterns = toml::from_str("path = \"data\"\npattern = \"*.txt\"").unwrap();
         assert_eq!(
             dir,
             FilePatterns::Dir {

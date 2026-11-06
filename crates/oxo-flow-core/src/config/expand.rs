@@ -2494,9 +2494,7 @@ impl WorkflowConfig {
             // [[values]] table product is another pre-DAG expansion path —
             // refuse the order of magnitude with a diagnostic instead of
             // exhausting memory.
-            let projected = value_combos
-                .len()
-                .saturating_mul(effective.len().max(1));
+            let projected = value_combos.len().saturating_mul(effective.len().max(1));
             if projected > crate::wildcard::MAX_COMBINATIONS {
                 return Err(OxoFlowError::Validation {
                     message: format!(

@@ -1327,7 +1327,9 @@ mod tests {
         );
         variables.insert(
             "chr".to_string(),
-            (1..=600).map(|i| format!("chr{i}")).collect::<Vec<String>>(),
+            (1..=600)
+                .map(|i| format!("chr{i}"))
+                .collect::<Vec<String>>(),
         );
         let error = cartesian_expand("{sample}_{chr}", &variables).unwrap_err();
         assert!(error.to_string().contains("combinations"), "{error}");

@@ -116,9 +116,9 @@ fn invalid_protected_output_pattern_fails_validation() {
         );
         let err = match WorkflowConfig::parse(&toml) {
             Err(err) => err,
-            Ok(config) => {
-                config.validate().expect_err("invalid protected pattern must fail validation")
-            }
+            Ok(config) => config
+                .validate()
+                .expect_err("invalid protected pattern must fail validation"),
         };
         assert!(
             err.to_string().contains("protected_output"),
@@ -140,7 +140,9 @@ fn valid_protected_output_patterns_pass_validation() {
         shell = "touch out.txt"
     "#;
     let config = WorkflowConfig::parse(toml).unwrap();
-    config.validate().expect("valid protected patterns are allowed");
+    config
+        .validate()
+        .expect("valid protected patterns are allowed");
 }
 
 #[test]
