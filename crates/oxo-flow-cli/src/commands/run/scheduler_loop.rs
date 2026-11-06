@@ -114,6 +114,66 @@ async fn record_processing_failure(
     record
 }
 
+/// Precomputed skip decision for a checkpoint-completed rule (E6):
+/// `Mark` skips unconditionally (existence-only evidence); `Verify` holds
+/// the rule, its merged wildcard scope, and the recorded output-hash
+/// submap, and defers to the shared core verifier after the checkpoint
+/// lock is released.
+enum PreSkipDecision {
+    Mark,
+    Verify(
+        Box<oxo_flow_core::Rule>,
+        oxo_flow_core::wildcard::WildcardValues,
+        std::collections::BTreeMap<String, String>,
+    ),
+}
+
+/// Mark a rule as pre-completed without re-executing it: scheduler slot,
+/// synthetic success record, skip counter, narration, and progress bar.
+/// Shared by the existence-only path and the checksum-verified path so
+/// both emit byte-identical accounting.
+#[allow(clippy::too_many_arguments)]
+fn mark_pre_completed(
+    rule_name: &str,
+    submitted: &mut HashSet<String>,
+    sched: &mut oxo_flow_core::scheduler::SchedulerState,
+    config: &WorkflowConfig,
+    workdir: &Path,
+    skipped_count: &AtomicUsize,
+    is_tty: bool,
+    run_log: Option<&SharedRunLog>,
+    progress: &indicatif::ProgressBar,
+) {
+    submitted.insert(rule_name.to_string());
+    sched.mark_completed(oxo_flow_core::executor::JobRecord {
+        signal: None,
+        rule: rule_name.to_string(),
+        status: oxo_flow_core::executor::JobStatus::Success,
+        enqueued_at: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(0),
+        stdout: None,
+        stderr: None,
+        command: None,
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: config.get_rule(rule_name).and_then(|r| {
+            oxo_flow_core::executor::process::rule_report_caption(r, workdir)
+        }),
+    });
+    skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !is_tty {
+        diagnostic_narrate(
+            format_args!("  {} {} (already completed)", "⊝".dimmed(), rule_name),
+            run_log,
+        );
+    }
+    progress.inc(1);
+}
+
 pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow::Result<()> {
     let SchedulerLoopContext {
         jobs,
@@ -172,6 +232,17 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         std::collections::HashMap::new();
 
     // Pre-process checkpoint-completed rules so they are never re-submitted.
+    //
+    // Checksum-opted rules (issue #1013 E6) get a freshness verdict before
+    // the skip: a recorded output hash that no longer matches the file must
+    // NOT be pre-skipped — the rule flows into normal scheduling, where the
+    // executor's own freshness gate (process.rs) re-executes it and
+    // re-records the checksum. Both sides call the same core verifier
+    // (`should_skip_rule_with_checksums`), so the two gates cannot drift.
+    // The verdict hashes up to 64 MiB per output (#527) and must not run
+    // under the checkpoint mutex, so candidates are collected under the
+    // lock and verified after release, preserving `order`.
+    let mut pre_skip_decisions: Vec<(String, PreSkipDecision)> = Vec::new();
     {
         let ck = checkpoint.lock().await;
         for rule_name in order.iter() {
@@ -186,54 +257,97 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             // `order_set` is derived from it, so membership is tautological
             // here; `submitted` starts empty and only ever receives the
             // rule being processed, so neither needs re-checking.
-            if ck.is_completed(rule_name) && !rerun {
-                // Shared with dry-run's read-only preview (issue #66).
-                // Tombstoned rules count as up to date while no dependent
-                // needs their outputs.
-                let outputs_ok = tombstone_keep.contains(rule_name)
-                    || config
-                        .get_rule(rule_name)
-                        .map(|rule| {
-                            crate::commands::run_preview::rule_outputs_exist(
-                                rule,
-                                workdir_actual.as_ref(),
-                                wildcard_values,
-                            )
-                        })
-                        .unwrap_or(true);
-                if outputs_ok {
-                    submitted.insert(rule_name.clone());
-                    sched.mark_completed(oxo_flow_core::executor::JobRecord {
-                        signal: None,
-                        rule: rule_name.clone(),
-                        status: oxo_flow_core::executor::JobStatus::Success,
-                        enqueued_at: None,
-                        started_at: None,
-                        finished_at: None,
-                        exit_code: Some(0),
-                        stdout: None,
-                        stderr: None,
-                        command: None,
-                        retries: 0,
-                        skip_reason: None,
-                        max_rss_mb: None,
-                        cpu_seconds: None,
-                        caption: config.get_rule(rule_name).and_then(|r| {
-                            oxo_flow_core::executor::process::rule_report_caption(
-                                r,
-                                workdir_actual.as_ref(),
-                            )
-                        }),
-                    });
-                    skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if !is_tty {
-                        diagnostic_narrate(
-                            format_args!("  {} {} (already completed)", "⊝".dimmed(), rule_name),
-                            Some(run_log),
-                        );
-                    }
-                    progress.inc(1);
+            if !(ck.is_completed(rule_name) && !rerun) {
+                continue;
+            }
+            // Shared with dry-run's read-only preview (issue #66).
+            // Tombstoned rules count as up to date while no dependent
+            // needs their outputs.
+            if tombstone_keep.contains(rule_name) {
+                pre_skip_decisions.push((rule_name.clone(), PreSkipDecision::Mark));
+                continue;
+            }
+            let Some(rule) = config.get_rule(rule_name) else {
+                // Unknown rule name: the historical `.unwrap_or(true)`
+                // treated it as up to date.
+                pre_skip_decisions.push((rule_name.clone(), PreSkipDecision::Mark));
+                continue;
+            };
+            // Mirror the executor gate's map builder (process.rs): only
+            // when EVERY expanded output has a recorded hash does the
+            // checksum verdict apply; anything else keeps the exact
+            // existence-only path below. The merged scope (run-level
+            // wildcard values + this instance's bindings) is what the
+            // executor's gate sees after execute_rule_with_bindings.
+            let mut scope = (**wildcard_values).clone();
+            for (key, value) in config.instance_bindings(rule_name) {
+                scope.insert(key, value);
+            }
+            let expanded_outputs: Vec<String> = rule
+                .output
+                .iter()
+                .map(|o| oxo_flow_core::executor::checkpoint::expand_config_in_path(o, &scope))
+                .collect();
+            let full_coverage = !expanded_outputs.is_empty()
+                && expanded_outputs.iter().all(|o| ck.checksums.contains_key(o));
+            if full_coverage {
+                // Submap clone (#268 item 4): only this rule's entries
+                // travel to the verifier, not the whole checkpoint map.
+                let submap: std::collections::BTreeMap<String, String> = expanded_outputs
+                    .iter()
+                    .filter_map(|o| ck.checksums.get(o).map(|v| (o.clone(), v.clone())))
+                    .collect();
+                pre_skip_decisions.push((
+                    rule_name.clone(),
+                    PreSkipDecision::Verify(Box::new(rule.clone()), scope, submap),
+                ));
+            } else if crate::commands::run_preview::rule_outputs_exist(
+                rule,
+                workdir_actual.as_ref(),
+                wildcard_values,
+            ) {
+                pre_skip_decisions.push((rule_name.clone(), PreSkipDecision::Mark));
+            }
+        }
+    }
+    // Verdicts after the lock release (bulk hashing on the blocking pool).
+    for (rule_name, decision) in pre_skip_decisions {
+        match decision {
+            PreSkipDecision::Mark => mark_pre_completed(
+                &rule_name,
+                &mut submitted,
+                &mut sched,
+                config,
+                workdir_actual.as_ref(),
+                skipped_count.as_ref(),
+                is_tty,
+                Some(run_log),
+                progress,
+            ),
+            PreSkipDecision::Verify(rule, scope, submap) => {
+                if oxo_flow_core::executor::checkpoint::should_skip_rule_with_checksums_async(
+                    &rule,
+                    workdir_actual.as_ref(),
+                    &scope,
+                    Some(&submap),
+                )
+                .await
+                {
+                    mark_pre_completed(
+                        &rule_name,
+                        &mut submitted,
+                        &mut sched,
+                        config,
+                        workdir_actual.as_ref(),
+                        skipped_count.as_ref(),
+                        is_tty,
+                        Some(run_log),
+                        progress,
+                    );
                 }
+                // else: a recorded hash diverges from the file on disk —
+                // decline the skip and leave the rule unsubmitted so the
+                // executor's freshness gate re-executes it (issue #1013 E6).
             }
         }
     }

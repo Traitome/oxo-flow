@@ -6127,6 +6127,96 @@ fn cli_run_per_rule_checksum_records_without_provenance() {
     );
 }
 
+/// Per-rule `checksum` must gate the scheduler's pre-process skip
+/// (issue #1013 E6): a checkpoint-completed rule whose recorded checksum
+/// no longer matches the on-disk content must NOT be pre-skipped as
+/// "(already completed)" — it must flow to the executor's freshness gate,
+/// which re-executes it. Covers both a plain rule and a `[[values]]`
+/// fan-out instance (whose outputs only expand with per-instance
+/// bindings).
+#[test]
+fn cli_run_per_rule_checksum_gates_preprocess_skip() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tamper.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "tamper"
+version = "1.0.0"
+
+[[values]]
+name = "smp"
+values = ["a", "b"]
+
+[[rules]]
+name = "hash_me"
+output = ["results/{smp}.txt"]
+checksum = "md5"
+shell = "mkdir -p results && echo payload-{smp} > {output}"
+
+[[rules]]
+name = "plain"
+output = ["plain.txt"]
+shell = "echo plain > {output}"
+"#,
+    )
+    .unwrap();
+
+    // Run 1: everything executes and checksums are recorded per rule.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("3 succeeded"), "first run: {stderr}");
+
+    // Tamper with one output of the checksum rule (an expanded instance)
+    // and one output of the plain rule. The plain rule has no checksum
+    // record, so its skip decision stays mtime/existence-based; the
+    // checksum rule must re-execute.
+    fs::write(dir.path().join("results/a.txt"), "TAMPERED").unwrap();
+    fs::write(dir.path().join("plain.txt"), "TAMPERED").unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "rerun failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("hash_me_smp_a (already completed)"),
+        "tampered checksum-rule instance must not be pre-skipped: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 succeeded"),
+        "exactly the tampered instance re-executes: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("results/a.txt")).unwrap(),
+        "payload-a\n",
+        "checksum divergence must re-execute and restore the output"
+    );
+    // Tampered instance is re-recorded with its fresh digest.
+    let raw = fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let rec = parsed["checksums"]["results/a.txt"].as_str().unwrap();
+    assert!(
+        rec.starts_with("md5:"),
+        "re-recorded after divergence: {rec}"
+    );
+    // The plain (no checksum) rule keeps its existence-based skip.
+    assert!(
+        stderr.contains("plain (already completed)"),
+        "non-checksum rule still skips by existence: {stderr}"
+    );
+}
+
 /// Full `temporary = true` lifecycle: after a successful run the intermediate
 /// is deleted and tombstoned; a plain rerun skips the whole chain; deleting a
 /// dependent's output lazily regenerates the producer first.
