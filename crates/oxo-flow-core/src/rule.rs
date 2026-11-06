@@ -938,11 +938,13 @@ where
 pub enum FilePatterns {
     /// List of file patterns (e.g., `["a.txt", "b.txt"]`).
     List(Vec<String>),
-    /// Named map of file patterns (e.g., `{ reads = "reads.fq" }`).
-    Map(HashMap<String, String>),
     /// Directory input with optional glob pattern.
     ///
-    /// Tracks all files in directory for modification detection.
+    /// Tracks all files in directory for modification detection. Declared
+    /// before the named map so `{ path = ..., pattern = ... }` reaches this
+    /// variant — the old ordering made `Map` (any string→string table)
+    /// swallow the table first and the directory form was unreachable from
+    /// documented TOML (H-9).
     Dir {
         /// Directory path.
         path: String,
@@ -950,6 +952,8 @@ pub enum FilePatterns {
         #[serde(default)]
         pattern: Option<String>,
     },
+    /// Named map of file patterns (e.g., `{ reads = "reads.fq" }`).
+    Map(HashMap<String, String>),
 }
 
 impl Default for FilePatterns {
@@ -3290,5 +3294,33 @@ mod tests {
         assert_eq!(pa.join(" "), "out.bam.bai out.bam");
         // get_index already indexed sorted keys — the two must agree.
         assert_eq!(pa.get_index(0), Some(&"out.bam.bai".to_string()));
+    }
+
+    #[test]
+    fn file_patterns_dir_form_is_reachable_from_toml() {
+        // H-9: `{ path = ..., pattern = ... }` used to deserialize as the
+        // named map (any string→string table matched first), so the
+        // directory form was unreachable from documented TOML. The
+        // reordered untagged variants make `Dir` win on `path` tables while
+        // every other named map still parses as `Map`.
+        let dir: FilePatterns =
+            toml::from_str("path = \"data\"\npattern = \"*.txt\"").unwrap();
+        assert_eq!(
+            dir,
+            FilePatterns::Dir {
+                path: "data".to_string(),
+                pattern: Some("*.txt".to_string()),
+            }
+        );
+        let minimal: FilePatterns = toml::from_str("path = \"data\"").unwrap();
+        assert_eq!(
+            minimal,
+            FilePatterns::Dir {
+                path: "data".to_string(),
+                pattern: None,
+            }
+        );
+        let named: FilePatterns = toml::from_str("reads = \"reads.fq\"").unwrap();
+        assert!(matches!(named, FilePatterns::Map(_)));
     }
 }

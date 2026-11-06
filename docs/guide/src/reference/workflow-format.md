@@ -1844,6 +1844,27 @@ substituted (literal brace text at render time) and is flagged by **W034**
 along with the rule's actual keys, so a typo like `{input.tumer}` is
 reported at lint time instead of surfacing as a tool failure.
 
+### Directory Input
+
+When a rule consumes every file under a directory, declare it explicitly
+with the `{ path = ..., pattern = ... }` form instead of a bare string:
+
+```toml
+[[rules]]
+name = "analyze"
+input = { path = "results", pattern = "*.bam" }
+shell = "multiqc {input.path}"
+```
+
+`pattern` is optional (omit it to track the whole directory). The explicit
+form always creates dependency edges to every producer writing under that
+directory — optionally filtered by the glob — while a bare-string input
+goes through a directory-vs-file heuristic (a trailing `/`, or a last
+component without a known file extension, reads as a directory). The
+heuristic cannot know that `results.txt` means a *directory* named
+`results.txt`; when a directory legitimately carries a file-like name,
+use the explicit form above or `depends_on`.
+
 ### Custom Wildcards
 
 Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:

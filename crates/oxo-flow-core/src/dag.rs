@@ -3549,6 +3549,39 @@ mod tests {
     }
 
     #[test]
+    fn dir_input_toml_form_reaches_edge_inference() {
+        // H-9: the documented-TOML `{ path = ..., pattern = ... }` form
+        // used to deserialize as a named map, silently losing the
+        // directory edges it was supposed to guarantee. End to end:
+        // parse → DAG → edge to the producer writing under the directory.
+        let config = crate::config::WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "dir-input-toml"
+            version = "0.1.0"
+
+            [[rules]]
+            name = "produce"
+            output = ["data/a.txt"]
+            shell = "mkdir -p data && echo x > data/a.txt"
+
+            [[rules]]
+            name = "consume"
+            input = { path = "data", pattern = "*.txt" }
+            output = ["out.txt"]
+            shell = "cat data/*.txt > out.txt"
+            "#,
+        )
+        .unwrap();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config.config_placeholder_values(),
+        )
+        .unwrap();
+        assert_eq!(dag.dependencies("consume").unwrap(), vec!["produce"]);
+    }
+
+    #[test]
     fn template_level_edges_unaffected_by_new_inference() {
         let step1 = make_rule("step1", vec!["input.txt"], vec!["mid.txt"]);
         let step2 = make_rule("step2", vec!["mid.txt"], vec!["output.txt"]);
