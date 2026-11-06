@@ -20,6 +20,7 @@
 //!   the engine never manages MCP server processes).
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -605,9 +606,31 @@ impl McpHttpClient {
             {
                 *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.to_string());
             }
-            let text = response.text().await.map_err(|e| AiError::Transport {
-                message: format!("MCP response read failed: {e}"),
-            })?;
+            // Bounded read (H-7): an MCP server is a third-party,
+            // user-configured HTTP endpoint — `response.text()` would
+            // buffer a multi-gigabyte body and OOM the CLI. Stream chunk
+            // at a time through the same cap the fetch tool uses; a
+            // JSON-RPC body that big cannot be a valid response anyway,
+            // so exceeding it is a hard error, not a truncated parse.
+            let mut capped = crate::tools::builtin::CappedBody::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| AiError::Transport {
+                    message: format!("MCP response read failed: {e}"),
+                })?;
+                if !capped.push(&chunk) {
+                    break;
+                }
+            }
+            if capped.truncated() {
+                return Err(AiError::Transport {
+                    message: format!(
+                        "MCP response body exceeded {} bytes — refusing an unbounded read",
+                        crate::tools::builtin::MAX_FETCH_BYTES
+                    ),
+                });
+            }
+            let text = capped.finish();
             return parse_rpc_response(&text, id).map_err(|e| AiError::Protocol { message: e });
         }
         Err(AiError::Transport {
@@ -1287,6 +1310,33 @@ mod tests {
             }
         });
         (format!("mcp://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_refuses_oversized_response_bodies() {
+        // H-7: an MCP server is a third-party, user-configured HTTP
+        // endpoint — `response.text()` would buffer a multi-gigabyte body
+        // and OOM the CLI. The capped read must abandon the body and
+        // answer with a transport error instead.
+        let (url, _calls) = json_rpc_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    let pad = "x".repeat(crate::tools::builtin::MAX_FETCH_BYTES + 4096);
+                    serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                        "protocolVersion":"2024-11-05","pad":pad}})
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let error = client.list_tools().await.unwrap_err();
+        match error {
+            AiError::Transport { message } => {
+                assert!(message.contains("exceeded"), "{message}");
+            }
+            other => panic!("expected a Transport error, got: {other}"),
+        }
     }
 
     #[tokio::test]

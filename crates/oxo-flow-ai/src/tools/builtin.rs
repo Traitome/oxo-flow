@@ -413,19 +413,19 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
 /// 15 s request timeout bounds *time*, not size: a fast endpoint can stream
 /// hundreds of megabytes in that window, and nothing near that fits the
 /// model's context (or the tool-result budget) anyway.
-const MAX_FETCH_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_FETCH_BYTES: usize = 256 * 1024;
 
 /// Accumulates a response body up to [`MAX_FETCH_BYTES`] and reports whether
 /// the source had more. Reading happens chunk-at-a-time so an oversized (or
 /// endless) response is abandoned once the cap is reached instead of being
 /// buffered whole.
-struct CappedBody {
+pub(crate) struct CappedBody {
     bytes: Vec<u8>,
     truncated: bool,
 }
 
 impl CappedBody {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             bytes: Vec::new(),
             truncated: false,
@@ -434,7 +434,7 @@ impl CappedBody {
 
     /// Append one chunk; returns `false` once the cap is reached, telling
     /// the caller to stop reading.
-    fn push(&mut self, chunk: &[u8]) -> bool {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> bool {
         let room = MAX_FETCH_BYTES.saturating_sub(self.bytes.len());
         if chunk.len() > room {
             self.bytes.extend_from_slice(&chunk[..room]);
@@ -445,8 +445,13 @@ impl CappedBody {
         self.bytes.len() < MAX_FETCH_BYTES
     }
 
+    /// Whether the cap was reached and content was cut short.
+    pub(crate) fn truncated(&self) -> bool {
+        self.truncated
+    }
+
     /// The body as text, with a marker appended when it was cut short.
-    fn finish(self) -> String {
+    pub(crate) fn finish(self) -> String {
         let text = String::from_utf8_lossy(&self.bytes).into_owned();
         if self.truncated {
             format!("{text}\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]")
