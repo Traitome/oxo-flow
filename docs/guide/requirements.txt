@@ -1,0 +1,4 @@
+# Pinned docs-deploy toolchain (audit M-16): a new upstream release must not
+# break the docs deploy or flip the MD032 gate with no change in this repo.
+mkdocs-material==9.8.0
+mike==2.2.0
