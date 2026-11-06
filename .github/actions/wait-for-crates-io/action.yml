@@ -21,13 +21,16 @@ runs:
   using: composite
   steps:
     - shell: bash
+      # L-8: inputs reach the shell through env, never via `${{ }}`
+      # interpolation into the run body (same hardening as the health check).
+      env:
+        CRATE: ${{ inputs.crate }}
+        VERSION: ${{ inputs.version }}
+        TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        DELAY_SECONDS: ${{ inputs.delay-seconds }}
       run: |
         set -euo pipefail
-        CRATE='${{ inputs.crate }}'
-        VERSION='${{ inputs.version }}'
         VERSION="${VERSION#v}"
-        TIMEOUT_SECONDS='${{ inputs.timeout-seconds }}'
-        DELAY_SECONDS='${{ inputs.delay-seconds }}'
         ATTEMPTS=$(( TIMEOUT_SECONDS / DELAY_SECONDS ))
         [ "${ATTEMPTS}" -gt 0 ] || ATTEMPTS=1
 

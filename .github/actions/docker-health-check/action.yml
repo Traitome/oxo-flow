@@ -36,17 +36,21 @@ runs:
   using: composite
   steps:
     - shell: bash
+      # L-8: inputs reach the shell through env, never via `${{ }}`
+      # interpolation into the run body — the first caller to pass a value
+      # derived from an event payload would otherwise become command
+      # injection (GitHub's own hardening guidance).
+      env:
+        IMAGE: ${{ inputs.image }}
+        CONTAINER: ${{ inputs.container-name }}
+        LABEL: ${{ inputs.label }}
+        PORT: ${{ inputs.port }}
+        PATH_SUFFIX: ${{ inputs.path }}
+        EXPECTED: ${{ inputs.expected-substring }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        DELAY_SECONDS: ${{ inputs.delay-seconds }}
       run: |
         set -euo pipefail
-        IMAGE='${{ inputs.image }}'
-        CONTAINER='${{ inputs.container-name }}'
-        LABEL='${{ inputs.label }}'
-        PORT='${{ inputs.port }}'
-        PATH_SUFFIX='${{ inputs.path }}'
-        EXPECTED='${{ inputs.expected-substring }}'
-        MAX_ATTEMPTS='${{ inputs.max-attempts }}'
-        DELAY_SECONDS='${{ inputs.delay-seconds }}'
-
         docker run -d --name "${CONTAINER}" -p "${PORT}:${PORT}" "${IMAGE}"
 
         for _ in $(seq 1 "${MAX_ATTEMPTS}"); do
