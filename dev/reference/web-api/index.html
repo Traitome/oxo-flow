@@ -6249,9 +6249,12 @@ their checkpoint entries before the freshness gate runs, so downstream rules
 re-execute with the new upstream outputs instead of silently passing the
 freshness gate with stale artifacts. The spawned CLI receives
 <code>--from-rule &lt;name&gt;</code> directly (the same closure computation the CLI's own
-<code>--from-rule</code> flag runs — one engine, two surfaces). <code>--from-rule</code> subsumes
-<code>skip_succeeded</code> for the re-executed set: completed rules outside the
-closure keep their checkpoint state, so the plan lists them in <code>will_skip</code>
+<code>--from-rule</code> flag runs — one engine, two surfaces). Failed and cancelled
+rules in the named rule's upstream target set have no success checkpoint
+record, so they re-execute as well; the plan lists them in <code>will_rerun</code>
+alongside the downstream closure. <code>--from-rule</code> subsumes
+<code>skip_succeeded</code> for the re-executed set: completed rules outside that set
+keep their checkpoint state, so the plan lists them in <code>will_skip</code>
 regardless of <code>skip_succeeded</code>. A <code>from_rule</code> naming a rule not in the DAG
 surfaces as a <code>400 RuleNotFound</code> from the spawned CLI's own DAG walk.</p>
 <p>The retry <strong>really executes</strong>: the returned <code>new_run_id</code> is a real run in
@@ -6268,9 +6271,11 @@ optional <code>note</code> when the plan is empty on a previously failed run (it
 before executing any rule, e.g. a configuration error at spawn; the retry
 re-fails identically unless the error is fixed).
 When <code>from_rule</code> is set, the plan's <code>will_rerun</code> list contains the named
-rule plus every transitive dependent (the downstream closure), and
-<code>will_skip</code> contains the remaining completed rules — the same closure the
-engine will invalidate at run start.</p>
+rule plus every transitive dependent (the downstream closure) and any
+failed/cancelled rule in its upstream target set (those re-execute too,
+since they have no success checkpoint record), and <code>will_skip</code> contains the
+remaining completed rules — the same set the engine will execute at run
+start.</p>
 <h3 id="cancel">Cancel<a class="headerlink" href="#cancel" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>POST /api/runs/{id}/cancel
 </span></code></pre></div>
@@ -6645,7 +6650,11 @@ loop (tool rounds, validation rounds) as typed events:</p>
 a scratch directory so a run never writes into an operator's real archive).
 Successful generations archive <code>outcome: "Success"</code>; a run that fails
 archives <code>outcome: "Failed"</code> with an <code>error</code> reason (the post-mortem
-record). Writes are temp-sibling + atomic rename, so a reader never observes
+record). A run aborted by a JSON route's total budget (the <code>504 AI_TIMEOUT</code>
+path) also archives <code>outcome: "Failed"</code> with the timeout reason — the route
+timer drops the orchestrator future before it can archive its own failure,
+so the route writes the synthetic record. Writes are temp-sibling + atomic
+rename, so a reader never observes
 a truncated file. Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent
