@@ -1088,6 +1088,21 @@ async fn security_headers(
     response
 }
 
+/// A JSON rejection built from the shared [`ApiError`] type.
+///
+/// Middleware-level errors used to be hand-built `serde_json::json!` bodies
+/// with varying field sets, so the `{code, message, detail, suggestion}`
+/// contract held only for handler errors (report finding P-F5). Routing
+/// them through one constructor keeps the wire shape identical everywhere.
+pub(crate) fn json_error(status: StatusCode, error: ApiError) -> axum::response::Response {
+    (
+        status,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        axum::Json(error),
+    )
+        .into_response()
+}
+
 /// Middleware: require authentication for team/hpc mode.
 ///
 /// Validates the Bearer token against the `sessions` table — the token must
@@ -1141,15 +1156,15 @@ async fn require_auth(
             request.extensions_mut().insert(user);
             return next.run(request).await;
         }
-        return (
-            axum::http::StatusCode::UNAUTHORIZED,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            axum::Json(serde_json::json!({
-                "code": "INVALID_API_KEY",
-                "message": "Invalid or revoked API key",
-            })),
-        )
-            .into_response();
+        return json_error(
+            StatusCode::UNAUTHORIZED,
+            ApiError {
+                code: "INVALID_API_KEY".into(),
+                message: "Invalid or revoked API key".into(),
+                detail: None,
+                suggestion: Some("Check the X-API-Key header or mint a new key.".into()),
+            },
+        );
     }
 
     // Extract Bearer token
@@ -1162,16 +1177,17 @@ async fn require_auth(
     let token = match token {
         Some(t) if !t.is_empty() => t,
         _ => {
-            return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                axum::Json(serde_json::json!({
-                    "code": "AUTH_REQUIRED",
-                    "message": "Authentication required in team/hpc mode",
-                    "suggestion": "Login at POST /api/auth/login to obtain a session token"
-                })),
-            )
-                .into_response();
+            return json_error(
+                StatusCode::UNAUTHORIZED,
+                ApiError {
+                    code: "AUTH_REQUIRED".into(),
+                    message: "Authentication required in team/hpc mode".into(),
+                    detail: None,
+                    suggestion: Some(
+                        "Login at POST /api/auth/login to obtain a session token".into(),
+                    ),
+                },
+            );
         }
     };
 
@@ -1215,42 +1231,44 @@ async fn require_auth(
                         "require_auth: session references unknown user '{}'; rejecting",
                         session.user_id
                     );
-                    return (
-                        axum::http::StatusCode::UNAUTHORIZED,
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        axum::Json(serde_json::json!({
-                            "code": "INVALID_TOKEN",
-                            "message": "Session is no longer valid; sign in again",
-                            "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
-                        })),
-                    )
-                        .into_response();
+                    return json_error(
+                        StatusCode::UNAUTHORIZED,
+                        ApiError {
+                            code: "INVALID_TOKEN".into(),
+                            message: "Session is no longer valid; sign in again".into(),
+                            detail: None,
+                            suggestion: Some(
+                                "Login again at POST /api/auth/login to obtain a fresh token"
+                                    .into(),
+                            ),
+                        },
+                    );
                 }
                 Err(e) => {
                     tracing::error!("require_auth: failed to query user: {e}");
-                    return (
-                        axum::http::StatusCode::UNAUTHORIZED,
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        axum::Json(serde_json::json!({
-                            "code": "AUTH_REQUIRED",
-                            "message": "Authentication required in team/hpc mode",
-                        })),
-                    )
-                        .into_response();
+                    return json_error(
+                        StatusCode::UNAUTHORIZED,
+                        ApiError {
+                            code: "AUTH_REQUIRED".into(),
+                            message: "Authentication required in team/hpc mode".into(),
+                            detail: None,
+                            suggestion: None,
+                        },
+                    );
                 }
             },
             // DB unavailable — reject everything (fail-secure).
             None => {
                 tracing::error!("require_auth: DB backend not available, rejecting request");
-                return (
-                    axum::http::StatusCode::UNAUTHORIZED,
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    axum::Json(serde_json::json!({
-                        "code": "AUTH_REQUIRED",
-                        "message": "Authentication required in team/hpc mode",
-                    })),
-                )
-                    .into_response();
+                return json_error(
+                    StatusCode::UNAUTHORIZED,
+                    ApiError {
+                        code: "AUTH_REQUIRED".into(),
+                        message: "Authentication required in team/hpc mode".into(),
+                        detail: Some("The server's session store is unavailable".into()),
+                        suggestion: None,
+                    },
+                );
             }
         };
         request
@@ -1259,16 +1277,15 @@ async fn require_auth(
         return next.run(request).await;
     }
 
-    (
-        axum::http::StatusCode::UNAUTHORIZED,
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        axum::Json(serde_json::json!({
-            "code": "INVALID_TOKEN",
-            "message": "Invalid or expired session token",
-            "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
-        })),
+    json_error(
+        StatusCode::UNAUTHORIZED,
+        ApiError {
+            code: "INVALID_TOKEN".into(),
+            message: "Invalid or expired session token".into(),
+            detail: None,
+            suggestion: Some("Login again at POST /api/auth/login to obtain a fresh token".into()),
+        },
     )
-        .into_response()
 }
 
 /// Pure decision for the #207 runs gate — extracted so the 503 contract

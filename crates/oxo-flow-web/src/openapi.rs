@@ -14,9 +14,14 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-/// Adds `bearerAuth` (JWT) and `apiKey` (`X-API-Key`) security schemes to the
-/// generated OpenAPI document. Protected endpoints declare which schemes they
-/// accept via `security(...)` in their `#[utoipa::path]` macro.
+/// Adds `bearerAuth` (opaque server-issued session token) and `apiKey`
+/// (`X-API-Key`) security schemes to the generated OpenAPI document.
+/// Protected endpoints declare which schemes they accept via `security(...)`
+/// in their `#[utoipa::path]` macro.
+///
+/// `bearerAuth` intentionally carries no `bearerFormat`: session tokens are
+/// opaque random ids persisted server-side, not JWTs, and declaring `"JWT"`
+/// misleads generated clients.
 pub struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -24,12 +29,7 @@ impl Modify for SecurityAddon {
         let components = openapi.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
             "bearerAuth",
-            SecurityScheme::Http(
-                HttpBuilder::new()
-                    .scheme(HttpAuthScheme::Bearer)
-                    .bearer_format("JWT")
-                    .build(),
-            ),
+            SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
         );
         components.add_security_scheme(
             "apiKey",

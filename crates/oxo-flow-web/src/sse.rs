@@ -10,6 +10,7 @@
 //! is consumed on first use). The stream delivers only the subscriber's
 //! own events plus userless ones; admins see all.
 
+use crate::domains::workflow::handlers::ApiError;
 use crate::extract::ApiQuery;
 use axum::http::StatusCode;
 use axum::response::{
@@ -119,15 +120,15 @@ pub async fn events_ticket(
         // resolve() falls back to the `default` pseudo-user when no auth
         // extension is present — a real session always carries an
         // authenticated id in team/hpc mode.
-        return (
+        return crate::server::json_error(
             StatusCode::UNAUTHORIZED,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            axum::Json(serde_json::json!({
-                "code": "AUTH_REQUIRED",
-                "message": "Authentication required to mint an event-stream ticket",
-            })),
-        )
-            .into_response();
+            ApiError {
+                code: "AUTH_REQUIRED".into(),
+                message: "Authentication required to mint an event-stream ticket".into(),
+                detail: None,
+                suggestion: Some("Sign in, then retry minting the ticket.".into()),
+            },
+        );
     }
     let ticket = issue_ticket(&user.id);
     (
@@ -208,15 +209,15 @@ pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> 
             .filter(|t| !t.is_empty())
             .and_then(consume_ticket);
         let Some(user_id) = user_id else {
-            return (
+            return crate::server::json_error(
                 StatusCode::UNAUTHORIZED,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                axum::Json(serde_json::json!({
-                    "code": "INVALID_TOKEN",
-                    "message": "A fresh one-time ?ticket= from POST /api/events/ticket is required for the event stream in team/hpc mode",
-                })),
-            )
-                .into_response();
+                ApiError {
+                    code: "INVALID_TOKEN".into(),
+                    message: "A fresh one-time ?ticket= from POST /api/events/ticket is required for the event stream in team/hpc mode".into(),
+                    detail: None,
+                    suggestion: Some("Mint a ticket with POST /api/events/ticket and reconnect.".into()),
+                },
+            );
         };
         // Resolve role from the canonical row; fail closed when the user
         // has vanished since the ticket was minted (#516 policy).
@@ -230,15 +231,15 @@ pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> 
             None => None,
         };
         let Some(role) = role else {
-            return (
+            return crate::server::json_error(
                 StatusCode::UNAUTHORIZED,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                axum::Json(serde_json::json!({
-                    "code": "INVALID_TOKEN",
-                    "message": "Ticket user no longer exists",
-                })),
-            )
-                .into_response();
+                ApiError {
+                    code: "INVALID_TOKEN".into(),
+                    message: "Ticket user no longer exists".into(),
+                    detail: None,
+                    suggestion: Some("Sign in again and mint a fresh ticket.".into()),
+                },
+            );
         };
         Some(crate::domains::auth::current_user::CurrentUser { id: user_id, role })
     };

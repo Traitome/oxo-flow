@@ -1122,6 +1122,9 @@ export default function MonitorReport() {
           <span style={{ color: 'var(--color-success)' }}>{t('monitor.done').replace('{{n}}', String(dagStatus.metrics.completed_nodes))}</span>
           <span style={{ color: 'var(--color-info)' }}>{t('monitor.running').replace('{{n}}', String(dagStatus.metrics.running_nodes))}</span>
           <span style={{ color: 'var(--color-error)' }}>{t('monitor.failed').replace('{{n}}', String(dagStatus.metrics.failed_nodes))}</span>
+          {dagStatus.metrics.cancelled_nodes > 0 && (
+            <span style={{ color: 'var(--color-text-tertiary)' }}>{t('monitor.cancelled').replace('{{n}}', String(dagStatus.metrics.cancelled_nodes))}</span>
+          )}
           <span style={{ color: 'var(--color-text-tertiary)' }}>{t('monitor.skipped').replace('{{n}}', String(dagStatus.metrics.skipped_nodes))}</span>
           <span>{t('monitor.pending').replace('{{n}}', String(dagStatus.metrics.pending_nodes))}</span>
           {dagStatus.metrics.eta_ms != null && dagStatus.metrics.eta_ms > 0 && (

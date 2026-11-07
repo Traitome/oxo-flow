@@ -6,8 +6,8 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 
 ## API Design Conventions
 
-- **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail?, suggestion? }`
-- **Errors**: `{ code: "E001", message, detail?, suggestion? }` — the `code` value uses the engine's [diagnostic codes](./glossary.md#diagnostic-codes)
+- **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail, suggestion }` — `detail` and `suggestion` are always present and are `null` when the error carries no extra context
+- **Errors**: `{ code: "E001", message, detail, suggestion }` — the `code` value uses the engine's [diagnostic codes](./glossary.md#diagnostic-codes)
 - **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
 - **Versioning**: `/api/` prefix for all endpoints
 - **Authentication**: in team/hpc mode, protected endpoints accept an `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.
@@ -25,6 +25,11 @@ All errors return a unified JSON format:
   "suggestion": "Please login at POST /api/auth/login to obtain a session token"
 }
 ```
+
+`detail` and `suggestion` are **always serialized**; when an error has no
+extra context they are `null` rather than absent, so clients can parse the
+four-field shape unconditionally (the OpenAPI `ApiError` schema marks both
+nullable).
 
 Rate limiting follows the same contract: over-limit requests get
 `429 {"code":"RATE_LIMITED", "message":"Rate limit exceeded", "detail":"retry in Ns", ...}`
@@ -124,6 +129,8 @@ Returns paginated structured audit entries:
 }
 ```
 `page` defaults to 1 and `per_page` defaults to 50 (max 200). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
+
+`user` is the actor's canonical `users.id`, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (`user`, `viewer`) and the `default` personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through `GET /api/users` when one is needed (admin-only).
 
 ### Server-Sent Events
 ```
@@ -505,7 +512,7 @@ Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled) keeps `completed + failed + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures and skips never inflate it.
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. A rule killed because the *run* was cancelled reports `status: "cancelled"` — never `failed` — while a rule with its own recorded exit code stays `failed` even if the run was later cancelled. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled siblings of a failed run) plus `cancelled_nodes` (run-level cancellations) keep `completed + failed + cancelled + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.
 
 ### Diagnostics
 ```
