@@ -46,6 +46,16 @@ regexes = [
   '''BSgenome\.Hsapiens\.UCSC\.hg38''',
 ]
 
+[[allowlists]]
+description = "azure.rs SharedKey golden-vector HMAC assertions: fake account 'acct'/fake key test vectors, not credentials"
+paths = ['''oxo-flow-core/src/storage/azure\.rs$''']
+regexes = [
+  '''SharedKey acct:JjSoiI3O64sBWVJt8jKMnJz8rGlDwg/4W8mhb0wOLoA=''',
+  '''SharedKey acct:2QgDGHCSPM/fCJ25Eso728oUxL5DoBS8eOKz1DS88V8=''',
+  '''SharedKey acct:q4uK0wChjfS6SROYYMw8wrBDoIZY9VphcenZBlTwbms=''',
+  '''SharedKey acct:PmuSXq9\+BeqBmZvSPD07ePhjq6Y5dqrkLO0xP6fvSJU=''',
+]
+
 # ── History-only paths ────────────────────────────────────────────────────
 # Files no longer in the tree but still present in past commits; git-mode
 # scans full history, so these keeps `gitleaks detect` green.
