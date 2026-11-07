@@ -4188,6 +4188,17 @@ reads only <code>input_size</code> and <code>memory_scale</code>. The repair is 
 enforced limits instead (<code>resources.time_limit</code>, <code>resources.memory</code>,
 <code>resources.threads</code>); the reserved hints stay legal TOML so external
 tooling can keep writing them.</p>
+<p><a href="../../reference/glossary/#diagnostic-codes">W039</a> flags a dotted
+<code>{namespace.key}</code> placeholder whose namespace the engine does not
+recognize — for example <code>{metadata.batch}</code> where <code>{meta.batch}</code> was
+meant. Bare <code>{token}</code> wildcards already get an unknown-wildcard
+warning and <code>{input.…}</code>/<code>{output.…}</code> mistakes have their own W034
+checks, but an unrecognized <em>dotted</em> namespace used to fall through
+every guard: the token renders as literal brace text and the tool
+fails on input that looks valid. The diagnostic suggests the closest
+recognized namespace when the typo is a prefix-extended or truncated
+form (<code>metadata</code> → <code>meta</code>, <code>conf</code> → <code>config</code>); shell brace text like
+awk <code>'{print $1}'</code> and comment lines are not flagged.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

@@ -5339,6 +5339,10 @@ below list every code the engine currently emits.</p>
 <td><code>W037</code></td>
 <td>A <code>resource_hint</code> sets <code>runtime</code> or <code>io_bound</code> — both are parsed but consumed by nothing; the scheduler only uses <code>input_size</code> and <code>memory_scale</code> today</td>
 </tr>
+<tr>
+<td><code>W039</code></td>
+<td>A dotted <code>{namespace.key}</code> placeholder uses an unrecognized namespace (e.g. <code>{metadata.batch}</code> instead of <code>{meta.batch}</code>) — the token is never substituted and the tool receives literal brace text</td>
+</tr>
 </tbody>
 </table>
 <p>Schema-check codes (<code>S001</code>–<code>S007</code>) come from the raw-file schema pass,
