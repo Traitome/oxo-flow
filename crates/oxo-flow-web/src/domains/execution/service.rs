@@ -147,6 +147,25 @@ pub fn compute_overall_status(nodes: &[NodeStatusItem], db_status: Option<&str>)
     }
 }
 
+/// The CLI flag pair (`--resume-failed`, `--rerun`) that makes a retry's
+/// spawned execution match what [`compute_retry_plan`] promised.
+///
+/// - `from_rule` set: the CLI's `--from-rule` transitive-closure
+///   invalidation subsumes both flags (issue #1017), so both are suppressed.
+/// - `skip_succeeded`: the plan promises a non-empty `will_skip`; the
+///   checkpoint skip set delivers it, and `--resume-failed` clears the
+///   failed-rule markers so exactly the failed set re-executes. `--rerun`
+///   force-re-executes every rule and contradicts the promise.
+/// - `!skip_succeeded`: the plan promises nothing is skipped — `--rerun`
+///   is what makes that true.
+pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) {
+    if from_rule {
+        (false, false)
+    } else {
+        (skip_succeeded, !skip_succeeded)
+    }
+}
+
 /// Compute retry plan: which rules to rerun and which to skip.
 /// Reruns all failed nodes + their downstream dependents.
 pub fn compute_retry_plan(
@@ -376,6 +395,18 @@ pub fn diagnose_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_spawn_flags_honor_the_plan_promise() {
+        // skip_succeeded → checkpoint-driven partial retry: --resume-failed
+        // on, --rerun off (the plan promised will_skip).
+        assert_eq!(retry_spawn_flags(false, true), (true, false));
+        // no skip → force the full pass (the plan promised nothing skipped).
+        assert_eq!(retry_spawn_flags(false, false), (false, true));
+        // from_rule → the closure invalidation subsumes both flags.
+        assert_eq!(retry_spawn_flags(true, true), (false, false));
+        assert_eq!(retry_spawn_flags(true, false), (false, false));
+    }
 
     #[test]
     fn create_run_rejects_reserved_values_name() {
