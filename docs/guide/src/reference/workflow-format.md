@@ -1921,6 +1921,14 @@ shell = "{assembler} -o {output} {input}"
   as `expand_inputs` config references. CLI `--arg x=u1,u2` or a profile
   then drives the fan-out without editing the workflow; takes precedence
   over a static `values` when both are set.
+
+  !!! note "The config key must exist at validation time"
+      Validation runs before CLI overrides are applied, so the referenced
+      key must be declared in the workflow's `[config]` (an array or a
+      comma string) — possibly with an empty default you replace on the
+      command line. If the key is absent, validation fails with
+      `[[values]] table 'x' has no values: values_from 'config.x' resolved
+      to no values` before any `--arg` is considered.
 - Multiple `[[values]]` tables form a cartesian product with each other
   and with sample groups / pairs (deterministic order: the first table
   varies slowest).
