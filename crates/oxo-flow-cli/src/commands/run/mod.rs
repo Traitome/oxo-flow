@@ -471,6 +471,34 @@ pub async fn run_command(
     // Default targets (issue #469): `target = true` rules seed the build
     // when nothing explicit was selected. Explicit -t/--module wins.
     let target = resolve_default_targets(&config, &target);
+    // Issue #1017: the --from-rule closure must be resolved ONCE and shared
+    // by three consumers — the planner (below), the checkpoint invalidation,
+    // and the executor's force_rules. Computing it here, before planning,
+    // also fixes the semantics gap the first #1017 cut shipped with: the
+    // target slot only ever produced an UPSTREAM closure for the from-rule,
+    // so the invalidated downstream rules were never part of `order` and the
+    // run printed "invalidated … will re-execute" while skipping them all.
+    // The closure extends the target set (upstream(X) ∪ {X} ∪ downstream(X)
+    // in the planner, because each dependent's own upstream closure pulls X
+    // and its producers back in), and X itself is invalidated so the
+    // scheduler's completed pre-skip cannot mark it done before it runs.
+    let from_closure: Vec<String> = match from_rule.as_deref() {
+        Some(from) => {
+            let dependents = dag.transitive_dependents(from)?;
+            let mut closure = Vec::with_capacity(dependents.len() + 1);
+            closure.push(from.to_string());
+            closure.extend(dependents);
+            closure
+        }
+        None => Vec::new(),
+    };
+    let target = if !from_closure.is_empty() {
+        let mut extended = target;
+        extended.extend(from_closure.iter().cloned());
+        extended
+    } else {
+        target
+    };
     let mut order = execution_order_skipping_with_notes(
         &dag,
         &target,
@@ -616,27 +644,28 @@ pub async fn run_command(
     // old X. Compute the closure in the DAG, invalidate those checkpoint
     // entries, and persist the invalidated state before any scheduling
     // decision is made. Runs BEFORE the freshness gate so checksum-verified
-    // outputs (E6 machinery) also re-derive.
-    if let Some(ref from_rule_name) = from_rule {
-        let closure: Vec<String> = dag.transitive_dependents(from_rule_name)?;
-        if !closure.is_empty() {
-            let mut ck = checkpoint.lock().await;
-            ck.invalidate_closure(&closure);
-            drop(ck);
-            // Persist the invalidation so a concurrent reader or a crash
-            // before the first save still sees the closure as un-done.
-            checkpoint.lock().await.save_to_file(&checkpoint_path)?;
-            diagnostic_narrate(
-                format_args!(
-                    "  {} --from-rule: invalidated checkpoint for {} downstream \
-                     of '{}' — they will re-execute.",
-                    "Info:".bold().cyan(),
-                    oxo_flow_core::plural(closure.len(), "rule", "rules"),
-                    from_rule_name,
-                ),
-                Some(&run_log),
-            );
-        }
+    // outputs (E6 machinery) also re-derive. The closure is the one resolved
+    // before planning above and INCLUDES X itself: X must re-run (that is
+    // the point of --from-rule), and invalidating it also keeps the
+    // scheduler's completed-rule pre-skip from marking X done before it is
+    // submitted.
+    if !from_closure.is_empty() {
+        let mut ck = checkpoint.lock().await;
+        ck.invalidate_closure(&from_closure);
+        drop(ck);
+        // Persist the invalidation so a concurrent reader or a crash
+        // before the first save still sees the closure as un-done.
+        checkpoint.lock().await.save_to_file(&checkpoint_path)?;
+        diagnostic_narrate(
+            format_args!(
+                "  {} --from-rule: invalidated checkpoint for {} rule(s) at and \
+                 downstream of '{}' — they will re-execute.",
+                "Info:".bold().cyan(),
+                from_closure.len(),
+                from_closure[0],
+            ),
+            Some(&run_log),
+        );
     }
 
     // Sensitive keys are needed by the snapshot-drift warning below and by
@@ -696,8 +725,14 @@ pub async fn run_command(
             Some(&run_workdir),
             Some(&config),
         );
-        let force_rules: std::collections::HashSet<String> =
+        let mut force_rules: std::collections::HashSet<String> =
             report.invalidated.iter().cloned().collect();
+        // Issue #1017: the --from-rule closure rides force_rules too — its
+        // checkpoint entries were just cleared, but stale outputs still sit
+        // on disk, so without this the executor's mtime freshness gate
+        // would silently mark them "outputs up-to-date" instead of
+        // rebuilding (the exact reuse class force_rules exists for).
+        force_rules.extend(from_closure.iter().cloned());
         let completed_in_run = order
             .iter()
             .filter(|name| ck.completed_rules.contains(*name))
