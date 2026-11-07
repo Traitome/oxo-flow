@@ -53,6 +53,9 @@ pub enum NodeStatus {
     Running,
     Success,
     Failed,
+    /// The rule was killed because the RUN was cancelled — terminal and
+    /// non-success, but not a failure of the rule.
+    Cancelled,
     Skipped,
 }
 
@@ -63,6 +66,7 @@ impl std::fmt::Display for NodeStatus {
             Self::Running => write!(f, "running"),
             Self::Success => write!(f, "success"),
             Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
             Self::Skipped => write!(f, "skipped"),
         }
     }
@@ -376,10 +380,14 @@ pub struct DagMetrics {
     pub failed_nodes: usize,
     pub running_nodes: usize,
     pub pending_nodes: usize,
-    /// when-gated-off / abort-cancelled nodes — counted separately so
-    /// `completed + failed + running + pending + skipped == total` partitions
-    /// exactly (issue #907 P1-2).
+    /// when-gated-off / abort-cancelled siblings — counted separately so
+    /// `completed + failed + cancelled + running + pending + skipped == total`
+    /// partitions exactly (issue #907 P1-2).
     pub skipped_nodes: usize,
+    /// Nodes killed because the run itself was cancelled — kept distinct
+    /// from `failed_nodes` so a cancelled run is not reported as a failure
+    /// tally.
+    pub cancelled_nodes: usize,
     pub eta_ms: Option<u64>,
 }
 
@@ -474,6 +482,7 @@ mod tests {
         assert_eq!(NodeStatus::Running.to_string(), "running");
         assert_eq!(NodeStatus::Success.to_string(), "success");
         assert_eq!(NodeStatus::Failed.to_string(), "failed");
+        assert_eq!(NodeStatus::Cancelled.to_string(), "cancelled");
         assert_eq!(NodeStatus::Skipped.to_string(), "skipped");
     }
 

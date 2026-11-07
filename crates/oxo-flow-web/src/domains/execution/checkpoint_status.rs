@@ -16,9 +16,17 @@ use super::types::{NodeStatus, NodeStatusItem};
 
 /// Derive node statuses from the run's checkpoint file.
 ///
-/// `is_running` gates the execution.log scan: a finished run must not report
-/// anything as still running.
-pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusItem> {
+/// `run_status` is the run record's own terminal/runtime status and drives
+/// two things: the execution.log scan is gated on `"running"` (a finished
+/// run must not report anything as still running), and a cancelled run's
+/// killed rules surface as [`NodeStatus::Cancelled`] rather than `Failed`
+/// — the process-tree kill is collateral of the operator's cancel, not a
+/// rule failure. A rule with a recorded exit code
+/// keeps `Failed` even in a cancelled run: that is a genuine failure that
+/// happened before the cancel.
+pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusItem> {
+    let is_running = run_status == "running";
+    let run_cancelled = run_status == "cancelled";
     let checkpoint = CheckpointState::load_from_file(&CheckpointState::default_path(run_dir))
         .unwrap_or_else(|_| CheckpointState::new());
 
@@ -81,16 +89,24 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         });
     }
     for rule in &checkpoint.failed_rules {
+        let record = checkpoint.rule_runs.get(rule);
         // Issue #690: a failed_rules entry whose recorded when-verdict is
         // false was gated off, not failed — typically a stale entry from an
         // earlier run under a different config. Surface it as Skipped so the
         // web view agrees with the CLI's dry-run tally.
+        //
+        // P-F4: in a cancelled run a rule with no recorded exit code was
+        // killed by the cancel (the CLI may not reach its own
+        // demote-to-cancelled reconciliation when the web server terminates
+        // the whole process tree), so surface Cancelled. An exit code means
+        // the rule failed on its own — keep Failed.
         let status = if checkpoint.when_verdicts.get(rule) == Some(&false) {
             NodeStatus::Skipped
+        } else if run_cancelled && record.is_none_or(|r| r.exit_code.is_none()) {
+            NodeStatus::Cancelled
         } else {
             NodeStatus::Failed
         };
-        let record = checkpoint.rule_runs.get(rule);
         let is_failed = status == NodeStatus::Failed;
         items.push(NodeStatusItem {
             rule: rule.clone(),
@@ -186,7 +202,14 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         for rule in cancelled {
             items.push(NodeStatusItem {
                 rule: rule.clone(),
-                status: NodeStatus::Skipped,
+                // A run-level cancel killed these too — same terminal
+                // vocabulary as the failed_rules branch above. In a FAILED
+                // run they stay Skipped: abort collateral, not the failure.
+                status: if run_cancelled {
+                    NodeStatus::Cancelled
+                } else {
+                    NodeStatus::Skipped
+                },
                 started_at: None,
                 duration_ms: None,
                 exit_code: None,
@@ -256,8 +279,10 @@ pub fn with_all_rules(items: Vec<NodeStatusItem>, all_rules: &[String]) -> Vec<N
 
 /// Combine one rule's instance statuses into a single rule-level status.
 ///
-/// Priority: Failed > Running > Success (with at least one success) >
-/// Skipped > Pending. Duration is the max across instances.
+/// Priority: Failed > Running > Cancelled > Success (with at least one
+/// success) > Skipped > Pending. Cancelled outranks Success because a rule
+/// whose instances were partly cancelled did not fully run; showing Success
+/// would hide the interruption. Duration is the max across instances.
 fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusItem {
     let Some(items) = items else {
         return NodeStatusItem {
@@ -275,6 +300,8 @@ fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusI
         NodeStatus::Failed
     } else if items.iter().any(|i| i.status == NodeStatus::Running) {
         NodeStatus::Running
+    } else if items.iter().any(|i| i.status == NodeStatus::Cancelled) {
+        NodeStatus::Cancelled
     } else if items.iter().any(|i| i.status == NodeStatus::Success) {
         NodeStatus::Success
     } else if items.iter().all(|i| i.status == NodeStatus::Skipped) {
@@ -318,7 +345,7 @@ mod tests {
                 "benchmarks": {"fastqc": {"rule": "fastqc", "wall_time_secs": 1.5, "retries": 0}}
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         assert_eq!(items.len(), 2);
         let fastqc = items.iter().find(|i| i.rule == "fastqc").unwrap();
         assert!(matches!(fastqc.status, NodeStatus::Success));
@@ -341,13 +368,13 @@ mod tests {
             "Running: align\n✓ fastqc (0.1s)\n",
         )
         .unwrap();
-        let items = load_node_statuses(&dir, true);
+        let items = load_node_statuses(&dir, "running");
         let align = items.iter().find(|i| i.rule == "align").unwrap();
         assert!(matches!(align.status, NodeStatus::Running));
         // Without a live run, the same log must not claim anything is running.
         // Pending rules are expressed by absence — the caller merges with the
         // full rule list from the pipeline snapshot.
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         assert!(!items.iter().any(|i| i.rule == "align"));
     }
 
@@ -376,7 +403,7 @@ mod tests {
                 }
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let trim = items.iter().find(|i| i.rule == "trim").unwrap();
         assert!(matches!(trim.status, NodeStatus::Failed));
         assert_eq!(trim.exit_code, Some(-1));
@@ -399,7 +426,7 @@ mod tests {
         let dir = std::env::temp_dir().join("cp-test-3");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        assert!(load_node_statuses(&dir, false).is_empty());
+        assert!(load_node_statuses(&dir, "completed").is_empty());
     }
 
     #[test]
@@ -470,7 +497,7 @@ mod tests {
                 }
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let align = items
             .iter()
             .find(|i| i.rule == "align")
@@ -504,7 +531,7 @@ mod tests {
                 }
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let align = items.iter().find(|i| i.rule == "align").unwrap();
         assert!(
             matches!(align.status, NodeStatus::Skipped),
@@ -531,7 +558,7 @@ mod tests {
                 "when_verdicts": {"qc": false}
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let qc = items
             .iter()
             .find(|i| i.rule == "qc")
@@ -562,7 +589,7 @@ mod tests {
             "Running: align\n✓ align\nRunning: samtools_sort\n",
         )
         .unwrap();
-        let items = load_node_statuses(&dir, true);
+        let items = load_node_statuses(&dir, "running");
         let align = items.iter().find(|i| i.rule == "align").unwrap();
         assert!(
             matches!(align.status, NodeStatus::Success),
@@ -607,7 +634,7 @@ mod tests {
                 "benchmarks": {}
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let gated = items
             .iter()
             .find(|i| i.rule == "primers_map_primers")
@@ -626,7 +653,7 @@ mod tests {
             &dir,
             r#"{"completed_rules": ["a"], "failed_rules": [], "benchmarks": {}}"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let all = with_all_rules(items, &["a".into(), "b".into(), "c".into()]);
         assert_eq!(all.len(), 3);
         let statuses: Vec<&NodeStatus> = all.iter().map(|i| &i.status).collect();
@@ -652,11 +679,102 @@ mod tests {
                 "benchmarks": {}
             }"#,
         );
-        let items = load_node_statuses(&dir, false);
+        let items = load_node_statuses(&dir, "completed");
         let align = items.iter().find(|i| i.rule == "align").unwrap();
         assert!(matches!(align.status, NodeStatus::Skipped));
         let real_fail = items.iter().find(|i| i.rule == "real_fail").unwrap();
         assert!(matches!(real_fail.status, NodeStatus::Failed));
+    }
+
+    /// Report finding P-F4: cancelling a run kills the in-flight rule. The
+    /// checkpoint shows it in failed_rules with no exit code (the CLI never
+    /// reached its own demote-to-cancelled reconciliation), and the web used
+    /// to report it as `failed`. With the run record cancelled, the node is
+    /// `cancelled` — the cancel is the cause, not a rule failure.
+    #[test]
+    fn cancelled_run_maps_killed_rule_to_cancelled_not_failed() {
+        let dir = std::env::temp_dir().join("cp-run-cancelled-killed");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["fastqc"],
+                "failed_rules": ["sleep"],
+                "benchmarks": {},
+                "rule_runs": {"sleep": {}}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, "cancelled");
+        let killed = items.iter().find(|i| i.rule == "sleep").unwrap();
+        assert!(
+            matches!(killed.status, NodeStatus::Cancelled),
+            "killed rule must be Cancelled: {:?}",
+            killed.status
+        );
+        assert_eq!(killed.exit_code, None);
+        let done = items.iter().find(|i| i.rule == "fastqc").unwrap();
+        assert!(matches!(done.status, NodeStatus::Success));
+    }
+
+    /// A genuine failure that happened BEFORE the cancel keeps its exit
+    /// code and must stay `failed` — cancellation must not launder real
+    /// failures (report finding P-F4).
+    #[test]
+    fn cancelled_run_keeps_genuine_failure_failed() {
+        let dir = std::env::temp_dir().join("cp-run-cancelled-real-fail");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": [],
+                "failed_rules": ["align"],
+                "benchmarks": {},
+                "rule_runs": {"align": {"exit_code": 1, "stderr_tail": "boom"}}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, "cancelled");
+        let failed = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(
+            matches!(failed.status, NodeStatus::Failed),
+            "a recorded exit code is a real failure: {:?}",
+            failed.status
+        );
+        assert_eq!(failed.exit_code, Some(1));
+        assert_eq!(failed.stderr_tail.as_deref(), Some("boom"));
+    }
+
+    /// The CLI's own abort-cancelled records (status "cancelled", not in
+    /// failed_rules) follow the same run-level vocabulary: Cancelled when
+    /// the run was cancelled, Skipped when it failed.
+    #[test]
+    fn cancelled_run_maps_rule_runs_cancelled_entries_to_cancelled() {
+        let dir = std::env::temp_dir().join("cp-run-cancelled-siblings");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": [],
+                "failed_rules": [],
+                "benchmarks": {},
+                "rule_runs": {
+                    "align": {
+                        "status": "cancelled",
+                        "skip_reason": "run cancelled by operator"
+                    }
+                }
+            }"#,
+        );
+        let cancelled = load_node_statuses(&dir, "cancelled");
+        let align = cancelled.iter().find(|i| i.rule == "align").unwrap();
+        assert!(matches!(align.status, NodeStatus::Cancelled));
+        // Same checkpoint on a FAILED run: abort collateral stays Skipped,
+        // so the failed-run view does not grow a cancelled vocabulary.
+        let failed = load_node_statuses(&dir, "failed");
+        let align = failed.iter().find(|i| i.rule == "align").unwrap();
+        assert!(matches!(align.status, NodeStatus::Skipped));
     }
 }
 
@@ -711,6 +829,25 @@ mod aggregation_tests {
         ];
         let all = with_all_rules(items, &["qc".into()]);
         assert_eq!(all[0].status, NodeStatus::Running);
+    }
+
+    #[test]
+    fn cancelled_instance_outranks_success_in_aggregation() {
+        // A partly-run wildcard rule was interrupted: showing Success for
+        // the base rule would hide the cancellation of its other instances.
+        let items = vec![
+            item("qc_S1", NodeStatus::Success),
+            item("qc_S2", NodeStatus::Cancelled),
+        ];
+        let all = with_all_rules(items, &["qc".into()]);
+        assert_eq!(all[0].status, NodeStatus::Cancelled);
+        // A genuine failure still outranks the cancellation.
+        let items = vec![
+            item("qc_S1", NodeStatus::Failed),
+            item("qc_S2", NodeStatus::Cancelled),
+        ];
+        let all = with_all_rules(items, &["qc".into()]);
+        assert_eq!(all[0].status, NodeStatus::Failed);
     }
 
     #[test]

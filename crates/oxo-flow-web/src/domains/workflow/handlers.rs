@@ -49,13 +49,17 @@ async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_c
 // Error helpers
 // ---------------------------------------------------------------------------
 
+/// The one structured-error shape every JSON route returns:
+/// `{code, message, detail, suggestion}`. `detail` and `suggestion` are
+/// ALWAYS serialized — as `null` when the error has no extra context — so
+/// the documented four-field contract holds on the common paths instead of
+/// varying per endpoint. Both fields are nullable in the schema, so
+/// generated clients already accept the null form.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct ApiError {
     pub code: String,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
 }
 
@@ -1651,4 +1655,42 @@ pub async fn rollback_pipeline(
         created_at: pipeline.created_at,
         updated_at: now,
     }))
+}
+
+#[cfg(test)]
+mod error_shape_tests {
+    use super::*;
+
+    /// Report finding P-F5: the documented contract is
+    /// `{code, message, detail, suggestion}`. The shared constructor must
+    /// emit all four keys on every path — absent context is `null`, never a
+    /// missing field — so clients can parse the shape unconditionally.
+    #[test]
+    fn err_serializes_all_four_contract_fields() {
+        let (status, Json(error)) = err(StatusCode::NOT_FOUND, "NOT_FOUND", "Run missing".into());
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let value = serde_json::to_value(&error).expect("ApiError serializes");
+        assert_eq!(value["code"], "NOT_FOUND");
+        assert_eq!(value["message"], "Run missing");
+        assert!(value["detail"].is_null(), "detail must be null: {value}");
+        assert!(
+            value["suggestion"].is_null(),
+            "suggestion must be null: {value}"
+        );
+        assert_eq!(
+            value.as_object().map(|o| o.len()),
+            Some(4),
+            "exactly the four contract fields: {value}"
+        );
+    }
+
+    /// Populated hints keep their string types (the AI surface relies on
+    /// both fields being actionable advice, not just present).
+    #[test]
+    fn populated_hints_serialize_as_strings() {
+        let error = ai_not_configured_error();
+        let value = serde_json::to_value(&error).expect("ApiError serializes");
+        assert!(value["detail"].is_string());
+        assert!(value["suggestion"].is_string());
+    }
 }

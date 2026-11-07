@@ -168,6 +168,50 @@ fn effective_bind_host_with(mode: &str, host: &str, dev_mode: bool) -> anyhow::R
     Ok(host.to_string())
 }
 
+/// Whether at least one sign-in credential is configured.
+///
+/// Single source of truth for the startup warning below: the standalone
+/// `oxo-flow-web` binary and `oxo-flow serve` must agree on what "no
+/// credentials" means. `OXO_FLOW_DEV_MODE=1` deliberately does not count —
+/// it bypasses the password check instead of configuring one, and is refused
+/// on a network bind.
+pub fn sign_in_credentials_configured() -> bool {
+    sign_in_credentials_configured_from(
+        std::env::var("OXO_FLOW_ADMIN_PASSWORD").ok().as_deref(),
+        std::env::var("OXO_FLOW_USER_PASSWORD").ok().as_deref(),
+        std::env::var("OXO_FLOW_VIEWER_PASSWORD").ok().as_deref(),
+    )
+}
+
+/// Pure core of [`sign_in_credentials_configured`] — values are passed in so
+/// tests need no environment mutation.
+fn sign_in_credentials_configured_from(
+    admin: Option<&str>,
+    user: Option<&str>,
+    viewer: Option<&str>,
+) -> bool {
+    admin.is_some() || user.is_some() || viewer.is_some()
+}
+
+/// Warn loudly at startup when no sign-in credentials are configured.
+///
+/// Without one of the three env-var passwords the server still starts, but
+/// every login is rejected (team/hpc modes) — an opaque 401 wall unless the
+/// operator is told why. Shared by both serving entry points (issue #79
+/// P1-06 originally emitted it only in the standalone binary, leaving the
+/// documented `oxo-flow serve` path silent).
+pub fn warn_if_no_sign_in_credentials() {
+    if sign_in_credentials_configured() {
+        return;
+    }
+    tracing::warn!(
+        "No sign-in credentials configured (OXO_FLOW_ADMIN_PASSWORD / \
+         OXO_FLOW_USER_PASSWORD / OXO_FLOW_VIEWER_PASSWORD). Every login \
+         will be rejected until one is set; personal mode does not \
+         require sign-in for daily use."
+    );
+}
+
 /// Resolve the effective host into a concrete [`std::net::SocketAddr`].
 ///
 /// `oxo-flow serve` binds `TcpListener::bind(format!("{host}:{port}"))`,
@@ -312,6 +356,10 @@ pub async fn start_server_with_mode(
 ) -> anyhow::Result<()> {
     // Auth-boundary enforcement (shared with the standalone binary).
     let host = effective_bind_host(mode, host)?;
+    // Credential visibility (issue #79 P1-06): one shared check so the
+    // documented `oxo-flow serve` entry point cannot be silent while the
+    // standalone binary warns (report finding T-F1).
+    warn_if_no_sign_in_credentials();
     crate::init_database().await?;
 
     // Cluster definitions from the platform config file are imported by both
@@ -576,6 +624,18 @@ mod effective_bind_host_tests {
         );
         assert!(effective_bind_host_with("team", "0.0.0.0", true).is_err());
         assert!(effective_bind_host_with("team", "127.0.0.1", true).is_ok());
+    }
+
+    /// Report finding T-F1: both serving entry points now call the same
+    /// predicate. Any single configured password is enough; a set-but-empty
+    /// variable still counts because the login comparison accepts it.
+    #[test]
+    fn sign_in_credential_predicate_accepts_any_configured_password() {
+        assert!(!sign_in_credentials_configured_from(None, None, None));
+        assert!(sign_in_credentials_configured_from(Some("a"), None, None));
+        assert!(sign_in_credentials_configured_from(None, Some("u"), None));
+        assert!(sign_in_credentials_configured_from(None, None, Some("v")));
+        assert!(sign_in_credentials_configured_from(Some(""), None, None));
     }
 
     /// Both prefixes accepted by the postgres gate; anything else —

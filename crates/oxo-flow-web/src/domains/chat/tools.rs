@@ -56,7 +56,7 @@ impl Tool for RunStatusTool {
         }
         let nodes = crate::domains::execution::checkpoint_status::load_node_statuses(
             std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-            run.status == "running",
+            &run.status,
         );
         Ok(serde_json::json!({
             "run_id": run.id,

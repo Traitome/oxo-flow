@@ -164,7 +164,7 @@ export interface DagStatus {
   nodes: Array<{ id: string; label: string; status: string; color: string; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
   edges: Array<{ source: string; target: string }>;
   parallel_groups: Array<Array<string>>; critical_path: Array<string>;
-  metrics: { total_nodes: number; completed_nodes: number; failed_nodes: number; running_nodes: number; pending_nodes: number; skipped_nodes: number; eta_ms: number | null };
+  metrics: { total_nodes: number; completed_nodes: number; failed_nodes: number; running_nodes: number; pending_nodes: number; skipped_nodes: number; cancelled_nodes: number; eta_ms: number | null };
 }
 export interface Diagnostics {
   failed_nodes: Array<{ rule: string; error_pattern: string | null; likely_cause: string; suggestions: string[]; relevant_log_lines: string[]; auto_fixable?: boolean; fix_action?: { description: string; command?: string } }>;

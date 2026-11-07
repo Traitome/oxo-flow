@@ -125,14 +125,19 @@ pub fn create_run(
 pub fn compute_overall_status(nodes: &[NodeStatusItem], db_status: Option<&str>) -> RunStatus {
     let derived = if nodes.iter().any(|n| n.status == NodeStatus::Failed) {
         RunStatus::Failed
+    } else if nodes.iter().any(|n| n.status == NodeStatus::Running) {
+        RunStatus::Running
+    } else if nodes.iter().any(|n| n.status == NodeStatus::Cancelled) {
+        // Report finding P-F4: a cancelled node is a terminal non-failure;
+        // without this arm the run derived as Queued and only the stored
+        // status saved it.
+        RunStatus::Cancelled
     } else if !nodes.is_empty()
         && nodes
             .iter()
             .all(|n| n.status == NodeStatus::Success || n.status == NodeStatus::Skipped)
     {
         RunStatus::Completed
-    } else if nodes.iter().any(|n| n.status == NodeStatus::Running) {
-        RunStatus::Running
     } else {
         RunStatus::Queued
     };
@@ -188,9 +193,13 @@ pub fn compute_retry_plan(
         });
     }
 
+    // Cancelled nodes never completed, so a retry must re-execute them just
+    // like failed ones (report finding P-F4 made them visible; leaving them
+    // out would produce a plan that promises nothing to run while the
+    // spawned --resume-failed run re-runs them).
     let mut will_rerun: Vec<String> = run_nodes
         .iter()
-        .filter(|n| n.status == NodeStatus::Failed)
+        .filter(|n| n.status == NodeStatus::Failed || n.status == NodeStatus::Cancelled)
         .map(|n| n.rule.clone())
         .collect();
 
@@ -607,6 +616,80 @@ output = ["b.txt"]
         let plan = compute_retry_plan(&nodes, &dag, true, None).unwrap();
         assert!(plan.will_rerun.contains(&"step1".to_string()));
         assert!(plan.will_rerun.contains(&"step2".to_string()));
+    }
+
+    /// Report finding P-F4: a cancelled node never completed, so the retry
+    /// plan must list it for re-execution exactly like a failed one — the
+    /// spawned `--resume-failed` run will re-run it, and a plan that says
+    /// otherwise is a promise the engine breaks.
+    #[test]
+    fn test_compute_retry_reruns_cancelled_nodes() {
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+[[rules]]
+name = "step1"
+shell = "echo 1"
+output = ["a.txt"]
+[[rules]]
+name = "step2"
+shell = "echo 2"
+input = ["a.txt"]
+output = ["b.txt"]
+"#;
+        let wf = WorkflowConfig::parse(toml).unwrap();
+        let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+        let nodes = vec![NodeStatusItem {
+            rule: "step1".into(),
+            status: NodeStatus::Cancelled,
+            started_at: None,
+            duration_ms: None,
+            exit_code: None,
+            progress_pct: None,
+            stderr_tail: None,
+            stdout_tail: None,
+        }];
+        let plan = compute_retry_plan(&nodes, &dag, true, None).unwrap();
+        assert!(
+            plan.will_rerun.contains(&"step1".to_string()),
+            "cancelled rule must be re-run: {plan:?}"
+        );
+        assert!(plan.will_rerun.contains(&"step2".to_string()));
+        assert!(!plan.will_skip.contains(&"step1".to_string()));
+    }
+
+    #[test]
+    fn test_compute_overall_status_cancelled_node() {
+        let nodes = vec![
+            NodeStatusItem {
+                rule: "done".into(),
+                status: NodeStatus::Success,
+                started_at: None,
+                duration_ms: None,
+                exit_code: Some(0),
+                progress_pct: None,
+                stderr_tail: None,
+                stdout_tail: None,
+            },
+            NodeStatusItem {
+                rule: "killed".into(),
+                status: NodeStatus::Cancelled,
+                started_at: None,
+                duration_ms: None,
+                exit_code: None,
+                progress_pct: None,
+                stderr_tail: None,
+                stdout_tail: None,
+            },
+        ];
+        assert_eq!(compute_overall_status(&nodes, None), RunStatus::Cancelled);
+        // A still-"running" stored status cannot downgrade the derived
+        // terminal state to Queued/Running.
+        assert_eq!(
+            compute_overall_status(&nodes, Some("running")),
+            RunStatus::Cancelled
+        );
     }
 
     #[test]
