@@ -55,6 +55,12 @@ pub(crate) fn validate_provider_kind(kind: &str) -> Result<(), String> {
 /// — the call fails loudly instead of silently borrowing the server's
 /// key (isolation means no shared-secret leakage, in both directions).
 pub async fn provider_for(user_id: &str) -> AiProvider {
+    // An explicit `OXO_FLOW_AI_PROVIDER=disabled` pin outranks every
+    // persisted tier — including a per-user row saved before the pin — so
+    // no stored key can spend money behind the operator's back.
+    if oxo_flow_ai::provider::provider_pinned_disabled() {
+        return AiProvider::Noop;
+    }
     if let Some(cached) = PER_USER_PROVIDERS
         .lock()
         .ok()
@@ -107,6 +113,20 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
 /// All original methods are preserved with the same signatures.
 pub struct AiProviderRegistry;
 
+/// The provider name to report for a registry state.
+///
+/// `AiConfig.provider` is a [`ProviderKind`] and has no "disabled" variant,
+/// so a pinned-disabled or unconfigured registry carries a stale default
+/// name (`deepseek`). Status surfaces must name what actually executes —
+/// otherwise the startup log contradicts itself and `/api/health` masks the
+/// disabled state.
+fn reported_provider_name(active: &Result<AiProvider, oxo_flow_ai::error::AiError>) -> String {
+    match active {
+        Ok(provider) if provider.is_usable() => provider.name().to_string(),
+        _ => "disabled".to_string(),
+    }
+}
+
 impl AiProviderRegistry {
     pub fn global() -> Self {
         Self
@@ -124,8 +144,8 @@ impl AiProviderRegistry {
         oxo_flow_ai::AI
             .config()
             .map(|c| {
-                let provider = format!("{:?}", c.provider).to_lowercase();
                 let active_provider = oxo_flow_ai::AI.provider();
+                let provider = reported_provider_name(&active_provider);
                 let is_configured = match active_provider {
                     // Test/scripted providers are always considered configured;
                     // they do not need a real API key.
@@ -225,7 +245,7 @@ impl AiProviderRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_provider_kind;
+    use super::{reported_provider_name, validate_provider_kind};
 
     #[test]
     fn provider_names_are_validated_before_durable_writes() {
@@ -233,5 +253,27 @@ mod tests {
         assert!(validate_provider_kind("claude").is_ok());
         assert!(validate_provider_kind("disabled").is_ok());
         assert!(validate_provider_kind("definitely-not-a-provider").is_err());
+    }
+
+    #[test]
+    fn reported_provider_name_reflects_the_active_backend() {
+        use oxo_flow_ai::error::AiError;
+        use oxo_flow_ai::provider::{AiProvider, ProviderKind, create_provider};
+
+        // A pinned-disabled (or unconfigured) registry used to report the
+        // stale ProviderKind default (`deepseek`) while every AI surface was
+        // off; the startup log then printed a contradictory provider story.
+        assert_eq!(reported_provider_name(&Ok(AiProvider::Noop)), "disabled");
+        assert_eq!(
+            reported_provider_name(&Err(AiError::NotConfigured)),
+            "disabled"
+        );
+        let deepseek = create_provider(
+            ProviderKind::DeepSeek,
+            Some("sk-test".into()),
+            Some("http://127.0.0.1:9/v1".into()),
+            None,
+        );
+        assert_eq!(reported_provider_name(&Ok(deepseek)), "deepseek");
     }
 }

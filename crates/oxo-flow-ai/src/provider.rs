@@ -1776,6 +1776,27 @@ pub fn create_provider_from_env() -> AiProvider {
     )
 }
 
+/// Whether an `OXO_FLOW_AI_PROVIDER` value is the explicit off switch
+/// (case-insensitive, matching the provider-kind parse).
+///
+/// One predicate for every tier: the provider-resolution core pins on it,
+/// [`provider_pinned_disabled`] exposes the process-level pin to surfaces
+/// that load persisted config afterwards, and `AiConfig::from_env` derives
+/// `enabled` from it.
+pub fn provider_name_is_disabled(value: &str) -> bool {
+    value.eq_ignore_ascii_case("disabled")
+}
+
+/// Whether this process was started with `OXO_FLOW_AI_PROVIDER=disabled`.
+///
+/// The pin outranks every persisted tier — `~/.oxo-flow/ai_config.json`,
+/// the web platform config file, and DB-persisted settings. Those tiers may
+/// reconfigure credentials/endpoint/model for any other provider value, but
+/// they must never resurrect AI the operator explicitly turned off.
+pub fn provider_pinned_disabled() -> bool {
+    std::env::var("OXO_FLOW_AI_PROVIDER").is_ok_and(|value| provider_name_is_disabled(&value))
+}
+
 /// Pure provider-resolution core: the env provider string, an optional
 /// persisted config, and an environment-variable snapshot.
 ///
@@ -1801,7 +1822,7 @@ fn resolve_provider(
     saved: Option<(&str, &str, &str, &str)>,
     env: &EnvSnapshot,
 ) -> AiProvider {
-    if provider_env.eq_ignore_ascii_case("disabled") {
+    if provider_name_is_disabled(provider_env) {
         tracing::info!("AI provider disabled via OXO_FLOW_AI_PROVIDER=disabled");
         return AiProvider::Noop;
     }
@@ -2860,6 +2881,85 @@ mod tests {
             ),
             "disabled must win over auto-detectable credentials"
         );
+    }
+
+    #[test]
+    fn disabled_predicate_is_case_insensitive_and_exact() {
+        assert!(provider_name_is_disabled("disabled"));
+        assert!(provider_name_is_disabled("DISABLED"));
+        assert!(provider_name_is_disabled("Disabled"));
+        assert!(!provider_name_is_disabled(""));
+        assert!(!provider_name_is_disabled("off"));
+        // No trimming, matching the existing tier comparison: a padded
+        // value is not the documented exact string (and does not parse as
+        // a provider either, so it falls through to detection/config).
+        assert!(!provider_name_is_disabled("disabled "));
+    }
+
+    #[test]
+    fn disabled_pin_survives_a_fully_valid_config_file() {
+        // The operator's explicit off switch is pinned AFTER the saved
+        // config tier: a complete, otherwise working provider section
+        // (provider + key + endpoint + model) and shell credentials must
+        // not resurrect AI.
+        let saved = (
+            "deepseek",
+            "sk-live-config",
+            "https://api.deepseek.com/v1",
+            "deepseek-v4-pro",
+        );
+        let env = EnvSnapshot {
+            deepseek_api_key: Some("sk-env-deepseek".into()),
+            openai_api_key: Some("sk-env-openai".into()),
+            anthropic_auth_token: Some("sk-env-anthropic".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("disabled", Some(saved), &env);
+        assert!(matches!(provider, AiProvider::Noop));
+        assert_eq!(provider.name(), "disabled");
+        assert!(!provider.is_usable());
+    }
+
+    #[test]
+    fn unset_env_applies_the_config_file_section() {
+        // No regression: without the pin, the persisted config file still
+        // supplies provider, credential, endpoint, and model.
+        let saved = (
+            "deepseek",
+            "sk-saved",
+            "http://127.0.0.1:9/v1",
+            "saved-model",
+        );
+        let provider = resolve_provider("", Some(saved), &EnvSnapshot::default());
+        assert_eq!(provider.name(), "deepseek");
+        // The openai-compatible backend normalizes a /v1 base to its
+        // chat-completions endpoint; the saved endpoint is honored.
+        assert_eq!(
+            provider.api_url().as_deref(),
+            Some("http://127.0.0.1:9/v1/chat/completions")
+        );
+        assert_eq!(provider.model().as_deref(), Some("saved-model"));
+    }
+
+    #[test]
+    fn env_provider_beats_the_config_file_model() {
+        // Documented precedence: the env tier outranks the file, so neither
+        // the saved provider kind nor its model/endpoint may leak into an
+        // env-selected provider.
+        let saved = (
+            "claude",
+            "sk-saved",
+            "https://saved.example.com",
+            "saved-model",
+        );
+        let env = EnvSnapshot {
+            deepseek_api_key: Some("sk-env-deepseek".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("deepseek", Some(saved), &env);
+        assert_eq!(provider.name(), "deepseek");
+        assert_eq!(provider.model().as_deref(), Some(DEEPSEEK_DEFAULT_MODEL));
+        assert_eq!(provider.api_url().as_deref(), Some(DEEPSEEK_API_URL));
     }
 
     #[test]

@@ -68,14 +68,21 @@ fn build_health(
             scheduler: None,
             ai_provider: {
                 let config = crate::ai_provider::AiProviderRegistry::global().get_config();
-                if config.is_configured {
-                    Some(crate::domains::observability::types::ComponentStatus {
-                        status: "connected".into(),
-                        latency_ms: None,
-                    })
+                // Report the state that actually executes: a provider that
+                // is not configured is DISABLED, not unknown. The old null
+                // could not be told apart from "probe failed" and masked an
+                // explicit OXO_FLOW_AI_PROVIDER=disabled pin (that pin now
+                // also gates every AI endpoint, so this value and the call
+                // behavior agree).
+                let status = if config.is_configured {
+                    "connected"
                 } else {
-                    None
-                }
+                    "disabled"
+                };
+                Some(crate::domains::observability::types::ComponentStatus {
+                    status: status.into(),
+                    latency_ms: None,
+                })
             },
             ai_key_storage: if encrypted_keys {
                 "encrypted".into()

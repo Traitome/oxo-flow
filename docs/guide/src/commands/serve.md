@@ -191,7 +191,7 @@ curl http://127.0.0.1:8080/api/health
     "database": { "status": "ok", "latency_ms": null },
     "filesystem": { "status": "ok", "latency_ms": null },
     "scheduler": null,
-    "ai_provider": null,
+    "ai_provider": { "status": "disabled", "latency_ms": null },
     "ai_key_storage": "plaintext",
     "engine": null
   },
@@ -205,6 +205,8 @@ curl http://127.0.0.1:8080/api/health
   }
 }
 ```
+
+`components.ai_provider` is `{"status": "connected"}` while a provider is active and `{"status": "disabled"}` otherwise — including when `OXO_FLOW_AI_PROVIDER=disabled` pins AI off. The startup log reports the same pinned state, and every AI endpoint answers `AI_NOT_CONFIGURED` without contacting a provider.
 
 ### Example: Validate a pipeline
 

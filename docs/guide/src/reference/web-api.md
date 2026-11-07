@@ -76,6 +76,8 @@ Returns status, version, mode, uptime, component health (database, filesystem, s
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
+`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request.
+
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
 ```json

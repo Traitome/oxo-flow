@@ -267,15 +267,25 @@ pub async fn init_database() -> anyhow::Result<()> {
 /// `api_key_env`, never inline). Issue #569: this sequence was previously
 /// standalone-binary-only, so `oxo-flow serve` and the desktop shell lost
 /// saved provider keys on every restart.
+///
+/// `OXO_FLOW_AI_PROVIDER=disabled` is pinned before any persisted tier
+/// runs: the DB and platform-config tiers may reconfigure credentials for
+/// every other value, but they must not resurrect a disabled registry.
 pub async fn init_ai_provider(platform_config: Option<&crate::config::WebConfig>) {
+    // Snapshot the operator's explicit off switch BEFORE any config tier
+    // runs — see the doc comment above.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
     crate::ai_provider::AiProviderRegistry::global().init_from_env();
     // Issue #205: at-rest encryption is opt-in. The shared notice lives in
     // infra::crypto so every entry point emits the same warning.
     crate::infra::crypto::warn_if_plaintext_key();
     // Restore the DB-persisted tier (settings UI) when env did not configure
     // a provider — otherwise a saved key would be lost on restart.
-    crate::domains::ai::handlers::restore_ai_config_from_db().await;
-    if let Some(cfg) = platform_config
+    if !pinned_disabled {
+        crate::domains::ai::handlers::restore_ai_config_from_db().await;
+    }
+    if !pinned_disabled
+        && let Some(cfg) = platform_config
         && crate::ai_provider::AiProviderRegistry::global()
             .get_config()
             .provider
