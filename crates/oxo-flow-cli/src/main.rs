@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
     version,
     about = "A Rust-native bioinformatics pipeline engine",
     long_about = "oxo-flow is a high-performance, modular bioinformatics pipeline engine\n\
-                   built from first principles in Rust. It supports conda, mamba, pixi,\n\
+                   written in Rust. It supports conda, mamba, pixi,\n\
                    docker, singularity, venv, and environment-modules backends (plus the\n\
                    system environment) with DAG-based execution.",
     after_help = "Get started:\n  \

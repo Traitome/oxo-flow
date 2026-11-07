@@ -4,7 +4,7 @@
 
 <h1>oxo-flow</h1>
 
-<p><strong>A Rust-native bioinformatics pipeline engine with AI Companion — built from first principles for performance, reproducibility, and developer experience.</strong></p>
+<p><strong>A Rust-native bioinformatics pipeline engine with AI Companion — engineered for performance, reproducibility, and developer experience.</strong></p>
 
 [![CI](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/Traitome/oxo-flow?label=release&style=flat-square)](https://github.com/Traitome/oxo-flow/releases)
