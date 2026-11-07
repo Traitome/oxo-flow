@@ -373,6 +373,11 @@ pub async fn chat_send_json(
     {
         Some(result) => result,
         None => {
+            // The dropped orchestrator future never reaches its own
+            // archive: persist the timeout failure here so the documented
+            // "every agent-loop run is archived" contract holds on the 504
+            // path (review wave 3 LOW-3).
+            service::archive_route_timeout(&provider, budget);
             tracing::warn!(
                 endpoint = "/api/chat/send/json",
                 budget_secs = budget.as_secs(),

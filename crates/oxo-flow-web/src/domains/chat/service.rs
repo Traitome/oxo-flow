@@ -100,6 +100,18 @@ fn chat_session(provider: &AiProvider) -> oxo_flow_ai::session::AiSession {
     )
 }
 
+/// Archive a chat generation aborted by the JSON route's total budget.
+///
+/// The orchestrator archives every failure it observes, but when the ROUTE
+/// timer fires first its future is dropped mid-flight and never reaches
+/// them — the 504 path left the documented "every agent-loop run is
+/// archived" contract unfulfilled (review wave 3 LOW-3). This writes the
+/// synthetic `Failed` record with the same session labels a real run uses.
+pub fn archive_route_timeout(provider: &AiProvider, budget: std::time::Duration) {
+    let session = chat_session(provider).fail(&crate::domains::ai::timeout::timeout_reason(budget));
+    crate::domains::ai::session_archive::archive_agent_session(&session);
+}
+
 /// Run the shared generation harness for a chat request. This is the ONE
 /// place the web chat harness is assembled — context, tool registry,
 /// session labels, round budget, orchestrator, usage logging — so the

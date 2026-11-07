@@ -179,9 +179,11 @@ pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) 
 /// - `!skip_succeeded`: the spawn receives `--rerun`, which re-executes
 ///   EVERY rule, so `will_rerun` lists every rule in the DAG and
 ///   `will_skip` is empty.
-/// - `from_rule`: the downstream closure of the named rule re-executes;
-///   completed rules outside it keep their checkpoint state (the flag pair
-///   is suppressed), so they are listed in `will_skip`.
+/// - `from_rule`: the downstream closure of the named rule re-executes,
+///   plus any failed/cancelled rule in the named rule's upstream target set
+///   (those have no success checkpoint, so the spawned run re-executes
+///   them); completed rules outside that set keep their checkpoint state
+///   (the flag pair is suppressed), so they are listed in `will_skip`.
 pub fn compute_retry_plan(
     run_nodes: &[NodeStatusItem],
     dag: &WorkflowDag,
@@ -201,6 +203,22 @@ pub fn compute_retry_plan(
                 }
             }
         }
+        // The spawned run targets the named rule (the CLI maps --from-rule
+        // into the --target slot) and invalidates its downstream closure.
+        // Failed/cancelled rules inside that target's upstream closure have
+        // no success checkpoint record, so they re-execute too; omitting
+        // them left the union of `will_rerun`/`will_skip` short of the
+        // executed set (review wave 3 LOW-2).
+        if let Ok(target_set) = dag.execution_order_for_targets(&[rule]) {
+            for node in run_nodes {
+                if matches!(node.status, NodeStatus::Failed | NodeStatus::Cancelled)
+                    && target_set.contains(&node.rule)
+                    && !will_rerun.contains(&node.rule)
+                {
+                    will_rerun.push(node.rule.clone());
+                }
+            }
+        }
         // `--from-rule` subsumes the retry flag pair, so the checkpoint
         // skip set applies regardless of `skip_succeeded`; listing the
         // completed rules outside the closure is honest in both cases.
@@ -215,7 +233,8 @@ pub fn compute_retry_plan(
             will_skip,
             note: Some(format!(
                 "from-rule: re-running from '{rule}' downstream — the transitive-dependent \
-                 closure is invalidated and re-executed regardless of checkpoint state."
+                 closure is invalidated and re-executed regardless of checkpoint state, and \
+                 failed/cancelled upstream rules without a success record re-run too."
             )),
         });
     }
@@ -744,6 +763,63 @@ output = ["c.txt"]
         );
         // The spawn pair this plan must match is the full-rerun branch.
         assert_eq!(retry_spawn_flags(false, false), (false, true));
+    }
+
+    /// `from_rule` targets the named rule (the CLI maps it into the
+    /// `--target` slot) and invalidates its downstream closure. A FAILED
+    /// upstream rule has no success checkpoint record, so the spawned run
+    /// re-executes it too — it used to appear in neither `will_rerun` nor
+    /// `will_skip` (review wave 3 LOW-2). The plan must list every rule the
+    /// run actually executes; a failed rule in an unrelated branch is
+    /// outside the target closure and must stay out.
+    #[test]
+    fn test_compute_retry_from_rule_lists_failed_upstream_rule() {
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+[[rules]]
+name = "a"
+shell = "echo a"
+output = ["a.txt"]
+[[rules]]
+name = "b"
+shell = "echo b"
+input = ["a.txt"]
+output = ["b.txt"]
+[[rules]]
+name = "c"
+shell = "echo c"
+input = ["b.txt"]
+output = ["c.txt"]
+[[rules]]
+name = "other"
+shell = "echo other"
+output = ["other.txt"]
+"#;
+        let wf = WorkflowConfig::parse(toml).unwrap();
+        let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+        let nodes = vec![
+            retry_node("a", NodeStatus::Success),
+            retry_node("b", NodeStatus::Failed),
+            retry_node("c", NodeStatus::Pending),
+            retry_node("other", NodeStatus::Failed),
+        ];
+
+        let plan = compute_retry_plan(&nodes, &dag, true, Some("c")).unwrap();
+
+        let mut rerun = plan.will_rerun.clone();
+        rerun.sort();
+        assert_eq!(
+            rerun,
+            vec!["b", "c"],
+            "failed upstream rule b executes and must be listed: {plan:?}"
+        );
+        assert_eq!(plan.will_skip, vec!["a"], "plan: {plan:?}");
+        assert!(
+            !plan.will_rerun.contains(&"other".to_string()),
+            "a failed rule outside the from-rule target closure does not run: {plan:?}"
+        );
     }
 
     /// Report finding P-F4: a cancelled node never completed, so the retry

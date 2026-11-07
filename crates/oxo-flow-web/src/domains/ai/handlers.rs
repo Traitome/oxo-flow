@@ -189,6 +189,10 @@ pub async fn translate(
     {
         Some(result) => result,
         None => {
+            // The dropped orchestrator future never reaches its own
+            // archive: persist the timeout failure here (review wave 3
+            // LOW-3).
+            super::service::archive_route_timeout(&provider, budget);
             tracing::warn!(
                 endpoint = "/api/ai/translate",
                 budget_secs = budget.as_secs(),

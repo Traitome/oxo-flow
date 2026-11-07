@@ -77,7 +77,14 @@ impl StoreKind {
     /// cwd (the workdir), which is where `pixi install --manifest-path` /
     /// `python -m venv` actually materialize the env.
     pub fn in_tree_path(self, spec: &str, base: Option<&Path>) -> PathBuf {
-        let raw = Path::new(spec);
+        // A trailing separator is legal workflow spelling — the documented
+        // `venv = ".venv/"` form — but poisons every later filesystem
+        // operation: `rename(staged_link, ".venv/")` fails with ENOENT on
+        // macOS and ENOTDIR on Linux, so the store link was never installed
+        // and no ready entry was ever recorded (review wave 3 MEDIUM-1).
+        // Normalize ONCE here: this is the store's single resolution point,
+        // so setup, detach, link, and re-home all follow.
+        let raw = normalize_spec_path(spec);
         if raw.is_absolute() {
             match self {
                 // `pixi install --manifest-path <file>` puts `.pixi` next to
@@ -106,6 +113,15 @@ impl StoreKind {
             Self::Venv => "venv",
         }
     }
+}
+
+/// Normalizes a workflow spelling of an environment path.
+///
+/// `components()` drops trailing (and repeated) separators while preserving
+/// an absolute root, a leading `.`, and `..` segments. Used only by
+/// [`StoreKind::in_tree_path`] — the store's single resolution point.
+fn normalize_spec_path(spec: &str) -> PathBuf {
+    Path::new(spec).components().collect()
 }
 
 /// Store directory layout plus the symlink/bookkeeping operations the
@@ -779,6 +795,90 @@ mod tests {
         assert_eq!(
             StoreKind::Pixi.in_tree_path("envs/pixi.toml", Some(Path::new("/run"))),
             PathBuf::from("/run/envs/.pixi")
+        );
+    }
+
+    /// The documented venv spelling carries a trailing slash
+    /// (`venv = ".venv/"` in the workflow-format reference). The store's
+    /// resolution point must trim it: every later filesystem operation
+    /// (`rename(staged_link, "<path>/")`) fails with ENOENT/ENOTDIR when the
+    /// separator survives (review wave 3 MEDIUM-1).
+    #[test]
+    fn in_tree_path_trims_trailing_separators() {
+        let base = Path::new("/wf");
+        for spec in [".venv/", ".venv//", "envs/venv/"] {
+            let got = StoreKind::Venv.in_tree_path(spec, Some(base));
+            assert!(
+                !got.to_string_lossy().ends_with('/'),
+                "{spec} resolved to {got:?}"
+            );
+        }
+        assert_eq!(
+            StoreKind::Venv.in_tree_path(".venv/", Some(base)),
+            PathBuf::from("/wf/.venv")
+        );
+        assert_eq!(
+            StoreKind::Venv.in_tree_path(".venv/", None),
+            PathBuf::from("./.venv")
+        );
+        assert_eq!(
+            StoreKind::Venv.in_tree_path("/abs/.venv/", None),
+            PathBuf::from("/abs/.venv")
+        );
+        // Pixi's manifest may carry the same spelling; the materialized
+        // `.pixi` dir must stay beside the normalized manifest path.
+        assert_eq!(
+            StoreKind::Pixi.in_tree_path("envs/pixi.toml/", Some(base)),
+            PathBuf::from("/wf/envs/.pixi")
+        );
+        // The filesystem root must survive normalization unchanged.
+        assert_eq!(StoreKind::Venv.in_tree_path("/", None), PathBuf::from("/"));
+    }
+
+    /// End-to-end store behavior for the documented trailing-slash venv
+    /// spec: with the slash the re-home used to fail (WARN plus a torn
+    /// store copy), so no ready entry was ever recorded. The slash spelling
+    /// must record a ready entry, and a second workdir (plain spelling,
+    /// same content key) must adopt that entry instead of materializing a
+    /// copy (review wave 3 MEDIUM-1).
+    #[test]
+    fn trailing_slash_spec_records_ready_entry_and_reuses_across_workdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = EnvStore::from_root(tmp.path().join("store"));
+        let key = "cache-key-shared";
+
+        // First workdir: the documented `.venv/` spelling.
+        let w1 = tmp.path().join("w1");
+        std::fs::create_dir_all(&w1).unwrap();
+        let env1 = venv_env(&w1, ".venv", "from-first-workdir.txt");
+        let record = rehome_into_store(&store, StoreKind::Venv, ".venv/", Some(&w1), key)
+            .unwrap_or_else(|e| panic!("trailing-slash re-home must succeed: {e}"));
+        let store_dir = store.store_dir(StoreKind::Venv, key);
+        assert!(store.store_is_ready(&store_dir), "ready entry recorded");
+        assert_eq!(record.cache_key, key);
+
+        let link1 = w1.join(".venv");
+        let meta = std::fs::symlink_metadata(&link1).unwrap();
+        assert!(meta.file_type().is_symlink(), "w1/.venv is a store link");
+        assert_eq!(std::fs::read_link(&link1).unwrap(), store_dir);
+        assert!(env1.join("from-first-workdir.txt").is_file());
+
+        // Second workdir, plain spelling: the ready store entry is adopted
+        // instead of materializing (and re-homing) a second copy.
+        let w2 = tmp.path().join("w2");
+        std::fs::create_dir_all(&w2).unwrap();
+        venv_env(&w2, ".venv", "");
+        rehome_into_store(&store, StoreKind::Venv, ".venv", Some(&w2), key)
+            .expect("second workdir reuses the ready store entry");
+        let link2 = w2.join(".venv");
+        assert_eq!(
+            std::fs::read_link(&link2).unwrap(),
+            store_dir,
+            "second workdir points at the same content-addressed entry"
+        );
+        assert!(
+            link2.join("from-first-workdir.txt").is_file(),
+            "second workdir resolves the first workdir's store content"
         );
     }
 

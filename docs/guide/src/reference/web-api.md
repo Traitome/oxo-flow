@@ -651,9 +651,12 @@ their checkpoint entries before the freshness gate runs, so downstream rules
 re-execute with the new upstream outputs instead of silently passing the
 freshness gate with stale artifacts. The spawned CLI receives
 `--from-rule <name>` directly (the same closure computation the CLI's own
-`--from-rule` flag runs — one engine, two surfaces). `--from-rule` subsumes
-`skip_succeeded` for the re-executed set: completed rules outside the
-closure keep their checkpoint state, so the plan lists them in `will_skip`
+`--from-rule` flag runs — one engine, two surfaces). Failed and cancelled
+rules in the named rule's upstream target set have no success checkpoint
+record, so they re-execute as well; the plan lists them in `will_rerun`
+alongside the downstream closure. `--from-rule` subsumes
+`skip_succeeded` for the re-executed set: completed rules outside that set
+keep their checkpoint state, so the plan lists them in `will_skip`
 regardless of `skip_succeeded`. A `from_rule` naming a rule not in the DAG
 surfaces as a `400 RuleNotFound` from the spawned CLI's own DAG walk.
 
@@ -671,9 +674,11 @@ optional `note` when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
 re-fails identically unless the error is fixed).
 When `from_rule` is set, the plan's `will_rerun` list contains the named
-rule plus every transitive dependent (the downstream closure), and
-`will_skip` contains the remaining completed rules — the same closure the
-engine will invalidate at run start.
+rule plus every transitive dependent (the downstream closure) and any
+failed/cancelled rule in its upstream target set (those re-execute too,
+since they have no success checkpoint record), and `will_skip` contains the
+remaining completed rules — the same set the engine will execute at run
+start.
 
 ### Cancel
 ```
@@ -1062,7 +1067,11 @@ Every agent-loop run — successful or aborted — is persisted under
 a scratch directory so a run never writes into an operator's real archive).
 Successful generations archive `outcome: "Success"`; a run that fails
 archives `outcome: "Failed"` with an `error` reason (the post-mortem
-record). Writes are temp-sibling + atomic rename, so a reader never observes
+record). A run aborted by a JSON route's total budget (the `504 AI_TIMEOUT`
+path) also archives `outcome: "Failed"` with the timeout reason — the route
+timer drops the orchestrator future before it can archive its own failure,
+so the route writes the synthetic record. Writes are temp-sibling + atomic
+rename, so a reader never observes
 a truncated file. Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent

@@ -122,6 +122,23 @@ pub enum TranslateError {
     Failed(String),
 }
 
+/// Archive a translate generation aborted by the JSON route's total budget.
+///
+/// The orchestrator archives its own failures, but a route-budget expiry
+/// drops its future mid-flight, so the 504 path used to leave no record
+/// (review wave 3 LOW-3). Writes the synthetic `Failed` session with the
+/// same labels a real translate run uses.
+pub fn archive_route_timeout(provider: &AiProvider, budget: std::time::Duration) {
+    let session = oxo_flow_ai::session::AiSession::new(
+        "web-translate",
+        "translate",
+        provider.name(),
+        &provider.model().unwrap_or_else(|| "default".into()),
+    )
+    .fail(&crate::domains::ai::timeout::timeout_reason(budget));
+    crate::domains::ai::session_archive::archive_agent_session(&session);
+}
+
 /// Translate natural language intent into a validated .oxoflow pipeline.
 ///
 /// Pipeline (one harness across all generation surfaces):
