@@ -56,8 +56,9 @@ make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
 #       cargo build, cargo test, schema-drift, version-check, cargo audit,
 #       cargo-deny, aws-legacy-tripwire (fails if the legacy AWS TLS stack
-#       re-enters the s3-storage graph), secrets scan, docs build,
-#       frontend-lint, eval-tests
+#       re-enters the s3-storage graph), issue-id-tripwire (fails if internal
+#       issue IDs leak into user-facing pages), secrets scan, docs build,
+#       frontend-lint, eval-tests, eval-lint, extension-test
 ```
 
 ---
@@ -113,16 +114,24 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All eight checks must pass:
+All sixteen checks must pass:
 
 - [x] `cargo fmt -- --check`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo build --workspace`
 - [x] `cargo test --workspace`
-- [x] `schema-drift` (OpenAPI spec matches code)
+- [x] `schema-drift` (workflow JSON schema: CLI copy matches the docs canonical copy)
 - [x] `version-check` (every version location agrees with Cargo.toml)
 - [x] `cargo audit`
+- [x] `cargo deny check`
+- [x] `aws-legacy-tripwire` (legacy AWS TLS stack stays out of the s3-storage graph)
+- [x] `issue-id-tripwire` (no internal issue IDs in user-facing pages)
+- [x] `secrets` scan
+- [x] `docs` build (rustdoc with warnings denied)
 - [x] `frontend-lint`
+- [x] `eval-tests`
+- [x] `eval-lint`
+- [x] `extension-test` (VS Code extension fast gate)
 
 ### 4. Commit with Conventional Commits
 
