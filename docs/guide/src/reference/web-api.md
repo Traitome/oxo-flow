@@ -865,7 +865,12 @@ only a `prompt` field fails deserialization); `context` is optional.
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. `GET /api/ai/config/effective` shows the resolved result and
-which level supplied each field. API keys are never echoed back — responses
+which level supplied each field. The `effective.model` field is the model
+the active backend was actually constructed with: an explicit config model
+wins, otherwise the environment override (`ANTHROPIC_MODEL`,
+`OPENAI_MODEL`, `OLLAMA_MODEL`, `OXO_FLOW_AI_MODEL`) or the provider
+default is reported — it is `null` only when no provider is configured.
+`GET /api/ai/config` returns the same resolved model. API keys are never echoed back — responses
 mark `key_set` instead. Rows are encrypted at rest only when
 `OXO_FLOW_MASTER_KEY` is configured; without it, the local database uses the
 documented plaintext compatibility mode.
