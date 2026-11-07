@@ -108,6 +108,7 @@ codegen-units = 1
 strip = true
 
 [dev-dependencies]
+oxo-flow-ai = { workspace = true }
 assert_cmd = "2.2.0"
 predicates = "3.1.4"
 tempfile = { workspace = true }

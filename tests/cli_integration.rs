@@ -589,6 +589,40 @@ fn cli_ai_status_lists_discovered_skills() {
     );
 }
 
+/// `ai setup` resolves the AI config path through `OXO_FLOW_AI_CONFIG` —
+/// the same `ai_config_path()` the wizard's save (`save_ai_config`) uses —
+/// so tests/CI can redirect it away from the operator's real
+/// `$HOME/.oxo-flow/ai_config.json`. The non-interactive branch (stdin is a
+/// pipe under the test harness) prints the resolved path without saving.
+#[test]
+fn cli_ai_setup_reports_the_ai_config_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("scratch").join("ai_config.json");
+    let out = oxo_flow_cmd_without_ai_env()
+        .env("HOME", dir.path())
+        .env(oxo_flow_ai::provider::AI_CONFIG_OVERRIDE_ENV, &config)
+        .args(["ai", "setup"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ai setup non-interactive branch must succeed"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(config.to_str().unwrap()),
+        "setup must report the override config path, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("~/.oxo-flow/ai_config.json"),
+        "the hardcoded $HOME path must not be shown when the override is set: {stdout}"
+    );
+    assert!(
+        !config.exists(),
+        "the report-only non-interactive branch must not write the config"
+    );
+}
+
 // ─── ai explain (issue #65) ─────────────────────────────────────────────────
 
 #[test]

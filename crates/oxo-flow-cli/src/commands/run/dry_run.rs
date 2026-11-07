@@ -15,6 +15,68 @@ pub async fn dry_run_command(
     workflow: Option<PathBuf>,
     target: Vec<String>,
     module: Vec<String>,
+    verbose: bool,
+    json: bool,
+    ai: bool,
+    ai_max_retries: Option<u32>,
+    samples_filter: Vec<String>,
+    workdir: Option<PathBuf>,
+    profile: Option<String>,
+    skip_ref_build: bool,
+    cache_dir: Option<PathBuf>,
+    cli_args: Vec<String>,
+    rerun: bool,
+    resume_failed: bool,
+) -> Result<()> {
+    // `--json` is one-document-in / one-document-out: a failure BEFORE the
+    // success document is printed still gets a structured envelope (the same
+    // `errors[{code,message}]` shape `validate --json` uses) instead of an
+    // empty stdout. `json_written` keeps a post-document failure (declared
+    // pixi manifests) from emitting a second document.
+    let workflow_for_error = workflow.clone();
+    let mut json_written = false;
+    let result = dry_run_command_inner(
+        workflow,
+        target,
+        module,
+        verbose,
+        json,
+        ai,
+        ai_max_retries,
+        samples_filter,
+        workdir,
+        profile,
+        skip_ref_build,
+        cache_dir,
+        cli_args,
+        rerun,
+        resume_failed,
+        &mut json_written,
+    )
+    .await;
+    if json
+        && !json_written
+        && let Err(error) = &result
+    {
+        crate::commands::json_error::emit(
+            "dry-run",
+            crate::commands::json_error::code_for(error, "ERROR"),
+            &format!("{error:#}"),
+            serde_json::json!({
+                "workflow": workflow_for_error
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+            }),
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dry_run_command_inner(
+    workflow: Option<PathBuf>,
+    target: Vec<String>,
+    module: Vec<String>,
     _verbose: bool,
     json: bool,
     ai: bool,
@@ -27,6 +89,7 @@ pub async fn dry_run_command(
     cli_args: Vec<String>,
     rerun: bool,
     resume_failed: bool,
+    json_written: &mut bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -602,6 +665,21 @@ pub async fn dry_run_command(
             })
         });
 
+        // Static unproducible inputs, flattened from the same readiness pass
+        // the human section prints — the machine surface behind `input ✗` /
+        // "Sample readiness", so a `--json` consumer sees exactly what
+        // `validate --json` reports in its `missing_inputs` field.
+        let missing_inputs: Vec<String> = {
+            let mut paths = std::collections::BTreeSet::new();
+            if let Some(report) = &readiness_report {
+                for status in &report.waiting {
+                    paths.extend(status.missing.iter().cloned());
+                }
+                paths.extend(report.missing_global.iter().cloned());
+            }
+            paths.into_iter().collect()
+        };
+
         // Machine-readable checkpoint preview (issue #66): the predicted
         // execution plan with per-rule status + reason.
         let checkpoint_block = Some(&preview).map(|p| {
@@ -748,6 +826,7 @@ pub async fn dry_run_command(
                 .collect::<Vec<_>>(),
             "suggested_jobs": suggested_jobs,
             "samples": samples_block,
+            "missing_inputs": missing_inputs,
             "checkpoint_preview": checkpoint_block,
             "reentry": {
                 // Recorded re-entries (checkpoint.json) — replayed when their
@@ -784,6 +863,7 @@ pub async fn dry_run_command(
             },
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        *json_written = true;
     }
 
     // Bail AFTER the JSON document so callers still get machine-readable

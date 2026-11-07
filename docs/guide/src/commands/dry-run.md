@@ -281,7 +281,8 @@ for CI scripts and tooling that today grep the colored text:
 "summary": {"would_execute": 12, "will_skip": 0, "total_rules": 12},
 "suggested_jobs": 2,
 "sample_groups": [{"name": "cohort", "samples": […]}],
-"pairs": [{"pair_id": "…", "experiment": "…", "control": "…"}]
+"pairs": [{"pair_id": "…", "experiment": "…", "control": "…"}],
+"missing_inputs": ["inputs/A.txt", "inputs/B.txt"]
 ```
 
 `status` ∈ `run | skip | rerun` matches the stderr bracket prefix;
@@ -289,7 +290,32 @@ for CI scripts and tooling that today grep the colored text:
 by `--json`. `inputs`/`outputs` carry the declared patterns as written;
 `inputs_expanded`/`outputs_expanded` are the exact per-instance paths
 the engine will touch (with `{config.x}` resolved) — the same expansion
-the human listing shows.
+the human listing shows. `missing_inputs` is the flattened, deduplicated
+list behind the `input ✗` lines and `Sample readiness:` section — the same
+field and semantics `validate --json` reports, so a CI gate sees the static
+unproducible inputs without parsing the human text.
+
+### `--json` error contract
+
+With `--json`, stdout is always exactly **one** JSON document, success or
+failure. When dry-run fails before the plan can be built (unreadable
+workflow, TOML parse error, invalid `--arg` override, …) that document is
+the shared failure envelope and the command exits 1:
+
+```json
+{
+  "command": "dry-run",
+  "errors": [{"code": "PARSE", "message": "…"}],
+  "workflow": "broken.oxoflow"
+}
+```
+
+`code` is `PARSE` for workflow parse/deserialization failures (the same code
+`validate --json` and `lint --json` report) and `ERROR` for other pre-plan
+failures. A failure detected **after** the plan document is printed (declared
+pixi manifests that do not exist) keeps the single-document contract: the
+plan is printed once and the command exits non-zero — no second document is
+emitted.
 
 ## Examples
 

@@ -329,6 +329,43 @@ pub async fn handle_status(
     timing: bool,
     limit: usize,
 ) -> Result<()> {
+    // `--json` is one-document-in / one-document-out. A missing or malformed
+    // checkpoint used to exit 1 with EMPTY stdout; emit the shared
+    // `errors[{code,message}]` envelope instead so consumers never have to
+    // special-case this command.
+    let checkpoint_for_error = checkpoint
+        .clone()
+        .or_else(|| {
+            workdir
+                .as_ref()
+                .map(|dir| CheckpointState::default_path(dir))
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CHECKPOINT));
+    let mut json_written = false;
+    let result =
+        handle_status_inner(checkpoint, workdir, json, timing, limit, &mut json_written).await;
+    if json
+        && !json_written
+        && let Err(error) = &result
+    {
+        crate::commands::json_error::emit(
+            "status",
+            "CHECKPOINT",
+            &format!("{error:#}"),
+            serde_json::json!({"checkpoint": checkpoint_for_error.display().to_string()}),
+        );
+    }
+    result
+}
+
+async fn handle_status_inner(
+    checkpoint: Option<PathBuf>,
+    workdir: Option<PathBuf>,
+    json: bool,
+    timing: bool,
+    limit: usize,
+    json_written: &mut bool,
+) -> Result<()> {
     print_banner();
 
     // Detect common mistake: user passes a .oxoflow file instead of a
@@ -509,6 +546,7 @@ pub async fn handle_status(
             }
         }
         println!("{}", serde_json::to_string_pretty(&output)?);
+        *json_written = true;
         return Ok(());
     }
 

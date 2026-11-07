@@ -235,7 +235,10 @@ mod tests {
         let toml_str = toml_res.unwrap();
         assert!(toml_str.contains("[[rules]]"));
         assert!(toml_str.contains("name = \"bwa_mem\""));
-        assert!(toml_str.contains("threads = 8"));
+        assert!(
+            toml_str.contains("resources = { threads = 8, memory = \"16G\" }"),
+            "threads/memory must use the canonical resources form (W025): {toml_str}"
+        );
         assert!(toml_str.contains("bwa mem -t {threads} {input} > {sample}.bam"));
         assert!(toml_str.contains("types = {"));
     }
@@ -261,8 +264,10 @@ mod tests {
         let toml_str = toml_res.unwrap();
         assert!(toml_str.contains("[[rules]]"));
         assert!(toml_str.contains("name = \"bwa_mem\""));
-        assert!(toml_str.contains("threads = 4"));
-        assert!(toml_str.contains("resources = { memory = \"8G\" }"));
+        assert!(
+            toml_str.contains("resources = { threads = 4, memory = \"8G\" }"),
+            "threads/memory must use the canonical resources form (W025): {toml_str}"
+        );
         assert!(toml_str.contains("types = {"));
     }
 
