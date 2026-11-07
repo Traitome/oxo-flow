@@ -43,6 +43,18 @@ static INLINE_WILDCARD_CONSTRAINT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{(\w+):[^}]+\}").expect("valid inline-wildcard-constraint regex")
 });
 
+/// Matches dotted `{namespace.key}` references in shell or script text —
+/// candidate W039 tokens (issue #142 H1 parity: a `{metadata.batch}` typo
+/// for `{meta.batch}` is never substituted, and unlike the bare-token and
+/// `[[values]]` analogs nothing warns). Namespace charset excludes braces
+/// and whitespace — braces would be a nested placeholder, whitespace means
+/// it is shell text (e.g. awk `'{...}'`) rather than a reference; the
+/// first character must be alphabetic/underscore so numeric braces like
+/// `{1.5}` never match. Whether the namespace is recognized is decided by
+/// `RECOGNIZED_PLACEHOLDER_NAMESPACES`, not by this pattern.
+static DOTTED_PLACEHOLDER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{([a-zA-Z_]\w*)\.([^{}\s]+)\}").expect("valid dotted regex"));
+
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -1403,6 +1415,73 @@ fn sorted_io_keys(patterns: &crate::rule::FilePatterns) -> Option<String> {
     }
 }
 
+/// Dotted placeholder namespaces the engine actually substitutes (or
+/// statically validates) — anything else in a `{namespace.key}` brace
+/// group renders as literal brace text. `input`/`output` are recognized
+/// but their key mistakes have the stricter W034 checks.
+const RECOGNIZED_PLACEHOLDER_NAMESPACES: [&str; 7] = [
+    "config", "params", "wildcard", "meta", "values", "input", "output",
+];
+
+/// W039 (issue #142 H1 parity): dotted `{namespace.key}` references whose
+/// namespace the engine does not recognize. Bare `{token}` wildcards get a
+/// runtime unknown-wildcard warning and `input`/`output` mistakes have
+/// W034, but an unrecognized *dotted* namespace (a `{metadata.batch}` typo
+/// for `{meta.batch}`) falls through every guard — the runtime residual
+/// scan's substring checks (`{config.`, `{meta.`, …) only match the
+/// namespaces it knows — so the token renders literally and the tool
+/// fails on input that looks valid. Scan shell/script text (comments
+/// stripped, same rule as the runtime guard) for dotted tokens whose
+/// namespace is unrecognized, with a did-you-mean hint for
+/// prefix-extended/truncated typos.
+fn lint_dotted_placeholders(rule: &Rule) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut flagged: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let namespace_list = RECOGNIZED_PLACEHOLDER_NAMESPACES
+        .iter()
+        .map(|n| format!("{{{}.<key>}}", n))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cmd_texts = rule
+        .shell
+        .iter()
+        .chain(rule.script.iter())
+        .map(|text| crate::wildcard::strip_shell_comments(text));
+    for text in cmd_texts {
+        for cap in DOTTED_PLACEHOLDER_RE.captures_iter(&text) {
+            let token = cap[0].to_string();
+            if !flagged.insert(token.clone()) {
+                continue;
+            }
+            let namespace = &cap[1];
+            if RECOGNIZED_PLACEHOLDER_NAMESPACES.contains(&namespace) {
+                continue;
+            }
+            // Did-you-mean: prefix-extended typos (`metadata` → `meta`)
+            // and truncated ones (`conf` → `config`) are the realistic
+            // mistake shapes.
+            let hint = RECOGNIZED_PLACEHOLDER_NAMESPACES
+                .iter()
+                .find(|name| namespace.starts_with(*name) || name.starts_with(namespace))
+                .map(|name| format!("did you mean `{{{name}.{}}}`?", &cap[2]));
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "`{token}` uses an unrecognized placeholder namespace — the token is \
+                     never substituted and the tool receives literal brace text"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W039".to_string(),
+                suggestion: Some(match hint {
+                    Some(hint) => format!("{hint} Recognized namespaces are: {namespace_list}."),
+                    None => format!("recognized namespaces are: {namespace_list}."),
+                }),
+            });
+        }
+    }
+    diagnostics
+}
+
 /// Perform best-practice linting on a workflow configuration.
 ///
 /// Checks for:
@@ -1558,6 +1637,12 @@ pub fn lint_format(
         // decidable, always a bug (the placeholder renders as literal
         // brace text and the tool fails on a path that looks valid).
         diagnostics.extend(lint_io_placeholder_range(rule));
+
+        // W039 (issue #142 H1 parity): dotted `{namespace.key}` tokens whose
+        // namespace the engine does not recognize — like W034, statically
+        // decidable and always a bug (the token renders as literal brace
+        // text); the bare-token and [[values]] analogs already warn.
+        diagnostics.extend(lint_dotted_placeholders(rule));
 
         // W006: Naming convention (should use snake_case)
         if rule.name.contains('-') {
@@ -7078,6 +7163,142 @@ shell = "samtools faidx {{config.reference}}"
             0,
             "comments are prose, not executed code — same rule as the runtime guard: \
              {diagnostics:?}"
+        );
+    }
+
+    fn w039_count(diagnostics: &[Diagnostic]) -> usize {
+        diagnostics.iter().filter(|d| d.code == "W039").count()
+    }
+
+    #[test]
+    fn lint_w039_flags_unrecognized_namespace_with_did_you_mean() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "batcher"
+            input = ["a.tsv"]
+            output = ["out.tsv"]
+            shell = "process --batch {metadata.batch} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w039_count(&diagnostics),
+            1,
+            "a dotted namespace typo must warn exactly once: {diagnostics:?}"
+        );
+        let hit = diagnostics.iter().find(|d| d.code == "W039").unwrap();
+        assert_eq!(hit.rule.as_deref(), Some("batcher"));
+        assert!(
+            hit.message.contains("{metadata.batch}"),
+            "message must name the offending token: {}",
+            hit.message
+        );
+        let suggestion = hit.suggestion.as_deref().unwrap_or("");
+        assert!(
+            suggestion.contains("{meta.batch}"),
+            "prefix-extended typo gets a did-you-mean hint: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_w039_allows_all_recognized_namespaces() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            [config]
+            genome = "hg38"
+
+            [[rules]]
+            name = "everything"
+            input = { reference = "ref.fa" }
+            output = ["out.tsv"]
+            params = { threads = 4 }
+            shell = """
+                echo {config.reference} {params.threads} {wildcard.sample} \
+                    {meta.sample_id} {values.item} {input.reference} {output}
+            """
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w039_count(&diagnostics),
+            0,
+            "all seven recognized namespaces must stay silent in W039: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w039_ignores_shell_text_and_numeric_braces() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "awk_user"
+            input = ["a.tsv"]
+            output = ["out.tsv"]
+            shell = """
+                awk '{print $1}' {input} | sort > {output}
+                # {comments.look.like} this in comment lines
+            """
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w039_count(&diagnostics),
+            0,
+            "awk brace text has whitespace inside braces and numeric braces are not \
+             references; comment prose is stripped — none of these are W039: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w039_flags_truncated_namespace() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "trunc"
+            input = ["a.tsv"]
+            output = ["out.tsv"]
+            shell = "echo {conf.mode} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w039_count(&diagnostics), 1, "{diagnostics:?}");
+        let hit = diagnostics.iter().find(|d| d.code == "W039").unwrap();
+        let suggestion = hit.suggestion.as_deref().unwrap_or("");
+        assert!(
+            suggestion.contains("{config.mode}"),
+            "truncated namespace typo also gets a did-you-mean hint: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_w039_ignores_comment_lines() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "annotator"
+            input = ["a.tsv"]
+            output = ["out.vcf"]
+            shell = """
+                # {metadata.batch} is set by the caller upstream
+                call {input} > {output}
+            """
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w039_count(&diagnostics),
+            0,
+            "comments are prose, not executed code — same rule as W034: {diagnostics:?}"
         );
     }
 

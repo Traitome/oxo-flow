@@ -183,6 +183,18 @@ enforced limits instead (`resources.time_limit`, `resources.memory`,
 `resources.threads`); the reserved hints stay legal TOML so external
 tooling can keep writing them.
 
+[W039](../reference/glossary.md#diagnostic-codes) flags a dotted
+`{namespace.key}` placeholder whose namespace the engine does not
+recognize — for example `{metadata.batch}` where `{meta.batch}` was
+meant. Bare `{token}` wildcards already get an unknown-wildcard
+warning and `{input.…}`/`{output.…}` mistakes have their own W034
+checks, but an unrecognized *dotted* namespace used to fall through
+every guard: the token renders as literal brace text and the tool
+fails on input that looks valid. The diagnostic suggests the closest
+recognized namespace when the typo is a prefix-extended or truncated
+form (`metadata` → `meta`, `conf` → `config`); shell brace text like
+awk `'{print $1}'` and comment lines are not flagged.
+
 ---
 
 ## Notes

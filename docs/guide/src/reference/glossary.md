@@ -381,6 +381,7 @@ below list every code the engine currently emits.
 | `W035` | A command reads a shell glob (e.g. `cat stats/*.count.txt`) while the rule declares no inputs — globs are expanded by the shell at run time and create no DAG dependency, so the rule may run before the files it reads exist |
 | `W036` | A rule declares `input_function`, but the engine performs no dynamic input resolution — the field is parsed and round-tripped yet never called, so the input list stays exactly as declared (the declared function name does not fill it at run time) |
 | `W037` | A `resource_hint` sets `runtime` or `io_bound` — both are parsed but consumed by nothing; the scheduler only uses `input_size` and `memory_scale` today |
+| `W039` | A dotted `{namespace.key}` placeholder uses an unrecognized namespace (e.g. `{metadata.batch}` instead of `{meta.batch}`) — the token is never substituted and the tool receives literal brace text |
 
 Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
 reachable through `oxo-flow lint` (not `validate`, which reports only
