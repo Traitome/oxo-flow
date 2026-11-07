@@ -515,6 +515,14 @@ impl EnvironmentSpec {
     /// reads or hashes it. Absolute specs and `base_dir = None` pass
     /// through unchanged.
     ///
+    /// The default requirements file (`venv` set, `venv_requirements`
+    /// unset) is materialized against `base_dir` too: the venv backend
+    /// decides at setup time whether to run `pip install`, and both that
+    /// decision and the cache-key content hash must see the same file the
+    /// shell would (execution cwd = workdir, which is not the process cwd).
+    /// Without a base (tests, callers that never resolved) the default
+    /// stays unset and the backend keeps the legacy relative command.
+    ///
     /// Deliberately NOT resolved here:
     /// - `venv`: the spec may name a workdir-created artifact, and the
     ///   venv backend's teardown guard rejects absolute/`..` paths —
@@ -533,11 +541,17 @@ impl EnvironmentSpec {
                 _ => spec.clone(),
             })
         };
+        let venv_requirements = match (&self.venv, &self.venv_requirements) {
+            (Some(_), None) => {
+                base_dir.map(|base| base.join("requirements.txt").to_string_lossy().into_owned())
+            }
+            _ => resolve(self.venv_requirements.as_ref()),
+        };
         EnvironmentSpec {
             conda: resolve(self.conda.as_ref()),
             mamba: resolve(self.mamba.as_ref()),
             pixi: resolve(self.pixi.as_ref()),
-            venv_requirements: resolve(self.venv_requirements.as_ref()),
+            venv_requirements,
             ..self.clone()
         }
     }
@@ -2273,11 +2287,22 @@ mod tests {
         assert_eq!(resolved.conda.as_deref(), Some("/opt/envs/qc.yaml"));
         assert_eq!(resolved.venv.as_deref(), Some(".venv"));
         assert_eq!(resolved.conda_prefix.as_deref(), Some(".oxo-flow/envs"));
+        // The default requirements file materializes against the workflow
+        // base so the setup missing-file check and cache-key hash inspect
+        // the same path the shell reads (#1040).
+        assert_eq!(
+            resolved.venv_requirements.as_deref(),
+            Some("/wf/requirements.txt")
+        );
 
         // No workflow root (workdir == workflow dir, tests) → unchanged.
         let raw = spec.resolve_relative_paths(None);
         assert_eq!(raw.conda.as_deref(), Some("/opt/envs/qc.yaml"));
         assert_eq!(raw.venv.as_deref(), Some(".venv"));
+        assert!(
+            raw.venv_requirements.is_none(),
+            "without a base the default stays unresolved"
+        );
     }
 
     #[test]
