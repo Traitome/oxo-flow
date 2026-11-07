@@ -662,11 +662,10 @@ pub async fn oauth_callback(
     let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:3000/api/auth/oauth/callback".to_string());
 
-    // Verify CSRF state — the state from the callback must match what we issued.
-    // In production, the state should be stored server-side (e.g. in the sessions table
-    // or a short-lived cache) at authorization time and verified here.
-    // For now we validate that state is non-empty; a full implementation would
-    // store pending states with a TTL.
+    // Verify CSRF state: the state issued at authorization time was
+    // persisted server-side (`store_pending_state`), and here it is
+    // consumed single-use — before any token exchange — after an
+    // `OAUTH_STATE_TTL_MINS` (10-minute) freshness window.
     if req.state.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,

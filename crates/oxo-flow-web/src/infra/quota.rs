@@ -1,8 +1,9 @@
 //! Resource quota enforcement for team-mode deployments.
 //!
 //! Per-user limits on concurrent runs, total CPU threads, and total memory.
-//! Quotas are soft limits — exceeding them returns a warning rather than
-//! rejecting the request (admins can override).
+//! Quotas are hard limits — exceeding one rejects the spawn with
+//! `429 QUOTA_EXCEEDED`, enforced by the execution handlers'
+//! `check_spawn_budget` before a run is spawned.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
