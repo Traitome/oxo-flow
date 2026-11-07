@@ -135,7 +135,7 @@ oxo-flow run my-pipeline.oxoflow
 
 ```
 oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
-DAG: 2 rules in execution order
+DAG: 2 rules in dependency order
   1. create_data
   2. transform
   Running: create_data

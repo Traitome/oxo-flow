@@ -825,7 +825,17 @@ impl LocalExecutor {
                     Some("Docker is not installed or not in PATH. Install Docker: https://docs.docker.com/engine/install/".into())
                 } else if stderr_lower.contains("permission denied") {
                     Some("Docker requires permission. Add your user to the 'docker' group or use sudo.".into())
-                } else if stderr_lower.contains("pull") && stderr_lower.contains("error") {
+                } else if (stderr_lower.contains("pull") && stderr_lower.contains("error"))
+                    // Docker prefixes daemon failures with "Error response
+                    // from daemon" but does not repeat the word "pull" for
+                    // registry/network failures (`Get "https://…": context
+                    // deadline exceeded`), so the old pull+error gate left
+                    // the pull hint unreachable even once stderr was
+                    // captured (H2).
+                    || stderr_lower.contains("error response from daemon")
+                    || stderr_lower.contains("manifest unknown")
+                    || stderr_lower.contains("pull access denied")
+                {
                     Some("Docker image pull failed. Check image name, network connectivity, or registry authentication.".into())
                 } else {
                     None
@@ -1095,24 +1105,30 @@ impl LocalExecutor {
         // returned otherwise), but the in-tree path may still be a symlink
         // into the OLD key's store dir — `python -m venv` / `pixi install`
         // would follow it and mutate that env, which then serves stale
-        // packages under a fresh key (journey-power P2). Detach the link so
-        // setup materializes a fresh in-tree env; re-home then moves it under
-        // the new key. A failure is fatal here: installing through the wrong
-        // env is silent corruption, not a best-effort degradation.
+        // packages under a fresh key (journey-power P2). A DANGLING link
+        // must be detached as well: the store entry was deleted (`env gc`,
+        // manual cleanup) and setup cannot create an env over an existing
+        // directory entry (`python3 -m venv`: [Errno 17] File exists) — the
+        // documented broken-link auto-rebuild broke exactly there (H1).
+        // Detach the link so setup materializes a fresh in-tree env; re-home
+        // then moves it under the new key. A failure is fatal here:
+        // installing through the wrong env is silent corruption, not a
+        // best-effort degradation.
         if let Some(kind) = store_kind
             && self.env_store.is_enabled()
         {
             let spec_str = Self::store_spec(kind, env_spec);
             if let Err(e) = self
                 .env_store
-                .detach_link_to_other_store_dir(kind, &spec_str, store_base, &key)
+                .detach_link_for_rebuild(kind, &spec_str, store_base, &key)
             {
                 return Err(OxoFlowError::Environment {
                     kind: env_spec.kind().to_string(),
                     message: format!(
-                        "failed to detach the stale env-store symlink for '{spec_str}' before \
-                         rebuilding (refusing to install through a link into a different \
-                         content-key environment): {e}"
+                        "failed to detach the stale or broken env-store symlink for \
+                         '{spec_str}' before rebuilding (refusing to install through a link \
+                         into a different content-key environment or through a dangling \
+                         one): {e}"
                     ),
                 });
             }
@@ -1222,7 +1238,17 @@ impl LocalExecutor {
             .kill_on_drop(true)
             .arg("-c")
             .arg(&setup_cmd)
-            .current_dir(&self.config.workdir);
+            .current_dir(&self.config.workdir)
+            // H2: CAPTURE both streams. This child used to inherit the
+            // terminal, so `wait_bounded`'s bounded collector saw nothing:
+            // every failure became the empty `setup failed: ` while the real
+            // cause reached only the terminal — never the error, the
+            // checkpoint's `stderr_tail`, or `env_setup_hint`. Null stdin
+            // keeps a tty-launched run from handing the terminal to the env
+            // tool (same batch-tool contract as rule shells).
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         // Bounded capture, no timeout (H-3): a chatty env tool must not
         // buffer unbounded, but legit env creation legitimately runs for
         // many minutes — the env-create lock timeout governs the overall
@@ -2512,7 +2538,13 @@ impl LocalExecutor {
         // `$()`/backtick riding on one of them is rejected before the shell
         // spawns (issue #276).
         for cmd in &resolved_commands {
-            validate_rendered_command(&rule, cmd, wildcard_values, &self.config.workdir)?;
+            validate_rendered_command(
+                &rule,
+                cmd,
+                &base_cmd,
+                wildcard_values,
+                &self.config.workdir,
+            )?;
         }
 
         // Residual-wildcard gate (output patterns): a bare `{identifier}`
@@ -2688,7 +2720,13 @@ impl LocalExecutor {
                 .cloned()
                 .map(|c| mask_sensitive(&c, &self.config.sensitive_values));
             for cmd in &resolved_commands {
-                validate_rendered_command(&rule, cmd, wildcard_values, &self.config.workdir)?;
+                validate_rendered_command(
+                    &rule,
+                    cmd,
+                    &base_cmd,
+                    wildcard_values,
+                    &self.config.workdir,
+                )?;
             }
         }
         // check_resources waits for availability AND reserves atomically.
@@ -3393,7 +3431,9 @@ impl LocalExecutor {
                     {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
-                    for warning in sanitize_shell_command(cmd) {
+                    // L2: warn about USER idioms only — the wrapper's own
+                    // `$(id -u)` / bash-shim `>/dev/null` are engine text.
+                    for warning in sanitize_shell_command(command.as_deref().unwrap_or_default()) {
                         tracing::info!(rule = %rule.name, "{warning}");
                     }
                 }
@@ -3824,9 +3864,17 @@ fn warn_shell_fallback_once() {
 /// warnings (issue #890 — each distinct pattern emits once per rule).
 /// Shared by the initial environment wrap and the issue #1011 degraded
 /// re-wrap (`LocalExecutor::rewrap_if_pixi_degraded`).
+///
+/// `cmd` is the WRAPPED command (environment + optional numactl); the
+/// safety and binding checks see it because the user text is embedded in
+/// it. The suspicious-idiom warnings scan `user_cmd` — the rendered rule
+/// shell BEFORE wrapping — because the engine's own container wrapper
+/// contains `$(id -u)` and the bash shim's `>/dev/null`, which used to
+/// produce two INFO notes on every docker rule (journey L2).
 fn validate_rendered_command(
     rule: &Rule,
     cmd: &str,
+    user_cmd: &str,
     wildcard_values: &HashMap<String, String>,
     workdir: &Path,
 ) -> Result<()> {
@@ -3842,12 +3890,20 @@ fn validate_rendered_command(
     // description, because the rendered warning embeds the instance's own
     // command and would never collide. The rule's stderr still carries the
     // first instance's copy.
-    for (pattern, warning) in sanitize_shell_command_detailed(cmd) {
+    for (pattern, warning) in user_command_warnings(user_cmd) {
         emit_once_per_rule(&rule.name, &pattern, |_| {
             tracing::info!(rule = %rule.name, "{warning}");
         });
     }
     Ok(())
+}
+
+/// Suspicious-idiom scan source for a rule: the rendered USER command,
+/// never the engine-generated environment wrapper (journey L2). User
+/// content still flows into it — wildcard/config expansion happens before
+/// wrapping — so injected substitutions remain detectable.
+fn user_command_warnings(user_cmd: &str) -> Vec<(String, String)> {
+    sanitize_shell_command_detailed(user_cmd)
 }
 
 fn emit_once_per_rule(rule: &str, pattern: &str, emit: impl FnOnce(&str)) {
@@ -7055,6 +7111,24 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
     }
 
     #[test]
+    fn hint_docker_daemon_pull_failure_fires_pull_hint() {
+        // tx-ubuntu live shape when Docker Hub is unreachable: the daemon
+        // error never repeats the word "pull", so the old pull+error gate
+        // left the pull hint unreachable even after stderr was captured.
+        let stderr = "Error response from daemon: Get \"https://registry-1.docker.io/v2/\": \
+                      context deadline exceeded (Client.Timeout exceeded while awaiting headers)\n";
+        let hint = LocalExecutor::env_setup_hint("docker", stderr).unwrap();
+        assert!(hint.contains("Docker image pull failed"), "got {hint}");
+        // A wrong tag / missing manifest is a pull failure too.
+        let hint = LocalExecutor::env_setup_hint(
+            "docker",
+            "Error response from daemon: manifest unknown: manifest unknown\n",
+        )
+        .unwrap();
+        assert!(hint.contains("Docker image pull failed"), "got {hint}");
+    }
+
+    #[test]
     fn hint_existing_arms_unchanged() {
         let cases: [(&str, &str, &str); 5] = [
             (
@@ -7086,6 +7160,48 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         for (kind, stderr, expect) in cases {
             let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
             assert!(hint.contains(expect), "{kind}: {hint} lacks {expect}");
+        }
+    }
+
+    /// L2: the engine's own container wrapper contains `$(id -u)` and the
+    /// bash shim's `>/dev/null`; scanning the WRAPPED command flagged both on
+    /// every docker rule. The warning scan now reads the user command only.
+    #[test]
+    fn docker_wrapper_idioms_are_not_user_shell_warnings() {
+        let ex = executor_with(4, 2048);
+        let rule = docker_rule("1G");
+        let user_cmd = "echo hello > out.txt";
+        let wrapped = ex.resolve_command(user_cmd, &rule, None).unwrap();
+        let wrapper_hits = user_command_warnings(&wrapped);
+        assert!(
+            wrapper_hits
+                .iter()
+                .any(|(pattern, _)| pattern == "Command substitution detected"),
+            "the engine wrapper itself is the noise source: {wrapper_hits:?}"
+        );
+        assert!(
+            wrapper_hits
+                .iter()
+                .any(|(pattern, _)| pattern == "Redirect to /dev/ detected"),
+            "the engine wrapper itself is the noise source: {wrapper_hits:?}"
+        );
+        assert!(
+            user_command_warnings(user_cmd).is_empty(),
+            "a clean user command must not inherit wrapper warnings"
+        );
+    }
+
+    #[test]
+    fn user_command_warnings_still_flag_user_idioms() {
+        for (user_cmd, expected) in [
+            ("echo $(whoami) > out.txt", "Command substitution detected"),
+            ("echo hi >/dev/null", "Redirect to /dev/ detected"),
+        ] {
+            let hits = user_command_warnings(user_cmd);
+            assert!(
+                hits.iter().any(|(pattern, _)| pattern == expected),
+                "{user_cmd}: {hits:?}"
+            );
         }
     }
 
@@ -7532,5 +7648,53 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
     /// spec content stays part of the key in these tests too.
     fn key_of(ex: &LocalExecutor, env_spec: &crate::rule::EnvironmentSpec) -> String {
         ex.env_resolver.cache_key(env_spec)
+    }
+
+    /// H2: the env-setup child used to INHERIT the terminal streams, so the
+    /// bounded collector saw nothing and every failure surfaced as the empty
+    /// `setup failed: ` — while the real cause reached only the terminal,
+    /// never the error, the checkpoint's `stderr_tail`, or `env_setup_hint`.
+    /// Force a fast, network-free venv failure (the venv target's parent is
+    /// a regular file) and require the captured stderr in the message.
+    #[tokio::test]
+    async fn setup_failure_message_carries_captured_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let env_spec = crate::rule::EnvironmentSpec {
+            venv: Some(blocker.join("venv").to_string_lossy().into_owned()),
+            venv_requirements: Some(
+                tmp.path()
+                    .join("missing-requirements.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..Default::default()
+        };
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: tmp.path().to_path_buf(),
+            cache_dir: Some(tmp.path().join("cache")),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "venv-setup-failure".to_string(),
+            environment: env_spec,
+            ..Default::default()
+        };
+        let err = ex
+            .ensure_environment_ready(&rule)
+            .await
+            .expect_err("venv creation under a regular file must fail");
+        let OxoFlowError::Environment { kind, message } = err else {
+            panic!("expected an Environment error, got {err:?}");
+        };
+        assert_eq!(kind, "venv");
+        let cause = message
+            .strip_prefix("setup failed: ")
+            .unwrap_or_else(|| panic!("unexpected setup error shape: {message:?}"));
+        assert!(
+            !cause.trim().is_empty(),
+            "the captured setup stderr must reach the error message (H2): {message:?}"
+        );
     }
 }

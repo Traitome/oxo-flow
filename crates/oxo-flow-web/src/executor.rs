@@ -1355,7 +1355,7 @@ mod tests {
 
     #[test]
     fn summary_extracts_config_change_block() {
-        let log = "DAG: 2 rules in execution order\n\
+        let log = "DAG: 2 rules in dependency order\n\
                    Config change:\n\
                    \x20 min_quality: 20 → 30\n\
                    \x20 → invalidated 1 (1 directly affected), re-running 1/2 this run, skipping 1\n\
@@ -1394,7 +1394,7 @@ mod tests {
 
     #[test]
     fn summary_returns_none_without_invalidation_activity() {
-        let log = "DAG: 2 rules in execution order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
+        let log = "DAG: 2 rules in dependency order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
         assert_eq!(extract_invalidation_summary(log), None);
     }
 
@@ -1548,7 +1548,7 @@ mod preview_tests {
 
     #[test]
     fn returns_none_for_run_logs_without_preview() {
-        let log = "DAG: 2 rules in execution order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
+        let log = "DAG: 2 rules in dependency order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
         assert_eq!(extract_dry_run_preview(log), None);
     }
 

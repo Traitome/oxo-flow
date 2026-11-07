@@ -66,6 +66,13 @@ pub(crate) fn narrate_console_line(msg: std::fmt::Arguments<'_>) {
 /// the workflow has `[[include]]` modules (issue #887), otherwise a flat
 /// numbered listing. The writer parameter keeps the rendering testable; the
 /// run command sends it to process stderr.
+///
+/// The listing is a TOPOLOGICAL (dependency) order, not the dispatch
+/// sequence: independent rules are free to run in any order, and the
+/// scheduler dispatches its name-sorted ready list (so a wildcard fan-out
+/// printed S3, S2, S1 while -j1 ran S1, S2, S3). The header must say
+/// "dependency order" so it does not promise an execution sequence
+/// (journey L1).
 pub(crate) fn write_execution_plan<W: std::io::Write>(
     sink: &mut W,
     order: &[String],
@@ -73,7 +80,7 @@ pub(crate) fn write_execution_plan<W: std::io::Write>(
 ) -> std::io::Result<()> {
     writeln!(
         sink,
-        "{} {} rules in execution order",
+        "{} {} rules in dependency order",
         "DAG:".bold().green(),
         order.len()
     )?;
@@ -310,7 +317,7 @@ shell = "true"
         let plain = strip_ansi(&String::from_utf8(sink).unwrap());
 
         assert!(
-            plain.contains("DAG: 2 rules in execution order\n"),
+            plain.contains("DAG: 2 rules in dependency order\n"),
             "{plain}"
         );
         assert!(plain.contains("QC — 1 rule\n    1. qc::align\n"), "{plain}");
@@ -337,6 +344,6 @@ shell = "true"
         write_execution_plan(&mut sink, &["only".to_string()], &config).unwrap();
         let plain = strip_ansi(&String::from_utf8(sink).unwrap());
 
-        assert_eq!(plain, "DAG: 1 rules in execution order\n  1. only\n");
+        assert_eq!(plain, "DAG: 1 rules in dependency order\n  1. only\n");
     }
 }
