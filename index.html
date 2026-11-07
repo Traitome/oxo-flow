@@ -2276,7 +2276,7 @@ $ <span class="tok-sec">oxo-flow run</span> somatic.oxoflow --ai-recover --ai-ma
                     <span class="meta-chip">Embedded Bioconda + bio.tools + Parabricks KB</span>
                     <span class="meta-chip">Compiler-in-the-loop validation</span>
                     <span class="meta-chip">MCP Server Bearer Auth</span>
-                    <span class="meta-chip">SSRF Guard (#204/#518)</span>
+                    <span class="meta-chip">SSRF Guard</span>
                   </div>
                 </div>
               </div>
@@ -2287,7 +2287,7 @@ $ <span class="tok-sec">oxo-flow run</span> somatic.oxoflow --ai-recover --ai-ma
               <div class="stage-code-pane">
                 <div class="pane-header">
                   <span class="file-tag">🛡️ Runtime Disk-Pressure Guard &amp; Protected Data Trees</span>
-                  <span>Issues #843 · #907 · #935</span>
+                  <span>Runtime storage safety</span>
                 </div>
                 <div class="code-lines"><span class="tok-cmt"># 1. Run with cryptographic output provenance &amp; scratch redirection</span>
 $ <span class="tok-sec">OXO_FLOW_TMPDIR</span>=/scratch/tmp <span class="tok-sec">oxo-flow run</span> wgs.oxoflow -j 16 --provenance
@@ -2512,7 +2512,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
             <!-- Card 3: Disk-Pressure Guard & Protected Data Trees -->
             <article class="bento-card span-6">
               <div>
-                <div class="bento-tag copper">🛡️ Storage Safety · Provenance · Issue #843 / #907</div>
+                <div class="bento-tag copper">🛡️ Storage Safety · Provenance</div>
                 <h3>
                   <span class="lang-en">Disk-Pressure Guard, Scratch Isolation &amp; Protected Trees</span>
                   <span class="lang-zh">磁盘压力自动守护、全局临时目录与受保护数据树</span>
