@@ -195,6 +195,17 @@ recognized namespace when the typo is a prefix-extended or truncated
 form (`metadata` → `meta`, `conf` → `config`); shell brace text like
 awk `'{print $1}'` and comment lines are not flagged.
 
+[W040](../reference/glossary.md#diagnostic-codes) flags a rule with no
+runnable command: `shell` is missing or empty/whitespace-only and no
+non-empty `script` is declared. This is the lint mirror of
+[E022](../reference/glossary.md#diagnostic-codes) — the engine skips
+such a rule at run time (“no shell or script defined”), so the workflow
+validates yet silently does nothing. The classic source is an
+`oxo-flow import` of a Nextflow process whose `script:` block was not
+captured; re-import after upgrading, or add the command by hand.
+`transform` rules are exempt because their command lives in
+`transform.map`/`transform.combine`.
+
 ---
 
 ## Notes

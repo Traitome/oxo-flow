@@ -40,16 +40,32 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
 
     toml.push_str("[defaults]\nthreads = 1\n\n");
 
-    // Standard biological types catalog for inferred contracts
-    toml.push_str("[types.fastq]\nformat = \"fastq\"\ncompression = \"gzip\"\n\n");
-    toml.push_str(
-        "[types.bam_coord]\nformat = \"bam\"\nsort_order = \"coordinate\"\nindex = \"bai\"\n\n",
-    );
-    toml.push_str(
-        "[types.vcf_indexed]\nformat = \"vcf\"\ncompression = \"bgzip\"\nindex = \"tbi\"\n\n",
-    );
+    // Only emit the catalog entries an inferred contract actually uses: a
+    // rule whose type inference misses must not inherit a fabricated
+    // `[types.*]` catalog unrelated to the source workflow.
+    let inferred: Vec<(Option<&'static str>, Option<&'static str>)> = rules
+        .iter()
+        .map(|r| infer_bio_types(&r.name, &r.inputs, &r.outputs))
+        .collect();
+    let mut used_types = std::collections::BTreeSet::new();
+    for (in_type, out_type) in &inferred {
+        used_types.extend(in_type.iter().chain(out_type.iter()).copied());
+    }
+    if used_types.contains("fastq") {
+        toml.push_str("[types.fastq]\nformat = \"fastq\"\ncompression = \"gzip\"\n\n");
+    }
+    if used_types.contains("bam_coord") {
+        toml.push_str(
+            "[types.bam_coord]\nformat = \"bam\"\nsort_order = \"coordinate\"\nindex = \"bai\"\n\n",
+        );
+    }
+    if used_types.contains("vcf_indexed") {
+        toml.push_str(
+            "[types.vcf_indexed]\nformat = \"vcf\"\ncompression = \"bgzip\"\nindex = \"tbi\"\n\n",
+        );
+    }
 
-    for r in &rules {
+    for (index, r) in rules.iter().enumerate() {
         toml.push_str("[[rules]]\n");
         toml.push_str(&format!("name = \"{}\"\n", r.name));
 
@@ -134,7 +150,7 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
         }
 
         // Inferred biological types
-        let (in_type, out_type) = infer_bio_types(&r.name, &r.inputs, &r.outputs);
+        let (in_type, out_type) = inferred[index];
         push_types_contract(
             &mut toml,
             in_type.zip(r.inputs.first().map(String::as_str)),
