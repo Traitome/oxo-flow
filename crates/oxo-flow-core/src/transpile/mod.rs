@@ -48,11 +48,34 @@ impl SourceFormat {
     }
 }
 
+/// Result of a transpilation: the generated workflow plus every non-fatal
+/// translation warning (constructs the importer could not map faithfully).
+#[derive(Debug, Clone, Default)]
+pub struct TranspileOutput {
+    /// Generated `.oxoflow` TOML.
+    pub toml: String,
+    /// Human-readable warnings to surface alongside the import.
+    pub warnings: Vec<String>,
+}
+
 /// Transpile external workflow DSL source code into an oxo-flow TOML string.
 pub fn transpile(source: &str, format: SourceFormat) -> Result<String> {
+    transpile_with_warnings(source, format).map(|output| output.toml)
+}
+
+/// Transpile external workflow DSL source code, returning the TOML and every
+/// non-fatal translation warning. `transpile` is the warning-free wrapper for
+/// callers that only need the generated workflow.
+pub fn transpile_with_warnings(source: &str, format: SourceFormat) -> Result<TranspileOutput> {
     match format {
-        SourceFormat::Nextflow => nextflow::transpile_nextflow(source),
-        SourceFormat::Snakemake => snakemake::transpile_snakemake(source),
+        SourceFormat::Nextflow => {
+            let (toml, warnings) = nextflow::transpile_nextflow_with_warnings(source)?;
+            Ok(TranspileOutput { toml, warnings })
+        }
+        SourceFormat::Snakemake => Ok(TranspileOutput {
+            toml: snakemake::transpile_snakemake(source)?,
+            warnings: Vec::new(),
+        }),
     }
 }
 

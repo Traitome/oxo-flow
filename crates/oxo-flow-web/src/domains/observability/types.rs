@@ -114,6 +114,12 @@ pub struct AuditLogResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditEntry {
     pub timestamp: String,
+    /// The actor's canonical `users.id`, stored verbatim with the row. The
+    /// id is a UUID for DB-created/bootstrap accounts and the username
+    /// itself for env-password-provisioned identities (`user`, `viewer`)
+    /// plus the `default` personal-mode pseudo-user — both shapes are the
+    /// same canonical key, not two vocabularies.
+    /// See the audit log section of `docs/guide/src/reference/web-api.md`.
     pub user: String,
     pub action: String,
     pub resource: String,

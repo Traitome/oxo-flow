@@ -10,7 +10,7 @@ CHANGE MANAGEMENT: any structural change (new crate, new subcommand, renamed fla
 ## Workspace Layout
 - `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
-- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 33 subcommands via clap derive
+- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 34 subcommands via clap derive. Agent-facing docs are embedded: `docs/guide/src/SKILL.md` is canonical, `crates/oxo-flow-cli/assets/SKILL.md` is the build-time copy (`make skill-drift` gate, `make sync-skill` refreshes), and `oxo-flow agent-docs` / `init --agent` scaffold `AGENTS.md` + `CLAUDE.md` + `SKILL.md` into a project
 - `crates/oxo-flow-web`: Axum web server + React 19 SPA, 100+ OpenAPI-documented endpoints across 9 domains
 - `crates/oxo-flow-desktop`: Native desktop shell (wry + tao) around the embedded web server. EXCLUDED from the workspace (`exclude` in the root Cargo.toml) because tao/wry need GUI toolchains headless CI must not pull in — build it with a separate `cargo build` invocation; its version is kept in lockstep by `scripts/bump-version.sh`
 - `editors/vscode`: First-party VS Code extension (`traitome.oxo-flow`) — `.oxoflow` language (TextMate grammar), schema-generated completion/hover data, CLI-backed diagnostics/formatting, and run/dry-run/graph/resume/AI commands. Self-contained npm project (TypeScript, esbuild, **zero runtime dependencies**); its version is kept in lockstep by `scripts/bump-version.sh`. Released as a VSIX attached to every GitHub release and published to Open VSX (`OVSX_PAT`) and the VS Code Marketplace (`VSCE_PAT`) by the `publish-vsix` CI job. Fast gate: `make extension-test`; headless integration tests: `make extension-integration`. Completion/hover data is GENERATED from `docs/schema/oxoflow-v1.schema.json` by `editors/vscode/scripts/generate-completions.mjs` — after schema changes run `npm run generate` in that directory (CI drift-checks the committed output)
@@ -31,7 +31,7 @@ Before concluding any task, the following suite **must** pass:
 ```bash
 make ci
 ```
-*Included in `make ci` (all gates are mandatory): `fmt`, `clippy` (`--workspace --all-targets -D warnings`), `build`, `test`, `schema-drift`, `version-check`, `audit`, `deny`, `aws-legacy-tripwire`, `issue-id-tripwire`, `secrets`, `docs`, `frontend-lint`, `eval-tests`, `eval-lint`, and the extension fast gate `extension-test` (npm ci + compile + unit tests + `vsce package` for `editors/vscode`). Headless VS Code integration tests are a separate target: `make extension-integration`.*
+*Included in `make ci` (all gates are mandatory): `fmt`, `clippy` (`--workspace --all-targets -D warnings`), `build`, `test`, `schema-drift`, `skill-drift`, `version-check`, `audit`, `deny`, `aws-legacy-tripwire`, `issue-id-tripwire`, `secrets`, `docs`, `frontend-lint`, `eval-tests`, `eval-lint`, and the extension fast gate `extension-test` (npm ci + compile + unit tests + `vsce package` for `editors/vscode`). Headless VS Code integration tests are a separate target: `make extension-integration`.*
 
 ## Key Design Principles
 1. **DAG-First Execution:** Everything is a graph. Validate dependencies before execution.

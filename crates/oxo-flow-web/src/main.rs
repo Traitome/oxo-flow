@@ -108,20 +108,10 @@ async fn main() -> Result<()> {
         cli.port
     );
 
-    // Credential visibility (issue #79 P1-06): sign-in and user management
-    // depend on env-var credentials — warn loudly when none are configured
-    // instead of letting the first sign-in hit an unexplained 401 wall.
-    if std::env::var("OXO_FLOW_ADMIN_PASSWORD").is_err()
-        && std::env::var("OXO_FLOW_USER_PASSWORD").is_err()
-        && std::env::var("OXO_FLOW_VIEWER_PASSWORD").is_err()
-    {
-        tracing::warn!(
-            "No sign-in credentials configured (OXO_FLOW_ADMIN_PASSWORD / \
-             OXO_FLOW_USER_PASSWORD / OXO_FLOW_VIEWER_PASSWORD). Every login \
-             will be rejected until one is set; personal mode does not \
-             require sign-in for daily use."
-        );
-    }
+    // Credential visibility (issue #79 P1-06): the check lives in the shared
+    // library helper so `oxo-flow serve` emits the same warning (report
+    // finding T-F1) — never retype it here.
+    oxo_flow_web::warn_if_no_sign_in_credentials();
 
     // HPC mode: detect scheduler and show status
     if matches!(cli.mode, ServerMode::Hpc) {

@@ -32,7 +32,23 @@ pub async fn health() -> ApiResult<HealthResponse> {
     // The mode must come from the running server, not a hardcoded value —
     // issue #79 (health reported "personal" on hpc/team deployments, one
     // more piece of the status-consistency collapse).
-    let mut health = service::health_check(crate::server::running_mode(), db_healthy);
+    //
+    // In hpc mode the scheduler component comes from the detection probe,
+    // which shells out to scheduler CLIs (cached after the first call); keep
+    // that off the async worker, mirroring the /api/hpc handler.
+    let mode = crate::server::running_mode();
+    let mut health =
+        match tokio::task::spawn_blocking(move || service::health_check(mode, db_healthy)).await {
+            Ok(health) => health,
+            Err(e) => {
+                tracing::error!("health check task failed: {e}");
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "HEALTH_CHECK_FAILED",
+                    "Health check failed".into(),
+                ));
+            }
+        };
     if !db_healthy {
         health.status = "degraded".to_string();
     }

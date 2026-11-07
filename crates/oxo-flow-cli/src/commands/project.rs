@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-pub fn init_command(name: String, dir: Option<PathBuf>, force: bool) -> Result<()> {
+pub fn init_command(name: String, dir: Option<PathBuf>, force: bool, agent: bool) -> Result<()> {
     print_banner();
 
     // Validate project name: must be non-empty and a valid identifier
@@ -197,6 +197,17 @@ Thumbs.db
     eprintln!("  {}/example.yaml", envs_dir.display());
     eprintln!("  {}/example.sh", scripts_dir.display());
     eprintln!("  {}", gitignore_path.display());
+    // Agent docs are scaffolded only on request: AGENTS.md is an editable
+    // project file, so init never overwrites it (no force here) even when
+    // --force refreshed the workflow itself.
+    if agent {
+        eprintln!(
+            "\n  {} Scaffolding agent docs (AGENTS.md, CLAUDE.md, SKILL.md):",
+            "Agent docs:".bold().cyan()
+        );
+        crate::commands::agent_docs::write_agent_docs(&project_dir, false, Some(&name))?;
+    }
+
     eprintln!(
         "\n  {} To run your first workflow:",
         "Next steps:".bold().cyan()

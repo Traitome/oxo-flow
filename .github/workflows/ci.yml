@@ -479,6 +479,12 @@ jobs:
       - name: Schema drift check
         run: make schema-drift
 
+      # Mirrors `make skill-drift`: the SKILL.md embedded in the CLI
+      # (`oxo-flow agent-docs` writes it into projects) must match the docs
+      # copy, which is canonical and served at /latest/SKILL/.
+      - name: Skill drift check
+        run: make skill-drift
+
       # Mirrors `make version-check`: every version location (Cargo.toml, both
       # lockfiles, CITATION.cff, Dockerfile, the excluded desktop crate, the
       # frontend manifests, README and the docs) must agree. The release job

@@ -383,6 +383,7 @@ select.search-input{padding-right:1.75rem}
 .rf-rule-node.node-status-failed { border-left-color: var(--color-error); }
 .rf-rule-node.node-status-running { border-left-color: var(--color-info); animation: rf-pulse 1.6s ease-in-out infinite; }
 .rf-rule-node.node-status-skipped { border-left-color: var(--env-system); opacity: 0.7; }
+.rf-rule-node.node-status-cancelled { border-left-color: var(--color-text-tertiary); opacity: 0.7; }
 .rf-rule-node.node-status-pending { border-left-color: var(--color-border); }
 
 @keyframes rf-pulse {
