@@ -2850,6 +2850,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#aggregation-race-sci-agg-race-surfaced-in-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation race (SCI-AGG-RACE surfaced in validate)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4102,6 +4113,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#aggregation-race-sci-agg-race-surfaced-in-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation race (SCI-AGG-RACE surfaced in validate)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4272,14 +4294,35 @@ so a green validate no longer hides a workflow that cannot run:</p>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    hint: declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder
 </span></code></pre></div>
 <p>Warnings keep exit code <code>0</code> — only errors fail. <code>validate</code> scopes itself
-to <code>W024</code> (runnability); the full best-practice sweep remains
-<a href="../lint/"><code>lint</code></a>'s job, and the <code>warnings</code> array is empty when nothing
-blocks runnability. At run time the corresponding unbound-placeholder
-WARN is emitted once per (instance, placeholder): the multiple render
-sites within one instance (output pattern + command) collapse to a
-single line — the double-print the issue reporter saw — while each
-fan-out instance still logs its own line, because the message names the
-expanded instance (<code>step1_lane_L1</code>) rather than the template rule.</p>
+to <code>W024</code> and <code>SCI-AGG-RACE</code> (runnability); the full best-practice sweep
+remains <a href="../lint/"><code>lint</code></a>'s job, and the <code>warnings</code> array is empty when
+nothing blocks runnability. At run time the corresponding
+unbound-placeholder WARN is emitted once per (instance, placeholder):
+the multiple render sites within one instance (output pattern + command)
+collapse to a single line — the double-print the issue reporter saw —
+while each fan-out instance still logs its own line, because the message
+names the expanded instance (<code>step1_lane_L1</code>) rather than the template
+rule.</p>
+<h3 id="aggregation-race-sci-agg-race-surfaced-in-validate">Aggregation race (SCI-AGG-RACE surfaced in validate)<a class="headerlink" href="#aggregation-race-sci-agg-race-surfaced-in-validate" title="Permanent link">#</a></h3>
+<p>A rule that fans out across a sample, pair, <code>[[values]]</code>, or
+<code>output_pattern</code> dimension while its declared outputs are <strong>not keyed by
+that dimension</strong> makes every expanded instance write the same concrete
+path — the instances race or duplicate work N−1 times. The shape is
+statically detectable (no expansion needed), and <code>validate</code> now reports
+it with the same detector and code <a href="../dry-run/#scientific-preflight"><code>dry-run</code></a>
+uses, so the first gate no longer waves through a workflow that will
+crash or corrupt results at run time:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>✓ agg.oxoflow — 1 rule, 0 dependencies
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  warning [SCI-AGG-RACE]: rule fans out per the sample domain — no {sample}/{group} wildcard keys the outputs: … (rule: multiqc)
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    hint: if the fan-out is unintentional … for a genuine per-element rule, key the outputs by that dimension's wildcard …
+</span></code></pre></div>
+<p><code>--json</code> carries the same finding in <code>warnings</code>. The warning keeps exit
+code <code>0</code> — it identifies a design defect, not a parse/DAG error — and
+<code>--as-include</code> skips it because a standalone fragment does not declare
+the parent workflow's fan-out domains. <code>dry-run</code> still prints the full
+scientific-preflight sweep; <code>validate</code> surfaces only this
+runnability-relevant code.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

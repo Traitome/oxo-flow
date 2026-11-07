@@ -5128,7 +5128,7 @@ repository.</p>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
-<td>Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on slower endpoints</td>
+<td>Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (<code>/api/chat/send/json</code>, <code>/api/ai/translate</code>), which answer <code>504 AI_TIMEOUT</code> when it expires</td>
 <td><code>300</code></td>
 </tr>
 <tr>

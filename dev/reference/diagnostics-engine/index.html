@@ -4609,7 +4609,7 @@ their declared limit:</p>
 </ul>
 <h4 id="6-workflow-concurrency-hardware-dataflow">6. Workflow Concurrency, Hardware &amp; Dataflow<a class="headerlink" href="#6-workflow-concurrency-hardware-dataflow" title="Permanent link">#</a></h4>
 <ul>
-<li><code>SCI-AGG-RACE</code>: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other.</li>
+<li><code>SCI-AGG-RACE</code>: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other. Statically detectable, so <a href="../../commands/validate/#aggregation-race-sci-agg-race-surfaced-in-validate"><code>validate</code></a> reports it too (warning, exit 0), not just <code>dry-run</code>.</li>
 <li><code>SCI-SORT-THREADS-MEM-PRODUCT</code>: <code>samtools sort -m</code> per-thread memory multiplied by thread count exceeds the rule resource budget; leads to kernel OOM kills.</li>
 <li><code>SCI-TMPDIR-NOT-SCRATCH</code>: Heavy I/O tools write intermediate files to system <code>/tmp</code> instead of engine-managed scratch space (<code>${TMPDIR}</code>).</li>
 <li><code>SCI-PIPE-FAIL-DISABLED</code>: Multi-stage shell pipelines (<code>cmd1 | cmd2 | cmd3</code>) lack <code>set -o pipefail</code>; upstream tool crashes are silently masked.</li>

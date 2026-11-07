@@ -6091,10 +6091,11 @@ page. Each item carries <code>dry_run</code> — see <a href="#run-detail">Run D
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/runs/{id}/status
 </span></code></pre></div>
 Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }</code>. A rule that did not run — when-gated off (<code>when_verdicts == false</code>) or abort-cancelled (<code>rule_runs</code> status <code>cancelled</code>, which records no set membership) — is surfaced as <code>skipped</code>, never as a forever-<code>pending</code> node.</p>
+<p>Timing guarantees for <code>nodes[]</code>: a terminal node that actually executed (<code>success</code>, <code>failed</code>, or run-level <code>cancelled</code>) reports <code>started_at</code> (RFC 3339 UTC) and <code>duration_ms</code> from the checkpoint's <code>rule_runs</code> start/end pair — completed rules pair the recorded start with their benchmark wall time; failed and cancelled rules derive the duration from the pair. Both fields are <code>null</code> when the underlying data genuinely does not exist: <code>pending</code>, <code>running</code>, <code>skipped</code>, synthetic "outputs up-to-date" completions (the rule did not execute in this run), and checkpoints written by engines predating the timestamp fields. The one legacy exception is a <code>success</code> node from an old checkpoint that recorded a benchmark but no start: it keeps the real <code>duration_ms</code> with <code>started_at: null</code> rather than fabricating a start.</p>
 <h3 id="dag-status">DAG Status<a class="headerlink" href="#dag-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs/{id}/dag-status
 </span></code></pre></div>
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. Each node also carries the same <code>started_at</code>/<code>duration_ms</code> timing contract as <a href="#run-status">Run Status</a> (<code>started_at</code> is an RFC 3339 UTC timestamp, not a duration substitute). A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>
@@ -6162,7 +6163,7 @@ The deterministic report object the report page renders: run identity, node stat
 </span></code></pre></div>
 Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim.</p>
 <h3 id="run-status-exit-codes-and-failure-tails">Run Status exit codes and failure tails<a class="headerlink" href="#run-status-exit-codes-and-failure-tails" title="Permanent link">#</a></h3>
-<p><code>GET /api/runs/{id}/status</code>, <code>/dag-status</code>, and <code>/instances</code> populate <code>exit_code</code> from the checkpoint's <code>rule_runs</code> records: completed rules report <code>0</code>, failed rules their recorded code — plus bounded <code>stderr_tail</code> and <code>stdout_tail</code> on failed nodes (some tools print their root cause on stdout). The AI monitor (<code>/ai-status</code>) receives the same tails and classifies failures through the shared <code>DiagnosticsEngine</code> pattern table before falling back to exit-code-only signatures; its alerts carry a stable <code>alert_id</code> for cross-poll dedup. The AI chat <code>get_run_status</code> tool carries the same fields.</p>
+<p><code>GET /api/runs/{id}/status</code>, <code>/dag-status</code>, and <code>/instances</code> populate <code>exit_code</code> and the terminal timing fields from the checkpoint's <code>rule_runs</code> records: completed rules report <code>0</code>, failed rules their recorded code — plus bounded <code>stderr_tail</code> and <code>stdout_tail</code> on failed nodes (some tools print their root cause on stdout). The AI monitor (<code>/ai-status</code>) receives the same tails and classifies failures through the shared <code>DiagnosticsEngine</code> pattern table before falling back to exit-code-only signatures; its alerts carry a stable <code>alert_id</code> for cross-poll dedup. The AI chat <code>get_run_status</code> tool carries the same fields.</p>
 <h3 id="report-visualization">Report Visualization<a class="headerlink" href="#report-visualization" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>POST /api/runs/{id}/report/visualize
 </span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>Content-Type: application/json
@@ -6367,10 +6368,22 @@ size, not the hit count.</p>
 <p>The translate endpoints take <code>{ "intent": "&lt;natural-language description&gt;",
 "context": { "data_analysis_id": "&lt;uuid&gt;" } }</code> — <code>intent</code> is REQUIRED (sending
 only a <code>prompt</code> field fails deserialization); <code>context</code> is optional.</p>
+<p><code>POST /api/ai/translate</code> (the non-streaming variant) budgets the WHOLE
+generation — every tool and validation round — at
+<code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 s). When the budget expires it
+answers <code>504 {code: "AI_TIMEOUT"}</code> with the standard
+<code>{code, message, detail, suggestion}</code> body, and <code>suggestion</code> names the knob.
+Use <code>POST /api/ai/translate/stream</code> for generations expected to run longer:
+the SSE route is not capped by this total budget.</p>
 <p>The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. <code>GET /api/ai/config/effective</code> shows the resolved result and
-which level supplied each field. API keys are never echoed back — responses
+which level supplied each field. The <code>effective.model</code> field is the model
+the active backend was actually constructed with: an explicit config model
+wins, otherwise the environment override (<code>ANTHROPIC_MODEL</code>,
+<code>OPENAI_MODEL</code>, <code>OLLAMA_MODEL</code>, <code>OXO_FLOW_AI_MODEL</code>) or the provider
+default is reported — it is <code>null</code> only when no provider is configured.
+<code>GET /api/ai/config</code> returns the same resolved model. API keys are never echoed back — responses
 mark <code>key_set</code> instead. Rows are encrypted at rest only when
 <code>OXO_FLOW_MASTER_KEY</code> is configured; without it, the local database uses the
 documented plaintext compatibility mode.</p>
@@ -6495,6 +6508,13 @@ loop (tool rounds, validation rounds) as typed events:</p>
 <li>The browser-side watchdog is derived from <code>ready.idle_timeout_secs</code>; on
   expiry the client aborts the fetch, renders the error with a Retry action,
   and re-enables the send button.</li>
+<li><code>POST /api/chat/send/json</code> (the non-streaming variant) budgets the WHOLE
+  generation — every tool and validation round — at
+  <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 s). When the budget expires it
+  answers <code>504 {code: "AI_TIMEOUT"}</code> with the standard
+  <code>{code, message, detail, suggestion}</code> body, and <code>suggestion</code> names the knob.
+  The SSE route above is not capped by this total budget; use it for
+  generations expected to run longer.</li>
 </ul>
 <h3 id="chat-session-archives">Chat session archives<a class="headerlink" href="#chat-session-archives" title="Permanent link">#</a></h3>
 <p>Every agent-loop run — including an aborted one — is persisted under

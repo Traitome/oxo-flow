@@ -9301,7 +9301,10 @@ the bare-wildcard scatter yields one instance per chromosome (and
 typically a downstream aggregation rule over the keyed outputs).
 The preflight reports the racing shape as <code>SCI-AGG-RACE</code>, naming the
 unkeyed fan-out dimension (see
-<a href="../../commands/dry-run/#scientific-preflight"><code>oxo-flow dry-run</code> → Scientific Preflight</a>).</p>
+<a href="../../commands/dry-run/#scientific-preflight"><code>oxo-flow dry-run</code> → Scientific Preflight</a>).
+The check is static, so <a href="../../commands/validate/#aggregation-race-sci-agg-race-surfaced-in-validate"><code>oxo-flow validate</code></a>
+reports the same code as a warning too — the racing shape is known before
+any expansion or execution.</p>
 <hr />
 <h2 id="wildcards">Wildcards<a class="headerlink" href="#wildcards" title="Permanent link">#</a></h2>
 <p>Wildcards enable dynamic, pattern-based pipeline definitions. For a detailed guide on how they are discovered, expanded, and constrained, see the <a href="../wildcards/">Wildcards Reference</a>.</p>
