@@ -527,6 +527,14 @@ jobs:
       - name: AWS legacy-client tripwire
         run: make aws-legacy-tripwire
 
+      # Mirrors `make issue-id-tripwire`: user-facing marketing surfaces
+      # (docs/index.html, both top-level READMEs) must not leak internal
+      # tracker IDs — readers have no issue-tracker access. Detection uses
+      # issue-shaped patterns, not hex-color exclusion (blind to 3-digit IDs
+      # that collide with CSS hex colors).
+      - name: Issue-ID tripwire
+        run: make issue-id-tripwire
+
       # Mirrors `make secrets`: gitleaks over the git history and the working
       # tree, with fixture allowlists from .gitleaks.toml (#557). gitleaks is
       # not in the taiki-e manifest, so install straight from the release

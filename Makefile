@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
+ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -44,6 +44,21 @@ aws-legacy-tripwire:
 	@if grep -rn "hyper_014" crates --include="*.rs"; then \
 	  echo "aws-legacy-tripwire: the legacy connector is referenced in engine code — re-assess the #876 feature-level fix"; \
 	  exit 1; \
+	fi
+
+## Issue-ID tripwire: user-facing marketing surfaces (docs/index.html,
+## README.md, editors/vscode/README.md) must not leak internal tracker IDs —
+## readers have no issue-tracker access. Detection uses issue-shaped
+## patterns (`Issues? #[0-9]+`, `#N / #M`), never hex-color exclusion, which
+## is blind to 3-digit IDs (#204) byte-identical to CSS hex colors. The
+## docs/guide/src "(issue #NNN)" reference-doc citations are deliberately
+## out of scope.
+issue-id-tripwire:
+	@if grep -nE 'Issues? #[0-9]+|#[0-9]+ */ *#[0-9]+' docs/index.html README.md editors/vscode/README.md; then \
+	  echo "issue-id-tripwire: internal issue IDs leaked into user-facing pages — replace with descriptive text"; \
+	  exit 1; \
+	else \
+	  echo "issue-id-tripwire: user-facing pages clean of internal issue IDs"; \
 	fi
 
 ## Secret-scanning gate over the git history and working tree (config in
