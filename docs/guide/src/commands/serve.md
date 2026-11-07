@@ -206,7 +206,7 @@ curl http://127.0.0.1:8080/api/health
 }
 ```
 
-`components.ai_provider` is `{"status": "connected"}` while a provider is active and `{"status": "disabled"}` otherwise — including when `OXO_FLOW_AI_PROVIDER=disabled` pins AI off. The startup log reports the same pinned state, and every AI endpoint answers `AI_NOT_CONFIGURED` without contacting a provider.
+`components.ai_provider` is `{"status": "connected"}` while a provider is active and `{"status": "disabled"}` otherwise — including when `OXO_FLOW_AI_PROVIDER=disabled` pins AI off. The startup log reports the same pinned state. While pinned, generation/chat endpoints answer `AI_NOT_CONFIGURED`, AI configuration updates answer `409 AI_DISABLED_BY_ENV` without persisting or applying, and `POST /api/ai/test` reports `disabled` without contacting a provider.
 
 ### Example: Validate a pipeline
 

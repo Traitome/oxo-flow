@@ -47,7 +47,9 @@ use std::sync::RwLock;
 
 use config::AiConfig;
 use error::AiError;
-use provider::{AiProvider, ProviderKind, create_provider, create_provider_from_env};
+use provider::{
+    AiProvider, ProviderKind, create_provider, create_provider_from_env, provider_pinned_disabled,
+};
 use session::AiSession;
 
 // ── Global registry ────────────────────────────────────────────────────────
@@ -181,7 +183,23 @@ impl AiRegistry {
     /// Reconfigure the provider at runtime.
     ///
     /// Useful for web-based settings pages that persist AI config.
+    ///
+    /// An explicit `OXO_FLOW_AI_PROVIDER=disabled` pin outranks every
+    /// runtime tier, so reconfiguration is refused while it is set — no
+    /// settings save, startup tier, or future caller can resurrect a
+    /// disabled registry (and the refusal happens before
+    /// `~/.oxo-flow/ai_config.json` is rewritten).
     pub fn reconfigure(&self, config: AiConfig) -> Result<(), AiError> {
+        self.reconfigure_with_pin(config, provider_pinned_disabled())
+    }
+
+    /// [`reconfigure`](Self::reconfigure) against an explicit pin state —
+    /// the testable core. `oxo-flow-ai` forbids `unsafe`, so the pin is
+    /// injected instead of mutating the process environment in tests.
+    fn reconfigure_with_pin(&self, config: AiConfig, pinned_disabled: bool) -> Result<(), AiError> {
+        if pinned_disabled {
+            return Err(AiError::DisabledByEnv);
+        }
         let provider = if config.enabled {
             create_provider(
                 config.provider,
@@ -282,6 +300,33 @@ mod tests {
     fn disable_switches_the_runtime_to_noop() {
         let reg = AiRegistry::new();
         reg.disable().expect("disable registry");
+        assert!(!reg.is_enabled());
+        assert_eq!(
+            reg.provider().unwrap_or(AiProvider::Noop).name(),
+            "disabled"
+        );
+    }
+
+    #[test]
+    fn pinned_reconfigure_is_refused_and_leaves_the_registry_disabled() {
+        // Regression: POST /api/ai/config (and the PUT server/user variants)
+        // called `reconfigure` directly, resurrecting a real provider on a
+        // process started with OXO_FLOW_AI_PROVIDER=disabled — the next
+        // /api/ai/test then dialed out. The guard must run before any state
+        // change or ai_config.json write.
+        let reg = AiRegistry::new();
+        let config = AiConfig {
+            enabled: true,
+            provider: ProviderKind::OpenAi,
+            model: Some("gpt-4o".into()),
+            api_key: Some("sk-must-not-activate".into()),
+            api_url: Some("http://127.0.0.1:9/v1".into()),
+            ..AiConfig::default()
+        };
+        assert!(matches!(
+            reg.reconfigure_with_pin(config, true),
+            Err(AiError::DisabledByEnv)
+        ));
         assert!(!reg.is_enabled());
         assert_eq!(
             reg.provider().unwrap_or(AiProvider::Noop).name(),
