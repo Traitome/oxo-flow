@@ -4127,6 +4127,9 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>config<span class="w"> </span>get<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>reference
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Output: "/data/references/GRCh38/genome.fa"</span>
 </span></code></pre></div>
+<p>The value is printed in its native TOML type representation (strings stay
+quoted, integers bare, arrays in bracket form). If the key is not found,
+the command errors and exits with code 1 — scripts can gate on that.</p>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
@@ -4185,8 +4188,7 @@
 <ul>
 <li><code>config show</code> displays workflow metadata (name, version, description, author) and configuration variables</li>
 <li><code>config stats</code> provides a high-level overview of the workflow's complexity</li>
-<li><code>config get</code> exits with code 1 if the key is not found</li>
-<li><code>config get</code> returns values in their native TOML type representation</li>
+<li><code>config get</code> prints the value in its native TOML type and exits with code 1 when the key is not found (see <a href="#get-a-specific-config-value">Get a specific config value</a>)</li>
 </ul>
 
 

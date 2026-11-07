@@ -4292,6 +4292,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#resource_groups-shared-resource-pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [resource_groups] — Shared Resource Pools
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference_db-tracked-reference-database-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [[reference_db]] — Tracked Reference Database Versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#citation-citation-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [citation] — Citation Metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6660,6 +6693,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#resource_groups-shared-resource-pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [resource_groups] — Shared Resource Pools
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference_db-tracked-reference-database-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [[reference_db]] — Tracked Reference Database Versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#citation-citation-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [citation] — Citation Metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6740,9 +6806,10 @@
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[cluster]</span><span class="w">           </span><span class="c1"># Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP Batch)</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard + global scratch dir + protected data trees</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[ai]</span><span class="w">                </span><span class="c1"># Optional: AI companion settings (provider, model, skills activation — see the AI CLI reference)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard + global scratch dir + protected data trees</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -7043,6 +7110,13 @@ had written them:</p>
 <td>No</td>
 <td>—</td>
 <td>Shell command run once after the workflow reaches a terminal state with at least one failed rule. Same rendering and best-effort semantics as <code>on_complete</code>.</td>
+</tr>
+<tr>
+<td><code>profile_mode</code></td>
+<td>String</td>
+<td>No</td>
+<td><code>"fill"</code></td>
+<td>How <code>profiles/&lt;name&gt;.toml</code> values merge into the workflow config: <code>"fill"</code> fills in only keys the workflow does not set (existing values always win); <code>"override"</code> lets the profile replace workflow values (nested tables deep-merge, scalars/arrays replace wholesale).</td>
 </tr>
 </tbody>
 </table>
@@ -7463,6 +7537,16 @@ by declaring it explicitly.</p>
 <td><code>shell_prelude</code></td>
 <td>String</td>
 <td>Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line — e.g. <code>set -euo pipefail</code> for fail-fast shells. <strong>Opt-in</strong>: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. <code>pipefail</code> requires bash (the engine falls back to <code>sh</code> only when bash is absent)</td>
+</tr>
+<tr>
+<td><code>time_limit</code></td>
+<td>String</td>
+<td>Default wall-time limit (e.g. <code>"48h"</code>) applied to every rule whose <code>resources.time_limit</code> is unset — the cluster-path SBATCH <code>-t</code> value</td>
+</tr>
+<tr>
+<td><code>staging_mode</code></td>
+<td>String</td>
+<td>Default remote input staging mode (<code>"eager"</code>, <code>"stream_fifo"</code>/<code>"stream"</code>, <code>"passthrough"</code>) for rules that don't set their own <code>staging_mode</code> — see <a href="../cloud-storage/#remote-staging-and-upload">Remote staging and upload</a></td>
 </tr>
 </tbody>
 </table>
@@ -7936,6 +8020,12 @@ section can render inline SVG charts from declared metrics).</p>
 <td>Boolean</td>
 <td>No</td>
 <td>Selects <code>staging_mode = "stream_fifo"</code> by default for <strong>remote</strong> inputs: each remote input is downloaded and streamed into a named FIFO while the rule runs (local inputs are unaffected — they are read in place); an explicit <code>staging_mode</code> on the same rule wins. Equivalent to <code>staging_mode = "stream_fifo"</code></td>
+</tr>
+<tr>
+<td><code>staging_mode</code></td>
+<td>String</td>
+<td>No</td>
+<td>Remote input staging mode for this rule: <code>"eager"</code> (default — download the full object to local scratch before the rule runs), <code>"stream_fifo"</code>/<code>"stream"</code> (stream on demand through a FIFO without buffering to disk), or <code>"passthrough"</code> (alias <code>pass_through</code> — leave the raw remote URI untouched for tools with native cloud I/O). Overrides the <code>[defaults]</code> / <code>[engine]</code> staging_mode for this rule — see <a href="../cloud-storage/#remote-staging-and-upload">Remote staging and upload</a></td>
 </tr>
 <tr>
 <td><code>checksum</code></td>
@@ -11059,6 +11149,164 @@ workflows whose runnable rules declare <code>scratch = true</code></strong> at p
 naming each offender, instead of silently running the job in the shared
 workdir where fixed-filename outputs collide across concurrent instances.
 Remove the directive or run those rules on the local path).</p>
+<hr />
+<h2 id="resource_groups-shared-resource-pools"><code>[resource_groups]</code> — Shared Resource Pools<a class="headerlink" href="#resource_groups-shared-resource-pools" title="Permanent link">#</a></h2>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-114-1"><a id="__codelineno-114-1" name="__codelineno-114-1" href="#__codelineno-114-1"></a><span class="k">[resource_groups.db_conn]</span>
+</span><span id="__span-114-2"><a id="__codelineno-114-2" name="__codelineno-114-2" href="#__codelineno-114-2"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-114-3"><a id="__codelineno-114-3" name="__codelineno-114-3" href="#__codelineno-114-3"></a><span class="n">wait</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"queue"</span>
+</span><span id="__span-114-4"><a id="__codelineno-114-4" name="__codelineno-114-4" href="#__codelineno-114-4"></a>
+</span><span id="__span-114-5"><a id="__codelineno-114-5" name="__codelineno-114-5" href="#__codelineno-114-5"></a><span class="k">[resource_groups.api]</span>
+</span><span id="__span-114-6"><a id="__codelineno-114-6" name="__codelineno-114-6" href="#__codelineno-114-6"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+</span></code></pre></div>
+<p>Named capacity pools shared across rules. A rule consumes a pool via
+<code>[rules.resources]</code> <code>groups</code> (see
+<a href="#resources-extended">Resources (extended)</a>): <code>groups = {db_conn = 1}</code>
+reserves one slot of the <code>db_conn</code> pool while the rule runs. Slots are
+released when the rule finishes, so pools cap concurrent access to
+rate-limited external resources (APIs, database connections).</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max</code></td>
+<td>Integer</td>
+<td>Yes</td>
+<td>—</td>
+<td>Pool capacity — the maximum number of slots that can be held concurrently across all rules</td>
+</tr>
+<tr>
+<td><code>wait</code></td>
+<td>String</td>
+<td>No</td>
+<td><code>"queue"</code></td>
+<td>Declared wait strategy — <code>"queue"</code> or <code>"fail"</code>. The engine queues rules that cannot get a slot (FIFO fair dispatch, see below); a declared <code>"fail"</code> does not change that behavior today</td>
+</tr>
+</tbody>
+</table>
+<p>Semantics at run time:</p>
+<ul>
+<li>A rule whose requirement exceeds the declared capacity (or names an
+  undeclared group) <strong>hard-fails immediately</strong> with
+  <code>ResourceGroupExhausted</code> — it can never be satisfied, so no wait is
+  attempted.</li>
+<li>Otherwise a rule that cannot get a slot <strong>waits</strong>: the scheduler
+  dispatches queued rules FIFO with priority aging, so starvation is
+  impossible — see
+  <a href="../dag-engine/#rules-print-running-but-never-spawn-a-process">DAG Engine → "Rules print Running but never spawn a process"</a>
+  for the full fairness contract and the invisible-waiting diagnostic.</li>
+</ul>
+<hr />
+<h2 id="reference_db-tracked-reference-database-versions"><code>[[reference_db]]</code> — Tracked Reference Database Versions<a class="headerlink" href="#reference_db-tracked-reference-database-versions" title="Permanent link">#</a></h2>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-115-1"><a id="__codelineno-115-1" name="__codelineno-115-1" href="#__codelineno-115-1"></a><span class="k">[[reference_db]]</span>
+</span><span id="__span-115-2"><a id="__codelineno-115-2" name="__codelineno-115-2" href="#__codelineno-115-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"GRCh38"</span>
+</span><span id="__span-115-3"><a id="__codelineno-115-3" name="__codelineno-115-3" href="#__codelineno-115-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"p14"</span>
+</span><span id="__span-115-4"><a id="__codelineno-115-4" name="__codelineno-115-4" href="#__codelineno-115-4"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"</span>
+</span><span id="__span-115-5"><a id="__codelineno-115-5" name="__codelineno-115-5" href="#__codelineno-115-5"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256:abc123"</span>
+</span><span id="__span-115-6"><a id="__codelineno-115-6" name="__codelineno-115-6" href="#__codelineno-115-6"></a><span class="n">accessed_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2026-01-15"</span>
+</span></code></pre></div>
+<p>Declares the exact versions of external reference databases a workflow
+depends on. Entries are recorded in the run's software-versions report
+(<code>name</code>, <code>version</code>, and <code>checksum</code>), so runs stay auditable against the
+reference data they consumed.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>Database identifier (e.g. <code>"GRCh38"</code>, <code>"dbSNP"</code>)</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>String</td>
+<td>No</td>
+<td>Database release/version tag (e.g. <code>"p14"</code>, <code>"b156"</code>)</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>String</td>
+<td>No</td>
+<td>Download URL or origin of the database</td>
+</tr>
+<tr>
+<td><code>checksum</code></td>
+<td>String</td>
+<td>No</td>
+<td>Checksum of the downloaded artifact (e.g. <code>"sha256:abc123"</code>)</td>
+</tr>
+<tr>
+<td><code>accessed_date</code></td>
+<td>String</td>
+<td>No</td>
+<td>Date the database was downloaded/accessed</td>
+</tr>
+</tbody>
+</table>
+<p>Repeat the <code>[[reference_db]]</code> header for each database. <code>name</code> alone is
+accepted — declare the other fields when the provenance matters.</p>
+<hr />
+<h2 id="citation-citation-metadata"><code>[citation]</code> — Citation Metadata<a class="headerlink" href="#citation-citation-metadata" title="Permanent link">#</a></h2>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-116-1"><a id="__codelineno-116-1" name="__codelineno-116-1" href="#__codelineno-116-1"></a><span class="k">[citation]</span>
+</span><span id="__span-116-2"><a id="__codelineno-116-2" name="__codelineno-116-2" href="#__codelineno-116-2"></a><span class="n">doi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.1234/test"</span>
+</span><span id="__span-116-3"><a id="__codelineno-116-3" name="__codelineno-116-3" href="#__codelineno-116-3"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://github.com/example/test"</span>
+</span><span id="__span-116-4"><a id="__codelineno-116-4" name="__codelineno-116-4" href="#__codelineno-116-4"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"Alice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Bob"</span><span class="p">]</span>
+</span><span id="__span-116-5"><a id="__codelineno-116-5" name="__codelineno-116-5" href="#__codelineno-116-5"></a><span class="n">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"My Workflow Paper"</span>
+</span></code></pre></div>
+<p>Optional provenance metadata describing how the workflow itself should be
+cited. All fields are optional; entries round-trip through formatting and
+validation but are not consumed by run execution.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>authors</code></td>
+<td>Array of String</td>
+<td>No</td>
+<td>Author names</td>
+</tr>
+<tr>
+<td><code>doi</code></td>
+<td>String</td>
+<td>No</td>
+<td>DOI of the associated publication</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>String</td>
+<td>No</td>
+<td>Workflow or paper title</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td>String</td>
+<td>No</td>
+<td>Source repository or landing page URL</td>
+</tr>
+</tbody>
+</table>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../how-to/create-workflow/">Create a Workflow</a> — practical authoring guide</li>
