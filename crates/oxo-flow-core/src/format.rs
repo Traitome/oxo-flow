@@ -535,6 +535,42 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             });
         }
 
+        // E022 (issue #1040): a rule with no runnable command — the shell is
+        // missing/empty/whitespace-only and no non-empty script is declared.
+        // An empty `shell = ""` (what `import` used to emit when it dropped a
+        // Nextflow `script:` block) passes E002 because the field is `Some`,
+        // then silently skips at run time. `transform` rules are exempt: their
+        // command lives in `transform.map`/`transform.combine`, and E002
+        // already treats them as command-bearing.
+        let has_non_empty_shell = rule
+            .shell
+            .as_deref()
+            .is_some_and(|shell| !shell.trim().is_empty());
+        let has_non_empty_script = rule
+            .script
+            .as_deref()
+            .is_some_and(|script| !script.trim().is_empty());
+        let e002_covers = !rule.output.is_empty()
+            && rule.shell.is_none()
+            && rule.script.is_none()
+            && rule.transform.is_none();
+        if !has_non_empty_shell && !has_non_empty_script && rule.transform.is_none() && !e002_covers
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "rule '{}' has no runnable command: shell is missing or empty and no script is declared",
+                    rule.name
+                ),
+                rule: Some(rule.name.clone()),
+                code: "E022".to_string(),
+                suggestion: Some(
+                    "add a non-empty shell or script — imported Nextflow processes need their `script:` block captured"
+                        .to_string(),
+                ),
+            });
+        }
+
         // E003: Wildcard consistency - output wildcards must appear in inputs
         // Exception: scatter rules use scatter variables, not input wildcards
         // Exception: pairs rules use {pair_id}, {experiment}, {control} wildcards
@@ -1579,6 +1615,33 @@ pub fn lint_format(
                     "add description = \"Brief one-line description of what {} does\" to this rule",
                     rule.name
                 )),
+            });
+        }
+
+        // W040 (issue #1040): the lint mirror of E022 — the rule has no
+        // non-empty shell and no script, so the engine will skip it at run
+        // time ("no shell or script defined"). Transform rules are exempt
+        // for the same reason as in E022.
+        let has_non_empty_shell = rule
+            .shell
+            .as_deref()
+            .is_some_and(|shell| !shell.trim().is_empty());
+        let has_non_empty_script = rule
+            .script
+            .as_deref()
+            .is_some_and(|script| !script.trim().is_empty());
+        if !has_non_empty_shell && !has_non_empty_script && rule.transform.is_none() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message:
+                    "rule has no runnable command — shell is missing or empty and no script is declared; the rule is skipped at run time"
+                        .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W040".to_string(),
+                suggestion: Some(
+                    "add a non-empty shell or script — `validate` reports the same condition as E022"
+                        .to_string(),
+                ),
             });
         }
 
@@ -3745,6 +3808,101 @@ mod tests {
             result.errors().iter().all(|d| d.code != "E003"),
             "values-declared wildcards must be E003-exempt: {:?}",
             result.errors()
+        );
+    }
+
+    #[test]
+    fn e022_flags_empty_shell_workflow() {
+        // Issue #1040: `import` used to emit `shell = ""` when it dropped a
+        // Nextflow `script:` block. E002 treats `Some("")` as command-bearing,
+        // so validate passed and the tool never ran. E022 must be a hard error.
+        let toml = r#"
+            [workflow]
+            name = "imported"
+
+            [[rules]]
+            name = "count"
+            input = ["data/{sample}.txt"]
+            output = ["data/{sample}.txt.count"]
+            shell = ""
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        let errors: Vec<&Diagnostic> = result.errors();
+        assert!(
+            errors.iter().any(|d| d.code == "E022"),
+            "empty shell must be E022: {:?}",
+            errors.iter().map(|d| &d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn e022_flags_missing_shell_without_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "noop"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.errors().iter().any(|d| d.code == "E022"));
+    }
+
+    #[test]
+    fn e022_does_not_flag_transform_rules() {
+        // Transform rules carry their command in transform.map/combine and are
+        // legal without a top-level shell (examples/gallery/10_transform_operator).
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            chromosomes = ["chr1"]
+
+            [[rules]]
+            name = "call"
+            input = ["aligned/sample.bam"]
+            output = ["variants/sample.vcf"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "caller {input} {chr} {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().all(|d| d.code != "E022"),
+            "transform rules must be exempt: {:?}",
+            result.errors()
+        );
+    }
+
+    #[test]
+    fn w040_warns_on_empty_shell() {
+        let toml = r#"
+            [workflow]
+            name = "imported"
+
+            [[rules]]
+            name = "count"
+            input = ["data/{sample}.txt"]
+            output = ["data/{sample}.txt.count"]
+            shell = ""
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == "W040" && d.severity == Severity::Warning),
+            "lint must warn W040: {:?}",
+            diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>()
         );
     }
 

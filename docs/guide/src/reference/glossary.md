@@ -344,6 +344,7 @@ below list every code the engine currently emits.
 | `E019` | A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). `validate` and `plan`/dry-run preflight it the same way they existence-check static inputs; `run` fails before executing anything |
 | `E020` | A `[wildcard_constraints]` entry is not a valid regex (e.g. the impossible range `[z-a]+`). Parse rejects such entries for TOML-loaded configs, so this diagnostic is defense-in-depth for programmatically constructed configs — it runs the SAME shared compilation helper the plan-time fan-out and runtime projection use, making the validate-time error byte-identical to the run-time one |
 | `E021` | A rule's input/output pattern uses Snakemake-style inline wildcard constraint syntax (e.g. `{sample:[A-Z]+}`). The engine's wildcard grammar is `{name}` only — a `:`-carrying brace group is never parsed as a wildcard, so it stays literal brace text and the tool fails on a path that looks valid. Constraints belong in `[wildcard_constraints]` |
+| `E022` | A rule has no runnable command: `shell` is missing, empty, or whitespace-only and no non-empty `script` is declared. `E002` sees `shell = ""` as a present field, and the engine then skips the rule at run time ("no shell or script defined") — this code makes that state a hard validation error. Rules driven by `transform` are exempt (their command lives in `transform.map`/`transform.combine`). The classic trigger is an imported Nextflow process whose `script:` block was not captured |
 
 ### Lint warnings (`lint`)
 
@@ -382,6 +383,7 @@ below list every code the engine currently emits.
 | `W036` | A rule declares `input_function`, but the engine performs no dynamic input resolution — the field is parsed and round-tripped yet never called, so the input list stays exactly as declared (the declared function name does not fill it at run time) |
 | `W037` | A `resource_hint` sets `runtime` or `io_bound` — both are parsed but consumed by nothing; the scheduler only uses `input_size` and `memory_scale` today |
 | `W039` | A dotted `{namespace.key}` placeholder uses an unrecognized namespace (e.g. `{metadata.batch}` instead of `{meta.batch}`) — the token is never substituted and the tool receives literal brace text |
+| `W040` | A rule has no runnable command — `shell` is missing or empty/whitespace-only and no non-empty `script` is declared; the engine skips the rule at run time. The lint mirror of `E022`; `transform` rules are exempt |
 
 Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
 reachable through `oxo-flow lint` (not `validate`, which reports only
