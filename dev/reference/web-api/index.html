@@ -5562,8 +5562,8 @@
 <hr />
 <h2 id="api-design-conventions">API Design Conventions<a class="headerlink" href="#api-design-conventions" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Envelope</strong>: success responses are bare JSON objects/arrays; errors are <code>{ code, message, detail?, suggestion? }</code></li>
-<li><strong>Errors</strong>: <code>{ code: "E001", message, detail?, suggestion? }</code> — the <code>code</code> value uses the engine's <a href="../glossary/#diagnostic-codes">diagnostic codes</a></li>
+<li><strong>Envelope</strong>: success responses are bare JSON objects/arrays; errors are <code>{ code, message, detail, suggestion }</code> — <code>detail</code> and <code>suggestion</code> are always present and are <code>null</code> when the error carries no extra context</li>
+<li><strong>Errors</strong>: <code>{ code: "E001", message, detail, suggestion }</code> — the <code>code</code> value uses the engine's <a href="../glossary/#diagnostic-codes">diagnostic codes</a></li>
 <li><strong>Lists</strong>: <code>GET /api/runs</code> returns a cursor-paginated envelope <code>{ items, next_cursor, total }</code> (limit ≤ 500, <code>status</code>/<code>q</code> filters); other list endpoints return bare arrays (≤ 100 items)</li>
 <li><strong>Versioning</strong>: <code>/api/</code> prefix for all endpoints</li>
 <li><strong>Authentication</strong>: in team/hpc mode, protected endpoints accept an <code>Authorization: Bearer &lt;token&gt;</code> session token or an <code>X-API-Key</code> header. The generated OpenAPI spec at <code>GET /api/openapi.json</code> declares both <code>bearerAuth</code> and <code>apiKey</code> security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.</li>
@@ -5578,6 +5578,10 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">"suggestion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Please login at POST /api/auth/login to obtain a session token"</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">}</span>
 </span></code></pre></div>
+<p><code>detail</code> and <code>suggestion</code> are <strong>always serialized</strong>; when an error has no
+extra context they are <code>null</code> rather than absent, so clients can parse the
+four-field shape unconditionally (the OpenAPI <code>ApiError</code> schema marks both
+nullable).</p>
 <p>Rate limiting follows the same contract: over-limit requests get
 <code>429 {"code":"RATE_LIMITED", "message":"Rate limit exceeded", "detail":"retry in Ns", ...}</code>
 with a <code>Retry-After</code> header (sliding window, 100 requests / 60 s per
@@ -5615,6 +5619,7 @@ in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <c
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/health
 </span></code></pre></div>
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.</p>
+<p>In <code>hpc</code> mode, <code>components.scheduler</code> reports <code>{"status":"ok"}</code> when a scheduler backend is detected (the same cached probe <code>/api/hpc</code> uses); it is <code>null</code> in other modes or when no backend is installed.</p>
 <p><code>components.ai_key_storage</code> is <code>"encrypted"</code> when <code>OXO_FLOW_MASTER_KEY</code> is set, <code>"plaintext"</code> otherwise.</p>
 <p><code>components.ai_provider</code> is <code>{"status": "connected", "latency_ms": null}</code> while a provider is active and <code>{"status": "disabled", "latency_ms": null}</code> when AI is off — explicitly pinned with <code>OXO_FLOW_AI_PROVIDER=disabled</code>, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: <code>~/.oxo-flow/ai_config.json</code>, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured <code>AI_NOT_CONFIGURED</code> error without any outbound request.</p>
 <p><code>components.engine</code> reports the engine CLI the server spawns for runs, resolved once at startup by running <code>&lt;binary&gt; --version</code>:</p>
@@ -5652,6 +5657,7 @@ Returns paginated structured audit entries:
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="p">}</span>
 </span></code></pre></div>
 <code>page</code> defaults to 1 and <code>per_page</code> defaults to 50 (max 200). <strong>Team/hpc modes: admin-only</strong> (the trail spans every user's actions; personal mode keeps the localhost trust model).</p>
+<p><code>user</code> is the actor's canonical <code>users.id</code>, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (<code>user</code>, <code>viewer</code>) and the <code>default</code> personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through <code>GET /api/users</code> when one is needed (admin-only).</p>
 <h3 id="server-sent-events">Server-Sent Events<a class="headerlink" href="#server-sent-events" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/events
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Accept: text/event-stream
@@ -5976,7 +5982,7 @@ Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, dur
 <h3 id="dag-status">DAG Status<a class="headerlink" href="#dag-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs/{id}/dag-status
 </span></code></pre></div>
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled) keeps <code>completed + failed + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures and skips never inflate it.</p>
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>
@@ -6386,16 +6392,21 @@ response (including the upsert echo) — clients see <code>ssh_key_set: true |
 false</code> instead. When <code>OXO_FLOW_MASTER_KEY</code> is set, the key is sealed at
 rest with the same AES-256-GCM scheme as AI provider keys; without it, the
 database stores plaintext compatibility-mode rows.
+<code>ssh_key</code> accepts a <strong>path or key material</strong>: material is written to a
+private <code>0600</code> temp file for the SSH invocation, so either form works.
 <code>POST /api/runs</code> accepts <code>cluster_id</code>: the run then stages its workdir to
-the remote host (tar over stdio — no rsync), executes under a per-run
-nohup wrapper, and pulls the results back on completion so every
-downstream endpoint (logs, files, report) works unchanged. See
+the remote host (tar over stdio — no rsync), launches it detached (own
+session via <code>setsid</code>, with <code>nohup</code> fallback) so the launch call returns
+while the workflow keeps running, and pulls the results back on completion
+so every downstream endpoint (logs, files, report) works unchanged.
+Cancel kills the wrapper's recorded process group, so the remote CLI and
+rule subprocesses stop rather than being orphaned. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
 <hr />
 <h2 id="hpc">HPC<a class="headerlink" href="#hpc" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>GET /api/hpc
 </span></code></pre></div>
-Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. This route is only mounted when the server runs in <code>hpc</code> mode.</p>
+Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. Nodes are deduplicated by name (SLURM lists a node once per partition it belongs to). This route is only mounted when the server runs in <code>hpc</code> mode, and the generated OpenAPI document only advertises it in that mode.</p>
 <hr />
 <h2 id="dag-editing">DAG Editing<a class="headerlink" href="#dag-editing" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)

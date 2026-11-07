@@ -4259,6 +4259,16 @@ fails on input that looks valid. The diagnostic suggests the closest
 recognized namespace when the typo is a prefix-extended or truncated
 form (<code>metadata</code> → <code>meta</code>, <code>conf</code> → <code>config</code>); shell brace text like
 awk <code>'{print $1}'</code> and comment lines are not flagged.</p>
+<p><a href="../../reference/glossary/#diagnostic-codes">W040</a> flags a rule with no
+runnable command: <code>shell</code> is missing or empty/whitespace-only and no
+non-empty <code>script</code> is declared. This is the lint mirror of
+<a href="../../reference/glossary/#diagnostic-codes">E022</a> — the engine skips
+such a rule at run time (“no shell or script defined”), so the workflow
+validates yet silently does nothing. The classic source is an
+<code>oxo-flow import</code> of a Nextflow process whose <code>script:</code> block was not
+captured; re-import after upgrading, or add the command by hand.
+<code>transform</code> rules are exempt because their command lives in
+<code>transform.map</code>/<code>transform.combine</code>.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

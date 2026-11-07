@@ -2213,6 +2213,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-is-extracted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is extracted
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What is extracted">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nextflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nextflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#snakemake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snakemake
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-not-extracted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is not extracted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#after-importing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After importing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#options" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3897,6 +3958,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-is-extracted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is extracted
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What is extracted">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nextflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nextflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#snakemake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snakemake
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-not-extracted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is not extracted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#after-importing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After importing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#options" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3949,12 +4071,65 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow import [OPTIONS] &lt;SOURCE&gt;
 </span></code></pre></div>
 <h2 id="description">Description<a class="headerlink" href="#description" title="Permanent link">#</a></h2>
-<p>The <code>import</code> command automatically transpiles Nextflow DSL2 process definitions
-and Snakemake rules into typed <code>.oxoflow</code> pipelines.</p>
-<p>It extracts rule names, CPU threads, memory allocations, walltime limits, conda/docker
-environments, inputs, outputs, and shell commands. In addition, it performs biological
-typing inference to attach <code>[rules.types]</code> contracts based on tool semantics, ensuring
-immediate validation by the BioTypes type checker.</p>
+<p>The <code>import</code> command transpiles Nextflow DSL2 process definitions and
+Snakemake rules into <code>.oxoflow</code> pipelines. It is a <strong>best-effort translator</strong>,
+not a full language implementation: every construct it cannot map faithfully
+is either reported as a warning on stderr or rejected with a clear error — it
+never silently emits an empty command or an invented file path.</p>
+<h2 id="what-is-extracted">What is extracted<a class="headerlink" href="#what-is-extracted" title="Permanent link">#</a></h2>
+<h3 id="nextflow">Nextflow<a class="headerlink" href="#nextflow" title="Permanent link">#</a></h3>
+<ul>
+<li>Rule names (<code>process NAME</code> → lowercased rule name)</li>
+<li><code>cpus</code> → <code>threads</code>, <code>memory</code> (<code>GB</code>/<code>MB</code> canonicalized), <code>time</code> → <code>resources.time_limit</code></li>
+<li><code>conda</code> / <code>container</code> directives → <code>environment</code></li>
+<li>The <code>script:</code> or <code>shell:</code> body, in both inline quoted form
+  (<code>script: "wc -l &lt; ${x}"</code>) and triple-quoted multi-line form
+  (<code>script: """ ... """</code>), including <code>'''…'''</code> bodies</li>
+<li>Declared <code>path</code>/<code>file</code> input variables, and <code>${var}</code> / <code>$var</code> references to
+  them inside the script → oxo-flow placeholders (<code>{input}</code>, <code>{input[N]}</code>)</li>
+<li><code>$task.cpus</code> → <code>{threads}</code>, <code>${meta.id}</code> / <code>${prefix}</code> → <code>{sample}</code></li>
+<li>A direct <code>Channel.fromPath("data/*.txt")</code> (or a <code>name = Channel.fromPath(…)</code>
+  variable) feeding a process → the real wildcard input
+  <code>data/{sample}.txt</code>, a matching <code>sample_pattern</code>, and input-derived outputs
+  (<code>output: "${x}.count"</code> → <code>data/{sample}.txt.count</code>)</li>
+<li>BioType contracts only when inference actually recognizes the tool/files
+  (<code>[types.fastq]</code>, <code>[types.bam_coord]</code>, <code>[types.vcf_indexed]</code> are emitted
+  <strong>only</strong> when a rule's inferred contract references them)</li>
+</ul>
+<h3 id="snakemake">Snakemake<a class="headerlink" href="#snakemake" title="Permanent link">#</a></h3>
+<ul>
+<li>Rule names, <code>threads</code>, <code>resources.mem_mb</code> / <code>resources.time</code></li>
+<li><code>conda:</code> / <code>container:</code> directives → <code>environment</code></li>
+<li>Literal input/output patterns (including <code>expand(...)</code> patterns and
+  <code>temp()</code> / <code>protected()</code> markers)</li>
+<li>The <code>shell:</code> body</li>
+</ul>
+<h2 id="what-is-not-extracted">What is not extracted<a class="headerlink" href="#what-is-not-extracted" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Nextflow workflow-local variables</strong> (<code>def args = task.ext.args ?: ''</code>):
+  the <code>def</code> prelude is stripped so bash does not receive <code>def: command not
+  found</code>, and the import prints a warning naming the variable. References to
+  it remain as shell text and may expand to nothing at run time.</li>
+<li><strong>Nextflow channel operators and expressions</strong> (<code>params.*</code>, <code>task.ext.*</code>,
+  <code>Channel.map</code>/<code>join</code>/<code>combine</code>, ternaries, closures): unsupported
+  interpolations are left verbatim and warned about by name.</li>
+<li><strong>Process wiring / dependencies</strong>: each process becomes an independent rule;
+  <code>depends_on</code> edges are not inferred. Add them by hand after import.</li>
+<li><strong>Multiple-wildcard globs</strong> (<code>Channel.fromFilePairs("data/*_{1,2}.fastq.gz")</code>)
+  and character-class globs: only the first <code>*</code> maps to <code>{sample}</code>; the import
+  warns loudly.</li>
+<li><strong>Output expressions that reference unknown variables</strong> (e.g.
+  <code>"${params.outdir}/x.txt"</code>): the output is omitted with a warning rather
+  than fabricated.</li>
+<li><strong>Processes with no <code>script:</code>/<code>shell:</code> body</strong>: the import fails with a clear
+  message instead of writing <code>shell = ""</code> (such a rule would be skipped at run
+  time; <code>validate</code> reports it as error <code>E022</code>).</li>
+</ul>
+<h2 id="after-importing">After importing<a class="headerlink" href="#after-importing" title="Permanent link">#</a></h2>
+<p>Always run <code>oxo-flow validate</code> and <code>oxo-flow lint</code> on the generated workflow,
+then <code>oxo-flow dry-run</code> to confirm the DAG and command preview. Because the
+translation is best-effort, expect to edit the result — the import warnings
+are the checklist of what needs manual attention.</p>
 <p>When <code>--from</code> is omitted, <code>oxo-flow import</code> auto-detects the source format from the
 file extension (<code>.nf</code> for Nextflow, <code>Snakefile</code> or <code>.smk</code> for Snakemake) or through
 content inspection.</p>

@@ -5260,6 +5260,10 @@ below list every code the engine currently emits.</p>
 <td><code>E021</code></td>
 <td>A rule's input/output pattern uses Snakemake-style inline wildcard constraint syntax (e.g. <code>{sample:[A-Z]+}</code>). The engine's wildcard grammar is <code>{name}</code> only — a <code>:</code>-carrying brace group is never parsed as a wildcard, so it stays literal brace text and the tool fails on a path that looks valid. Constraints belong in <code>[wildcard_constraints]</code></td>
 </tr>
+<tr>
+<td><code>E022</code></td>
+<td>A rule has no runnable command: <code>shell</code> is missing, empty, or whitespace-only and no non-empty <code>script</code> is declared. <code>E002</code> sees <code>shell = ""</code> as a present field, and the engine then skips the rule at run time ("no shell or script defined") — this code makes that state a hard validation error. Rules driven by <code>transform</code> are exempt (their command lives in <code>transform.map</code>/<code>transform.combine</code>). The classic trigger is an imported Nextflow process whose <code>script:</code> block was not captured</td>
+</tr>
 </tbody>
 </table>
 <h3 id="lint-warnings-lint">Lint warnings (<code>lint</code>)<a class="headerlink" href="#lint-warnings-lint" title="Permanent link">#</a></h3>
@@ -5402,6 +5406,10 @@ below list every code the engine currently emits.</p>
 <tr>
 <td><code>W039</code></td>
 <td>A dotted <code>{namespace.key}</code> placeholder uses an unrecognized namespace (e.g. <code>{metadata.batch}</code> instead of <code>{meta.batch}</code>) — the token is never substituted and the tool receives literal brace text</td>
+</tr>
+<tr>
+<td><code>W040</code></td>
+<td>A rule has no runnable command — <code>shell</code> is missing or empty/whitespace-only and no non-empty <code>script</code> is declared; the engine skips the rule at run time. The lint mirror of <code>E022</code>; <code>transform</code> rules are exempt</td>
 </tr>
 </tbody>
 </table>

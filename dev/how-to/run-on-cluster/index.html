@@ -4833,19 +4833,22 @@ job.</p>
 itself lives elsewhere (your laptop, a lab server, a container):</p>
 <ol>
 <li><strong>Register the connection</strong> — Clusters page (or the platform config
-   file's <code>[clusters]</code> section): SSH host, port, user, optional key path,
-   scheduler hint, and a <code>remote_dir</code> for staged runs. Probe verifies
-   connectivity and detects the scheduler (slurm/pbs/sge/lsf) from the
-   remote's installed binaries.</li>
+   file's <code>[clusters]</code> section): SSH host, port, user, optional SSH key
+   (a path or the key material itself), scheduler hint, and a
+   <code>remote_dir</code> for staged runs. Probe verifies connectivity and detects
+   the scheduler (slurm/pbs/sge/lsf) from the remote's installed binaries.</li>
 <li><strong>Run with <code>cluster_id</code></strong> — the Run dialog's <em>Execute on cluster</em>
    selector (or <code>cluster_id</code> in <code>POST /api/runs</code>).</li>
 <li><strong>What happens</strong> — the workdir is staged to
    <code>{remote_dir}/runs/{run_id}</code> over a tar stream (no rsync needed); a
-   per-run wrapper launches <code>oxo-flow run</code> remotely under nohup; the
-   server polls the remote <code>.exit-code</code> every 5s; on completion the whole
-   workdir (logs, checkpoint, results) is pulled back, so the web logs,
-   files, preview, and report views work exactly as for local runs.
-   Cancel sends <code>pkill</code> for the per-run wrapper.</li>
+   per-run wrapper launches <code>oxo-flow run</code> fully detached (its own
+   session via <code>setsid</code>, with <code>nohup</code> fallback), so the launch SSH call
+   returns immediately while the workflow keeps running; the server polls
+   the remote <code>.exit-code</code> every 5s; on completion the whole workdir
+   (logs, checkpoint, results) is pulled back, so the web logs, files,
+   preview, and report views work exactly as for local runs. Cancel kills
+   the wrapper's recorded process group, so the CLI and every rule
+   subprocess stop instead of being orphaned.</li>
 </ol>
 <p>Requirements on the remote host: the <code>oxo-flow</code> CLI on <code>PATH</code> (any recent
 release), <code>tar</code>, and non-interactive SSH access (key auth, <code>BatchMode</code>).
