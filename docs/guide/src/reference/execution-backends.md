@@ -145,6 +145,12 @@ cancellation reconciliation, per-element accounting, and crash recovery
 remain evidence gaps. See the audit ledger before describing any backend
 as production-ready.
 
+Freshness note (2026-11-07): this evidence is a point-in-time campaign —
+the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a
+schedule. Before citing these artifacts against current behavior, re-run
+`scripts/real-cluster-matrix/` locally (its runners now propagate case
+failures, so a rotted backend can no longer pass silently).
+
 Accounting is read once per job as it settles, not once per poll, and feeds
 both the run directory and the checkpoint benchmarks — see
 [what a finished job records](../commands/run.md#what-a-finished-job-records).

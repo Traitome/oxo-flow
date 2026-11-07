@@ -98,6 +98,54 @@ fn bare_interpreter_name_passes_config_validation() {
 }
 
 #[test]
+fn invalid_protected_output_pattern_fails_validation() {
+    // H-4: a protection typo must be a hard error at load time — the old
+    // matchers failed open and treated the path as unprotected.
+    for bad in ["***", "results/a**b/x.bam", "results/[a-b"] {
+        let toml = format!(
+            r#"
+            [workflow]
+            name = "protected-bad"
+
+            [[rules]]
+            name = "step"
+            output = ["out.txt"]
+            protected_output = ["{bad}"]
+            shell = "touch out.txt"
+            "#
+        );
+        let err = match WorkflowConfig::parse(&toml) {
+            Err(err) => err,
+            Ok(config) => config
+                .validate()
+                .expect_err("invalid protected pattern must fail validation"),
+        };
+        assert!(
+            err.to_string().contains("protected_output"),
+            "unexpected error for {bad}: {err}"
+        );
+    }
+}
+
+#[test]
+fn valid_protected_output_patterns_pass_validation() {
+    let toml = r#"
+        [workflow]
+        name = "protected-ok"
+
+        [[rules]]
+        name = "step"
+        output = ["out.txt"]
+        protected_output = ["results/*.bam", "results/{sample}.bam", "final.bam"]
+        shell = "touch out.txt"
+    "#;
+    let config = WorkflowConfig::parse(toml).unwrap();
+    config
+        .validate()
+        .expect("valid protected patterns are allowed");
+}
+
+#[test]
 fn parse_full_workflow() {
     let config = WorkflowConfig::parse(FULL_WORKFLOW).unwrap();
     assert_eq!(config.workflow.name, "test-pipeline");

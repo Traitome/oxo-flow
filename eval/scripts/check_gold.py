@@ -53,6 +53,26 @@ REVIEWED = ("approved", "corrected")
 COMMUNITY_BASE = "https://raw.githubusercontent.com/oxo-flow-community/{repo}/main/{path}"
 
 
+def count_community_references(repo_root):
+    """Workflow gold rows whose reference lives in a community repo.
+
+    Derived from the gold CSV (audit L-12) instead of a hand-copied
+    constant: when the reference set grows or shrinks, the `--help` text
+    follows automatically instead of silently describing the wrong rows.
+    Returns None when the CSV is absent (a foreign --repo-root).
+    """
+    path = os.path.join(repo_root, "eval", "gold", "workflow.csv")
+    if not os.path.isfile(path):
+        return None
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    return sum(
+        1
+        for row in rows
+        if row.get("reference_file") and not row.get("reference_repo", "").startswith("examples/")
+    )
+
+
 def load_rows(repo_root, layer):
     path = os.path.join(repo_root, "eval", "gold", f"{layer}.csv")
     with open(path, newline="", encoding="utf-8") as fh:
@@ -244,7 +264,8 @@ def materialize_community_reference(ref_repo, ref_file, workdir):
         except (urllib.error.URLError, OSError, ValueError) as exc:
             return None, f"{url}: {exc}"
         try:
-            data = tomllib.loads(open(dest, encoding="utf-8").read())
+            with open(dest, encoding="utf-8") as fh:
+                data = tomllib.loads(fh.read())
         except (tomllib.TOMLDecodeError, UnicodeDecodeError):
             continue  # engine (and the graph step) will surface parse errors
         for entry in data.get("include", []):
@@ -358,7 +379,7 @@ def check_version_intent(tool_rows):
     for row in tool_rows:
         if row.get("negative_sample") == "1":
             continue
-        if row.get("expected_version") and "version" not in (row.get("query") or "").lower():
+        if row.get("expected_version") and not common.asks_about_version(row):
             warnings.append(row["id"])
     return warnings
 
@@ -431,6 +452,15 @@ def print_report(report):
 
 
 def main(argv=None):
+    # Help is built before --repo-root is parsed, so the count reflects the
+    # shipped repo's gold set (the default root); a --repo-root override with
+    # no CSV falls back to the generic wording.
+    community_count = count_community_references(common.REPO_ROOT)
+    skip_community_help = (
+        f"skip the {community_count} community references instead of fetching them from GitHub"
+        if community_count
+        else "skip community references instead of fetching them from GitHub"
+    )
     parser = argparse.ArgumentParser(description="Gold-set consistency checks (issue #172)")
     parser.add_argument("--strict", action="store_true", help="treat warnings as failures")
     parser.add_argument("--repo-root", default=common.REPO_ROOT)
@@ -442,7 +472,7 @@ def main(argv=None):
     parser.add_argument(
         "--no-fetch-community",
         action="store_true",
-        help="skip the 22 community references instead of fetching them from GitHub",
+        help=skip_community_help,
     )
     args = parser.parse_args(argv)
     oxo_flow_bin = os.path.abspath(args.oxo_flow) if args.oxo_flow else os.path.join(

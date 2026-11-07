@@ -13,6 +13,14 @@ export interface CliResult {
   exitCode: number | null;
   /** Set when the binary could not be launched at all (ENOENT, EACCES, …). */
   spawnError?: string;
+  /**
+   * Set when the child was killed before exiting — the exec timeout fired
+   * (the CLI hung or the machine is overloaded) or an `onSpawn` kill was
+   * requested. Distinct from a clean non-zero exit (L-14): the extension
+   * must be able to say "the CLI hung" instead of reporting a generic
+   * failure.
+   */
+  timedOut?: boolean;
 }
 
 export interface RunCliOptions {
@@ -40,15 +48,20 @@ export async function runCli(
         windowsHide: true,
       },
       (error, stdout, stderr) => {
-        const err = error as (NodeJS.ErrnoException & { code?: number | string }) | null;
+        const err = error as (NodeJS.ErrnoException & {
+          code?: number | string;
+          killed?: boolean;
+        }) | null;
         if (err && typeof err.code === "string") {
           resolve({ stdout: stdout.toString(), stderr: stderr.toString(), exitCode: null, spawnError: err.code });
           return;
         }
+        const timedOut = Boolean(err?.killed);
         resolve({
           stdout: stdout.toString(),
           stderr: stderr.toString(),
           exitCode: typeof err?.code === "number" ? err.code : err ? 1 : 0,
+          timedOut,
         });
       }
     );

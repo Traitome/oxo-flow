@@ -380,7 +380,10 @@ async fn record_outcome(
             summary.skipped += 1;
         }
     }
-    if let Err(e) = ck.save_to_file(args.checkpoint_path) {
+    // M-7: the local scheduler loop saves through the async API at every
+    // site; the cluster path must not serialize submissions behind fsync
+    // latency either.
+    if let Err(e) = ck.save_to_file_async(args.checkpoint_path).await {
         tracing::warn!("Failed to save checkpoint: {e}");
     }
 }
@@ -602,7 +605,10 @@ pub(crate) async fn run_on_cluster(
                 },
                 output_tail_bytes,
             );
-            ck.save_to_file(&path)
+            // M-7: this hook is awaited inline inside the driver's submit
+            // loop — the blocking save would park the executor thread on
+            // disk I/O per submission.
+            ck.save_to_file_async(&path).await
         })
     };
     let run_result = driver

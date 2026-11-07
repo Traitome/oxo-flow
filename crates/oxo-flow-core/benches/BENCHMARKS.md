@@ -46,8 +46,6 @@ throughput (rules/second) is derived by dividing iteration count by time.
 | Scheduler strategy | Method | Priority |
 |---|---|---|
 | Default | `ready_rules` | None (arbitrary order) |
-| Prioritised | `ready_rules_prioritized` | Explicit rule priority |
-| Critical path | `ready_rules_critical_path` | Path + priority + name |
 
 ## Usage
 

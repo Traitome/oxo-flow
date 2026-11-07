@@ -99,7 +99,9 @@ def repo_dirty():
 
 def knowledge_digest():
     h = hashlib.sha256()
-    for root, _, files in os.walk(KNOWLEDGE_DIR):
+    for root, dirs, files in os.walk(KNOWLEDGE_DIR):
+        dirs.sort()
+        files.sort()
         for name in sorted(files):
             path = os.path.join(root, name)
             rel = os.path.relpath(path, KNOWLEDGE_DIR).replace(os.sep, "/")
@@ -108,6 +110,17 @@ def knowledge_digest():
                 for chunk in iter(lambda: fh.read(65536), b""):
                     h.update(chunk)
     return h.hexdigest()
+
+
+def asks_about_version(row):
+    """Schema.md rule: expected_version applies only when the query asks
+    about a version (#172: 45 rows carried a version on non-version queries
+    and penalised correct answers). An empty query keeps the scorer's
+    deliberate leniency for synthetic inputs: it counts as version-intent.
+    Single shared definition — runner.py (scoring) and check_gold.py
+    (grading) must never disagree again."""
+    query = row.get("query") or ""
+    return "version" in query.lower() if query else True
 
 
 def provider_public_config(provider):

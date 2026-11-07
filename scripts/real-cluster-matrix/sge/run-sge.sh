@@ -46,3 +46,7 @@ done
 collect_run_dir_evidence "$EV" /work/runs
 
 echo "chain_rc=$CHAIN_RC array_rc=$ARRAY_RC" | tee -a "$EV/summary.txt"
+
+# The evidence echo must not swallow the verdict: a CI or human caller has to
+# be able to distinguish "both matrices passed" from "both failed" (H-2).
+[[ $CHAIN_RC -eq 0 && $ARRAY_RC -eq 0 ]] || exit 1

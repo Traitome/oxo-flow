@@ -42,9 +42,13 @@ fn write_checkpoint_staged(json: &str, path: &Path, tmp_path: &Path) -> Result<(
         drop(f);
         std::fs::rename(tmp_path, path)?;
         // fsync the parent directory so the rename is durable (POSIX).
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        // Propagate both the open and the sync error: on EIO/quota/
+        // remount-ro the run must NOT believe the checkpoint committed —
+        // resume would silently re-run completed rules against the old
+        // file (audit L-2; file sync_all and process.rs sync_parent_dir
+        // already propagate, this was the outlier).
+        let dir = std::fs::File::open(parent)?;
+        dir.sync_all()?;
         Ok(())
     })();
     write_result.map_err(|e| {

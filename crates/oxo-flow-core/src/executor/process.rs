@@ -1146,10 +1146,17 @@ impl LocalExecutor {
             .arg("-c")
             .arg(&setup_cmd)
             .current_dir(&self.config.workdir);
-        let output = setup.output().await;
+        // Bounded capture, no timeout (H-3): a chatty env tool must not
+        // buffer unbounded, but legit env creation legitimately runs for
+        // many minutes — the env-create lock timeout governs the overall
+        // wait, not a per-command deadline.
+        let output = match setup.spawn() {
+            Ok(child) => wait_bounded(child, None).await,
+            Err(e) => Err(e),
+        };
 
         match output {
-            Ok(o) if o.status.success() => {
+            Ok(o) if o.status.is_some_and(|s| s.success()) => {
                 // Setup reported success — but conda/mamba can exit 0 while
                 // leaving a broken env behind (interrupted transactions on
                 // loaded machines; live evidence: tx-ubuntu, where
@@ -1181,15 +1188,18 @@ impl LocalExecutor {
                                 .arg("-c")
                                 .arg(&teardown)
                                 .current_dir(&self.config.workdir);
-                            let _ = teardown_cmd.output().await;
+                            if let Ok(child) = teardown_cmd.spawn() {
+                                let _ = wait_bounded(child, None).await;
+                            }
                             let mut retry_cmd = Command::new("sh");
                             retry_cmd
                                 .kill_on_drop(true)
                                 .arg("-c")
                                 .arg(&setup_cmd)
                                 .current_dir(&self.config.workdir);
-                            if let Ok(retry) = retry_cmd.output().await
-                                && retry.status.success()
+                            if let Ok(child) = retry_cmd.spawn()
+                                && let Ok(waited) = wait_bounded(child, None).await
+                                && waited.status.is_some_and(|s| s.success())
                             {
                                 verified = Self::env_verify(self, &verify).await;
                             }
@@ -1215,7 +1225,7 @@ impl LocalExecutor {
                 }
             }
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                let stderr = o.stderr;
                 let hint = Self::env_setup_hint(env_spec.kind(), &stderr);
                 Err(OxoFlowError::Environment {
                     kind: env_spec.kind().to_string(),
@@ -1245,12 +1255,16 @@ impl LocalExecutor {
     async fn env_verify(&self, verify: &str) -> bool {
         let mut cmd = Command::new("sh");
         cmd.kill_on_drop(true); // #524: die with the aborted task
-        cmd.arg("-c")
-            .arg(verify)
-            .current_dir(&self.config.workdir)
-            .output()
-            .await
-            .is_ok_and(|o| o.status.success())
+        cmd.arg("-c").arg(verify).current_dir(&self.config.workdir);
+        // Bounded capture (H-3): verification output is never buffered
+        // unbounded. No timeout — the caller's overall env-wait budget
+        // governs.
+        match cmd.spawn() {
+            Ok(child) => wait_bounded(child, None)
+                .await
+                .is_ok_and(|waited| waited.status.is_some_and(|s| s.success())),
+            Err(_) => false,
+        }
     }
 
     /// Spec string the store operations should use for `kind`.
@@ -2469,7 +2483,7 @@ impl LocalExecutor {
             insert_tmpdir_vars(&mut pre_envs, self.config.tmp_dir.as_deref());
             let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
             let pre_result = match pre_child {
-                Ok(child) => child.wait_with_output().await,
+                Ok(child) => wait_bounded(child, Some(hook_timeout_duration())).await,
                 Err(e) => {
                     discard_scratch(scratch_dir.as_deref()).await;
                     self.release_resources(&rule).await;
@@ -2480,7 +2494,19 @@ impl LocalExecutor {
                 }
             };
             match pre_result {
-                Ok(output) if !output.status.success() => {
+                Ok(waited) if waited.timed_out => {
+                    discard_scratch(scratch_dir.as_deref()).await;
+                    self.release_resources(&rule).await;
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!(
+                            "pre_exec hook timed out (limit {}s) — \
+                             increase OXO_FLOW_HOOK_TIMEOUT_SECS if it is legitimate",
+                            hook_timeout_duration().as_secs()
+                        ),
+                    });
+                }
+                Ok(waited) if !waited.status.is_some_and(|s| s.success()) => {
                     // The hook ran and may have written diagnostic files —
                     // preserve the scratch dir and name its path (matches
                     // the "preserved on failure" contract).
@@ -2494,6 +2520,7 @@ impl LocalExecutor {
                         message: format!("pre_exec hook failed{note}"),
                     });
                 }
+                Ok(_) => {}
                 Err(e) => {
                     discard_scratch(scratch_dir.as_deref()).await;
                     self.release_resources(&rule).await;
@@ -2502,7 +2529,6 @@ impl LocalExecutor {
                         message: format!("failed to spawn pre_exec hook: {e}"),
                     });
                 }
-                _ => {}
             }
         }
 
@@ -3412,6 +3438,70 @@ async fn drain_capped(
     }
 }
 
+/// Hook timeout (H-3): the rule path times out; a hook that hangs must
+/// not hang the run forever either. `OXO_FLOW_HOOK_TIMEOUT_SECS`
+/// overrides; invalid or `0` values fall back to the default so a typo
+/// can never disable the abort.
+const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 300;
+
+fn hook_timeout_duration() -> std::time::Duration {
+    let secs = std::env::var("OXO_FLOW_HOOK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_HOOK_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// What [`wait_bounded`] observed for one spawned child.
+struct BoundedWait {
+    /// `None` when the timeout tripped before the child exited.
+    status: Option<std::process::ExitStatus>,
+    stderr: String,
+    timed_out: bool,
+}
+
+/// Bounded wait for a spawned child (H-3): the rule path caps capture and
+/// times out, but hooks and env setup used `wait_with_output()` /
+/// `.output().await` — unbounded memory and, for hooks, no timeout at all,
+/// so a chatty hook OOMed the engine and a hung hook froze the run.
+/// Drain both pipes through [`CappedCapture`] and, when `timeout` is
+/// `Some`, abandon the wait at the deadline (dropping the joined future
+/// kills the child via `kill_on_drop`).
+async fn wait_bounded(
+    mut child: tokio::process::Child,
+    timeout: Option<std::time::Duration>,
+) -> std::io::Result<BoundedWait> {
+    // stdout is drained (a full pipe would deadlock the child) but only
+    // stderr is rendered — hooks and env setup diagnose through stderr.
+    let mut stdout_cap = CappedCapture::default();
+    let mut stderr_cap = CappedCapture::default();
+    let wait = async {
+        let (stdout_result, stderr_result) = tokio::join!(
+            drain_capped(child.stdout.take(), &mut stdout_cap),
+            drain_capped(child.stderr.take(), &mut stderr_cap),
+        );
+        let status = child.wait().await?;
+        stdout_result?;
+        stderr_result?;
+        std::io::Result::Ok(status)
+    };
+    let waited = match timeout {
+        Some(limit) => match tokio::time::timeout(limit, wait).await {
+            Ok(result) => result.map(Some),
+            Err(_elapsed) => Ok(None),
+        },
+        None => wait.await.map(Some),
+    };
+    let status = waited?;
+    let timed_out = status.is_none();
+    Ok(BoundedWait {
+        stderr: stderr_cap.into_string(),
+        status,
+        timed_out,
+    })
+}
+
 /// Emit the bash→sh fallback warning at most once per process.
 fn warn_shell_fallback_once() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -3581,8 +3671,22 @@ async fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
     match tokio::fs::rename(src, dest).await {
         Ok(()) => Ok(()),
         Err(_) => {
-            copy_tree_atomic(src, dest)?;
-            remove_tree(src).await
+            // The rename failure IS the cross-filesystem case (M-2): the
+            // copy is exactly the unbounded, not-local work the sync
+            // recursion must not run on a tokio worker. Off-thread with
+            // owned paths; an aborted task drops the future (the spawn is
+            // best-effort, the copy is the payload).
+            let src = src.to_path_buf();
+            let dest = dest.to_path_buf();
+            let src_after_copy = src.clone();
+            tokio::task::spawn_blocking(move || copy_tree_atomic(&src, &dest))
+                .await
+                .unwrap_or_else(|join_error| {
+                    Err(std::io::Error::other(format!(
+                        "cross-filesystem output copy task failed: {join_error}"
+                    )))
+                })?;
+            remove_tree(&src_after_copy).await
         }
     }
 }
@@ -3661,9 +3765,12 @@ fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Recursively copy a file or directory tree (synchronous: output moves
-/// touch bounded local files; `std::fs` avoids an infinitely sized future
-/// that a recursive `async fn` would need to box).
+/// Recursively copy a file or directory tree. Synchronous `std::fs`
+/// avoids an infinitely sized future that a recursive `async fn` would
+/// need to box — and every production caller (`move_path`'s
+/// cross-filesystem fallback, the atomic copy) runs under
+/// `spawn_blocking`, so the blocking recursion never sits on a tokio
+/// worker (M-2). Callers that add new production paths must do the same.
 pub(super) fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
     let meta = std::fs::metadata(src)?;
     if meta.is_dir() {
@@ -3945,20 +4052,27 @@ async fn run_hook(
             return;
         }
     };
-    let result = child.wait_with_output().await;
-    match result {
-        Ok(output) if !output.status.success() => {
-            tracing::warn!(
-                rule = %rule.name,
-                code = %output.status.code().unwrap_or(-1),
-                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-                "rule hook failed (best-effort)"
-            );
-        }
+    let result = match wait_bounded(child, Some(hook_timeout_duration())).await {
+        Ok(waited) => waited,
         Err(e) => {
             tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
+            return;
         }
-        _ => {}
+    };
+    if result.timed_out {
+        tracing::warn!(
+            rule = %rule.name,
+            "rule hook timed out (best-effort) — increase OXO_FLOW_HOOK_TIMEOUT_SECS if it is legitimate"
+        );
+    } else if let Some(status) = result.status
+        && !status.success()
+    {
+        tracing::warn!(
+            rule = %rule.name,
+            code = %status.code().unwrap_or(-1),
+            stderr = %result.stderr.trim(),
+            "rule hook failed (best-effort)"
+        );
     }
 }
 
@@ -3991,19 +4105,25 @@ pub async fn run_workflow_hook(
             return;
         }
     };
-    let result = child.wait_with_output().await;
-    match result {
-        Ok(output) if !output.status.success() => {
-            tracing::warn!(
-                code = %output.status.code().unwrap_or(-1),
-                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-                "workflow hook failed (best-effort)"
-            );
-        }
+    let result = match wait_bounded(child, Some(hook_timeout_duration())).await {
+        Ok(waited) => waited,
         Err(e) => {
             tracing::warn!(error = %e, "failed to spawn workflow hook");
+            return;
         }
-        _ => {}
+    };
+    if result.timed_out {
+        tracing::warn!(
+            "workflow hook timed out (best-effort) — increase OXO_FLOW_HOOK_TIMEOUT_SECS if it is legitimate"
+        );
+    } else if let Some(status) = result.status
+        && !status.success()
+    {
+        tracing::warn!(
+            code = %status.code().unwrap_or(-1),
+            stderr = %result.stderr.trim(),
+            "workflow hook failed (best-effort)"
+        );
     }
 }
 
@@ -5526,6 +5646,39 @@ mod tests {
             stderr.contains("command terminated by SIGTERM (15)"),
             "stderr must name the signal: {stderr:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn wait_bounded_caps_streaming_output() {
+        // H-3: hooks and env setup used `wait_with_output()` — a chatty
+        // child buffered unbounded and OOMed the engine. The bounded wait
+        // must finish with a status and truncated capture.
+        let child = spawn_rule_shell(
+            "seq 1 2000000 >&2",
+            std::path::Path::new("/tmp"),
+            &HashMap::new(),
+        )
+        .unwrap();
+        let waited = wait_bounded(child, None).await.unwrap();
+        let status = waited.status.expect("no timeout was set");
+        assert!(status.success());
+        assert!(
+            waited.stderr.contains("output truncated"),
+            "a multi-MB stream must be capped, not buffered whole"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_bounded_times_out_a_hung_child() {
+        // H-3: a hook that hangs must not hang the run forever — the
+        // deadline abandons the wait (the child dies via kill_on_drop).
+        let child =
+            spawn_rule_shell("sleep 30", std::path::Path::new("/tmp"), &HashMap::new()).unwrap();
+        let waited = wait_bounded(child, Some(std::time::Duration::from_millis(100)))
+            .await
+            .unwrap();
+        assert!(waited.timed_out);
+        assert!(waited.status.is_none(), "a timed-out child has no status");
     }
 
     #[tokio::test]

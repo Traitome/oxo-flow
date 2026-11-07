@@ -145,6 +145,9 @@ def per_item_summary(results):
     for item_id, rows in sorted(by_id.items()):
         overalls = [float(r.get("overall", 0.0)) for r in rows]
         first_trials = [r for r in rows if int(r.get("trial", 0)) == 1]
+        capture_errors = sorted(
+            {str(r.get("capture_error", "")).strip() for r in rows if str(r.get("capture_error", "")).strip()}
+        )
         summaries.append(
             {
                 "id": item_id,
@@ -156,6 +159,7 @@ def per_item_summary(results):
                 "overall_stdev": stdev(overalls),
                 "perfect_trial_rate": round(sum(1 for v in overalls if v == 1.0) / len(overalls), 3),
                 "pass_at_k": 1.0 if any(v == 1.0 for v in overalls) else 0.0,
+                "capture_errors": capture_errors,
             }
         )
     return summaries
@@ -547,13 +551,7 @@ def judge_tool(gold_rows, captures_path):
             scores = {}
             if row["expected_tool"]:
                 scores["name_match"] = 1.0 if common.name_present(row["expected_tool"], answer) else 0.0
-            # schema.md: expected_version is empty when the query does not ask
-            # for a version, and version_match is scored only when it is asked
-            # (#172: 45 rows carried a version on non-version queries and
-            # penalised correct answers). Rows without a query keep the old
-            # behaviour for synthetic inputs.
-            query = row.get("query", "")
-            asks_version = "version" in query.lower() if query else True
+            asks_version = common.asks_about_version(row)
             if row["expected_version"] and asks_version:
                 # Boundary-checked match: "2.0.4" must not be satisfied by
                 # "2.0.40" or "12.0.4" (#172 audit), while "v2.0.4" still is.
@@ -694,7 +692,11 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                     ok = ok and (mem_mb is not None) and mem_mb <= resource_range.get("memory_max_mb", 262144)
                 scores["resources_in_range"] = 1.0 if ok else 0.0
 
-            scores["overall"] = mean(list(scores.values())) if scores else 0.0
+            # A corrupted gold cell invalidates the measurement itself: the
+            # remaining dimensions were never checked against real
+            # expectations, so the row cannot read as a perfect pass — it is
+            # scored 0.0 and the corruption is surfaced via capture_error.
+            scores["overall"] = 0.0 if gold_errs else (mean(list(scores.values())) if scores else 0.0)
             results.append(
                 {
                     "id": row["id"],
@@ -783,7 +785,10 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 declared = [p for r in rules for p in r.get("output", [])]
                 scores["output_coverage"] = path_hits(expected_outputs, declared)
 
-            scores["overall"] = mean(list(scores.values())) if scores else 0.0
+            # Same policy as the rule layer: a corrupted gold cell means the
+            # row's correctness was never checked, so it cannot read as a
+            # perfect pass — score 0.0 and surface the corruption.
+            scores["overall"] = 0.0 if gold_errs else (mean(list(scores.values())) if scores else 0.0)
             results.append(
                 {
                     "id": row["id"],
@@ -842,6 +847,12 @@ def build_validity_warnings(summary, gold_rows, capture_manifest):
     if missing_first:
         warnings.append(
             "Items without trial 1 are excluded from pass@1 (not silently failed): " + ", ".join(missing_first)
+        )
+    corrupted = [row["id"] for row in summary.get("per_item", []) if row.get("capture_errors")]
+    if corrupted:
+        warnings.append(
+            "Gold cells failed to parse for these items; they are scored 0.0 (never vacuously perfect): "
+            + ", ".join(corrupted)
         )
     return warnings
 

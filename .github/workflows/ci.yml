@@ -536,9 +536,14 @@ jobs:
       # the tree scan (working tree via `detect`) is the part that gates.
       - name: Install gitleaks
         run: |
-          curl -sSfL \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-            | tar -xz -C /usr/local/bin gitleaks
+          # M-15: download to a file and verify the sha256 (matches the
+          # release's published gitleaks_8.30.1_checksums.txt, checked
+          # 2026-11-07) BEFORE extracting — the stream used to be piped
+          # straight into tar as untrusted input.
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: Secret scan
@@ -1068,8 +1073,14 @@ jobs:
             'Categories=Science;Development;' \
             > "${APPDIR}/oxo-flow.desktop"
           cp assets/oxo-flow.png "${APPDIR}/oxo-flow.png"
+          # M-14: `continuous` is a mutable tag with no upstream checksum
+          # file, so the exact verified build is pinned by sha256 here
+          # (observed 2026-11-07). An upstream rebuild of the tag now fails
+          # loudly instead of shipping an unverified toolchain into the
+          # user-facing AppImage.
           curl -sL -o appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          echo "e8c1169c4af66c3184d7ee110713d4be04befe671fa358e2c1591ee840553b03  appimagetool" | sha256sum -c -
           chmod +x appimagetool
           mkdir -p artifacts/dist
           ./appimagetool "${APPDIR}" "artifacts/dist/oxo-flow-${RELEASE_TAG}-desktop-x86_64.AppImage"
@@ -2009,7 +2020,7 @@ jobs:
           # the promotion — an empty LATEST_TAG used to satisfy the guard
           # and re-published an old release onto :latest in a green run.
           LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" \
-            | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 || true)
+            | jq -r .tag_name || true)
           if [ -z "$LATEST_TAG" ]; then
             echo "::error::could not determine the repo's latest release — refusing to promote :latest on unknown state"
             exit 1
@@ -2236,7 +2247,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install MkDocs Material + mike
-        run: pip install mkdocs-material mike
+        run: pip install -r docs/guide/requirements.txt
 
       # #551: MD032 (blank line before a list) is the repo's documented
       # markdown invariant (AGENTS.md "Markdown lists") — gate it on the
@@ -2249,7 +2260,9 @@ jobs:
       - name: Lint docs lists (MD032)
         run: |
           printf '%s' '{"default":false,"MD032":true}' > "$RUNNER_TEMP/md032.jsonc"
-          npx --yes markdownlint-cli2 --config "$RUNNER_TEMP/md032.jsonc" "docs/guide/src/**/*.md"
+          # M-16: pinned so an upstream release cannot flip the gate with no
+          # change in this repository.
+          npx --yes markdownlint-cli2@0.24.0 --config "$RUNNER_TEMP/md032.jsonc" "docs/guide/src/**/*.md"
 
       - name: Configure git identity (mike pushes the gh-pages branch)
         run: |

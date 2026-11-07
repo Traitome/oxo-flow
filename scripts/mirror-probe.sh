@@ -18,10 +18,10 @@ set -u
 
 probe() {
   local name="$1" url="$2"
-  local out code time ip
+  local out code seconds ip verdict
   out=$(curl -s -o /dev/null -m 10 -w "%{http_code} %{time_total}s %{remote_ip}" "$url" 2>&1)
   code=${out%% *}
-  time=$(echo "$out" | awk '{print $2}')
+  seconds=$(echo "$out" | awk '{print $2}')
   ip=$(echo "$out" | awk '{print $3}')
   case "$code" in
     000) verdict="UNREACHABLE" ;;
@@ -29,7 +29,7 @@ probe() {
     200|301|302|403|404) verdict="OK(http-$code)" ;;
     *) verdict="http-$code" ;;
   esac
-  printf "%-42s %-20s %-8s %s\n" "$name" "$verdict" "$time" "$ip"
+  printf "%-42s %-20s %-8s %s\n" "$name" "$verdict" "$seconds" "$ip"
 }
 
 echo "=== bioconda channels (repodata.json) ==="

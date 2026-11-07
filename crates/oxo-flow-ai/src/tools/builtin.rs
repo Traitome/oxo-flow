@@ -413,19 +413,19 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
 /// 15 s request timeout bounds *time*, not size: a fast endpoint can stream
 /// hundreds of megabytes in that window, and nothing near that fits the
 /// model's context (or the tool-result budget) anyway.
-const MAX_FETCH_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_FETCH_BYTES: usize = 256 * 1024;
 
 /// Accumulates a response body up to [`MAX_FETCH_BYTES`] and reports whether
 /// the source had more. Reading happens chunk-at-a-time so an oversized (or
 /// endless) response is abandoned once the cap is reached instead of being
 /// buffered whole.
-struct CappedBody {
+pub(crate) struct CappedBody {
     bytes: Vec<u8>,
     truncated: bool,
 }
 
 impl CappedBody {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             bytes: Vec::new(),
             truncated: false,
@@ -434,7 +434,7 @@ impl CappedBody {
 
     /// Append one chunk; returns `false` once the cap is reached, telling
     /// the caller to stop reading.
-    fn push(&mut self, chunk: &[u8]) -> bool {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> bool {
         let room = MAX_FETCH_BYTES.saturating_sub(self.bytes.len());
         if chunk.len() > room {
             self.bytes.extend_from_slice(&chunk[..room]);
@@ -445,8 +445,13 @@ impl CappedBody {
         self.bytes.len() < MAX_FETCH_BYTES
     }
 
+    /// Whether the cap was reached and content was cut short.
+    pub(crate) fn truncated(&self) -> bool {
+        self.truncated
+    }
+
     /// The body as text, with a marker appended when it was cut short.
-    fn finish(self) -> String {
+    pub(crate) fn finish(self) -> String {
         let text = String::from_utf8_lossy(&self.bytes).into_owned();
         if self.truncated {
             format!("{text}\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]")
@@ -457,9 +462,11 @@ impl CappedBody {
 }
 
 /// Fetch content from a URL.
-#[derive(Default)]
 pub struct FetchUrlTool {
-    client: reqwest::Client,
+    /// `Err` = the security-screened client could not be built — the tool
+    /// is DISABLED (M-9): the old fallback installed a working client with
+    /// no timeout, voiding exactly the guarantee the builder exists for.
+    client: Result<reqwest::Client, String>,
 }
 
 impl FetchUrlTool {
@@ -472,16 +479,19 @@ impl FetchUrlTool {
             // pinned-hop re-screening this tool exists to enforce (#642).
             // A builder failure therefore disables the tool rather than
             // silently downgrading to an unfiltered client.
-            client: fetch_client(None).unwrap_or_else(|e| {
+            client: fetch_client(None).map_err(|e| {
                 tracing::error!(
                     "failed to build the fetch HTTP client ({e}); URL fetch is disabled"
                 );
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .expect("a no-redirect client builds on every TLS backend")
+                e.to_string()
             }),
         }
+    }
+}
+
+impl Default for FetchUrlTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -519,14 +529,17 @@ impl Tool for FetchUrlTool {
             tool: "fetch_url".into(),
             message: "missing 'url' argument".into(),
         })?;
+        let client = self.client.as_ref().map_err(|error| AiError::ToolError {
+            tool: "fetch_url".into(),
+            message: format!("URL fetch is disabled: {error}"),
+        })?;
 
-        let response =
-            validated_get(&self.client, url)
-                .await
-                .map_err(|reason| AiError::ToolError {
-                    tool: "fetch_url".into(),
-                    message: format!("blocked: {reason}"),
-                })?;
+        let response = validated_get(client, url)
+            .await
+            .map_err(|reason| AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("blocked: {reason}"),
+            })?;
         if let Some(reason) = status_failure(response.status()) {
             return Err(AiError::ToolError {
                 tool: "fetch_url".into(),

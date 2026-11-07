@@ -649,28 +649,36 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 // the natural first question after a submit, and the one the
                 // old hard error left unanswered (the command used to bail
                 // with "requires at least one job ID").
-                let listing = query_my_jobs(&cluster_backend, |program, args| {
-                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                    let output = match std::process::Command::new(program).args(&arg_refs).output()
-                    {
-                        Ok(out) => out,
-                        Err(e) => {
-                            eprintln!("  Is {program} installed on this system?");
-                            anyhow::bail!("Failed to execute status command: {e}");
+                // M-8: the scheduler round-trip is a blocking subprocess —
+                // off-thread so this async command body never parks a
+                // tokio worker.
+                let listing = tokio::task::spawn_blocking(move || {
+                    query_my_jobs(&cluster_backend, |program, args| {
+                        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                        let output =
+                            match std::process::Command::new(program).args(&arg_refs).output() {
+                                Ok(out) => out,
+                                Err(e) => {
+                                    eprintln!("  Is {program} installed on this system?");
+                                    anyhow::bail!("Failed to execute status command: {e}");
+                                }
+                            };
+                        if !output.status.success() {
+                            // bjobs exits non-zero when the queue is empty;
+                            // treat that as an empty answer, not a failure.
+                            eprintln!(
+                                "{} exited {} (no jobs listed)",
+                                program,
+                                output.status.code().unwrap_or(-1)
+                            );
+                            return Ok(String::new());
                         }
-                    };
-                    if !output.status.success() {
-                        // bjobs exits non-zero when the queue is empty;
-                        // treat that as an empty answer, not a failure.
-                        eprintln!(
-                            "{} exited {} (no jobs listed)",
-                            program,
-                            output.status.code().unwrap_or(-1)
-                        );
-                        return Ok(String::new());
-                    }
-                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                })?;
+                        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                    })
+                })
+                .await
+                .context("status query task failed")?;
+                let listing = listing?;
 
                 eprintln!(
                     "{} {}",
@@ -699,23 +707,31 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 );
             }
 
-            let mut report = query_status(&cluster_backend, &job_ids, |program, args| {
-                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let output = match std::process::Command::new(program).args(&arg_refs).output() {
-                    Ok(out) => out,
-                    Err(e) => {
-                        eprintln!("  Is {program} installed on this system?");
-                        anyhow::bail!("Failed to execute status command: {e}");
-                    }
-                };
-                if !output.status.success() {
-                    // A scheduler exits non-zero for "no such job" (qstat -j)
-                    // while still naming the others; what it printed still
-                    // answers for the ids it did list.
-                    eprintln!("{} exited {}", program, output.status.code().unwrap_or(-1));
-                }
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
-            })?;
+            let mut report = {
+                let job_ids = job_ids.clone();
+                tokio::task::spawn_blocking(move || {
+                    query_status(&cluster_backend, &job_ids, |program, args| {
+                        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                        let output =
+                            match std::process::Command::new(program).args(&arg_refs).output() {
+                                Ok(out) => out,
+                                Err(e) => {
+                                    eprintln!("  Is {program} installed on this system?");
+                                    anyhow::bail!("Failed to execute status command: {e}");
+                                }
+                            };
+                        if !output.status.success() {
+                            // A scheduler exits non-zero for "no such job" (qstat -j)
+                            // while still naming the others; what it printed still
+                            // answers for the ids it did list.
+                            eprintln!("{} exited {}", program, output.status.code().unwrap_or(-1));
+                        }
+                        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                    })
+                })
+                .await
+                .context("status query task failed")??
+            };
 
             eprintln!(
                 "{} {}:",
@@ -779,10 +795,17 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 oxo_flow_core::plural(job_ids.len(), "job", "jobs")
             );
 
-            match std::process::Command::new(cancel_cmd)
-                .args(&job_ids)
-                .status()
-            {
+            let cancel_status = {
+                let job_ids = job_ids.clone();
+                tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(cancel_cmd)
+                        .args(&job_ids)
+                        .status()
+                })
+                .await
+                .context("cancel task failed")?
+            };
+            match cancel_status {
                 Ok(status) => {
                     if status.success() {
                         eprintln!("{} Successfully canceled jobs.", "✓".green());

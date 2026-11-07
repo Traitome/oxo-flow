@@ -20,6 +20,7 @@
 //!   the engine never manages MCP server processes).
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +37,12 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on `tools/list` pages followed per server: a server that
 /// loops on `nextCursor` must not spin the engine forever.
 const MAX_TOOL_PAGES: usize = 50;
+/// Upper bound on TOTAL tools accumulated across pages (M-11): pages
+/// bound requests, not memory — a server answering every page with an
+/// unbounded tool list and no cursor was never flagged. The tool
+/// registry also hands each entry to the human approver, so past a few
+/// thousand nothing is usable anyway.
+const MAX_TOTAL_TOOLS: usize = 10_000;
 
 // ── MCP Client trait ───────────────────────────────────────────────────────
 
@@ -390,6 +397,23 @@ pub(crate) async fn screen_mcp_endpoint_async(
 /// a hung MCP server must fail the tool call (fail-safe), never block the
 /// AI command indefinitely — and follows NO redirects automatically;
 /// `rpc` re-screens each hop manually (#642).
+/// Canonical `http(s)://` form of an MCP endpoint URL: `mcp://` maps to
+/// `http://`; anything else must already be http(s). One helper so the
+/// sync and async constructors cannot drift apart.
+fn normalize_mcp_url(url: &str) -> Result<String, AiError> {
+    if let Some(rest) = url.strip_prefix("mcp://") {
+        Ok(format!("http://{rest}"))
+    } else if url.starts_with("http://") || url.starts_with("https://") {
+        Ok(url.to_string())
+    } else {
+        Err(AiError::Config {
+            message: format!(
+                "invalid MCP endpoint '{url}' — expected mcp://host:port[/path] or http(s)://..."
+            ),
+        })
+    }
+}
+
 fn pinned_client(pin: Option<(&str, std::net::SocketAddr)>) -> Result<reqwest::Client, AiError> {
     let builder = reqwest::Client::builder();
     let builder = match pin {
@@ -416,17 +440,7 @@ impl McpHttpClient {
     /// Build a client with an explicit exemption list (test seam; the
     /// crate forbids unsafe code so tests cannot set process env).
     pub fn new_with_allowlist(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
-        let base_url = if let Some(rest) = url.strip_prefix("mcp://") {
-            format!("http://{rest}")
-        } else if url.starts_with("http://") || url.starts_with("https://") {
-            url.to_string()
-        } else {
-            return Err(AiError::Config {
-                message: format!(
-                    "invalid MCP endpoint '{url}' — expected mcp://host:port[/path] or http(s)://..."
-                ),
-            });
-        };
+        let base_url = normalize_mcp_url(url)?;
         // #518: a skill manifest is attacker-influenced text, so its
         // mcp:// target gets the same SSRF screen as fetch_url — internal
         // address space is unreachable unless explicitly allowlisted.
@@ -434,13 +448,34 @@ impl McpHttpClient {
         // with the client (#948 P2-1): DNS-resolved endpoints connect to
         // the exact address that was screened.
         let pin = screen_mcp_endpoint(&base_url, &allow)?;
+        Self::build(url, base_url, allow, pin)
+    }
+
+    /// Async variant of [`McpHttpClient::new_with_allowlist`] using
+    /// tokio DNS resolution so callers already inside async contexts do
+    /// not block worker threads.
+    pub async fn new_with_allowlist_async(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
+        let base_url = normalize_mcp_url(url)?;
+        let pin = screen_mcp_endpoint_async(&base_url, &allow).await?;
+        Self::build(url, base_url, allow, pin)
+    }
+
+    /// Shared constructor after URL normalization and SSRF screening:
+    /// identity derivation, pinned client build and token resolution are
+    /// identical for the sync and async paths, so they live in one place.
+    fn build(
+        original_url: &str,
+        base_url: String,
+        allow: Vec<String>,
+        pin: Option<(String, std::net::SocketAddr)>,
+    ) -> Result<Self, AiError> {
         // Identity used for the per-server token variable and error
         // messages: the URL minus scheme and trailing slash, with `:` and
         // `/` folded to `_`. The whole tail — host, port AND path — is
         // part of the identity (two MCP servers can share a host on
         // different paths), so `mcp://fs-gdrive:9000/v1` consults
         // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
-        let server_name = url
+        let server_name = original_url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
             .trim_start_matches("http://")
@@ -472,7 +507,6 @@ impl McpHttpClient {
             pin,
         })
     }
-
     /// Reserve the next monotonically increasing request id. A fresh id per
     /// call keeps the replay guard (`extract_rpc_result` id check) sound:
     /// hardcoded ids collided with the `tools/list` pagination ids and let
@@ -605,9 +639,31 @@ impl McpHttpClient {
             {
                 *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.to_string());
             }
-            let text = response.text().await.map_err(|e| AiError::Transport {
-                message: format!("MCP response read failed: {e}"),
-            })?;
+            // Bounded read (H-7): an MCP server is a third-party,
+            // user-configured HTTP endpoint — `response.text()` would
+            // buffer a multi-gigabyte body and OOM the CLI. Stream chunk
+            // at a time through the same cap the fetch tool uses; a
+            // JSON-RPC body that big cannot be a valid response anyway,
+            // so exceeding it is a hard error, not a truncated parse.
+            let mut capped = crate::tools::builtin::CappedBody::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| AiError::Transport {
+                    message: format!("MCP response read failed: {e}"),
+                })?;
+                if !capped.push(&chunk) {
+                    break;
+                }
+            }
+            if capped.truncated() {
+                return Err(AiError::Transport {
+                    message: format!(
+                        "MCP response body exceeded {} bytes — refusing an unbounded read",
+                        crate::tools::builtin::MAX_FETCH_BYTES
+                    ),
+                });
+            }
+            let text = capped.finish();
             return parse_rpc_response(&text, id).map_err(|e| AiError::Protocol { message: e });
         }
         Err(AiError::Transport {
@@ -822,7 +878,13 @@ impl McpClient for McpHttpClient {
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized",
             }));
-        let _ = self.attach_session_headers(note_req).send().await;
+        // Fire-and-forget by spec (no id, no response), but a transport
+        // failure here is the client-side signal that the session was not
+        // established — downstream errors would otherwise surface as
+        // confusing "unknown session" replies from the server (L-4).
+        if let Err(error) = self.attach_session_headers(note_req).send().await {
+            tracing::debug!("MCP initialized-notification send failed: {error}");
+        }
 
         // tools/list is paginated: the first page carries `nextCursor` when
         // more tools exist. Ignoring it silently exposed only the first page
@@ -847,6 +909,14 @@ impl McpClient for McpHttpClient {
             .map_err(|e| AiError::Protocol {
                 message: format!("invalid tools/list payload: {e}"),
             })?;
+            if tools.len() + page.len() > MAX_TOTAL_TOOLS {
+                return Err(AiError::Protocol {
+                    message: format!(
+                        "server listed more than {MAX_TOTAL_TOOLS} tools — refusing an \
+                         unbounded tool catalog"
+                    ),
+                });
+            }
             tools.extend(page);
             pages += 1;
             cursor = result
@@ -1287,6 +1357,33 @@ mod tests {
             }
         });
         (format!("mcp://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_refuses_oversized_response_bodies() {
+        // H-7: an MCP server is a third-party, user-configured HTTP
+        // endpoint — `response.text()` would buffer a multi-gigabyte body
+        // and OOM the CLI. The capped read must abandon the body and
+        // answer with a transport error instead.
+        let (url, _calls) = json_rpc_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    let pad = "x".repeat(crate::tools::builtin::MAX_FETCH_BYTES + 4096);
+                    serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                        "protocolVersion":"2024-11-05","pad":pad}})
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let error = client.list_tools().await.unwrap_err();
+        match error {
+            AiError::Transport { message } => {
+                assert!(message.contains("exceeded"), "{message}");
+            }
+            other => panic!("expected a Transport error, got: {other}"),
+        }
     }
 
     #[tokio::test]

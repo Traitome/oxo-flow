@@ -108,7 +108,12 @@ impl AiCommandSession {
     /// Mark the session as failed and save to disk.
     pub fn fail(mut self, error: &str) {
         self.session = self.session.fail(error);
-        let _ = oxo_flow_ai::session::save_session(&self.session);
+        // The failure path is exactly the archive you most want on disk —
+        // a silent save loss contradicts the auto-archival contract (M-6):
+        // warn for the same reason finish_successfully warns.
+        if let Err(e) = oxo_flow_ai::session::save_session(&self.session) {
+            tracing::warn!("Failed to save AI session: {e}");
+        }
         tracing::warn!("AI session failed: {} — {}", self.session.id, error);
     }
 

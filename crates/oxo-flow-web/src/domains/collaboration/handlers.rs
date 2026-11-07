@@ -52,8 +52,8 @@ pub async fn fork_pipeline(
 
     // Read permission applies to forking too: owners, admins, and
     // workspace-visible pipelines may be forked. Shared helper — never
-    // retype the admin/owner/visibility rule inline (fork used to have its
-    // own copy; the share endpoint still has its own and it drifts).
+    // retype the admin/owner/visibility rule inline (fork and share both
+    // used to carry their own copies; both now call the shared helper).
     if !can_read_pipeline(&user, &source) {
         return Err(err(
             StatusCode::NOT_FOUND,

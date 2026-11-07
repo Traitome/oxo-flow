@@ -69,7 +69,7 @@ fn cartesian_10_samples_2_reads(c: &mut Criterion) {
     vars.insert("read".to_string(), vec!["1".to_string(), "2".to_string()]);
     let pattern = "data/{sample}/reads_R{read}.fastq.gz";
     c.bench_function("wildcard/cartesian_10x2", |b| {
-        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)))
+        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)).unwrap())
     });
 }
 
@@ -86,7 +86,7 @@ fn cartesian_100_samples_2_reads_23_chr(c: &mut Criterion) {
     );
     let pattern = "results/{sample}/{chr}/reads_R{read}.fastq.gz";
     c.bench_function("wildcard/cartesian_100x2x23", |b| {
-        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)))
+        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)).unwrap())
     });
 }
 
@@ -99,7 +99,7 @@ fn cartesian_1000_samples_2_reads(c: &mut Criterion) {
     vars.insert("read".to_string(), vec!["1".to_string(), "2".to_string()]);
     let pattern = "data/{sample}/reads_R{read}.fastq.gz";
     c.bench_function("wildcard/cartesian_1000x2", |b| {
-        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)))
+        b.iter(|| cartesian_expand(black_box(pattern), black_box(&vars)).unwrap())
     });
 }
 

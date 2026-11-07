@@ -372,12 +372,15 @@ pub fn expand_pattern_with_glob(
 /// variables.insert("sample".to_string(), vec!["S1".to_string(), "S2".to_string()]);
 /// variables.insert("read".to_string(), vec!["1".to_string(), "2".to_string()]);
 ///
-/// let results = cartesian_expand("{sample}_R{read}.fastq.gz", &variables);
+/// let results = cartesian_expand("{sample}_R{read}.fastq.gz", &variables).unwrap();
 /// assert_eq!(results.len(), 4);
 /// assert!(results.contains(&"S1_R1.fastq.gz".to_string()));
 /// assert!(results.contains(&"S2_R2.fastq.gz".to_string()));
 /// ```
-pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>) -> Vec<String> {
+pub fn cartesian_expand(
+    pattern: &str,
+    variables: &HashMap<String, Vec<String>>,
+) -> Result<Vec<String>> {
     // Identify which wildcards in the pattern have provided values
     let wildcards = extract_wildcards(pattern);
     let mut active_vars = Vec::new();
@@ -396,10 +399,29 @@ pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>)
         // {input} (enrichment port finding, the #199/#239 literal-token
         // family).
         return if wildcards.is_empty() {
-            vec![pattern.to_string()]
+            Ok(vec![pattern.to_string()])
         } else {
-            Vec::new()
+            Ok(Vec::new())
         };
+    }
+
+    // Hard ceiling on the product (H-8): expansion runs during config
+    // expansion, before any DAG validation or resource accounting can
+    // object — the first symptom of an unbounded product was memory
+    // exhaustion. Refuse with a diagnostic instead of allocating.
+    let total: usize = active_vars
+        .iter()
+        .map(|(_, vals)| vals.len())
+        .product::<usize>()
+        .max(1);
+    if total > MAX_COMBINATIONS {
+        return Err(OxoFlowError::Wildcard {
+            rule: String::new(),
+            message: format!(
+                "wildcard expansion of {pattern:?} would produce {total} combinations \
+                 (limit {MAX_COMBINATIONS}) — reduce wildcard values or split the workflow"
+            ),
+        });
     }
 
     // Pre-calculate pattern parts to avoid string searching/replacement in loops
@@ -481,7 +503,7 @@ pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>)
         &mut results,
     );
 
-    results
+    Ok(results)
 }
 
 /// Discovers files matching a wildcard pattern in a directory.
@@ -969,6 +991,13 @@ pub fn expand_meta_namespace(
         .into_owned()
 }
 
+/// Hard ceiling on any wildcard expansion product (guard against
+/// combinatorial explosion, e.g. 5 wildcards × 1000 values = 10^15).
+/// Shared by `cartesian_expand`, `cartesian_product`, and the
+/// `[[values]]` table product so every expansion path refuses the same
+/// order of magnitude with the same diagnostic.
+pub const MAX_COMBINATIONS: usize = 100_000;
+
 /// Generates the Cartesian product of all wildcard value lists.
 ///
 /// Given `{"sample": ["A", "B"], "read": ["1", "2"]}`, produces:
@@ -987,8 +1016,6 @@ pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> Wildc
         .product::<usize>()
         .max(1);
 
-    // Guard against combinatorial explosion (e.g., 5 wildcards × 1000 values = 10^15)
-    const MAX_COMBINATIONS: usize = 100_000;
     if total > MAX_COMBINATIONS {
         tracing::warn!(
             "wildcard expansion would produce {total} combinations (exceeds limit of {MAX_COMBINATIONS}). \
@@ -1273,7 +1300,9 @@ mod tests {
         let mut variables = HashMap::new();
         variables.insert("gene_set".to_string(), Vec::new());
         assert!(
-            cartesian_expand("{gene_set}", &variables).is_empty(),
+            cartesian_expand("{gene_set}", &variables)
+                .unwrap()
+                .is_empty(),
             "wildcards with empty values must expand to nothing"
         );
 
@@ -1281,9 +1310,29 @@ mod tests {
         let mut empty = HashMap::new();
         empty.insert("gene_set".to_string(), Vec::new());
         assert_eq!(
-            cartesian_expand("output.bam", &empty),
+            cartesian_expand("output.bam", &empty).unwrap(),
             vec!["output.bam".to_string()]
         );
+    }
+
+    #[test]
+    fn cartesian_expand_refuses_combinatorial_explosion() {
+        // H-8: expansion runs before DAG validation, so the first symptom
+        // of an unbounded product was memory exhaustion. The shared
+        // MAX_COMBINATIONS ceiling must refuse it with a diagnostic.
+        let mut variables = HashMap::new();
+        variables.insert(
+            "sample".to_string(),
+            (1..=600).map(|i| i.to_string()).collect::<Vec<String>>(),
+        );
+        variables.insert(
+            "chr".to_string(),
+            (1..=600)
+                .map(|i| format!("chr{i}"))
+                .collect::<Vec<String>>(),
+        );
+        let error = cartesian_expand("{sample}_{chr}", &variables).unwrap_err();
+        assert!(error.to_string().contains("combinations"), "{error}");
     }
 
     #[test]

@@ -556,10 +556,20 @@ pub async fn run_command(
     // Retention for failed-output aside files (issue #194 C2): stale
     // `.oxo-failed` evidence ages out at run start instead of accumulating
     // forever. Best-effort — cleanup must never block the run.
-    let stale_asides = oxo_flow_core::executor::output_invalidation::cleanup_stale_failed_asides(
-        workdir.as_ref().unwrap_or(&workdir_default),
-        oxo_flow_core::executor::output_invalidation::OXOX_FAILED_RETENTION_DAYS,
-    );
+    // The walk stats/unlinks with std::fs; off-thread like the #527
+    // sibling write paths so a large or cold workdir cannot stall the
+    // tokio worker at every run start (M-1).
+    let stale_asides = {
+        let workdir = workdir.as_ref().unwrap_or(&workdir_default).to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            oxo_flow_core::executor::output_invalidation::cleanup_stale_failed_asides(
+                &workdir,
+                oxo_flow_core::executor::output_invalidation::OXOX_FAILED_RETENTION_DAYS,
+            )
+        })
+        .await
+        .unwrap_or(0)
+    };
     if stale_asides > 0 {
         tracing::info!(
             count = stale_asides,

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "f4169fd872dd0d9065c8c9fbc93c1ae3f7fad36b5b08dfd4c9138aa0ad0f8ff8",
+  "schemaSha256": "58c92d50106e0980e9959b4a9a178bd1741efba2600ffc30c0423fdce7f5cfc2",
   "contexts": {
     "root": {
       "keys": [

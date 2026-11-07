@@ -5,26 +5,6 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-/// Replace oxo-flow wildcards (`{name}`) with glob `*` for filesystem matching.
-fn replace_oxoflow_wildcards_with_glob(pattern: &str) -> String {
-    let mut result = String::new();
-    let mut in_wildcard = false;
-    for c in pattern.chars() {
-        match c {
-            '{' => {
-                in_wildcard = true;
-                result.push('*');
-            }
-            '}' => {
-                in_wildcard = false;
-            }
-            _ if !in_wildcard => result.push(c),
-            _ => {} // skip chars inside wildcard
-        }
-    }
-    result
-}
-
 /// Resolve a declared output path against the workdir.
 ///
 /// Relative declarations are workdir-relative (the convention `run`,
@@ -41,19 +21,31 @@ fn resolve_output_path(workdir: &Path, output: &str) -> PathBuf {
 
 /// Whether one (config-expanded) `protected_output` pattern covers `path`.
 ///
-/// Three honored forms (issue #473): exact literal paths; `{wildcard}`
-/// patterns (`results/{sample}.bam`, each `{…}` matches any single path
-/// segment chunk); and shell-glob patterns (`results/*.bam`). The glob forms
-/// go through the filesystem-walking `glob::glob` — a `clean` candidate path
-/// is an existing-or-listed file, so that is fine here (unlike the failure
-/// invalidation snapshot, which must match before anything exists).
+/// The shared core matcher (H-4) is the primary decision: exact literal,
+/// `{wildcard}` and shell-glob forms all match exactly like failure
+/// invalidation and the reclaim gate — one protection semantics for every
+/// destroy path. On top of that, this `clean`-specific pass resolves through
+/// the filesystem (`glob::glob` walk + canonicalize), which can only ever
+/// ADD protection (symlinked layouts where the strings differ): a candidate
+/// is kept when either path says "protected".
 fn protected_pattern_matches(pattern: &str, workdir: &Path, path: &Path) -> bool {
+    let relative = path
+        .strip_prefix(workdir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned();
+    let absolute = path.to_string_lossy().into_owned();
+    if oxo_flow_core::protected::protected_pattern_matches(pattern, &relative)
+        || oxo_flow_core::protected::protected_pattern_matches(pattern, &absolute)
+    {
+        return true;
+    }
     if pattern.contains('{') && pattern.contains('}')
         || pattern.contains('*')
         || pattern.contains('?')
         || pattern.contains('[')
     {
-        let glob_pattern = replace_oxoflow_wildcards_with_glob(pattern);
+        let glob_pattern = oxo_flow_core::protected::wildcard_to_glob(pattern);
         let full_glob = if Path::new(&glob_pattern).is_absolute() {
             glob_pattern.clone()
         } else {
@@ -257,7 +249,7 @@ pub fn clean_command(
         let has_wildcard = output.contains('{') && output.contains('}');
         if has_wildcard {
             // Convert oxo-flow wildcard {name} to glob * for matching
-            let glob_pattern = replace_oxoflow_wildcards_with_glob(output);
+            let glob_pattern = oxo_flow_core::protected::wildcard_to_glob(output);
             let full_glob = if Path::new(&glob_pattern).is_absolute() {
                 glob_pattern.clone()
             } else {

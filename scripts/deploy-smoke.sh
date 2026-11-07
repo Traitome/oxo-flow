@@ -172,8 +172,15 @@ if [ -n "$APP_BUNDLE" ] && [ -x "$APP_BUNDLE/Contents/MacOS/oxo-flow" ]; then
   "$APP_BUNDLE/Contents/MacOS/oxo-flow" serve -p "$P" > "$D/srv.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/api/runs" && break; sleep 0.25; done
-  SPA=$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "$BASE/" || true)
-  case "$SPA" in "200 5"*|"200 6"*) ok "bundled SPA self-contained ($SPA)";; *) bad "bundled SPA self-contained ($SPA)";; esac
+  # Assert on the served document's content, not its byte size (L-10): a
+  # size window breaks on any bundle change and a right-sized wrong deploy
+  # passes. HTTP 200 + the SPA mount point is the real self-containment check.
+  SPA_HTTP=$(curl -s -o "$WORK/spa.html" -w '%{http_code}' "$BASE/" || true)
+  if [ "$SPA_HTTP" = "200" ] && grep -q 'id="root"' "$WORK/spa.html"; then
+    ok "bundled SPA self-contained (200, #root mount present)"
+  else
+    bad "bundled SPA self-contained (http=$SPA_HTTP, #root mount $(grep -c 'id="root"' "$WORK/spa.html" 2>/dev/null || echo 0))"
+  fi
   cleanup
 else
   echo "— 7. desktop .app bundle: skipped (set OXO_APP=/path/to/oxo-flow.app)"

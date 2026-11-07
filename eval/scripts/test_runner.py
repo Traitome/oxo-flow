@@ -262,6 +262,8 @@ class RuleJudgingTests(unittest.TestCase):
         )
         self.assertIn("expected_key_params", result["capture_error"])
         self.assertNotIn("key_params", result)
+        self.assertEqual(result["overall"], 0.0)
+        self.assertEqual(result["perfect"], 0.0)
 
     def test_corrupted_resource_range_cell_scores_zero_not_vacuous_pass(self):
         # A corrupted range cell must not fall back to the lenient defaults

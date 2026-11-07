@@ -715,7 +715,7 @@ memory = "32G"
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder). Local-executor-only: cluster paths reject workflows whose runnable rules declare `scratch = true` before any submission |
-| `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
+| `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Patterns the glob parser rejects (`***`, `a**b` mid-component forms, unterminated `[a-b` ranges) fail workflow validation — a protection typo is a hard error, never a silently unprotected file. Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
 | `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
@@ -916,6 +916,14 @@ retries = 3
 - **`on_failure`**: Runs if the main command fails, *after* all `retries` have been exhausted.
 
 Hook commands support the same `{config.x}` / `{input}` / `{output}` placeholder expansion as `shell`.
+
+Hooks are bounded like rule shells: their stdout/stderr is captured through the same
+capped collector (a chatty hook can no longer grow the engine's memory without
+limit), and each hook gets a timeout — 300 s by default, overridable with
+`OXO_FLOW_HOOK_TIMEOUT_SECS` (invalid or `0` values fall back to the default).
+A `pre_exec` hook that trips the timeout aborts the rule (same as a failed
+`pre_exec`); rule-level and workflow-level hooks time out as a warning, since
+they are best-effort.
 
 **Output validation:** After a rule's shell command exits successfully (exit code 0),
 oxo-flow verifies that all declared `output` files exist on disk. If any declared output
@@ -1835,6 +1843,27 @@ A named reference to a key the rule does not declare is likewise never
 substituted (literal brace text at render time) and is flagged by **W034**
 along with the rule's actual keys, so a typo like `{input.tumer}` is
 reported at lint time instead of surfacing as a tool failure.
+
+### Directory Input
+
+When a rule consumes every file under a directory, declare it explicitly
+with the `{ path = ..., pattern = ... }` form instead of a bare string:
+
+```toml
+[[rules]]
+name = "analyze"
+input = { path = "results", pattern = "*.bam" }
+shell = "multiqc {input.path}"
+```
+
+`pattern` is optional (omit it to track the whole directory). The explicit
+form always creates dependency edges to every producer writing under that
+directory — optionally filtered by the glob — while a bare-string input
+goes through a directory-vs-file heuristic (a trailing `/`, or a last
+component without a known file extension, reads as a directory). The
+heuristic cannot know that `results.txt` means a *directory* named
+`results.txt`; when a directory legitimately carries a file-like name,
+use the explicit form above or `depends_on`.
 
 ### Custom Wildcards
 
