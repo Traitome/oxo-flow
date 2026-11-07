@@ -927,6 +927,24 @@ impl LocalExecutor {
             return Ok(());
         }
         let key = self.env_resolver.cache_key(env_spec);
+        // Issue #1011: a persisted degraded marker means a previous run
+        // re-solved this environment after a stale-lock fetch failure.
+        // Every warm-cache fast path below skips setup entirely, so the
+        // one-way disclosure must re-flip here — before any early return —
+        // for every later run that touches the environment.
+        if self.env_resolver.pixi_degraded_contains(&key) {
+            tracing::warn!(
+                rule = %rule.name,
+                env = %key,
+                "environment reproducibility: degraded — this pixi environment was re-solved \
+                 from the manifest after a stale pixi.lock fetch failure; proceeding on the \
+                 re-solved environment without re-validating the committed lock. Review the \
+                 parked pixi.lock.new beside the manifest and commit it to restore reproducibility"
+            );
+            if let Some(ck) = &self.config.checkpoint {
+                ck.lock().await.env_repro_degraded = true;
+            }
+        }
         // Issue #904: pixi/venv envs are store-managed — a content-addressed
         // machine-level store holds the materialized env once per key and the
         // in-tree path becomes a symlink into it. Everything below is
@@ -1408,6 +1426,11 @@ impl LocalExecutor {
                 self.rehome_store_managed_env(rule, env_spec, store_kind, store_base, key)
                     .await;
                 self.env_resolver.cache_mark_ready(key).await;
+                // Rule execution wraps with `pixi run --as-is` from here on:
+                // the committed lock was restored byte-identical, so the
+                // default wrap would re-validate it and fail on the vanished
+                // upstream build (issue #1011).
+                self.env_resolver.pixi_mark_degraded(key);
                 true
             }
             Err(e) => {
@@ -1643,6 +1666,41 @@ impl LocalExecutor {
         } else {
             Ok(wrapped)
         }
+    }
+
+    /// Issue #1011: the execution command is wrapped ~200 lines BEFORE
+    /// `ensure_environment_ready` runs (the wrap feeds validation, the
+    /// content-cache identity, and the audit record). The stale-lock
+    /// fallback marks the environment degraded only at setup time, so the
+    /// wrap built earlier still carries the plain `pixi run` — which would
+    /// re-validate the restored committed lock and fail the rule on the
+    /// vanished upstream build (live-caught on the E2E rig's run 1). When
+    /// the rule's environment is degraded, re-resolve the command so the
+    /// rule executes with `pixi run --as-is`. Environments marked degraded
+    /// before the wrap (persisted marker from an earlier run) re-resolve to
+    /// the identical `--as-is` string, so this is a cheap no-op for them.
+    fn rewrap_if_pixi_degraded(
+        &self,
+        base_cmd: &str,
+        rule: &Rule,
+        scratch_dir: Option<&Path>,
+    ) -> Result<Option<String>> {
+        let resolved_env = rule
+            .environment
+            .resolve_relative_paths(self.config.workflow_root.as_deref());
+        if resolved_env.is_empty()
+            || !self
+                .env_resolver
+                .pixi_degraded_contains(&self.env_resolver.cache_key(&resolved_env))
+        {
+            return Ok(None);
+        }
+        tracing::warn!(
+            rule = %rule.name,
+            "environment is degraded (stale pixi.lock fallback) — executing with \
+             'pixi run --as-is' so the restored committed lock is not re-validated"
+        );
+        Ok(Some(self.resolve_command(base_cmd, rule, scratch_dir)?))
     }
 
     /// Wait until the resource pool can accommodate the rule, then reserve
@@ -2370,7 +2428,7 @@ impl LocalExecutor {
             wildcard_values,
         );
 
-        let resolved_commands =
+        let mut resolved_commands =
             vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())?];
         record.command = resolved_commands
             .first()
@@ -2387,24 +2445,7 @@ impl LocalExecutor {
         // `$()`/backtick riding on one of them is rejected before the shell
         // spawns (issue #276).
         for cmd in &resolved_commands {
-            validate_instance_bindings(cmd, wildcard_values)?;
-            // Workdir-aware check (issue #428): `rm -rf <workdir>/...` with an
-            // absolute {config.out_dir} is a legitimate output cleanup idiom;
-            // deletions outside the workdir stay hard errors.
-            validate_shell_safety_in_workdir(cmd, &self.config.workdir)?;
-            // #890 string batch: every wildcard instance of the same rule
-            // shares the template's idioms, so the identical warning would
-            // re-print once per instance (hundreds of lines for a fan-out
-            // rule). Emit each distinct pattern once per rule instead —
-            // keyed on the pattern description, because the rendered
-            // warning embeds the instance's own command and would never
-            // collide. The rule's stderr still carries the first
-            // instance's copy.
-            for (pattern, warning) in sanitize_shell_command_detailed(cmd) {
-                emit_once_per_rule(&rule.name, &pattern, |_| {
-                    tracing::info!(rule = %rule.name, "{warning}");
-                });
-            }
+            validate_rendered_command(&rule, cmd, wildcard_values, &self.config.workdir)?;
         }
 
         // Residual-wildcard gate (output patterns): a bare `{identifier}`
@@ -2566,6 +2607,23 @@ impl LocalExecutor {
         }
 
         self.ensure_environment_ready(&rule).await?;
+        // Issue #1011: the command above was wrapped BEFORE setup ran. If
+        // the stale-lock fallback just marked this environment degraded, the
+        // plain `pixi run` wrap would re-validate the restored committed
+        // lock and fail on the vanished upstream build — re-resolve with
+        // `pixi run --as-is` and keep the audit record honest.
+        if let Some(refreshed) =
+            self.rewrap_if_pixi_degraded(&base_cmd, &rule, scratch_dir.as_deref())?
+        {
+            resolved_commands = vec![refreshed];
+            record.command = resolved_commands
+                .first()
+                .cloned()
+                .map(|c| mask_sensitive(&c, &self.config.sensitive_values));
+            for cmd in &resolved_commands {
+                validate_rendered_command(&rule, cmd, wildcard_values, &self.config.workdir)?;
+            }
+        }
         // check_resources waits for availability AND reserves atomically.
         self.check_resources(&rule).await?;
         // Resource pool (and any env setup) no longer parks us: this is
@@ -3694,6 +3752,37 @@ fn warn_shell_fallback_once() {
 /// and it is bounded by the pattern count times rule count, not by run
 /// length. A poisoned lock (a panic while holding it) is recovered from
 /// rather than silently suppressing every future warning.
+/// Validate one rendered command: instance-binding injection (issue #276),
+/// workdir-scoped deletion safety (issue #428), and batched sanitize
+/// warnings (issue #890 — each distinct pattern emits once per rule).
+/// Shared by the initial environment wrap and the issue #1011 degraded
+/// re-wrap (`LocalExecutor::rewrap_if_pixi_degraded`).
+fn validate_rendered_command(
+    rule: &Rule,
+    cmd: &str,
+    wildcard_values: &HashMap<String, String>,
+    workdir: &Path,
+) -> Result<()> {
+    validate_instance_bindings(cmd, wildcard_values)?;
+    // Workdir-aware check (issue #428): `rm -rf <workdir>/...` with an
+    // absolute {config.out_dir} is a legitimate output cleanup idiom;
+    // deletions outside the workdir stay hard errors.
+    validate_shell_safety_in_workdir(cmd, workdir)?;
+    // #890 string batch: every wildcard instance of the same rule shares
+    // the template's idioms, so the identical warning would re-print once
+    // per instance (hundreds of lines for a fan-out rule). Emit each
+    // distinct pattern once per rule instead — keyed on the pattern
+    // description, because the rendered warning embeds the instance's own
+    // command and would never collide. The rule's stderr still carries the
+    // first instance's copy.
+    for (pattern, warning) in sanitize_shell_command_detailed(cmd) {
+        emit_once_per_rule(&rule.name, &pattern, |_| {
+            tracing::info!(rule = %rule.name, "{warning}");
+        });
+    }
+    Ok(())
+}
+
 fn emit_once_per_rule(rule: &str, pattern: &str, emit: impl FnOnce(&str)) {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -7217,6 +7306,150 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("wf/pixi/pixi.lock")).unwrap(),
             "old\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_wraps_followup_rules_as_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old lock bytes\n");
+        let ex = LocalExecutor::new(config);
+        let rule = recovery_rule();
+
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                &format!(
+                    "printf '%s' 'fresh lock content' > {}/pixi.lock",
+                    tmp.path().join("wf/pixi").display()
+                ),
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(recovered);
+
+        // Rule execution must now wrap with `--as-is`: the committed lock
+        // was restored byte-identical, so the default wrap would re-validate
+        // it and fail on the vanished upstream build.
+        let wrapped = ex
+            .env_resolver
+            .wrap_command("python main.py", &env_spec, None, std::path::Path::new("."))
+            .unwrap();
+        assert_eq!(
+            wrapped,
+            "pixi run --as-is --manifest-path wf/pixi/pixi.toml bash -c 'python main.py'"
+        );
+    }
+
+    #[tokio::test]
+    async fn degraded_env_rerun_still_discloses_reproducibility() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old lock bytes\n");
+        let cache_dir = tmp.path().join("shared-cache");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            cache_dir: Some(cache_dir.clone()),
+            ..config
+        });
+        let rule = Rule {
+            environment: env_spec.clone(),
+            ..recovery_rule()
+        };
+
+        // Run 1: recovery succeeds and persists the degraded marker.
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                &format!(
+                    "printf '%s' 'fresh lock content' > {}/pixi.lock",
+                    tmp.path().join("wf/pixi").display()
+                ),
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(recovered);
+
+        // Run 2: fresh executor, fresh checkpoint, same cache dir. The env
+        // is cache-ready (in-tree state Fine), so setup is skipped — but
+        // the persisted degraded marker must still flip the disclosure.
+        let ck = Arc::new(Mutex::new(
+            crate::executor::checkpoint::CheckpointState::new(),
+        ));
+        let ex2 = LocalExecutor::new(ExecutorConfig {
+            workdir: tmp.path().to_path_buf(),
+            cache_dir: Some(cache_dir),
+            checkpoint: Some(ck.clone()),
+            ..Default::default()
+        });
+        ex2.ensure_environment_ready(&rule).await.unwrap();
+        assert!(
+            ck.lock().await.env_repro_degraded,
+            "a later run proceeding on the degraded environment must disclose it again"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_lock_recovery_rewraps_command_for_same_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (config, env_spec) = recovery_env(&tmp, "old lock bytes\n");
+        let ex = LocalExecutor::new(config);
+        let rule = Rule {
+            environment: env_spec.clone(),
+            ..recovery_rule()
+        };
+
+        // Live-caught ordering bug (run 1 of the E2E rig): the execution
+        // command is wrapped ~200 lines BEFORE ensure_environment_ready, so
+        // the pre-setup wrap cannot see the degraded marker that recovery
+        // sets at setup time — it carries the plain `pixi run`.
+        let wrapped = ex.resolve_command("python main.py", &rule, None).unwrap();
+        assert_eq!(
+            wrapped,
+            "pixi run --manifest-path wf/pixi/pixi.toml bash -c 'python main.py'"
+        );
+
+        // Recovery fires at setup time and marks the environment degraded.
+        let recovered = ex
+            .try_pixi_stale_lock_recovery(
+                &rule,
+                &env_spec,
+                &key_of(&ex, &env_spec),
+                &format!(
+                    "printf '%s' 'fresh lock content' > {}/pixi.lock",
+                    tmp.path().join("wf/pixi").display()
+                ),
+                &stale_404_stderr(),
+                None,
+                None,
+            )
+            .await;
+        assert!(recovered);
+
+        // The post-setup re-wrap must hand the executor the `--as-is`
+        // variant — without it the rule fails with the same 404, because
+        // the pre-setup wrap re-validates the restored committed lock.
+        let refreshed = ex
+            .rewrap_if_pixi_degraded("python main.py", &rule, None)
+            .unwrap();
+        let refreshed = refreshed.expect("a degraded environment must trigger a re-wrap");
+        assert_eq!(
+            refreshed,
+            "pixi run --as-is --manifest-path wf/pixi/pixi.toml bash -c 'python main.py'"
+        );
+
+        // A rule whose environment is not degraded keeps its command.
+        let plain_rule = recovery_rule();
+        assert!(
+            ex.rewrap_if_pixi_degraded("echo hi", &plain_rule, None)
+                .unwrap()
+                .is_none()
         );
     }
 

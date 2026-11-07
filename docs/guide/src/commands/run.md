@@ -356,9 +356,19 @@ manifest, the executor:
    `Environment Reproducibility: degraded …` disclosure (see
    [Report](#report-snapshots)).
 
-The run proceeds on the re-solved environment. To adopt the fresh lock,
-replace `pixi.lock` with `pixi.lock.new` and commit it; until then every
-subsequent run re-solves again (and discloses it again).
+The run proceeds on the re-solved environment: rule commands wrap with
+`pixi run --as-is`, which skips re-validating the committed lock against the
+upstream channels — the restored lock still pins the vanished build, so the
+default wrap would fail the rule with the same 404. The degraded marker
+persists in the environment cache (a `pixi_degraded.json` sidecar beside
+`environment_cache.json`), so later runs keep wrapping with `--as-is`: they
+skip setup entirely (the re-solved environment is already materialized and
+cache-ready) but still disclose **degraded** reproducibility in the report.
+
+To adopt the fresh lock, replace `pixi.lock` with `pixi.lock.new` and commit
+it. The environment's cache key folds the lock content, so the stale degraded
+marker stops matching and the next run returns to the normal lock-validated
+wrap — nothing to clean up by hand.
 
 `--strict-envs` disables the fallback entirely: a stale-lock failure keeps
 today's hard error with a hint explaining how to refresh the lock by hand.
