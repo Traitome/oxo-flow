@@ -225,9 +225,11 @@ fn every_router_route_is_in_the_generated_spec() {
 /// stay, but the spec must not claim a JWT format.
 #[test]
 fn bearer_auth_does_not_declare_a_jwt_format() {
-    let spec: serde_json::Value =
-        serde_json::from_str(&oxo_flow_web::openapi::spec_json("personal"))
-            .expect("generated spec must parse as JSON");
+    // The full surface lives behind the hpc mode gate (spec_json takes the
+    // serving mode since the /api/hpc gating change); the security scheme is
+    // mode-independent, so any mode projects it.
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
 
     let scheme = &spec["components"]["securitySchemes"]["bearerAuth"];
     assert_eq!(scheme["type"], "http", "bearerAuth must remain http auth");
