@@ -2144,8 +2144,10 @@ fn from_rule_closure_invalidates_downstream_checkpoints() {
     // --from-rule b: invalidate the downstream closure.
     ck.invalidate_closure(&closure);
 
-    // a and b stay completed (b is the from-rule root; it is re-executed
-    // by the planner via --target semantics, not by the closure gate).
+    // a stays completed; b is re-executed because the CLI closure passed to
+    // invalidate_closure INCLUDES the from-rule itself (see
+    // from_rule_cli_wiring_reexecutes_downstream_closure), which also keeps
+    // the scheduler's completed-rule pre-skip from marking b done.
     assert!(ck.should_skip("a"));
     // c and d are invalidated: the freshness gate must re-execute them.
     assert!(!ck.should_skip("c"));
@@ -2198,4 +2200,120 @@ fn from_rule_leaf_node_no_invalidation() {
     );
     ck.invalidate_closure(&closure);
     assert!(ck.should_skip("x"));
+}
+
+/// End-to-end wiring test (mirrors the tx-ubuntu repro that caught the
+/// first #1017 cut): a full CLI run completes all four rules, then
+/// `run --from-rule b` must (a) print the downstream invalidation note,
+/// (b) place b/c/d in the execution order — not just b's upstream, (c)
+/// actually re-execute all three, and (d) leave `a` skipped. The first
+/// cut extended only b's UPSTREAM closure through the target slot, so
+/// the run printed "invalidated … will re-execute" while skipping c and
+/// d entirely.
+///
+/// Re-execution is proven by a side-effect log (`exec.log`, one appended
+/// line per rule execution) rather than `checkpoint.rule_runs`: that
+/// ledger holds exactly one record per rule and `invalidate_closure`
+/// deletes the closure's entries outright, so it cannot count history.
+#[test]
+fn from_rule_cli_wiring_reexecutes_downstream_closure() {
+    #[path = "common/mod.rs"]
+    mod common;
+    use common::workspace_bin;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml = r#"
+        [workflow]
+        name = "from-rule-wiring"
+
+        [[rules]]
+        name = "a"
+        output = ["a.txt"]
+        shell = "echo a >> exec.log; echo a > {output[0]}"
+
+        [[rules]]
+        name = "b"
+        input = ["a.txt"]
+        output = ["b.txt"]
+        shell = "echo b >> exec.log; echo b > {output[0]}"
+
+        [[rules]]
+        name = "c"
+        input = ["b.txt"]
+        output = ["c.txt"]
+        shell = "echo c >> exec.log; echo c > {output[0]}"
+
+        [[rules]]
+        name = "d"
+        input = ["c.txt"]
+        output = ["d.txt"]
+        shell = "echo d >> exec.log; echo d > {output[0]}"
+    "#;
+    std::fs::write(dir.path().join("wf.oxoflow"), toml).unwrap();
+
+    let run = |args: &[&str]| {
+        std::process::Command::new(workspace_bin("oxo-flow"))
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("spawn oxo-flow")
+    };
+    let exec_log = |dir: &std::path::Path| -> Vec<String> {
+        std::fs::read_to_string(dir.join("exec.log"))
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+
+    // First run: everything executes and completes.
+    let out1 = run(&["run", "wf.oxoflow"]);
+    assert!(
+        out1.status.success(),
+        "first run failed: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+    assert_eq!(
+        exec_log(dir.path()),
+        vec!["a", "b", "c", "d"],
+        "run 1 must execute the whole chain"
+    );
+
+    // --from-rule b: b/c/d re-execute, a stays done.
+    let out2 = run(&["run", "wf.oxoflow", "--from-rule", "b"]);
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        out2.status.success(),
+        "--from-rule run failed: {stderr2}{stdout2}"
+    );
+    let combined = format!("{stderr2}{stdout2}");
+    assert!(
+        combined.contains("invalidated checkpoint for 3 rule(s)"),
+        "--from-rule must narrate the 3-rule closure (b, c, d), got: {combined}"
+    );
+    assert!(
+        combined.contains("b") && combined.contains("re-execut"),
+        "run must report the from-rule re-execution, got: {combined}"
+    );
+
+    assert_eq!(
+        exec_log(dir.path()),
+        vec!["a", "b", "c", "d", "b", "c", "d"],
+        "--from-rule b must re-execute exactly b, c, d (a untouched)"
+    );
+
+    // Checkpoint bookkeeping: the closure's entries were deleted by
+    // invalidate_closure and re-recorded by the fresh executions; a's
+    // original record stands untouched.
+    let ck: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap(),
+    )
+    .unwrap();
+    for rule in &["a", "b", "c", "d"] {
+        assert_eq!(
+            ck["rule_runs"][rule]["status"], "success",
+            "{rule} must end the run completed with a live rule_runs record"
+        );
+    }
 }
