@@ -22,6 +22,14 @@ pub struct ChatInvocation<'a> {
     pub is_admin: bool,
 }
 
+/// Per-run observability wiring: where live events go, and the flag that
+/// stops the loop once the consumer disappears. Bundled so the generation
+/// helpers stay within the argument budget.
+pub struct ChatRunWiring<'a> {
+    pub sink: Option<&'a mut AgentEventSink>,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
 /// Run the shared generation harness for a chat request. This is the ONE
 /// place the web chat harness is assembled — context, tool registry,
 /// session labels, round budget, orchestrator, usage logging — so the
@@ -32,8 +40,9 @@ async fn run_chat_generation(
     intent: String,
     invocation: &ChatInvocation<'_>,
     provider: &AiProvider,
-    sink: Option<&mut AgentEventSink>,
+    wiring: ChatRunWiring<'_>,
 ) -> Result<AgentOutcome, String> {
+    let ChatRunWiring { sink, cancel } = wiring;
     let ctx = oxo_flow_ai::agent::AgentContext {
         intent,
         command: message.to_string(),
@@ -52,7 +61,7 @@ async fn run_chat_generation(
 
     let orchestrator = Orchestrator::new(provider.clone(), chat_max_rounds());
     let outcome = orchestrator
-        .execute_with_sink(&agent, &ctx, sink, None)
+        .execute_with_sink(&agent, &ctx, sink, cancel)
         .await;
     // Token spend is logged by the orchestrator itself (all surfaces).
     outcome.map_err(|e| e.to_string())
@@ -126,7 +135,10 @@ pub async fn process_chat(
         intent.clone(),
         invocation,
         provider,
-        None,
+        ChatRunWiring {
+            sink: None,
+            cancel: None,
+        },
     )
     .await
     .map_err(|e| {
@@ -259,15 +271,18 @@ pub fn spawn_chat_agent(
     let outcome_tx = event_tx.clone();
     tokio::spawn(async move {
         // Non-blocking: the sink is sync and runs inside the tokio runtime.
-        // A full or closed channel drops the event (observability loss only;
-        // on client disconnect the closing channel ends the SSE stream,
-        // which is the cancellation path).
+        // A FULL channel drops the event (observability loss only). A
+        // CLOSED channel means the SSE client disconnected — the sink flips
+        // `cancel`, and the orchestrator stops between provider calls and
+        // before each tool instead of burning paid rounds nobody reads.
         // Accumulate text so a round-cap failure can still deliver an
         // already-generated pipeline (issue #79 P1-10). Shared through an
         // Arc so the sink closure can be `move` (it must stay Send) while
         // the post-run read keeps its own handle.
         let text_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let sink_buffer = text_buffer.clone();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sink_cancel = cancel.clone();
         let mut sink = move |e: AgentEvent| {
             if let AgentEvent::Text(ref chunk) = e {
                 // Lock is held for a push_str only; contention is a single
@@ -276,7 +291,12 @@ pub fn spawn_chat_agent(
                     buf.push_str(chunk);
                 }
             }
-            let _ = event_tx.try_send(ChatStreamEvent::Agent(e));
+            if matches!(
+                event_tx.try_send(ChatStreamEvent::Agent(e)),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+            ) {
+                sink_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         };
         let mut result = run_chat_agent(
             &message,
@@ -284,8 +304,11 @@ pub fn spawn_chat_agent(
             run_id.as_deref(),
             &user_id,
             is_admin,
-            Some(&mut sink),
             &provider,
+            ChatRunWiring {
+                sink: Some(&mut sink),
+                cancel: Some(&cancel),
+            },
         )
         .await;
         // Degradation path: the agent burned its round budget after
@@ -328,8 +351,8 @@ pub async fn run_chat_agent(
     run_id: Option<&str>,
     user_id: &str,
     is_admin: bool,
-    sink: Option<&mut AgentEventSink>,
     provider: &AiProvider,
+    wiring: ChatRunWiring<'_>,
 ) -> Result<AgentOutcome, String> {
     // The streaming route builds the SAME agent as the JSON route: an
     // explicit context intent wins over keyword inference, and analyzed data
@@ -353,7 +376,7 @@ pub async fn run_chat_agent(
         user_id,
         is_admin,
     };
-    run_chat_generation(agent, message, intent, &invocation, provider, sink).await
+    run_chat_generation(agent, message, intent, &invocation, provider, wiring).await
 }
 
 #[cfg(test)]

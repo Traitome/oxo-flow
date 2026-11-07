@@ -216,8 +216,19 @@ pub struct Modification {
 
 // ── Session persistence ────────────────────────────────────────────────────
 
+/// Explicit archive-directory override.
+///
+/// Set `OXO_FLOW_AI_SESSION_DIR` to keep session JSON somewhere other than
+/// `<cwd|$HOME>/.oxo-flow/ai_sessions` — required for test processes (which
+/// used to fall back to the operator's real `$HOME` archive) and useful on
+/// shared HPC homes or read-only project trees.
+pub const SESSION_DIR_ENV: &str = "OXO_FLOW_AI_SESSION_DIR";
+
 /// Directory for session JSON files (public for status/listing commands).
 pub fn sessions_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os(SESSION_DIR_ENV).filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir);
+    }
     resolve_oxo_flow_dir().join("ai_sessions")
 }
 
@@ -240,10 +251,26 @@ fn resolve_oxo_flow_dir() -> PathBuf {
 }
 
 /// Persist a completed session to disk.
+///
+/// Unit tests inside this crate must never write into the operator's real
+/// archive: `cargo test` used to emit `command=test` records (with the
+/// `scripted` stub's rate-limit errors) into `$HOME/.oxo-flow/ai_sessions`,
+/// which — at the 200-file cap — pruned the very session an operator was
+/// investigating (issue #1040 B1/B3). Tests that exercise the write path call
+/// `save_session_to` on a temp dir; integration tests set
+/// [`SESSION_DIR_ENV`].
 pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
     let dir = sessions_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| AiError::SessionError {
-        path: dir.clone(),
+    if cfg!(test) && std::env::var_os(SESSION_DIR_ENV).is_none() {
+        return Ok(dir.join(format!("{}.json", session.id)));
+    }
+    save_session_to(&dir, session)
+}
+
+/// Persist `session` as JSON inside `dir` (temp sibling + atomic rename).
+pub(crate) fn save_session_to(dir: &Path, session: &AiSession) -> Result<PathBuf, AiError> {
+    std::fs::create_dir_all(dir).map_err(|e| AiError::SessionError {
+        path: dir.to_path_buf(),
         message: e.to_string(),
     })?;
 
@@ -259,7 +286,7 @@ pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
     // of it on shared HPC homes (ai_config.json already gets 0600).
     restrict_to_owner(&path);
 
-    prune_oldest(&dir, "json", MAX_SESSION_ARCHIVES);
+    prune_oldest(dir, "json", MAX_SESSION_ARCHIVES);
 
     tracing::info!(session = %session.id, "AI session saved to {}", path.display());
     Ok(path)
@@ -285,10 +312,21 @@ fn restrict_to_owner(path: &Path) {
     let _ = path;
 }
 
+/// Fresh archives are exempt from pruning. A real session written seconds
+/// ago is still being inspected (and a stopped run's failure record is the
+/// whole point of archiving it); rotation must only ever reclaim old
+/// history, never the file under investigation (issue #1040 B1).
+const PRUNE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// Delete the oldest files with `extension` in `dir` beyond `keep`
-/// (best-effort). Shared by session saves (`.json` at one level) and
-/// workflow archives (`.oxoflow` inside per-workflow subdirectories, P3-10).
+/// (best-effort), leaving files younger than [`PRUNE_MIN_AGE`] alone.
+/// Shared by session saves (`.json` at one level) and workflow archives
+/// (`.oxoflow` inside per-workflow subdirectories, P3-10).
 fn prune_oldest(dir: &Path, extension: &str, keep: usize) {
+    prune_oldest_older_than(dir, extension, keep, PRUNE_MIN_AGE);
+}
+
+fn prune_oldest_older_than(dir: &Path, extension: &str, keep: usize, min_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -305,7 +343,14 @@ fn prune_oldest(dir: &Path, extension: &str, keep: usize) {
     }
     sessions.sort();
     let excess = sessions.len() - keep;
-    for (_, path) in sessions.into_iter().take(excess) {
+    let now = std::time::SystemTime::now();
+    for (modified, path) in sessions.into_iter().take(excess) {
+        let age = now.duration_since(modified).unwrap_or_default();
+        if age < min_age {
+            // Sorted oldest-first, so every remaining candidate is at least
+            // as fresh — the grace window applies to the whole tail.
+            continue;
+        }
         if let Err(e) = std::fs::remove_file(&path) {
             tracing::warn!(error = %e, path = %path.display(), "prune failed");
         }
@@ -398,7 +443,7 @@ fn prune_keeps_the_newest_sessions() {
         std::fs::write(&p, "{}").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    prune_oldest(dir.path(), "json", 3);
+    prune_oldest_older_than(dir.path(), "json", 3, std::time::Duration::ZERO);
     let remaining: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -437,6 +482,93 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "temp files must be renamed away: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn fresh_archives_are_exempt_from_pruning() {
+        // B1: a session archived seconds ago (e.g. an aborted web-chat run)
+        // must survive a retention sweep triggered by concurrent writers —
+        // the 200-file cap rotated real sessions out when test archives
+        // flooded the directory.
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..6 {
+            std::fs::write(dir.path().join(format!("fresh{i}.json")), "{}").unwrap();
+        }
+        prune_oldest_older_than(dir.path(), "json", 3, std::time::Duration::from_secs(3600));
+        let remaining = std::fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(remaining, 6, "fresh archives must never be pruned");
+    }
+
+    #[test]
+    fn save_session_to_persists_an_aborted_run_as_a_failure_record() {
+        // B1: when the orchestration loop aborts (provider timeout, client
+        // disconnect), the archive must survive with outcome=error and the
+        // reason — the post-mortem artifact the browser test could not find.
+        let dir = tempfile::tempdir().unwrap();
+        let session = AiSession::new("web-chat", "chat", "web", "claude")
+            .fail("provider error: request timed out");
+        let path = save_session_to(dir.path(), &session).unwrap();
+
+        let saved: AiSession =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.outcome, SessionOutcome::Failed);
+        assert_eq!(
+            saved.error.as_deref(),
+            Some("provider error: request timed out")
+        );
+    }
+
+    #[test]
+    fn concurrent_reads_never_observe_a_truncated_archive() {
+        // The temp-sibling + rename contract: a reader racing the writer sees
+        // the previous complete document or the next one, never a partial.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s1.json");
+        let big =
+            |tag: usize| serde_json::json!({"n": tag, "pad": "x".repeat(64 * 1024)}).to_string();
+        write_json_atomic(&path, &big(0)).unwrap();
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader = {
+            let path = path.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut reads = 0u32;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let Ok(raw) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let parsed: serde_json::Value = serde_json::from_str(&raw)
+                        .expect("a reader must never observe a truncated archive");
+                    assert!(parsed["pad"].is_string());
+                    reads += 1;
+                }
+                reads
+            })
+        };
+        for i in 1..200 {
+            write_json_atomic(&path, &big(i)).unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let reads = reader.join().unwrap();
+        assert!(reads > 0, "the racing reader must have observed archives");
+    }
+
+    #[test]
+    fn unit_tests_do_not_write_the_real_session_archive() {
+        // The `command=test` storm came from orchestrator unit tests saving
+        // into $HOME/.oxo-flow/ai_sessions; under cfg(test) saves are a
+        // no-op unless OXO_FLOW_AI_SESSION_DIR redirects them.
+        if std::env::var_os(SESSION_DIR_ENV).is_some() {
+            return;
+        }
+        let session = AiSession::new("test", "test", "noop", "none");
+        let path = save_session(&session).unwrap();
+        assert!(
+            !path.exists(),
+            "unit tests must not write into the operator's archive: {}",
+            path.display()
         );
     }
 
@@ -538,7 +670,7 @@ mod tests {
         std::fs::write(sibling.join("keep.oxoflow"), "other").unwrap();
         std::fs::write(root.path().join("stray.json"), "{}").unwrap();
 
-        prune_oldest(&dir, "oxoflow", 3);
+        prune_oldest_older_than(&dir, "oxoflow", 3, std::time::Duration::ZERO);
 
         let remaining: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()

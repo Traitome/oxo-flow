@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 
-use super::events::{AgentEvent, AgentEventSink};
+use super::events::{AgentEvent, AgentEventSink, ProgressEvent};
 use super::{Agent, AgentContext, AgentOutcome};
 use crate::error::AiError;
 use crate::provider::AiProvider;
@@ -56,6 +56,7 @@ impl Orchestrator {
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<AgentOutcome, AiError> {
         let mut session = ctx.session.clone();
+        let started = std::time::Instant::now();
         let mut messages: Vec<Message> = Vec::new();
         let mut modifications: Vec<Modification> = Vec::new();
         let mut tool_call_records: Vec<ToolCallRecord> = Vec::new();
@@ -64,6 +65,15 @@ impl Orchestrator {
         if let Some(sink) = &mut sink {
             sink(AgentEvent::Status("planning".into()));
         }
+        emit_progress(
+            &mut sink,
+            0,
+            self.max_rounds,
+            "plan",
+            None,
+            started,
+            &session.total_usage,
+        );
         let system_msg = agent.plan(ctx);
         let user_msg = agent.user_message(ctx);
         messages.push(system_msg);
@@ -118,6 +128,15 @@ impl Orchestrator {
             }
 
             // 2. GATHER/ACT — call AI with current messages + tools
+            emit_progress(
+                &mut sink,
+                rounds,
+                self.max_rounds,
+                "generate",
+                None,
+                started,
+                &session.total_usage,
+            );
             let tool_defs = ctx.tool_registry.to_defs();
             // Ollama tool-calling support varies widely by model (and older
             // daemons ignore `tools` entirely); say so once per run instead
@@ -212,6 +231,15 @@ impl Orchestrator {
                 }
                 for tc in tool_calls {
                     let start = std::time::Instant::now();
+                    emit_progress(
+                        &mut sink,
+                        rounds,
+                        self.max_rounds,
+                        "tool",
+                        Some(&tc.name),
+                        started,
+                        &session.total_usage,
+                    );
 
                     // Fail-closed argument gate (audit F4 / AI-07): the
                     // model's `arguments` string must be valid JSON before
@@ -395,6 +423,15 @@ impl Orchestrator {
 
                 if let Some(ref text) = extracted {
                     // 3. VALIDATE
+                    emit_progress(
+                        &mut sink,
+                        rounds,
+                        self.max_rounds,
+                        "validate",
+                        None,
+                        started,
+                        &session.total_usage,
+                    );
                     let validation = agent.validate(text, ctx);
 
                     if validation.passed {
@@ -597,6 +634,33 @@ pub fn tool_call_approved(
     match (registry.get(name), approver) {
         (Some(tool), Some(approve)) => approve(&tool.def(), arguments),
         _ => false,
+    }
+}
+
+/// Emit one structured progress frame.
+///
+/// `usage` is the session's cumulative total (the caller passes it after
+/// folding in the round's billed tokens), so a client can render live token
+/// spend without a second data source.
+fn emit_progress(
+    sink: &mut Option<&mut AgentEventSink>,
+    round: u32,
+    max_rounds: u32,
+    step: &str,
+    tool: Option<&str>,
+    started: std::time::Instant,
+    usage: &crate::types::Usage,
+) {
+    if let Some(sink) = sink {
+        sink(AgentEvent::Progress(ProgressEvent {
+            round,
+            max_rounds,
+            step: step.to_string(),
+            tool: tool.map(str::to_string),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+        }));
     }
 }
 
@@ -1410,6 +1474,39 @@ mod tests {
                 .any(|e| matches!(e, AgentEvent::Text(t) if t == "final output"))
         );
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+
+        // Structured progress: every phase of a multi-round run is
+        // observable, not just a terminal status. This is what the web chat
+        // renders instead of a static "planning" for 8+ minutes.
+        let progress: Vec<&ProgressEvent> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Progress(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            progress
+                .iter()
+                .any(|p| p.step == "plan" && p.round == 0 && p.max_rounds == 3),
+            "missing plan progress: {progress:?}"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|p| p.step == "generate" && p.round == 1),
+            "missing generate progress for round 1: {progress:?}"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|p| p.step == "tool" && p.tool.as_deref() == Some("read_only_tool")),
+            "missing tool progress naming the tool: {progress:?}"
+        );
+        assert!(
+            progress.iter().any(|p| p.step == "validate"),
+            "missing validate progress: {progress:?}"
+        );
     }
 
     #[tokio::test]

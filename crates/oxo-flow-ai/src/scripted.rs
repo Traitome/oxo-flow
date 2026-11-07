@@ -9,6 +9,9 @@
 //! actually sent (e.g. that an overflow retry used the compressed form).
 
 use crate::error::AiError;
+// Only the test-gated `scripted_provider` constructor names this type;
+// production builds would see an unused import otherwise.
+#[cfg(any(test, feature = "test-scripted"))]
 use crate::provider::AiProvider;
 use crate::types::{AiResponse, Message, ToolCall, ToolDef, Usage};
 use serde::{Deserialize, Serialize};
@@ -69,6 +72,15 @@ pub struct ScriptedBackend {
 
 impl ScriptedBackend {
     /// Create a backend replaying `turns` in order.
+    ///
+    /// Test-only by construction: this constructor (and `from_json`)
+    /// is compiled out of production builds, so a running server cannot be
+    /// handed the `scripted` stub through any path. Issue #1040 B3: a stub
+    /// provider surfaced in a real deployment's archives (`Rate limited by
+    /// scripted`) because nothing prevented the test backend from being
+    /// installed process-wide. Integration tests enable the `test-scripted`
+    /// feature (dev-dependencies only); unit tests compile with `cfg(test)`.
+    #[cfg(any(test, feature = "test-scripted"))]
     pub fn new(turns: Vec<ScriptedTurn>) -> Self {
         Self {
             turns: Arc::new(Mutex::new(turns.into())),
@@ -78,6 +90,9 @@ impl ScriptedBackend {
     }
 
     /// Deserialize a script from JSON (e.g. a test fixture file).
+    ///
+    /// Test-only — see `ScriptedBackend::new`.
+    #[cfg(any(test, feature = "test-scripted"))]
     pub fn from_json(spec: &str) -> Result<Self, AiError> {
         let turns: Vec<ScriptedTurn> = serde_json::from_str(spec).map_err(|e| AiError::Config {
             message: format!("invalid scripted-provider JSON: {e}"),
@@ -164,6 +179,10 @@ fn scripted_error(tag: &str) -> AiError {
 }
 
 /// Convenience: an [`AiProvider::Scripted`] from turns.
+///
+/// Test-only — see `ScriptedBackend::new`; production builds do not export
+/// this constructor at all.
+#[cfg(any(test, feature = "test-scripted"))]
 pub fn scripted_provider(turns: Vec<ScriptedTurn>) -> AiProvider {
     AiProvider::Scripted(ScriptedBackend::new(turns))
 }
@@ -172,6 +191,17 @@ pub fn scripted_provider(turns: Vec<ScriptedTurn>) -> AiProvider {
 mod tests {
     use super::*;
     use crate::provider::{COMPRESS_KEEP_TAIL, compress_transcript};
+
+    #[test]
+    fn scripted_backend_exists_only_in_test_builds() {
+        // Compile-time gate: `new`/`from_json`/`scripted_provider` carry
+        // `#[cfg(any(test, feature = "test-scripted"))]`. Reaching this test
+        // proves the cfg(test) arm is open; a production build has no way to
+        // construct the stub at all (issue #1040 B3 — a real server must
+        // never run the scripted provider).
+        let backend = ScriptedBackend::new(vec![ScriptedTurn::content("ok")]);
+        assert_eq!(backend.model_name(), "scripted-test");
+    }
 
     fn long_transcript() -> Vec<Message> {
         let mut messages = vec![Message::system("sys")];

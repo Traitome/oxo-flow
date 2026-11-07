@@ -83,7 +83,7 @@ In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
-`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request.
+`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only `POST /api/ai/config` answers `409 AI_DISABLED_BY_ENV` (it has no durable tier, so refusing is the only honest answer), while the persisted `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still save (200, `applied_to_runtime: false`) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
 
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
@@ -892,6 +892,33 @@ runtime cannot activate the new provider, the endpoint returns
 next startup, but the caller must correct the provider settings rather
 than assuming the running process switched.
 
+### Pinned disabled AI (`OXO_FLOW_AI_PROVIDER=disabled`)
+
+An explicit `disabled` is an operator-level switch: it outranks every
+configuration tier and every runtime update. While it is set:
+
+- `POST /api/ai/config` (runtime-only — applying to the live registry is
+  its only effect) returns `409 AI_DISABLED_BY_ENV` with the standard
+  `{code, message, detail, suggestion}` shape.
+- `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still persist
+  the row and return `200` with `applied_to_runtime: false`: Settings stays
+  usable and the saved configuration applies after an unpinned restart,
+  but the pinned runtime is never reconfigured.
+- `POST /api/ai/test` returns `200` with `success: false`,
+  `provider: "disabled"`, and a message stating that no connection was
+  attempted. No provider is resolved and no HTTP client is constructed.
+- `GET /api/ai/config` and `GET /api/ai/config/effective` report
+  `provider: "disabled"` / `is_configured: false`. The per-user and
+  server reads add `disabled_by_env: true` and report the effective
+  `configured` as `false`; the stored row is still returned so the
+  Settings page can show what is saved.
+- Generation, chat, explain, interpret, and optimize keep answering
+  `503 AI_NOT_CONFIGURED`.
+
+Lifting the pin requires restarting the server without the variable (or
+with a provider name); configuration saves are rejected, not queued,
+while it is set.
+
 See [AI Translation Layer](ai-translation.md) for details.
 
 ---
@@ -903,6 +930,58 @@ POST /api/chat/send        # Streamed chat over SSE
 POST /api/chat/send/json   # Same, single JSON response
 GET  /api/chat/sessions    # The acting user's chat sessions
 ```
+
+### `POST /api/chat/send` — SSE event contract
+
+The stream opens with a `ready` handshake, then forwards the real agent
+loop (tool rounds, validation rounds) as typed events:
+
+| Event | Payload | Meaning |
+|-------|---------|---------|
+| `ready` | `{keepalive_secs, idle_timeout_secs}` | Handshake, sent before the first provider call. `keepalive_secs` is the comment-frame cadence; `idle_timeout_secs` (`3 × keepalive_secs`) is the **client watchdog budget** — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever. |
+| `status` | `{message}` | Human-readable phase (`planning`, `executing tools`). |
+| `progress` | `{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}` | Structured loop progress, emitted at every phase boundary: `step` is `plan`, `generate`, `tool` (with `tool` naming the running tool), or `validate`. `elapsed_ms` is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead". |
+| `tool_call` | `{name, args}` | The model requested a grounded tool call. |
+| `tool_result` | `{name, summary}` | The tool finished; `summary` is a truncated preview (errors ride here too). |
+| `text` | `{chunk}` | One complete round response (token-level streaming is not implemented). |
+| `action` | `{action_type, data}` | Structured action — `pipeline_ready` carries the validated TOML and its validation result. |
+| `error` | `{code, message}` | Terminal failure (`CHAT_ERROR`, `AI_NOT_CONFIGURED`, `EMPTY_MESSAGE`). The loop aborts and its transcript is archived with `outcome: "Failed"` and the reason. |
+| `done` | `{session_id, rounds, prompt_tokens, completion_tokens}` | Terminal success marker. Always sent after `action`; clients stop reading here. |
+
+Transport behavior:
+
+- Keep-alive **comment frames** (`: ping`) are emitted every 15 s. They are
+  not events, but they are bytes on the wire — an inactivity watchdog must
+  treat them as traffic so a slow but healthy generation (8–14 minute runs
+  are normal) is never cut off.
+- Each provider request is bounded by `OXO_FLOW_AI_TIMEOUT_SECS` (default
+  300 s). A stalled endpoint surfaces as an `error` event within that budget,
+  never as an indefinite hang.
+- A client that disconnects mid-generation flips the loop's cancel flag; the
+  orchestrator stops between provider calls and before each tool rather than
+  burning paid rounds nobody is reading. The aborted run is archived (below).
+- The browser-side watchdog is derived from `ready.idle_timeout_secs`; on
+  expiry the client aborts the fetch, renders the error with a Retry action,
+  and re-enables the send button.
+
+### Chat session archives
+
+Every agent-loop run — including an aborted one — is persisted under
+`.oxo-flow/ai_sessions/` (or `OXO_FLOW_AI_SESSION_DIR`) as
+`<timestamp>-<command>-<id>.json`. Writes are temp-sibling + atomic rename,
+so a reader never observes a truncated file, and a run that fails archives
+`outcome: "Failed"` with an `error` reason (the post-mortem record). Pruning
+only reclaims archives older than ten minutes, so a fresh failure record — or
+the file an operator is inspecting — is never rotated out by concurrent
+writers.
+
+### AI provider probe
+
+`POST /api/ai/test` is **single-flight**: concurrent callers share one
+outbound provider round-trip (queued behind an async mutex) and a result
+younger than 10 seconds is reused. The probe calls the provider directly and
+never writes an `ai_sessions` archive, so repeated settings checks cannot
+pollute the audit trail or trip the provider's rate limiter.
 
 ---
 

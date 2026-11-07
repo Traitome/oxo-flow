@@ -6,11 +6,37 @@
 
 use serde::Serialize;
 
+/// Structured progress for one agent-loop round.
+///
+/// Emitted before each provider call and at every phase boundary so long
+/// multi-round generations (8–14 minutes of tool + validation rounds) have
+/// observable motion instead of a static "planning" label. The web chat
+/// forwards this verbatim over SSE; the CLI ignores it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProgressEvent {
+    /// 1-based loop round (0 for the initial plan phase).
+    pub round: u32,
+    /// Round budget for this generation.
+    pub max_rounds: u32,
+    /// Phase within the round: `plan`, `generate`, `tool`, `validate`.
+    pub step: String,
+    /// Tool name when `step == "tool"`.
+    pub tool: Option<String>,
+    /// Milliseconds since the loop started.
+    pub elapsed_ms: u64,
+    /// Cumulative prompt tokens billed so far.
+    pub prompt_tokens: u64,
+    /// Cumulative completion tokens billed so far.
+    pub completion_tokens: u64,
+}
+
 /// One observable step in the agent loop.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum AgentEvent {
     /// The loop entered a phase (planning, executing tools, validating).
     Status(String),
+    /// Structured round progress (round index, phase, elapsed, usage).
+    Progress(ProgressEvent),
     /// The model requested a tool call.
     ToolCall { name: String, args: String },
     /// A tool call finished; `summary` is a truncated preview.

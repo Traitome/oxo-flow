@@ -332,7 +332,7 @@ repository.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama`, or `disabled` | unset: auto-detect from credentials; `disabled` only when none resolve |
+| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama`, or `disabled`. An explicit `disabled` is pinned: it outranks saved config and, in the web server, refuses the runtime-only AI config endpoint (`409 AI_DISABLED_BY_ENV`), saves persisted settings without applying them (`applied_to_runtime: false`), and answers the connectivity test with `disabled` without dialing out | unset: auto-detect from credentials; `disabled` only when none resolve |
 | `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
@@ -420,6 +420,37 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
   "confidence": 0.91
 }
 ```
+
+### Archive guarantees
+
+- **Failures are archived too.** A run that aborts (provider error, round cap,
+  cancellation, client disconnect) persists `outcome: "Failed"` with an
+  `error` reason and the accumulated transcript/usage — the record you need
+  for a post-mortem instead of an empty directory. Successful runs archive
+  `outcome: "Success"`.
+- **Writes are crash-safe.** Each session is serialized to a temp sibling in
+  the same directory and atomically renamed into place, so a concurrent
+  reader (or `oxo-flow ai` status scan) always sees a complete JSON document,
+  never a partial write.
+- **Fresh archives are never pruned.** Retention keeps the newest 200
+  sessions per directory, but files younger than ten minutes are exempt: a
+  run archived seconds ago — or the session an operator is inspecting — is
+  never rotated out by concurrent writers.
+- **Test processes do not touch the operator's archive.** Unit tests skip
+  session writes entirely; integration tests point
+  `OXO_FLOW_AI_SESSION_DIR` at a scratch directory. Set that variable to
+  relocate archives on shared HPC homes or read-only project trees:
+
+  ```bash
+  export OXO_FLOW_AI_SESSION_DIR=/scratch/$USER/oxo-flow-sessions
+  ```
+
+- **The `scripted` test backend cannot be installed in production.** Its
+  constructors are compiled out unless the crate is built for tests
+  (`cfg(test)`) or with the `test-scripted` Cargo feature (dev-dependencies
+  only), so a real server can never run a stub provider — the
+  `Rate limited by scripted` archive entries from the browser test came from
+  unit tests writing into the real archive, and that path is now closed.
 
 `prompt_tokens` is the **full prompt bill**: on caching-enabled
 Anthropic-compatible endpoints it includes `cache_read_tokens` (served from

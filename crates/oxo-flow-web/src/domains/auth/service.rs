@@ -8,53 +8,66 @@ use uuid::Uuid;
 
 use super::types::*;
 
+/// Snapshot of the environment variables that drive credential resolution.
+///
+/// Built once by [`authenticate`] so the decision can live in a pure
+/// function ([`authenticate_with`]) that tests drive deterministically
+/// without mutating process-global state (this crate forbids `unsafe`,
+/// which edition-2024 `set_var` requires).
+#[derive(Debug, Default, Clone)]
+struct AuthEnv {
+    admin_password: Option<String>,
+    user_password: Option<String>,
+    viewer_password: Option<String>,
+    dev_mode: bool,
+}
+
+impl AuthEnv {
+    /// Read the live process environment.
+    fn from_process_env() -> Self {
+        let get = |key: &str| std::env::var(key).ok();
+        Self {
+            admin_password: get("OXO_FLOW_ADMIN_PASSWORD"),
+            user_password: get("OXO_FLOW_USER_PASSWORD"),
+            viewer_password: get("OXO_FLOW_VIEWER_PASSWORD"),
+            dev_mode: std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1"),
+        }
+    }
+}
+
 /// Authenticate user with username and password.
 /// Uses env-var based credential checking (backward compat with existing system).
 pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, String> {
+    authenticate_with(username, password, &AuthEnv::from_process_env())
+}
+
+/// Pure core of [`authenticate`] — `env` is passed in so every branch,
+/// including both dev-mode states, is testable without environment
+/// mutation.
+fn authenticate_with(
+    username: &str,
+    password: &str,
+    env: &AuthEnv,
+) -> Result<LoginResponse, String> {
     // Check admin
-    if let Ok(admin_pw) = std::env::var("OXO_FLOW_ADMIN_PASSWORD")
-        && username == "admin"
-        && password == admin_pw.as_str()
-    {
+    if username == "admin" && env.admin_password.as_deref() == Some(password) {
         return Ok(LoginResponse {
             token: generate_token(),
             username: "admin".into(),
             role: "admin".into(),
         });
     }
-    // The shared user/viewer passwords must never mint the admin identity
-    // (#516): OXO_FLOW_ADMIN_PASSWORD is the only credential that may sign
-    // in as "admin", otherwise anyone holding the weaker shared secret gets
-    // a session whose name resolves to the privileged admin row.
-    if username == "admin" {
-        return Err("Invalid credentials".into());
-    }
-    // Check user
-    if let Ok(user_pw) = std::env::var("OXO_FLOW_USER_PASSWORD")
-        && password == user_pw
-    {
-        return Ok(LoginResponse {
-            token: generate_token(),
-            username: username.into(),
-            role: "user".into(),
-        });
-    }
-    // Check viewer
-    if let Ok(viewer_pw) = std::env::var("OXO_FLOW_VIEWER_PASSWORD")
-        && password == viewer_pw
-    {
-        return Ok(LoginResponse {
-            token: generate_token(),
-            username: username.into(),
-            role: "viewer".into(),
-        });
-    }
-    // Dev mode fallback: password equals username — ONLY when explicitly enabled.
-    // In production this MUST be off, otherwise anyone can log in as any username.
-    if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1")
-        && password == username
-        && !username.is_empty()
-    {
+    // Dev mode fallback: password equals username — ONLY when explicitly
+    // enabled. In production this MUST be off, otherwise anyone can log in
+    // as any username.
+    //
+    // Deliberately BEFORE the #516 admin guard below: the documented
+    // contract is password==username for ANY user, admin included, and dev
+    // mode is refused on a non-loopback bind at startup
+    // (`effective_bind_host`), so the fallback cannot expose a network
+    // listener. Outside dev mode the guard still makes
+    // OXO_FLOW_ADMIN_PASSWORD the only credential that mints admin.
+    if env.dev_mode && password == username && !username.is_empty() {
         tracing::warn!(
             username = username,
             "DEV MODE: accepted password==username login for '{}'",
@@ -74,6 +87,30 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
             token: generate_token(),
             username: username.into(),
             role: role.into(),
+        });
+    }
+    // The shared user/viewer passwords must never mint the admin identity
+    // (#516): OXO_FLOW_ADMIN_PASSWORD (or the loopback-only dev fallback
+    // above) is the only credential that may sign in as "admin", otherwise
+    // anyone holding the weaker shared secret gets a session whose name
+    // resolves to the privileged admin row.
+    if username == "admin" {
+        return Err("Invalid credentials".into());
+    }
+    // Check user
+    if env.user_password.as_deref() == Some(password) {
+        return Ok(LoginResponse {
+            token: generate_token(),
+            username: username.into(),
+            role: "user".into(),
+        });
+    }
+    // Check viewer
+    if env.viewer_password.as_deref() == Some(password) {
+        return Ok(LoginResponse {
+            token: generate_token(),
+            username: username.into(),
+            role: "viewer".into(),
         });
     }
 
@@ -285,32 +322,54 @@ mod tests {
     use super::*;
     use crate::infra::db::StorageBackend;
 
+    fn auth_env(dev_mode: bool) -> AuthEnv {
+        AuthEnv {
+            dev_mode,
+            ..AuthEnv::default()
+        }
+    }
+
     #[test]
     fn test_dev_mode_login_role_matches_account() {
-        // M6 regression: the dev-mode password==username fallback must not
-        // hardcode "user" — admin must come back as admin (agrees with
-        // /api/auth/me's derivation).
-        if std::env::var("OXO_FLOW_DEV_MODE").as_deref() != Ok("1") {
-            return; // dev-mode branch not active in this environment
-        }
-        let resp = authenticate("admin", "admin").unwrap();
+        // M6/#1040 regression: the dev-mode password==username fallback must
+        // accept the admin account and must not hardcode "user" — the role
+        // must agree with /api/auth/me's derivation. Driven through the pure
+        // core so this runs identically in CI (no DEV_MODE env var there).
+        let env = auth_env(true);
+        let resp = authenticate_with("admin", "admin", &env).unwrap();
+        assert_eq!(resp.username, "admin");
         assert_eq!(resp.role, "admin");
-        let resp = authenticate("alice", "alice").unwrap();
+        let resp = authenticate_with("alice", "alice", &env).unwrap();
         assert_eq!(resp.role, "user");
+        let resp = authenticate_with("viewer", "viewer", &env).unwrap();
+        assert_eq!(resp.role, "viewer");
+    }
+
+    #[test]
+    fn test_dev_mode_requires_the_matching_password() {
+        let env = auth_env(true);
+        assert!(
+            authenticate_with("admin", "not-admin", &env).is_err(),
+            "dev mode must not accept an arbitrary password for admin"
+        );
+        assert!(
+            authenticate_with("alice", "bob", &env).is_err(),
+            "dev mode accepts password == username only"
+        );
     }
 
     #[test]
     fn test_authenticate_password_equals_username_rejected_in_production() {
-        // Without OX_FLOW_DEV_MODE=1, password==username MUST be rejected.
-        // This test must pass in CI (where the env var is not set).
-        if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1") {
-            // Dev mode is enabled — skip this assertion
-            return;
-        }
-        let result = authenticate("testuser", "testuser");
+        // Without OX_FLOW_DEV_MODE=1, password==username MUST be rejected —
+        // for admin and for every other account.
+        let env = auth_env(false);
         assert!(
-            result.is_err(),
-            "password==username should be rejected without OX_FLOW_DEV_MODE=1"
+            authenticate_with("admin", "admin", &env).is_err(),
+            "admin/admin must be rejected without OXO_FLOW_DEV_MODE=1"
+        );
+        assert!(
+            authenticate_with("testuser", "testuser", &env).is_err(),
+            "password==username should be rejected without OXO_FLOW_DEV_MODE=1"
         );
     }
 
@@ -318,25 +377,58 @@ mod tests {
     fn test_env_user_password_never_mints_admin() {
         // #516: the shared user/viewer passwords must not mint the admin
         // identity — a session named "admin" resolves to the privileged
-        // bootstrap row. Note the admin branch is skipped entirely when
-        // OXO_FLOW_ADMIN_PASSWORD is unset in the test environment.
-        if std::env::var("OXO_FLOW_USER_PASSWORD").is_ok()
-            || std::env::var("OXO_FLOW_VIEWER_PASSWORD").is_ok()
-        {
-            return; // env-password branches active — skip this assertion
+        // bootstrap row. Checked with and without dev mode: only
+        // ADMIN_PASSWORD (or the explicit loopback-only dev fallback) may
+        // sign in as "admin".
+        for dev_mode in [false, true] {
+            let env = AuthEnv {
+                admin_password: None,
+                user_password: Some("shared-user".into()),
+                viewer_password: Some("shared-viewer".into()),
+                dev_mode,
+            };
+            // The shared passwords never authenticate the admin name, even
+            // in dev mode where the dev fallback itself would (the fallback
+            // requires password == username).
+            assert!(
+                authenticate_with("admin", "shared-user", &env).is_err(),
+                "user password minted admin (dev_mode={dev_mode})"
+            );
+            assert!(
+                authenticate_with("admin", "shared-viewer", &env).is_err(),
+                "viewer password minted admin (dev_mode={dev_mode})"
+            );
+            assert!(
+                authenticate_with("admin", "anything", &env).is_err(),
+                "admin must not authenticate without its own password (dev_mode={dev_mode})"
+            );
+            // Sanity: the shared passwords still authenticate non-admin names.
+            assert_eq!(
+                authenticate_with("alice", "shared-user", &env)
+                    .expect("user password authenticates a user")
+                    .role,
+                "user"
+            );
         }
-        // Without any env password set, authenticate falls through to the
-        // dev-mode gate and fails — the identity is never minted.
-        let result = authenticate("admin", "anything");
+    }
+
+    #[test]
+    fn test_admin_password_still_authenticates_admin() {
+        let env = AuthEnv {
+            admin_password: Some("secret-admin".into()),
+            ..AuthEnv::default()
+        };
+        let resp = authenticate_with("admin", "secret-admin", &env).unwrap();
+        assert_eq!(resp.role, "admin");
         assert!(
-            result.is_err(),
-            "admin must not authenticate without its own password"
+            authenticate_with("admin", "admin", &env).is_err(),
+            "the admin password is the only production credential for admin"
         );
     }
 
     #[test]
     fn test_authenticate_invalid() {
-        let result = authenticate("nobody", "wrongpassword");
+        let result = authenticate_with("nobody", "wrongpassword", &AuthEnv::default());
         assert!(result.is_err());
     }
 

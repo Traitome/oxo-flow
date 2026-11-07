@@ -81,7 +81,7 @@ Before executing a rule with an environment specification:
 | Pixi | `pixi install --manifest-path <pixi.toml>` (manifest must exist — validated upfront) |
 | Docker | `docker image inspect <image> \|\| docker pull <image>` — pull only when absent; bare names that 404 on Docker Hub get one quay.io/biocontainers retry re-tagged to the original name |
 | Singularity | Pull when needed: a URI (`docker://…`) is pulled to a derived `.sif` name; a local `.sif` path is used as-is |
-| Venv | `python3 -m venv <path> && source <path>/bin/activate && pip install -r <requirements>` |
+| Venv | `python3 -m venv <path> && . <path>/bin/activate && pip install -r <requirements>` — the `pip install` leg is skipped, with a warning naming the expected path, when the requirements file does not exist |
 | Modules | None (no setup — modules are loaded at execution time) |
 | System | None (no setup needed — commands run directly in the current shell) |
 
@@ -155,13 +155,16 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 ### Python venv
 
 - **Detection**: Checks for `python3` on `$PATH` (with `ensurepip`/`venv` importable)
-- **Resolution**: `environment.venv` names the **venv directory** to create/reuse (e.g. `.venv`); `environment.venv_requirements` names the requirements file (default: `requirements.txt` in the working directory). Declaring a requirements file path in `venv` itself fails — the backend creates a directory at that path
-- **Activation**: Creates the venv (if needed) and activates it before the command
+- **Resolution**: `environment.venv` names the **venv directory** to create/reuse (e.g. `.venv`); `environment.venv_requirements` names the requirements file (default: `requirements.txt`, resolved against the workflow file's directory like every other file-backed environment spec). Declaring a requirements file path in `venv` itself fails — the backend creates a directory at that path
+- **Activation**: Creates the venv (if needed) and activates it before the command. If the requirements file does not exist, setup still creates/reuses the venv but **skips the `pip install` leg** and logs a warning naming the expected path — declaring `venv` on an existing environment never fails inside pip with "Could not open requirements file". An explicit `venv_requirements` pointing at a missing file behaves identically
 - **Caching**: Venvs are stored in a cache directory keyed by the declared
   venv spec **plus a content hash of the requirements file**
   (`venv:<path>:<hash8>`), so editing `requirements.txt` in place
   invalidates the cache and the next run rebuilds the environment.
-  Unreadable/missing files degrade to the plain path key.
+  A missing or unreadable requirements file (including the default
+  `requirements.txt` when it does not exist) degrades to the plain
+  `venv:<path>` key; the file appearing later changes the key, so the next
+  run performs the skipped install.
 
 ### HPC Modules
 

@@ -59,3 +59,8 @@ hex = { workspace = true }
 postgres = ["sqlx/postgres"]
 
 [dev-dependencies]
+# The scripted provider is a test-only stub; its constructors are compiled
+# out of production builds. Enabling the feature here (dev-dependencies are
+# not built by `cargo build`) keeps `cargo test` able to install it while a
+# real server cannot (issue #1040 B3).
+oxo-flow-ai = { workspace = true, features = ["test-scripted"] }

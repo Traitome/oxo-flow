@@ -920,9 +920,28 @@ impl LocalExecutor {
         // --workdir is not used. Anchoring at the boundary keeps the
         // cache_key, the setup command, verification, and wrapping all on
         // one consistent (already-absolute) spec.
-        let env_spec = &rule
+        let mut env_spec = rule
             .environment
             .resolve_relative_paths(self.config.workflow_root.as_deref());
+        // workflow_root is None when workdir == workflow_dir: the venv
+        // default requirements file still materializes against the workdir
+        // so the backend's missing-file check and the cache-key content
+        // hash inspect the file the setup shell actually reads from its
+        // cwd (#1040). Only the venv default is patched — anchoring every
+        // other spec here would move existing conda/pixi cache keys.
+        if self.config.workflow_root.is_none()
+            && env_spec.venv.is_some()
+            && env_spec.venv_requirements.is_none()
+        {
+            env_spec.venv_requirements = Some(
+                self.config
+                    .workdir
+                    .join("requirements.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        let env_spec = &env_spec;
         if env_spec.is_empty() {
             return Ok(());
         }
