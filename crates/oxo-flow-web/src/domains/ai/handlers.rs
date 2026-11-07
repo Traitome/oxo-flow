@@ -87,6 +87,56 @@ fn require_usable_provider(
     }
 }
 
+/// The structured refusal for the runtime-only AI configuration endpoint
+/// (`POST /api/ai/config`) while `OXO_FLOW_AI_PROVIDER=disabled` pins the
+/// process off.
+///
+/// That endpoint has no durable tier — applying to the live registry is its
+/// only effect — so under the pin there is nothing meaningful to do but
+/// refuse. The persisted PUT server/user tiers instead save normally and
+/// suppress only activation (`applied_to_runtime: false`); see their
+/// handlers. `pinned_disabled` is injected so the contract is unit-testable
+/// without process-global env mutation (mirrors `provider_candidates_for`
+/// in the AI service).
+fn reject_config_update_when_pinned(
+    pinned_disabled: bool,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if !pinned_disabled {
+        return Ok(());
+    }
+    Err((
+        StatusCode::CONFLICT,
+        Json(ApiError {
+            code: "AI_DISABLED_BY_ENV".into(),
+            message: "AI is disabled by OXO_FLOW_AI_PROVIDER=disabled".into(),
+            detail: Some(
+                "The server was started with the explicit AI off switch; configuration \
+                 updates cannot take effect while it is set."
+                    .into(),
+            ),
+            suggestion: Some(
+                "Unset OXO_FLOW_AI_PROVIDER (or set it to a provider) and restart the \
+                 server, then save the AI configuration."
+                    .into(),
+            ),
+        }),
+    ))
+}
+
+/// The honest `/api/ai/test` answer while pinned: no provider is resolved
+/// and no HTTP client is constructed, so the probe cannot dial out. The
+/// shape matches the endpoint's ordinary failure response (200,
+/// `success: false`) and names the same state `/api/health` reports
+/// (`disabled`).
+fn pinned_test_response(pinned_disabled: bool) -> Option<AiTestResponse> {
+    pinned_disabled.then(|| AiTestResponse {
+        success: false,
+        message: "AI is disabled by OXO_FLOW_AI_PROVIDER=disabled — no connection attempted".into(),
+        provider: "disabled".into(),
+        model: None,
+    })
+}
+
 #[utoipa::path(
     post,
     path = "/api/ai/translate",
@@ -486,6 +536,7 @@ pub async fn update_ai_config(
 ) -> ApiResult<AiConfigResponse> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
+    reject_config_update_when_pinned(oxo_flow_ai::provider::provider_pinned_disabled())?;
     // The shared runtime changed — every cached per-user fallback is stale.
     crate::ai_provider::invalidate_provider_cache();
     crate::ai_provider::AiProviderRegistry::global()
@@ -569,6 +620,12 @@ pub async fn test_ai_config(
     // Testing hits the real provider (costs money; also a DoS vector) —
     // admin-only outside personal mode.
     require_ai_admin(&user)?;
+    // Return before resolving a provider: a pinned process must answer
+    // "disabled" without constructing an HTTP client, let alone dialing out.
+    if let Some(response) = pinned_test_response(oxo_flow_ai::provider::provider_pinned_disabled())
+    {
+        return Ok(Json(response));
+    }
     let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
     let provider_name = provider.name().to_string();
     let provider_model = provider.model();
@@ -691,6 +748,7 @@ pub async fn get_ai_config_effective(
             "api_url": config.api_url,
             "is_configured": config.is_configured,
         },
+        "disabled_by_env": oxo_flow_ai::provider::provider_pinned_disabled(),
         "tiers": {
             "env_provider": std::env::var("OXO_FLOW_AI_PROVIDER").ok(),
             "env_model": std::env::var("OXO_FLOW_AI_MODEL").ok(),
@@ -736,13 +794,18 @@ pub async fn get_server_ai_config(
     // Split "a row exists" from "that row is usable": the api_key is sealed
     // and only readable with the same OXO_FLOW_MASTER_KEY. After a key
     // rotation the ciphertext stays in place but cannot be opened.
-    let (configured, requires_reauth) = match row.as_ref().and_then(|row| row.api_key.as_deref()) {
-        None => (false, false),
-        Some(api_key) => {
-            let usable = api_key.is_empty() || crate::infra::crypto::is_recoverable(api_key);
-            (usable, !usable)
-        }
-    };
+    let (stored_configured, requires_reauth) =
+        match row.as_ref().and_then(|row| row.api_key.as_deref()) {
+            None => (false, false),
+            Some(api_key) => {
+                let usable = api_key.is_empty() || crate::infra::crypto::is_recoverable(api_key);
+                (usable, !usable)
+            }
+        };
+    // `configured` is the effective runtime state, not just "a row exists
+    // and is readable": a pinned process answers providers with nothing.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
+    let configured = stored_configured && !pinned_disabled;
     let server_config = row.map(|row| {
         serde_json::json!({
             "provider": row.provider,
@@ -755,6 +818,7 @@ pub async fn get_server_ai_config(
     let mut body = serde_json::json!({
         "server_config": server_config,
         "configured": configured,
+        "disabled_by_env": pinned_disabled,
         "requires_reauth": requires_reauth,
     });
     if requires_reauth {
@@ -783,6 +847,11 @@ pub async fn update_server_ai_config(
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
+    // Contract (issue #1040 follow-up): under `OXO_FLOW_AI_PROVIDER=disabled`
+    // the save still persists — Settings must stay usable, and the stored
+    // config applies after an unpinned restart — but the runtime is NEVER
+    // reconfigured, so a pinned process cannot be resurrected by an API call.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
     let backend = get_backend()?;
     let existing = backend
         .get_ai_provider_config(None)
@@ -832,28 +901,37 @@ pub async fn update_server_ai_config(
 
     // Apply only after durable persistence so a failed save cannot leave the
     // runtime pointing at a configuration that disappears on restart.
-    crate::ai_provider::invalidate_provider_cache();
-    if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-        &saved.provider,
-        runtime_api_key(saved.api_key.as_deref()),
-        runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
-        runtime_optional(saved.model.as_deref().unwrap_or_default()),
-    ) {
-        tracing::error!(
-            provider = %saved.provider,
-            error = %error,
-            "server AI configuration was persisted but could not be activated"
+    if pinned_disabled {
+        tracing::warn!(
+            "server AI configuration persisted but not activated: \
+             OXO_FLOW_AI_PROVIDER=disabled pins this process off"
         );
-        return Err(err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AI_RECONFIGURE_FAILED",
-            "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
-        ));
+    } else {
+        crate::ai_provider::invalidate_provider_cache();
+        if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            &saved.provider,
+            runtime_api_key(saved.api_key.as_deref()),
+            runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
+            runtime_optional(saved.model.as_deref().unwrap_or_default()),
+        ) {
+            tracing::error!(
+                provider = %saved.provider,
+                error = %error,
+                "server AI configuration was persisted but could not be activated"
+            );
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI_RECONFIGURE_FAILED",
+                "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
+            ));
+        }
     }
 
-    Ok(Json(
-        serde_json::json!({"status": "updated", "provider": saved.provider}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "updated",
+        "provider": saved.provider,
+        "applied_to_runtime": !pinned_disabled,
+    })))
 }
 
 #[utoipa::path(
@@ -915,10 +993,15 @@ pub async fn get_user_ai_config(
             })
         }
     };
-    let configured = user_config["is_configured"].as_bool().unwrap_or(false);
+    // The stored row is reported as stored, but `configured` describes the
+    // EFFECTIVE state: a pinned process runs no provider regardless of what
+    // the row says, and must say so the way /api/health does.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
+    let configured = !pinned_disabled && user_config["is_configured"].as_bool().unwrap_or(false);
     Ok(Json(serde_json::json!({
         "user_config": user_config,
         "configured": configured,
+        "disabled_by_env": pinned_disabled,
     })))
 }
 
@@ -937,6 +1020,10 @@ pub async fn update_user_ai_config(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
+    // Same contract as the server tier: persist the row (Settings stays
+    // usable; GET reports `disabled_by_env` so the effective state is never
+    // misrepresented), but never reconfigure the runtime under the pin.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
     let backend = get_backend()?;
 
     let provider = req
@@ -997,8 +1084,10 @@ pub async fn update_user_ai_config(
 
     // The runtime serves ONE provider registry per process: in personal
     // mode (or for admins) applying it immediately is expected. Non-admin
-    // team users' rows are resolved per user by provider_for().
-    let applied = crate::server::running_mode() == "personal" || user.is_admin();
+    // team users' rows are resolved per user by provider_for(). The pin
+    // overrides all of it: never apply while `OXO_FLOW_AI_PROVIDER=disabled`.
+    let applied =
+        !pinned_disabled && (crate::server::running_mode() == "personal" || user.is_admin());
     crate::ai_provider::invalidate_provider_for(&user.id);
     if applied
         && let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
@@ -1097,7 +1186,38 @@ pub async fn knowledge_skills(
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_api_key, runtime_optional};
+    use super::{
+        pinned_test_response, reject_config_update_when_pinned, runtime_api_key, runtime_optional,
+    };
+    use axum::http::StatusCode;
+
+    #[test]
+    fn pinned_runtime_config_endpoint_is_refused_with_a_structured_conflict() {
+        // Unpinned: the endpoint proceeds to its normal reconfigure path.
+        assert!(reject_config_update_when_pinned(false).is_ok());
+
+        let (status, body) = reject_config_update_when_pinned(true).expect_err("pin must refuse");
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.0.code, "AI_DISABLED_BY_ENV");
+        assert!(body.0.message.contains("OXO_FLOW_AI_PROVIDER=disabled"));
+        assert!(body.0.detail.is_some(), "structured error carries detail");
+        assert!(
+            body.0.suggestion.is_some(),
+            "structured error carries a remedy"
+        );
+    }
+
+    #[test]
+    fn pinned_test_probe_answers_disabled_without_a_provider() {
+        // Regression: after a config update under the pin, this endpoint
+        // used to run a real chat round-trip (3 outbound connections). The
+        // pinned answer is produced before any provider/client is built.
+        assert!(pinned_test_response(false).is_none());
+        let response = pinned_test_response(true).expect("pinned answer");
+        assert!(!response.success);
+        assert_eq!(response.provider, "disabled");
+        assert!(response.message.contains("no connection attempted"));
+    }
 
     #[test]
     fn runtime_config_omits_blank_overrides() {

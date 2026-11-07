@@ -8,6 +8,13 @@ pub enum AiError {
     #[error("AI provider not configured. Set OXO_FLOW_AI_PROVIDER and OXO_FLOW_AI_API_KEY.")]
     NotConfigured,
 
+    /// The process was started with the explicit off switch
+    /// (`OXO_FLOW_AI_PROVIDER=disabled`). Runtime reconfiguration is refused
+    /// so no persisted setting, API request, or config-file tier can
+    /// resurrect AI behind the operator's back.
+    #[error("AI is disabled by OXO_FLOW_AI_PROVIDER=disabled; runtime reconfiguration is refused")]
+    DisabledByEnv,
+
     #[error("AI provider '{provider}' failed: {message}")]
     Provider { provider: String, message: String },
 

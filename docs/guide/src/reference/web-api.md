@@ -83,7 +83,7 @@ In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
-`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request.
+`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only `POST /api/ai/config` answers `409 AI_DISABLED_BY_ENV` (it has no durable tier, so refusing is the only honest answer), while the persisted `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still save (200, `applied_to_runtime: false`) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
 
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
@@ -886,6 +886,33 @@ runtime cannot activate the new provider, the endpoint returns
 `500 AI_RECONFIGURE_FAILED`; the durable row remains available for the
 next startup, but the caller must correct the provider settings rather
 than assuming the running process switched.
+
+### Pinned disabled AI (`OXO_FLOW_AI_PROVIDER=disabled`)
+
+An explicit `disabled` is an operator-level switch: it outranks every
+configuration tier and every runtime update. While it is set:
+
+- `POST /api/ai/config` (runtime-only — applying to the live registry is
+  its only effect) returns `409 AI_DISABLED_BY_ENV` with the standard
+  `{code, message, detail, suggestion}` shape.
+- `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still persist
+  the row and return `200` with `applied_to_runtime: false`: Settings stays
+  usable and the saved configuration applies after an unpinned restart,
+  but the pinned runtime is never reconfigured.
+- `POST /api/ai/test` returns `200` with `success: false`,
+  `provider: "disabled"`, and a message stating that no connection was
+  attempted. No provider is resolved and no HTTP client is constructed.
+- `GET /api/ai/config` and `GET /api/ai/config/effective` report
+  `provider: "disabled"` / `is_configured: false`. The per-user and
+  server reads add `disabled_by_env: true` and report the effective
+  `configured` as `false`; the stored row is still returned so the
+  Settings page can show what is saved.
+- Generation, chat, explain, interpret, and optimize keep answering
+  `503 AI_NOT_CONFIGURED`.
+
+Lifting the pin requires restarting the server without the variable (or
+with a provider name); configuration saves are rejected, not queued,
+while it is set.
 
 See [AI Translation Layer](ai-translation.md) for details.
 
