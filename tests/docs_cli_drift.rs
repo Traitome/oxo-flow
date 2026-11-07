@@ -4,7 +4,9 @@
 //! on any divergence (missing/extra table entries, stale counts). The
 //! GitHub Pages landing page's command cards (`docs/index.html`) hand-write
 //! each subcommand's name, category badge, and description — the same gate
-//! keeps that page in lockstep.
+//! keeps that page in lockstep, including its "N CLI subcommands" prose
+//! (English and Chinese), which is only checked when it is adjacent to the
+//! word "subcommand"/"子命令", so unrelated numbers never trip the gate.
 
 mod common;
 
@@ -117,6 +119,72 @@ fn landing_page_cards(html: &str) -> Vec<String> {
     cards
 }
 
+/// Trim the characters that may separate a count from the keyword it
+/// qualifies: whitespace, Markdown emphasis (`**34** subcommands`), and the
+/// backticks/underscores used around inline code.
+fn trim_count_separators(s: &str) -> &str {
+    s.trim_end_matches(|c: char| c.is_whitespace() || c == '*' || c == '`' || c == '_')
+}
+
+/// Digits ending `s`, with nothing else trailing.
+fn trailing_digits(s: &str) -> Option<String> {
+    let count = s.bytes().rev().take_while(|b| b.is_ascii_digit()).count();
+    let digits = &s[s.len() - count..];
+    (!digits.is_empty()).then(|| digits.to_string())
+}
+
+/// `N subcommands`, `N CLI subcommands`, `N CLI SUBCOMMANDS` — the count
+/// must sit immediately before the keyword (optionally through the `CLI`
+/// qualifier), so ports, versions, and "100+ APIs" can never match.
+fn digits_before_english_subcommand(prefix: &str) -> Option<String> {
+    let mut tail = trim_count_separators(prefix);
+    if tail.to_ascii_lowercase().ends_with("cli") {
+        tail = trim_count_separators(&tail[..tail.len() - "cli".len()]);
+    }
+    trailing_digits(tail)
+}
+
+/// Chinese counterpart: `N 个 (CLI) 子命令`.
+fn digits_before_chinese_subcommand(prefix: &str) -> Option<String> {
+    let mut tail = trim_count_separators(prefix);
+    if tail.to_ascii_lowercase().ends_with("cli") {
+        tail = trim_count_separators(&tail[..tail.len() - "cli".len()]);
+    }
+    let tail = trim_count_separators(tail.strip_suffix('个')?);
+    trailing_digits(tail)
+}
+
+fn line_number(text: &str, pos: usize) -> usize {
+    text[..pos].matches('\n').count() + 1
+}
+
+/// Every `<N> subcommands` / `<N> CLI subcommands` / `<N> 个 (CLI) 子命令`
+/// mention in `text`, as `(line, digits)`.
+fn prose_subcommand_counts(text: &str) -> Vec<(usize, String)> {
+    // ASCII lowercasing preserves byte offsets, so positions found in the
+    // lowercase copy are valid in `text`.
+    let lower = text.to_ascii_lowercase();
+    let mut mentions = Vec::new();
+    for (needle, parse) in [
+        (
+            "subcommand",
+            digits_before_english_subcommand as fn(&str) -> Option<String>,
+        ),
+        ("子命令", digits_before_chinese_subcommand),
+    ] {
+        let mut search_from = 0;
+        while let Some(offset) = lower[search_from..].find(needle) {
+            let pos = search_from + offset;
+            if let Some(digits) = parse(&lower[..pos]) {
+                mentions.push((line_number(text, pos), digits));
+            }
+            search_from = pos + needle.len();
+        }
+    }
+    mentions.sort();
+    mentions
+}
+
 #[test]
 fn readme_command_table_and_count_mentions_match_the_clap_definition() {
     let (mut cli, aliases) = clap_subcommands();
@@ -206,5 +274,44 @@ fn landing_page_command_cards_match_the_clap_definition() {
     assert_eq!(
         cards, cli,
         "landing-page CLI cards drifted from clap (missing = subcommands without a card, extra = cards that are not subcommands — aliases included)"
+    );
+}
+
+/// Regression gate for the stale "33 subcommands" prose the release audit
+/// found on the landing page: every count mention in README.md and
+/// docs/index.html must equal the clap-derived count, and each file must
+/// keep at least one mention so a prose rewrite cannot silently disable the
+/// check.
+#[test]
+fn prose_subcommand_counts_in_readme_and_landing_page_match_the_clap_definition() {
+    let (cli, _aliases) = clap_subcommands();
+    assert!(
+        cli.len() >= 10,
+        "--help parsing broke: only {} subcommands found",
+        cli.len()
+    );
+
+    let mut failures = Vec::new();
+    for file in ["README.md", "docs/index.html"] {
+        let text = fs::read_to_string(repo_root().join(file))
+            .unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+        let mentions = prose_subcommand_counts(&text);
+        assert!(
+            !mentions.is_empty(),
+            "{file}: no \"<N> subcommands\" prose found — update this gate if the wording changed"
+        );
+        for (line, digits) in mentions {
+            if digits != cli.len().to_string() {
+                failures.push(format!(
+                    "{file}:{line}: says \"{digits} subcommands\", clap reports {}",
+                    cli.len()
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "stale subcommand counts in prose:\n{}",
+        failures.join("\n")
     );
 }

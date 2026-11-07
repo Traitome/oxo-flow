@@ -57,7 +57,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 
 ---
 
-## Built from First Principles
+## Design Principles
 
 oxo-flow rethinks bioinformatics workflow orchestration from the ground up:
 

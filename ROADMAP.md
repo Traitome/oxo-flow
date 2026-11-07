@@ -69,7 +69,7 @@ against code, users, and domain truth sets.
 
 ## Architecture Overview
 
-### Design Principles (First Principles Thinking)
+### Design Principles
 
 1. **DAG is the fundamental abstraction** — Every bioinformatics workflow is a directed acyclic graph of tasks. The engine must natively construct, validate, optimize, and execute DAGs with maximum parallelism.
 
