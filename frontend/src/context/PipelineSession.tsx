@@ -12,12 +12,25 @@ export interface ChatMessageToolCall {
   summary?: string;
 }
 
+/** Structured round progress from the `progress` SSE event. */
+export interface ChatProgress {
+  round: number;
+  max_rounds: number;
+  step: string;
+  tool?: string | null;
+  elapsed_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'agent' | 'system';
   content: string;
   actions?: ChatAction[];
   agentStatus?: string;
+  /** Latest round-progress frame (agent loop observability, issue #1040 B2). */
+  progress?: ChatProgress;
   /** Grounded tool calls the agent made (rendered as collapsible cards). */
   toolCalls?: ChatMessageToolCall[];
 }
