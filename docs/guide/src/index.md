@@ -1,6 +1,6 @@
 # Introduction
 
-**oxo-flow** is a Rust-native bioinformatics pipeline engine built from first principles for performance, reproducibility, and environment isolation. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
+**oxo-flow** is a Rust-native bioinformatics pipeline engine engineered for performance, reproducibility, and environment isolation. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
 
 ```bash
 # Define your workflow in TOML
