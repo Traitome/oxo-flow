@@ -394,6 +394,11 @@ prompt. See [Custom Skills](./custom-skills.md).
 
 ### Session Logs
 
+> **Agents operating oxo-flow directly** should also follow
+> [Agent Safety & Workspace Discipline](../how-to/agent-safety.md): inputs are
+> read-only, mutations are snapshotted and journaled, and all probing stays
+> in one scratch tree inside the project.
+
 Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debugging:
 
 ```json
