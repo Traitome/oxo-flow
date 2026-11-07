@@ -1459,6 +1459,7 @@ pub fn snapshot_input_manifest(
                                 scheme: match storage_path.scheme {
                                     crate::storage::StorageScheme::S3 => "s3",
                                     crate::storage::StorageScheme::Gcs => "gs",
+                                    crate::storage::StorageScheme::Azure => "az",
                                     crate::storage::StorageScheme::Local => "local",
                                 }
                                 .to_string(),

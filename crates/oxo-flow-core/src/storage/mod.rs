@@ -17,6 +17,9 @@
 
 pub mod local;
 
+#[cfg(feature = "azure-storage")]
+pub mod azure;
+
 #[cfg(feature = "s3-storage")]
 pub mod s3;
 
@@ -36,6 +39,8 @@ pub enum StorageScheme {
     S3,
     /// Google Cloud Storage.
     Gcs,
+    /// Azure Blob Storage.
+    Azure,
 }
 
 impl StorageScheme {
@@ -45,17 +50,20 @@ impl StorageScheme {
             Self::S3
         } else if path.starts_with("gs://") {
             Self::Gcs
+        } else if path.starts_with("az://") {
+            Self::Azure
         } else {
             Self::Local
         }
     }
 
-    /// Lowercase scheme name ("local" | "s3" | "gs").
+    /// Lowercase scheme name ("local" | "s3" | "gs" | "az").
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Local => "local",
             Self::S3 => "s3",
             Self::Gcs => "gs",
+            Self::Azure => "az",
         }
     }
 }
@@ -79,17 +87,19 @@ pub struct StoragePath {
 impl StoragePath {
     /// Parse a path or URI into its component parts.
     ///
-    /// - `"s3://bucket/some/key"` -> scheme=S3, bucket="bucket", key="some/key"
-    /// - `"gs://bucket/obj"`      -> scheme=Gcs, bucket="bucket", key="obj"
-    /// - `"/local/path"`          -> scheme=Local, bucket=None, key="/local/path"
-    /// - `"relative/path"`        -> scheme=Local, bucket=None, key="relative/path"
+    /// - `"s3://bucket/some/key"`  -> scheme=S3, bucket="bucket", key="some/key"
+    /// - `"gs://bucket/obj"`       -> scheme=Gcs, bucket="bucket", key="obj"
+    /// - `"az://container/blob"`   -> scheme=Azure, bucket="container", key="blob"
+    /// - `"/local/path"`           -> scheme=Local, bucket=None, key="/local/path"
+    /// - `"relative/path"`         -> scheme=Local, bucket=None, key="relative/path"
     pub fn parse(raw: &str) -> Self {
         let scheme = StorageScheme::from_uri(raw);
         let (bucket, key) = match scheme {
-            StorageScheme::S3 | StorageScheme::Gcs => {
+            StorageScheme::S3 | StorageScheme::Gcs | StorageScheme::Azure => {
                 let without_prefix = match scheme {
                     StorageScheme::S3 => raw.strip_prefix("s3://").unwrap_or(raw),
                     StorageScheme::Gcs => raw.strip_prefix("gs://").unwrap_or(raw),
+                    StorageScheme::Azure => raw.strip_prefix("az://").unwrap_or(raw),
                     _ => raw,
                 };
                 if let Some((b, k)) = without_prefix.split_once('/') {
@@ -209,6 +219,14 @@ pub async fn verify_upload(
             }
         }
         StorageScheme::Gcs => {
+            let local_md5 = md5_base64_of_file(local).await?;
+            if local_md5 != etag {
+                return Err(upload_mismatch(remote, &local_md5, etag));
+            }
+        }
+        StorageScheme::Azure => {
+            // Azure returns Content-MD5 as base64-encoded raw bytes — the
+            // same shape as GCS md5Hash. Compare directly.
             let local_md5 = md5_base64_of_file(local).await?;
             if local_md5 != etag {
                 return Err(upload_mismatch(remote, &local_md5, etag));
