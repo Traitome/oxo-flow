@@ -58,17 +58,44 @@ pub async fn validate_command(
             // documented validate → dry-run → run path — stayed silent and
             // waved the workflow through with exit 0. Surface W024 here too
             // (warnings keep exit 0; only errors fail), so a green validate
-            // no longer hides a workflow that cannot run. Scoped to W024 —
-            // validate's contract is runnability; the full best-practice
-            // sweep remains `lint`'s job and re-printing it here drowned
-            // every validate in style noise.
+            // no longer hides a workflow that cannot run. Scoped to W024 and
+            // SCI-AGG-RACE — validate's contract is runnability; the full
+            // best-practice sweep remains `lint`/`dry-run`'s job and
+            // re-printing it here drowned every validate in style noise.
             let lint_diags = if !as_include {
                 oxo_flow_core::format::lint_format(&cfg, None)
             } else {
                 Vec::new()
             };
-            let warnings: Vec<&oxo_flow_core::format::Diagnostic> =
-                lint_diags.iter().filter(|d| d.code == "W024").collect();
+            let mut warnings: Vec<oxo_flow_core::format::Diagnostic> = lint_diags
+                .iter()
+                .filter(|d| d.code == "W024")
+                .cloned()
+                .collect();
+            // SCI-AGG-RACE (issue #1040 P3-2): an aggregation rule whose
+            // fan-out instances all write the same output path is statically
+            // detectable, and dry-run already reports it — but validate, the
+            // first gate in the documented validate → dry-run → run path,
+            // stayed silent. Share the exact detector dry-run calls (never a
+            // reimplementation) and keep only this runnability code: the
+            // remaining scientific checks are best-practice guidance, not a
+            // "this workflow cannot run" signal. `--as-include` skips it for
+            // the same reason it skips the fan-out domain assumptions (a
+            // fragment does not declare the parent's sample/values domains).
+            if !as_include {
+                warnings.extend(
+                    oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&cfg)
+                        .into_iter()
+                        .filter(|w| w.code == "SCI-AGG-RACE")
+                        .map(|w| oxo_flow_core::format::Diagnostic {
+                            severity: oxo_flow_core::format::Severity::Warning,
+                            message: w.message,
+                            rule: Some(w.rule),
+                            code: w.code,
+                            suggestion: Some(w.suggestion),
+                        }),
+                );
+            }
             let mut error_count = 0usize;
             let mut errors_json: Vec<serde_json::Value> = Vec::new();
 
@@ -1263,6 +1290,108 @@ shell = "true"
                 predicates::str::contains("1 rule, 0 dependencies")
                     .and(predicates::str::contains("1 rules").not()),
             );
+    }
+
+    #[test]
+    fn validate_reports_sci_agg_race() {
+        // Issue #1040 P3-2: dry-run reported the aggregation-race shape, but
+        // validate — the first gate in the documented path — stayed silent.
+        // The check is static (no expansion needed), so validate must share
+        // the dry-run detector and surface the same code as a warning
+        // (exit 0), in both the human and JSON surfaces.
+        let racing = r#"
+[workflow]
+name = "agg-race"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "multiqc"
+input = ["qc/{sample}/fastqc.html"]
+output = ["report/multiqc.html"]
+shell = "multiqc -f qc -o report"
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(racing.as_bytes()).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg(file.path())
+            .assert()
+            .success();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+        assert!(
+            stderr.contains("[SCI-AGG-RACE]"),
+            "validate must report the aggregation race like dry-run: {stderr}"
+        );
+        assert!(
+            stderr.contains("rule: multiqc"),
+            "the warning must name the racing rule: {stderr}"
+        );
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg("--json")
+            .arg(file.path())
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("validate --json must emit JSON on stdout");
+        let warnings = parsed["warnings"]
+            .as_array()
+            .expect("warnings must be an array");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w["code"] == "SCI-AGG-RACE" && w["rule"] == "multiqc"),
+            "SCI-AGG-RACE must ride the JSON warnings array: {parsed}"
+        );
+    }
+
+    #[test]
+    fn validate_silent_for_keyed_fanout() {
+        // The safe shape: the fan-out dimension keys the outputs, so no
+        // aggregation race exists and validate's warnings stay empty.
+        let keyed = r#"
+[workflow]
+name = "keyed"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "fastqc"
+input = ["raw/{sample}_R1.fastq.gz"]
+output = ["qc/{sample}/fastqc.html"]
+shell = "fastqc raw/{sample}_R1.fastq.gz -o qc/{sample}"
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(keyed.as_bytes()).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg("--json")
+            .arg(file.path())
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        assert!(
+            !stdout.contains("SCI-AGG-RACE"),
+            "a keyed fan-out must not fire SCI-AGG-RACE: {stdout}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            parsed["warnings"].as_array().map(Vec::len),
+            Some(0),
+            "validate must stay silent on a keyed fan-out: {parsed}"
+        );
     }
 
     #[test]

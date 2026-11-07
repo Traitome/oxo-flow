@@ -945,9 +945,15 @@ report caption, and (since the cancellation-semantics change) the terminal
 **`status`** (`"failed"`, `"cancelled"`, `"timed_out"`, …), the
 **`skip_reason`** when the rule did not run to completion, and the
 terminating **`signal`** when the process died to one. The three newer
-fields are optional and absent in checkpoints written by older engines —
-consumers must infer legacy records as before (failure when the rule is in
-`failed_rules`).
+fields (`status`, `skip_reason`, `signal`) are optional and absent in
+checkpoints written by older engines — consumers must infer legacy records
+as before (failure when the rule is in `failed_rules`). Each entry also
+persists the execution **`started_at`** and **`finished_at`**
+timestamps, so status consumers can report a node's start alongside its
+duration for both completed and failed rules
+(see the web API's [Run Status](../reference/web-api.md#run-status));
+both are absent in legacy checkpoints and for rules whose execution never
+started.
 
 Timestamp semantics: the engine stamps
 **`enqueued_at`** when an execution attempt is submitted and stamps
@@ -957,12 +963,12 @@ spends waiting in the resource pool (same split as the cluster driver's
 `queue_wait_secs`), and all wall-time reporting (`duration_ms`, the
 report's Benchmarks `Wall Time` column, `benchmarks.wall_time_secs`) is
 measured from `started_at`, so a rule parked behind busy resources never
-inflates its reported runtime. These two timestamps live on the engine's
-in-memory job records and are not part of `rule_runs` entries; the
-checkpoint persists the resulting wall time via `benchmarks.wall_time_secs`,
-and cluster runs additionally persist the split per job as
-`queue_wait_secs` in `jobs/<rule>/status.json` (see
-[What a finished job records](#what-a-finished-job-records)).
+inflates its reported runtime. The checkpoint persists these timestamps in
+the `rule_runs` entry itself (alongside the resulting wall time via
+`benchmarks.wall_time_secs`), and cluster runs additionally persist the
+split per job as `queue_wait_secs` in `jobs/<rule>/status.json` (see
+[What a finished job records](#what-a-finished-job-records)). `enqueued_at`
+remains in-memory only.
 
 The tails are truncated to the **last 64 KiB per stream by default** and
 prefixed with a `…` marker when cut. Set `OXO_FLOW_OUTPUT_TAIL_BYTES` to

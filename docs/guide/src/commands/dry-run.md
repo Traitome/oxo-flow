@@ -90,7 +90,9 @@ keying the outputs by the dimension's wildcard for a genuine per-element
 rule. The detector mirrors the engine's fan-out semantics, so fully keyed
 rules, `input_groups` rules, `output_pattern` producers, consumers keyed
 by the producer's fresh wildcard, and `when`-gated-off rules stay
-silent.
+silent. The check needs no expansion context, so [`validate`](validate.md)
+reports the same `SCI-AGG-RACE` finding (as a warning, exit `0`) before a
+dry-run is ever needed.
 
 ```bash
 # A 2-sample pilot of a VQSR workflow fails for scientific reasons —

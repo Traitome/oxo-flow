@@ -964,6 +964,17 @@ async fn web_wildcard_run_status_matches_checkpoint_instances() {
         .find(|n| n["rule"] == "align_experiment")
         .expect("align_experiment node must exist");
     assert_eq!(align["status"], "success");
+    // Issue #1040 P3-3: a completed node reports both its start timestamp
+    // and its duration — the checkpoint persists the execution timestamps
+    // instead of only the benchmark wall time.
+    assert!(
+        align["started_at"].as_str().is_some(),
+        "a completed node must carry started_at: {align}"
+    );
+    assert!(
+        align["duration_ms"].is_u64(),
+        "a completed node must carry duration_ms: {align}"
+    );
 
     // The DAG endpoint shares the same derivation.
     let dag: serde_json::Value = client
@@ -983,6 +994,15 @@ async fn web_wildcard_run_status_matches_checkpoint_instances() {
     assert_eq!(
         dag_align["status"], "success",
         "DAG node must aggregate instance success, not show pending: {dag}"
+    );
+    // Issue #1040 P3-3: dag-status carries the same terminal timing pair.
+    assert!(
+        dag_align["started_at"].as_str().is_some(),
+        "a completed DAG node must carry started_at: {dag_align}"
+    );
+    assert!(
+        dag_align["duration_ms"].is_u64(),
+        "a completed DAG node must carry duration_ms: {dag_align}"
     );
 }
 

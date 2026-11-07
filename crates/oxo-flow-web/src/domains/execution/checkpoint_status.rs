@@ -11,8 +11,26 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use oxo_flow_core::executor::CheckpointState;
+use oxo_flow_core::executor::checkpoint::RuleRunRecord;
 
 use super::types::{NodeStatus, NodeStatusItem};
+
+/// Terminal timing from the persisted `rule_runs` record: an RFC 3339 UTC
+/// start timestamp and the execution duration derived from the record's
+/// start/end pair. Both stay `None` when the record is absent, predates the
+/// timestamp fields (legacy checkpoint), or describes a rule that never
+/// started; a field the record does carry is reported as-is.
+fn recorded_timing(record: Option<&RuleRunRecord>) -> (Option<String>, Option<u64>) {
+    let Some(record) = record else {
+        return (None, None);
+    };
+    let started_at = record.started_at.map(|start| start.to_rfc3339());
+    let duration_ms = record
+        .started_at
+        .zip(record.finished_at)
+        .map(|(start, end)| end.signed_duration_since(start).num_milliseconds().max(0) as u64);
+    (started_at, duration_ms)
+}
 
 /// Derive node statuses from the run's checkpoint file.
 ///
@@ -62,14 +80,26 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
 
     let mut items: Vec<NodeStatusItem> = Vec::new();
     for rule in &checkpoint.completed_rules {
+        let record = checkpoint.rule_runs.get(rule);
+        let benchmark = checkpoint.benchmarks.get(rule);
+        // Synthetic up-to-date records (issue #324 F-1) carry a 0.0
+        // placeholder wall time — report neither a start nor a fake "0ms":
+        // the rule did not execute in this run.
+        let is_synthetic = benchmark.is_some_and(|b| b.recorded_as.is_some());
+        let recorded_start = if is_synthetic {
+            None
+        } else {
+            recorded_timing(record).0
+        };
         items.push(NodeStatusItem {
             rule: rule.clone(),
             status: NodeStatus::Success,
-            started_at: None,
-            // Synthetic up-to-date records (issue #324 F-1) carry a 0.0
-            // placeholder wall time — report no duration rather than a
-            // fake "0ms".
-            duration_ms: checkpoint.benchmarks.get(rule).and_then(|b| {
+            // Execution start from the same `rule_runs` record that
+            // carries the exit code; paired with the benchmark duration
+            // below so a current run's completed nodes report both
+            // (issue #1040 P3-3).
+            started_at: recorded_start,
+            duration_ms: benchmark.and_then(|b| {
                 if b.recorded_as.is_some() {
                     None
                 } else {
@@ -78,11 +108,7 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
             }),
             // The persisted rule_runs record (issue #758): completed rules
             // exited 0; a recorded code (legacy or 0) wins.
-            exit_code: checkpoint
-                .rule_runs
-                .get(rule)
-                .and_then(|r| r.exit_code)
-                .or(Some(0)),
+            exit_code: record.and_then(|r| r.exit_code).or(Some(0)),
             progress_pct: None,
             stderr_tail: None,
             stdout_tail: None,
@@ -108,11 +134,20 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
             NodeStatus::Failed
         };
         let is_failed = status == NodeStatus::Failed;
+        // A failed (or cancellation-demoted) rule has no benchmark record —
+        // derive both its start and its duration from the execution
+        // record's timestamp pair (issue #1040 P3-3). Skipped rules never
+        // executed; they keep null timing.
+        let (started_at, duration_ms) = if is_failed || status == NodeStatus::Cancelled {
+            recorded_timing(record)
+        } else {
+            (None, None)
+        };
         items.push(NodeStatusItem {
             rule: rule.clone(),
             status,
-            started_at: None,
-            duration_ms: None,
+            started_at,
+            duration_ms,
             // The persisted failure data the CLI narrates (issue #758) —
             // the web used to hardcode None here even though the frontend
             // already renders a non-null exit code.
@@ -180,7 +215,7 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
             .iter()
             .chain(checkpoint.failed_rules.iter())
             .collect();
-        let mut cancelled: Vec<&String> = checkpoint
+        let mut cancelled: Vec<(&String, &RuleRunRecord)> = checkpoint
             .rule_runs
             .iter()
             .filter(|(name, rec)| {
@@ -196,22 +231,30 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
                     && checkpoint.when_verdicts.get(*name) != Some(&false)
                     && !running.iter().any(|r| r == *name)
             })
-            .map(|(name, _)| name)
             .collect();
-        cancelled.sort();
-        for rule in cancelled {
+        cancelled.sort_by(|a, b| a.0.cmp(b.0));
+        for (rule, record) in cancelled {
+            // A run-level cancel killed these too — same terminal
+            // vocabulary as the failed_rules branch above. In a FAILED
+            // run they stay Skipped: abort collateral, not the failure.
+            let status = if run_cancelled {
+                NodeStatus::Cancelled
+            } else {
+                NodeStatus::Skipped
+            };
+            // A cancelled rule that was already executing has a recorded
+            // start/end pair; surface it exactly like a failed rule. Skipped
+            // abort collateral never reports execution timing.
+            let (started_at, duration_ms) = if status == NodeStatus::Cancelled {
+                recorded_timing(Some(record))
+            } else {
+                (None, None)
+            };
             items.push(NodeStatusItem {
                 rule: rule.clone(),
-                // A run-level cancel killed these too — same terminal
-                // vocabulary as the failed_rules branch above. In a FAILED
-                // run they stay Skipped: abort collateral, not the failure.
-                status: if run_cancelled {
-                    NodeStatus::Cancelled
-                } else {
-                    NodeStatus::Skipped
-                },
-                started_at: None,
-                duration_ms: None,
+                status,
+                started_at,
+                duration_ms,
                 exit_code: None,
                 progress_pct: None,
                 stderr_tail: None,
@@ -352,6 +395,78 @@ mod tests {
         assert_eq!(fastqc.duration_ms, Some(1500));
         let align = items.iter().find(|i| i.rule == "align").unwrap();
         assert!(matches!(align.status, NodeStatus::Failed));
+    }
+
+    #[test]
+    fn terminal_nodes_report_started_at_and_duration() {
+        // Issue #1040 P3-3: completed and failed nodes used to report
+        // `duration_ms` without `started_at` (and failed nodes no duration at
+        // all) because the checkpoint writer dropped the execution
+        // timestamps. Both fields must come from the same `rule_runs`
+        // record, and fields with no underlying data stay null together.
+        let dir = std::env::temp_dir().join("cp-terminal-timing");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["fastqc", "cached"],
+                "failed_rules": ["align"],
+                "running": ["sort"],
+                "benchmarks": {
+                    "fastqc": {"rule": "fastqc", "wall_time_secs": 1.5, "retries": 0},
+                    "cached": {"rule": "cached", "wall_time_secs": 0.0, "retries": 0, "recorded_as": "outputs up-to-date"}
+                },
+                "rule_runs": {
+                    "fastqc": {"exit_code": 0, "started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01.500Z"},
+                    "cached": {"exit_code": 0, "started_at": "2025-12-31T00:00:00Z", "finished_at": "2025-12-31T00:00:01Z"},
+                    "align": {"exit_code": 1, "started_at": "2026-01-01T00:01:00Z", "finished_at": "2026-01-01T00:01:02.500Z"}
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, "running");
+        let fastqc = items.iter().find(|i| i.rule == "fastqc").unwrap();
+        assert_eq!(
+            fastqc.started_at.as_deref(),
+            Some("2026-01-01T00:00:00+00:00"),
+            "a completed node must carry its execution start"
+        );
+        assert_eq!(fastqc.duration_ms, Some(1500));
+        let align = items.iter().find(|i| i.rule == "align").unwrap();
+        assert_eq!(
+            align.started_at.as_deref(),
+            Some("2026-01-01T00:01:00+00:00"),
+            "a failed node must carry its execution start"
+        );
+        assert_eq!(
+            align.duration_ms,
+            Some(2500),
+            "a failed node's duration derives from the recorded start/end pair"
+        );
+        // Synthetic "outputs up-to-date" completions did not execute in this
+        // run: neither field may be reported, even when a stale record keeps
+        // timestamps from an earlier execution.
+        let cached = items.iter().find(|i| i.rule == "cached").unwrap();
+        assert_eq!(cached.started_at, None);
+        assert_eq!(cached.duration_ms, None);
+        // A running rule has no recorded start/end yet; a pending rule has
+        // no record at all. Both keep sensible nulls.
+        let running = items.iter().find(|i| i.rule == "sort").unwrap();
+        assert_eq!(running.started_at, None);
+        assert_eq!(running.duration_ms, None);
+        let all = with_all_rules(
+            items,
+            &[
+                "fastqc".into(),
+                "cached".into(),
+                "align".into(),
+                "sort".into(),
+                "pending".into(),
+            ],
+        );
+        let pending = all.iter().find(|i| i.rule == "pending").unwrap();
+        assert_eq!(pending.started_at, None);
+        assert_eq!(pending.duration_ms, None);
     }
 
     #[test]

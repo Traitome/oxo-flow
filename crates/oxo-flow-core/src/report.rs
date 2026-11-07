@@ -3566,6 +3566,8 @@ mod tests {
         cp.rule_runs.insert(
             "call".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -3846,6 +3848,8 @@ input = ["out.bam"]
         cp.rule_runs.insert(
             "align".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -4102,6 +4106,8 @@ report = "Per-sample QC."
         cp.rule_runs.insert(
             "qc_cohort_S1".to_string(),
             RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -4115,6 +4121,8 @@ report = "Per-sample QC."
         cp.rule_runs.insert(
             "qc_cohort_S2".to_string(),
             RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -4754,6 +4762,8 @@ shell = "bwa mem"
         ck.rule_runs.insert(
             "summarize_cohort_S1".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -4767,6 +4777,8 @@ shell = "bwa mem"
         ck.rule_runs.insert(
             "summarize_cohort_S2".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,

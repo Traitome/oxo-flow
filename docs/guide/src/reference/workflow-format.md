@@ -1720,6 +1720,9 @@ typically a downstream aggregation rule over the keyed outputs).
 The preflight reports the racing shape as `SCI-AGG-RACE`, naming the
 unkeyed fan-out dimension (see
 [`oxo-flow dry-run` → Scientific Preflight](../commands/dry-run.md#scientific-preflight)).
+The check is static, so [`oxo-flow validate`](../commands/validate.md#aggregation-race-sci-agg-race-surfaced-in-validate)
+reports the same code as a warning too — the racing shape is known before
+any expansion or execution.
 
 ---
 

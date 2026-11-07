@@ -351,6 +351,11 @@ pub struct DagNode {
     pub label: String,
     pub status: String,
     pub color: String,
+    /// RFC 3339 UTC execution start, from the checkpoint's `rule_runs`
+    /// record. Present alongside `duration_ms` for terminal nodes that ran
+    /// (success/failed/cancelled); `null` for pending, running, skipped, and
+    /// legacy checkpoints that predate the timestamp fields.
+    pub started_at: Option<String>,
     pub duration_ms: Option<u64>,
     pub exit_code: Option<i32>,
     /// Bounded stderr tail of a failed rule (issue #758) — the DAG canvas
