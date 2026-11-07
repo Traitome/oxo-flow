@@ -9369,7 +9369,14 @@ per combination:</p>
   expansion time — a comma string (<code>"u1,u2"</code>) or array, the same semantics
   as <code>expand_inputs</code> config references. CLI <code>--arg x=u1,u2</code> or a profile
   then drives the fan-out without editing the workflow; takes precedence
-  over a static <code>values</code> when both are set.
+  over a static <code>values</code> when both are set.</p>
+<p>!!! note "The config key must exist at validation time"
+      Validation runs before CLI overrides are applied, so the referenced
+      key must be declared in the workflow's <code>[config]</code> (an array or a
+      comma string) — possibly with an empty default you replace on the
+      command line. If the key is absent, validation fails with
+      <code>[[values]] table 'x' has no values: values_from 'config.x' resolved
+      to no values</code> before any <code>--arg</code> is considered.
 - Multiple <code>[[values]]</code> tables form a cartesian product with each other
   and with sample groups / pairs (deterministic order: the first table
   varies slowest).
