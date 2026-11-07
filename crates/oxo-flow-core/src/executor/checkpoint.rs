@@ -568,6 +568,16 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub protected_tree_baselines: BTreeMap<String, InputManifest>,
+
+    /// Environment reproducibility degraded (issue #1011 P1): set when a
+    /// pixi environment's committed lock proved stale and the engine
+    /// re-solved from the manifest, parking the fresh solution in
+    /// `pixi.lock.new`. Surfaced in the run report's environment section so
+    /// methods/README layers can disclose the divergence. One-way flag —
+    /// any degraded env marks the whole run. Legacy checkpoints load false.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub env_repro_degraded: bool,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -699,6 +709,7 @@ impl CheckpointState {
             rule_runs: BTreeMap::new(),
             output_pattern_domains: BTreeMap::new(),
             protected_tree_baselines: BTreeMap::new(),
+            env_repro_degraded: false,
         }
     }
 

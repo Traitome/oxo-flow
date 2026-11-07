@@ -189,6 +189,8 @@ pub async fn resume_command(
         // resume never re-derives a from-rule closure: it continues the
         // recorded checkpoint's pending set exactly as-is.
         from_rule: None,
+        // resume re-solves degraded environments like a fresh run would
+        strict_envs: false,
     })
     .await
 }

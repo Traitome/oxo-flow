@@ -1377,6 +1377,31 @@ impl VenvBackend {
 #[derive(Debug, Default)]
 pub struct PixiBackend;
 
+impl PixiBackend {
+    /// Wrap `command` for execution inside the pixi environment described by
+    /// `spec` (the manifest FILE — see the contract notes in
+    /// [`EnvironmentBackend::wrap_command`]).
+    ///
+    /// `as_is` selects `pixi run --as-is`: solve nothing and, critically,
+    /// skip re-validating the lockfile against the upstream channels.
+    /// Issue #1011: after the stale-lock fallback the committed lock is
+    /// restored byte-identical, so the default wrap would refetch the
+    /// vanished pinned build and fail the rule; `--as-is` runs against the
+    /// installed (re-solved) environment. Only the degraded-fallback path
+    /// may set it (see [`EnvironmentResolver::pixi_mark_degraded`]).
+    fn wrap_shell(&self, command: &str, spec: &str, as_is: bool) -> Result<String> {
+        let escaped_cmd = escape_for_sh_single_quote(command);
+        let mode = if as_is {
+            "pixi run --as-is"
+        } else {
+            "pixi run"
+        };
+        Ok(format!(
+            "{mode} --manifest-path {spec} bash -c '{escaped_cmd}'"
+        ))
+    }
+}
+
 impl EnvironmentBackend for PixiBackend {
     fn name(&self) -> &str {
         "pixi"
@@ -1408,10 +1433,7 @@ impl EnvironmentBackend for PixiBackend {
         // a PATH-mutating one (like modules/venv), so shell operators and
         // continuation lines escape a prefix wrap (issue #354, live-caught
         // on the workq cluster).
-        let escaped_cmd = escape_for_sh_single_quote(command);
-        Ok(format!(
-            "pixi run --manifest-path {spec} bash -c '{escaped_cmd}'"
-        ))
+        self.wrap_shell(command, spec, false)
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -1584,13 +1606,24 @@ impl EnvironmentCache {
 
     /// Create a cache with file persistence.
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
-        let cache_file = cache_dir.join("environment_cache.json");
+        Self::with_file(cache_dir.join("environment_cache.json"))
+    }
+
+    /// Create a cache with file persistence at an explicit path.
+    /// `with_cache_dir` derives the standard ready-cache path from a
+    /// directory; issue #1011 additionally points this at the
+    /// degraded-pixi sidecar (`pixi_degraded.json`), whose entries carry
+    /// different semantics from "ready" and must never ride the ready file
+    /// (its loader would read them back as ready environments).
+    fn with_file(cache_file: std::path::PathBuf) -> Self {
         let mut cache = Self {
             ready: BTreeSet::new(),
-            cache_file: Some(cache_file.clone()),
+            cache_file: Some(cache_file),
         };
 
-        // Try to load existing cache
+        // Try to load existing cache — a missing or unreadable file leaves
+        // the set empty (degraded wrapping is then simply not applied this
+        // process, same stance as the ready cache).
         if let Err(e) = cache.load() {
             tracing::debug!("could not load environment cache: {}", e);
         }
@@ -1702,6 +1735,15 @@ pub struct EnvironmentResolver {
     /// whichever rule happened to trigger the setup first (a cold conda
     /// bootstrap is minutes, all of it spent inside the first rule).
     setup_started: std::sync::Mutex<HashMap<String, std::time::Instant>>,
+    /// Issue #1011: pixi environments (by cache key) whose setup completed
+    /// through the stale-lock fallback — usable, but not reproducible, so
+    /// rule commands wrap with `pixi run --as-is` and every run touching
+    /// one re-flips the one-way `env_repro_degraded` checkpoint disclosure.
+    /// Persists in its own sidecar file next to the ready cache (a degraded
+    /// entry must never be read back as cache-ready). Backed by the same
+    /// [`EnvironmentCache`] type — persistence is identical, only the entry
+    /// semantics differ (see [`Self::pixi_mark_degraded`]).
+    pixi_degraded: std::sync::Mutex<EnvironmentCache>,
 }
 
 impl Default for EnvironmentResolver {
@@ -1713,17 +1755,23 @@ impl Default for EnvironmentResolver {
 impl EnvironmentResolver {
     /// Create a new environment resolver.
     pub fn new() -> Self {
-        Self::with_cache_impl(EnvironmentCache::new())
+        Self::with_cache_impl(EnvironmentCache::new(), EnvironmentCache::new())
     }
 
     /// Create a new environment resolver with persistent cache directory.
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
-        Self::with_cache_impl(EnvironmentCache::with_cache_dir(cache_dir))
+        Self::with_cache_impl(
+            EnvironmentCache::with_cache_dir(cache_dir),
+            // Issue #1011 sidecar: degraded-pixi markers persist here, never
+            // in the ready cache (whose loader treats every entry as ready —
+            // the opposite of what a degraded entry means).
+            EnvironmentCache::with_file(cache_dir.join("pixi_degraded.json")),
+        )
     }
 
-    /// One constructor body: the eight backends and three lock fields are
-    /// identical for every resolver; only the cache differs.
-    fn with_cache_impl(cache: EnvironmentCache) -> Self {
+    /// One constructor body: the eight backends and four bookkeeping fields
+    /// are identical for every resolver; only the two caches differ.
+    fn with_cache_impl(cache: EnvironmentCache, degraded: EnvironmentCache) -> Self {
         Self {
             mamba: MambaBackend::new(),
             conda: CondaBackend,
@@ -1734,6 +1782,7 @@ impl EnvironmentResolver {
             modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(cache)),
+            pixi_degraded: std::sync::Mutex::new(degraded),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
             setup_origins: std::sync::Mutex::new(HashMap::new()),
             setup_started: std::sync::Mutex::new(HashMap::new()),
@@ -1778,6 +1827,32 @@ impl EnvironmentResolver {
         cache.invalidate(key);
     }
 
+    /// Mark a pixi environment (by cache key) as degraded after a successful
+    /// stale-lock fallback (issue #1011): usable, but not reproducible.
+    /// Persists to the sidecar so later processes keep wrapping rule
+    /// commands with `pixi run --as-is`; the entry expires once the parked
+    /// `pixi.lock.new` is adopted as `pixi.lock`, because the cache key
+    /// folds the lock content and the stale key stops matching.
+    pub(crate) fn pixi_mark_degraded(&self, key: &str) {
+        let mut degraded = self
+            .pixi_degraded
+            .lock()
+            .expect("environment cache mutex poisoned");
+        degraded.mark_ready(key);
+    }
+
+    /// Whether the environment identified by `key` is a degraded pixi
+    /// environment (issue #1011) — its setup completed through the
+    /// stale-lock fallback, so rule commands must wrap with
+    /// `pixi run --as-is`: re-validating the restored committed lock would
+    /// fail on the vanished upstream build.
+    pub(crate) fn pixi_degraded_contains(&self, key: &str) -> bool {
+        self.pixi_degraded
+            .lock()
+            .expect("environment cache mutex poisoned")
+            .is_ready(key)
+    }
+
     /// Wrap a command using the appropriate environment backend.
     pub fn wrap_command(
         &self,
@@ -1802,6 +1877,13 @@ impl EnvironmentResolver {
             );
         }
         if let Some(ref pixi) = env_spec.pixi {
+            // Issue #1011: a degraded environment (stale-lock fallback)
+            // wraps with `--as-is` — the committed lock was restored
+            // byte-identical and re-validating it would fail on the
+            // vanished upstream build.
+            if self.pixi_degraded_contains(&self.pixi.cache_key(pixi)) {
+                return self.pixi.wrap_shell(command, pixi, true);
+            }
             return self.pixi.wrap_command(command, pixi, resources, workdir);
         }
         if let Some(ref docker) = env_spec.docker {
@@ -3668,6 +3750,87 @@ mod tests {
         // Both lines — including the rule's own — travel inside the env.
         assert!(result.contains("mkdir -p out\ncommand -v curl"));
         assert!(result.ends_with('\''));
+    }
+
+    #[test]
+    fn pixi_wrap_uses_as_is_when_marked_degraded() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            pixi: Some("envs/pixi.toml".to_string()),
+            ..Default::default()
+        };
+        let workdir = std::path::Path::new(".");
+
+        // Unmarked: the default wrap re-validates the committed lock.
+        let plain = resolver
+            .wrap_command("python main.py", &spec, None, workdir)
+            .unwrap();
+        assert_eq!(
+            plain,
+            "pixi run --manifest-path envs/pixi.toml bash -c 'python main.py'"
+        );
+
+        // Issue #1011: after the stale-lock fallback the environment is
+        // usable but not reproducible — wrap with `--as-is` so the restored
+        // committed lock is not re-validated (the vanished upstream build
+        // would fail the rule).
+        resolver.pixi_mark_degraded(&resolver.cache_key(&spec));
+        let degraded = resolver
+            .wrap_command("python main.py", &spec, None, workdir)
+            .unwrap();
+        assert_eq!(
+            degraded,
+            "pixi run --as-is --manifest-path envs/pixi.toml bash -c 'python main.py'"
+        );
+
+        // A different pixi environment keeps the default wrap.
+        let other = EnvironmentSpec {
+            pixi: Some("envs/other.toml".to_string()),
+            ..Default::default()
+        };
+        let other_wrapped = resolver
+            .wrap_command("python main.py", &other, None, workdir)
+            .unwrap();
+        assert_eq!(
+            other_wrapped,
+            "pixi run --manifest-path envs/other.toml bash -c 'python main.py'"
+        );
+    }
+
+    #[test]
+    fn degraded_pixi_marks_persist_across_resolver_reloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = EnvironmentSpec {
+            pixi: Some("envs/pixi.toml".to_string()),
+            ..Default::default()
+        };
+        let key = EnvironmentResolver::new().cache_key(&spec);
+
+        {
+            let resolver = EnvironmentResolver::with_cache_dir(tmp.path());
+            resolver.pixi_mark_degraded(&key);
+        }
+
+        // A later process reloading the same cache dir must keep wrapping
+        // the environment with `--as-is` — warm-cache runs skip setup
+        // entirely, so the marker has to survive cross-process.
+        let reloaded = EnvironmentResolver::with_cache_dir(tmp.path());
+        let wrapped = reloaded
+            .wrap_command("python main.py", &spec, None, std::path::Path::new("."))
+            .unwrap();
+        assert_eq!(
+            wrapped,
+            "pixi run --as-is --manifest-path envs/pixi.toml bash -c 'python main.py'"
+        );
+        // The marker rides its own sidecar — never the ready cache, whose
+        // loader would resurrect it as a cache-ready environment.
+        assert!(tmp.path().join("pixi_degraded.json").is_file());
+        if let Ok(raw) = std::fs::read_to_string(tmp.path().join("environment_cache.json")) {
+            assert!(
+                !raw.contains(&key),
+                "degraded keys must never ride the ready cache: {raw}"
+            );
+        }
     }
 
     #[test]

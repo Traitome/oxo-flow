@@ -54,6 +54,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
 | `--background` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)) |
 | `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
+| `--strict-envs` | — | — | Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see [Stale pixi.lock fallback](#stale-pixilock-fallback)) — for GxP-style deployments that must never run on a re-solved environment |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -331,6 +332,55 @@ pixi manifests up front (error
 [E019](../reference/glossary.md#diagnostic-codes)) so the failure surfaces before you
 commit to a run; `run` keeps the check because manifests can also be
 created between validate and run.
+
+### Stale pixi.lock fallback
+
+A committed `pixi.lock` pins exact package builds. When an upstream channel
+later removes one of those builds (bioconda does this occasionally — old
+builds disappear), a lock-based `pixi install` fails with a fetch error
+(`failed to fetch … 404 Not Found`) and every run using that environment
+fails until the lock is refreshed by hand.
+
+`run` recovers from this automatically (issue #1011). When a pixi setup
+fails with that fetch signature and a committed `pixi.lock` sits beside the
+manifest, the executor:
+
+1. Deletes the committed lock and re-runs the setup command, so pixi
+   re-solves from the manifest.
+2. Parks the fresh solution as `pixi.lock.new` beside the committed lock
+   (never silently overwriting it).
+3. Restores the committed `pixi.lock` byte-identical.
+4. Warns loudly with the package-level diff (old lock vs new solve) and
+   marks the run's environment reproducibility as **degraded** — the report
+   environment section carries an
+   `Environment Reproducibility: degraded …` disclosure (see
+   [Report](#report-snapshots)).
+
+The run proceeds on the re-solved environment: rule commands wrap with
+`pixi run --as-is`, which skips re-validating the committed lock against the
+upstream channels — the restored lock still pins the vanished build, so the
+default wrap would fail the rule with the same 404. The degraded marker
+persists in the environment cache (a `pixi_degraded.json` sidecar beside
+`environment_cache.json`), so later runs keep wrapping with `--as-is`: they
+skip setup entirely (the re-solved environment is already materialized and
+cache-ready) but still disclose **degraded** reproducibility in the report.
+
+To adopt the fresh lock, replace `pixi.lock` with `pixi.lock.new` and commit
+it. The environment's cache key folds the lock content, so the stale degraded
+marker stops matching and the next run returns to the normal lock-validated
+wrap — nothing to clean up by hand.
+
+`--strict-envs` disables the fallback entirely: a stale-lock failure keeps
+today's hard error with a hint explaining how to refresh the lock by hand.
+Use it for GxP-style deployments that must never run on a re-solved
+environment.
+
+!!! note "What the fallback does not do"
+
+    A deterministic solver conflict (`failed to solve requirements`) is
+    **not** recoverable — re-solving would land on the same conflict — so
+    it still fails immediately. The fallback fires only for fetch failures
+    (HTTP 404/410 or equivalent) with a committed lock present.
 
 ### Pass config values
 

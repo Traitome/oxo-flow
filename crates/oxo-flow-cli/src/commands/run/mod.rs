@@ -171,6 +171,9 @@ pub struct RunRequest {
     /// new upstream outputs instead of silently passing the freshness
     /// gate with stale artifacts.
     pub from_rule: Option<String>,
+    /// Issue #1011 P2 (`--strict-envs`): keep the historical hard-fail on a
+    /// stale pixi.lock install failure instead of the graceful re-solve.
+    pub strict_envs: bool,
 }
 
 pub async fn run_command(
@@ -203,6 +206,7 @@ pub async fn run_command(
         checkpoint_override,
         allow_protected_drift,
         from_rule,
+        strict_envs,
     }: RunRequest,
 ) -> Result<()> {
     print_banner();
@@ -1048,6 +1052,9 @@ pub async fn run_command(
         storage_tiers: Some(
             oxo_flow_core::hardware::StorageTierLadder::from_engine_config(config.engine.as_ref()),
         ),
+        // Issue #1011 P2: `--strict-envs` disables the stale-pixi.lock
+        // graceful fallback so lock-based install failures hard-fail again.
+        strict_envs,
     };
 
     // Fail fast if any rule's declared request can never fit an explicit
