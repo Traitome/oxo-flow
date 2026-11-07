@@ -1261,12 +1261,25 @@ impl EnvironmentBackend for SingularityBackend {
         // interpolated {spec} raw into a shell case statement. Guard here
         // too, so nothing reaches the shell even when a caller skips
         // workflow-level validation (E016).
+        //
+        // Escape the interpolated occurrences as well (docker/conda
+        // pattern): E016/shell_risk rejects quotes at workflow level, but
+        // this builder is the backend boundary — escaping keeps a quoted
+        // spec from breaking out of the case word / test / message even
+        // when validation is skipped upstream. `{pull_spec}` only executes
+        // in the URI arm, which the guard above already cleared of quotes.
         if spec.contains("://") {
             ensure_container_spec_safe(spec)?;
         }
-        let pull_spec = mirrored_spec(spec);
+        // pull_spec only EXECUTES in the URI arm (pre-guarded above, so it
+        // can never carry a quote), but the shell parses the entire case
+        // statement before choosing an arm — a raw `'` in a local-path spec
+        // would re-pair quote contexts at parse time and restructure the
+        // command. Escape it like every other interpolation.
+        let pull_spec = escape_for_sh_single_quote(&mirrored_spec(spec));
+        let escaped_spec = escape_for_sh_single_quote(spec);
         Ok(format!(
-            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {pull_spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
+            "case '{escaped_spec}' in *://*) IMG=$(printf '%s' '{escaped_spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {pull_spec} ;; *) [ -f '{escaped_spec}' ] || {{ echo \"singularity spec '{escaped_spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -1367,8 +1380,13 @@ impl VenvBackend {
         // POSIX `.` (not `source` — a bashism): setup commands run under sh.
         // #534: quote the client-controlled spec like setup_command does.
         let quoted = escape_for_sh_single_quote(spec);
+        // The requirements path is client-controlled too — same escape-only
+        // treatment as the spec (backend boundary; E016/shell_risk already
+        // rejects quotes at workflow level, and the escaper is a no-op for
+        // every legal quote-free path).
+        let escaped_reqs = escape_for_sh_single_quote(reqs);
         Ok(format!(
-            "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate && pip install -r {reqs}"
+            "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate && pip install -r {escaped_reqs}"
         ))
     }
 }
@@ -1391,13 +1409,19 @@ impl PixiBackend {
     /// may set it (see [`EnvironmentResolver::pixi_mark_degraded`]).
     fn wrap_shell(&self, command: &str, spec: &str, as_is: bool) -> Result<String> {
         let escaped_cmd = escape_for_sh_single_quote(command);
+        // Backend boundary: the manifest path is client-controlled. E016
+        // already rejects quotes at workflow level; escaping keeps a quoted
+        // spec from opening a shell-quoting context even when validation is
+        // skipped upstream (docker/conda pattern — escape-only, so every
+        // quote-free spec renders byte-identical).
+        let escaped_spec = escape_for_sh_single_quote(spec);
         let mode = if as_is {
             "pixi run --as-is"
         } else {
             "pixi run"
         };
         Ok(format!(
-            "{mode} --manifest-path {spec} bash -c '{escaped_cmd}'"
+            "{mode} --manifest-path {escaped_spec} bash -c '{escaped_cmd}'"
         ))
     }
 }
@@ -1437,7 +1461,11 @@ impl EnvironmentBackend for PixiBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("pixi install --manifest-path {spec}"))
+        // Backend boundary: escape the client-controlled manifest path
+        // (see wrap_shell — escape-only, quote-free specs render
+        // byte-identical).
+        let escaped_spec = escape_for_sh_single_quote(spec);
+        Ok(format!("pixi install --manifest-path {escaped_spec}"))
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -3030,6 +3058,29 @@ mod tests {
     }
 
     #[test]
+    fn singularity_setup_escapes_quoted_local_path() {
+        // Backend boundary: a local SIF path with a `'` must not close the
+        // case word / `[ -f ]` test early (E016 rejects quotes at workflow
+        // level; the builder is the last line of defense).
+        let backend = SingularityBackend::new();
+        let evil = "/data/images/bw'; touch pwn; #.sif";
+        let cmd = backend.setup_command(evil).unwrap();
+        let escaped = evil.replace('\'', "'\\''");
+        assert!(
+            cmd.contains(&format!("case '{escaped}' in")),
+            "case word must be escaped: {cmd}"
+        );
+        assert!(
+            cmd.contains(&format!("[ -f '{escaped}' ]")),
+            "existence test must be escaped: {cmd}"
+        );
+        assert!(
+            !cmd.contains(evil),
+            "raw spec must never reach the shell: {cmd}"
+        );
+    }
+
+    #[test]
     fn singularity_teardown_is_noop() {
         let backend = SingularityBackend::new();
         assert!(backend.teardown_command("image.sif").unwrap().is_none());
@@ -3165,6 +3216,39 @@ mod tests {
         // name) fails whenever the manifest is not in the CWD.
         let cmd = backend.setup_command("envs/pixi.toml").unwrap();
         assert_eq!(cmd, "pixi install --manifest-path envs/pixi.toml");
+    }
+
+    #[test]
+    fn pixi_setup_escapes_quoted_manifest_path() {
+        // Backend boundary (see venv_setup_escapes_quoted_requirements_path).
+        let backend = PixiBackend;
+        let evil = "envs/pix'; touch pwn; #.toml";
+        let cmd = backend.setup_command(evil).unwrap();
+        let escaped = evil.replace('\'', "'\\''");
+        assert!(
+            cmd.contains(&escaped),
+            "manifest path must be escaped: {cmd}"
+        );
+        assert!(
+            !cmd.contains(evil),
+            "raw manifest path must never reach the shell: {cmd}"
+        );
+    }
+
+    #[test]
+    fn pixi_wrap_escapes_quoted_manifest_path() {
+        let backend = PixiBackend;
+        let evil = "envs/pix'; rm -rf ~; #.toml";
+        let cmd = backend.wrap_shell("python main.py", evil, false).unwrap();
+        let escaped = evil.replace('\'', "'\\''");
+        assert!(
+            cmd.contains(&escaped),
+            "manifest path must be escaped: {cmd}"
+        );
+        assert!(
+            !cmd.contains(evil),
+            "raw manifest path must never reach the shell: {cmd}"
+        );
     }
 
     #[test]
@@ -4080,6 +4164,25 @@ mod tests {
         let backend = VenvBackend;
         let cmd = backend.setup_command_with_reqs(".venv", None).unwrap();
         assert!(cmd.contains("pip install -r requirements.txt"));
+    }
+
+    #[test]
+    fn venv_setup_escapes_quoted_requirements_path() {
+        // Backend boundary: E016/shell_risk rejects quotes at workflow
+        // level, but the builder must not hand a raw `'` to the shell even
+        // when a caller skips validation (#534 pattern — escape-only, so a
+        // quoted path cannot close the `-r` token early).
+        let backend = VenvBackend;
+        let evil = "reqs'; touch pwn; #.txt";
+        let cmd = backend
+            .setup_command_with_reqs(".venv", Some(evil))
+            .unwrap();
+        let escaped = evil.replace('\'', "'\\''");
+        assert!(cmd.contains(&escaped), "reqs must be escaped: {cmd}");
+        assert!(
+            !cmd.contains(evil),
+            "raw reqs must never reach the shell: {cmd}"
+        );
     }
 
     // --- modules init guard test ----------------------------------------------
