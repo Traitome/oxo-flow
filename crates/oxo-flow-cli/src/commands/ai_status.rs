@@ -31,6 +31,22 @@ fn keep_saved_api_url(
     }
 }
 
+/// Persist the setup wizard's selections through the shared config writer
+/// (which honors `OXO_FLOW_AI_CONFIG`, so tests can redirect the file).
+///
+/// The wizard never asks for an endpoint, so keep the one already persisted
+/// (for this provider) instead of wiping it.
+fn persist_setup_config(provider_name: &str, api_key: Option<&str>, model: Option<&str>) {
+    let saved = provider::load_ai_config();
+    let api_url = keep_saved_api_url(
+        provider_name,
+        None,
+        saved.as_ref().map(|(kind, ..)| kind.as_str()),
+        saved.as_ref().map(|(_, _, url, _)| url.as_str()),
+    );
+    provider::save_ai_config(provider_name, api_key, api_url.as_deref(), model);
+}
+
 /// The quick-status exit contract: the connectivity probe is a real network
 /// call, and a FAIL must surface as a non-zero exit so scripts can rely on
 /// `oxo-flow ai` — the same contract `ai test` follows.
@@ -274,7 +290,10 @@ pub async fn ai_setup_command() -> Result<()> {
         );
         println!();
         println!("  Or edit the config file directly:");
-        println!("    {}", "~/.oxo-flow/ai_config.json".dimmed());
+        println!(
+            "    {}",
+            provider::ai_config_path().display().to_string().dimmed()
+        );
         println!();
         println!("  See docs: https://traitome.github.io/oxo-flow/latest/reference/ai-cli/");
         return Ok(());
@@ -283,7 +302,10 @@ pub async fn ai_setup_command() -> Result<()> {
     println!("{}", "AI Setup Wizard".bold().green().underline());
     println!();
     println!("  This will configure AI for oxo-flow and save to:");
-    println!("    {}", "~/.oxo-flow/ai_config.json".dimmed());
+    println!(
+        "    {}",
+        provider::ai_config_path().display().to_string().dimmed()
+    );
     println!();
 
     // Step 1: Choose provider
@@ -335,23 +357,13 @@ pub async fn ai_setup_command() -> Result<()> {
     let model = model.trim().to_string();
     let model = if model.is_empty() { None } else { Some(model) };
 
-    // Save config. The wizard never asks for an endpoint, so keep the one
-    // already persisted (for this provider) instead of wiping it.
-    let key_ref: Option<&str> = api_key.as_deref();
-    let model_ref: Option<&str> = model.as_deref();
-    let saved = provider::load_ai_config();
-    let api_url = keep_saved_api_url(
-        provider_name,
-        None,
-        saved.as_ref().map(|(k, ..)| k.as_str()),
-        saved.as_ref().map(|(_, _, url, _)| url.as_str()),
-    );
-    oxo_flow_ai::provider::save_ai_config(provider_name, key_ref, api_url.as_deref(), model_ref);
+    persist_setup_config(provider_name, api_key.as_deref(), model.as_deref());
 
     println!();
     println!(
-        "{} Configuration saved to ~/.oxo-flow/ai_config.json",
-        "✓".green()
+        "{} Configuration saved to {}",
+        "✓".green(),
+        provider::ai_config_path().display()
     );
     if api_key.is_some() {
         println!();

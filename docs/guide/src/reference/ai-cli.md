@@ -48,7 +48,7 @@ export OXO_FLOW_AI_MODEL="llama3"
 # variables needed. See "Environment Variables" below for the exact rules.
 ```
 
-Configuration persists to `~/.oxo-flow/ai_config.json` after first use.
+Configuration persists to `~/.oxo-flow/ai_config.json` after first use (or to the file named by `OXO_FLOW_AI_CONFIG`, when set).
 
 ### 2. Enable AI in Your Workflow
 
@@ -281,6 +281,12 @@ is fail-closed end to end:
 }
 ```
 
+Set `OXO_FLOW_AI_CONFIG` to an explicit file path to redirect this location
+for both reads and writes. It is the hermetic knob for tests and CI: while it
+is set the legacy `~/.config/oxo-flow/ai_config.json` migration fallback is
+skipped, so a redirected process cannot touch the user's real config. Unset
+(the default) keeps the `$HOME` path above.
+
 ### Workflow-Level Config (`[ai]` section in `.oxoflow`)
 
 ```toml
@@ -336,6 +342,7 @@ repository.
 | `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
+| `OXO_FLOW_AI_CONFIG` | Explicit AI config file path, used for BOTH reads and writes. When set it is authoritative: the legacy `~/.config/oxo-flow/ai_config.json` migration fallback is skipped, so a redirected process can never read or rewrite the `$HOME`-scoped file. An empty value is ignored; a relative path anchors to the process cwd, and parent directories are created on save. This is the hermetic knob for tests and CI (a web integration test once overwrote the operator's real config) | `$HOME/.oxo-flow/ai_config.json` |
 | `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced | `16384` |
 | `OXO_FLOW_AI_CONTEXT_TOKENS` | Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. `131072`). The Claude backend clamps `max_tokens` per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side) | unset |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (`/api/chat/send/json`, `/api/ai/translate`), which answer `504 AI_TIMEOUT` when it expires | `300` |
