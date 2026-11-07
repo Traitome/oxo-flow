@@ -403,16 +403,17 @@ Malformed or unknown pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
 checked by the same core BioType validator as CLI preflight. Typed
 declarations are detected structurally from parsed TOML, including both
 table forms such as `[types.*]` / `[rules.types]` and inline forms such as
-`types = { ... }`. Only the host workflow and locally staged sources reached
-through `[[include]]` participate in that check; unrelated staged assets are
-ignored. Any reachable typed include or uninspectable include fails closed
-regardless of optional fields. A directly typed workflow is validated in
-place when it has no include graph; adding `config_overrides` to that direct
-typed path also fails closed. In those cases the web layer cannot yet
-reconstruct the CLI's fully resolved graph, so it responds with
-`400 {"code":"TYPED_ADMISSION_UNSUPPORTED"}` before creating a run row. Use
-the CLI admission path for typed workflows that depend on includes or
-configuration overrides until resolved admission lands.
+`types = { ... }`. The web admission layer resolves the full include graph
+by staging `workflow.oxoflow` and all `include_files` sources on disk, then
+re-parsing through the canonical `from_file` path (the same machinery the
+CLI preflight uses) and running `validate_workflow_types` on the merged
+config. This covers typed workflows with local include graphs, typed
+includes, and `config_overrides` (issue #1018). Unresolvable includes
+(`repo = ...` git includes, missing files) surface as
+`400 {"code":"RUN_ERROR"}` from the canonical parser — not a blanket
+typed-admission rejection. Only the host workflow and locally staged sources
+reached through `[[include]]` participate in that check; unrelated staged
+assets are ignored.
 
 Execution flags are forwarded to the CLI executor:
 
