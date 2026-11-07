@@ -862,6 +862,14 @@ The translate endpoints take `{ "intent": "<natural-language description>",
 "context": { "data_analysis_id": "<uuid>" } }` — `intent` is REQUIRED (sending
 only a `prompt` field fails deserialization); `context` is optional.
 
+`POST /api/ai/translate` (the non-streaming variant) budgets the WHOLE
+generation — every tool and validation round — at
+`OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
+answers `504 {code: "AI_TIMEOUT"}` with the standard
+`{code, message, detail, suggestion}` body, and `suggestion` names the knob.
+Use `POST /api/ai/translate/stream` for generations expected to run longer:
+the SSE route is not capped by this total budget.
+
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. `GET /api/ai/config/effective` shows the resolved result and
@@ -931,6 +939,13 @@ Transport behavior:
 - The browser-side watchdog is derived from `ready.idle_timeout_secs`; on
   expiry the client aborts the fetch, renders the error with a Retry action,
   and re-enables the send button.
+- `POST /api/chat/send/json` (the non-streaming variant) budgets the WHOLE
+  generation — every tool and validation round — at
+  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
+  answers `504 {code: "AI_TIMEOUT"}` with the standard
+  `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
+  The SSE route above is not capped by this total budget; use it for
+  generations expected to run longer.
 
 ### Chat session archives
 

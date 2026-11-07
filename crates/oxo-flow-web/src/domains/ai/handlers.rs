@@ -94,9 +94,15 @@ fn require_usable_provider(
     responses(
         (status = 200, description = "Success", body = TranslateResponse),
         (status = 400, description = "Error", body = ApiError),
+        (status = 504, description = "AI generation exceeded OXO_FLOW_AI_TIMEOUT_SECS", body = ApiError),
     )
 )]
 /// POST /api/ai/translate — standard JSON response.
+///
+/// The whole generation (all tool and validation rounds) is bounded by
+/// `OXO_FLOW_AI_TIMEOUT_SECS`; expiry answers `504 AI_TIMEOUT` instead of
+/// letting a reverse proxy kill the connection with no structured answer
+/// (issue #1040 P3-5).
 pub async fn translate(
     authenticated: Option<Extension<CurrentUser>>,
     ApiJson(req): ApiJson<TranslateRequest>,
@@ -115,13 +121,27 @@ pub async fn translate(
     let provider = crate::ai_provider::provider_for(&user.id).await;
     let templates = super::super::workflow::handlers::top_template_names().await;
 
-    super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates)
-        .await
-        .map(Json)
-        .map_err(|e| {
-            let (status, error) = translate_error_parts(&e);
-            (status, Json(error))
-        })
+    let budget = super::timeout::json_route_timeout();
+    let translated = match super::timeout::with_budget(
+        budget,
+        super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates),
+    )
+    .await
+    {
+        Some(result) => result,
+        None => {
+            tracing::warn!(
+                endpoint = "/api/ai/translate",
+                budget_secs = budget.as_secs(),
+                "AI JSON route exceeded its total timeout budget"
+            );
+            return Err(super::timeout::timeout_response(budget));
+        }
+    };
+    translated.map(Json).map_err(|e| {
+        let (status, error) = translate_error_parts(&e);
+        (status, Json(error))
+    })
 }
 
 #[utoipa::path(
