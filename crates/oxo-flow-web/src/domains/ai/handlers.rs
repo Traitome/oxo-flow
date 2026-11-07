@@ -87,13 +87,15 @@ fn require_usable_provider(
     }
 }
 
-/// The structured refusal shared by every AI configuration-update endpoint
-/// while `OXO_FLOW_AI_PROVIDER=disabled` pins the process off.
+/// The structured refusal for the runtime-only AI configuration endpoint
+/// (`POST /api/ai/config`) while `OXO_FLOW_AI_PROVIDER=disabled` pins the
+/// process off.
 ///
-/// Contract: reject, do not apply, do not persist. The check runs before
-/// any DB write, config-file write, or runtime reconfiguration, so a save
-/// can neither resurrect AI nor leave durable state that contradicts the
-/// pin. `pinned_disabled` is injected so the contract is unit-testable
+/// That endpoint has no durable tier — applying to the live registry is its
+/// only effect — so under the pin there is nothing meaningful to do but
+/// refuse. The persisted PUT server/user tiers instead save normally and
+/// suppress only activation (`applied_to_runtime: false`); see their
+/// handlers. `pinned_disabled` is injected so the contract is unit-testable
 /// without process-global env mutation (mirrors `provider_candidates_for`
 /// in the AI service).
 fn reject_config_update_when_pinned(
@@ -796,7 +798,11 @@ pub async fn update_server_ai_config(
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
-    reject_config_update_when_pinned(oxo_flow_ai::provider::provider_pinned_disabled())?;
+    // Contract (issue #1040 follow-up): under `OXO_FLOW_AI_PROVIDER=disabled`
+    // the save still persists — Settings must stay usable, and the stored
+    // config applies after an unpinned restart — but the runtime is NEVER
+    // reconfigured, so a pinned process cannot be resurrected by an API call.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
     let backend = get_backend()?;
     let existing = backend
         .get_ai_provider_config(None)
@@ -846,28 +852,37 @@ pub async fn update_server_ai_config(
 
     // Apply only after durable persistence so a failed save cannot leave the
     // runtime pointing at a configuration that disappears on restart.
-    crate::ai_provider::invalidate_provider_cache();
-    if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-        &saved.provider,
-        runtime_api_key(saved.api_key.as_deref()),
-        runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
-        runtime_optional(saved.model.as_deref().unwrap_or_default()),
-    ) {
-        tracing::error!(
-            provider = %saved.provider,
-            error = %error,
-            "server AI configuration was persisted but could not be activated"
+    if pinned_disabled {
+        tracing::warn!(
+            "server AI configuration persisted but not activated: \
+             OXO_FLOW_AI_PROVIDER=disabled pins this process off"
         );
-        return Err(err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AI_RECONFIGURE_FAILED",
-            "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
-        ));
+    } else {
+        crate::ai_provider::invalidate_provider_cache();
+        if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            &saved.provider,
+            runtime_api_key(saved.api_key.as_deref()),
+            runtime_optional(saved.api_url.as_deref().unwrap_or_default()),
+            runtime_optional(saved.model.as_deref().unwrap_or_default()),
+        ) {
+            tracing::error!(
+                provider = %saved.provider,
+                error = %error,
+                "server AI configuration was persisted but could not be activated"
+            );
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI_RECONFIGURE_FAILED",
+                "AI configuration was saved but could not be activated; correct the provider settings or restart the server.".into(),
+            ));
+        }
     }
 
-    Ok(Json(
-        serde_json::json!({"status": "updated", "provider": saved.provider}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "updated",
+        "provider": saved.provider,
+        "applied_to_runtime": !pinned_disabled,
+    })))
 }
 
 #[utoipa::path(
@@ -956,10 +971,10 @@ pub async fn update_user_ai_config(
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
-    // Every user tier is bypassed by the pin (provider_for returns Noop), so
-    // persisting a row the runtime is forbidden to use would only create a
-    // misleading settings state. Refuse before touching storage.
-    reject_config_update_when_pinned(oxo_flow_ai::provider::provider_pinned_disabled())?;
+    // Same contract as the server tier: persist the row (Settings stays
+    // usable; GET reports `disabled_by_env` so the effective state is never
+    // misrepresented), but never reconfigure the runtime under the pin.
+    let pinned_disabled = oxo_flow_ai::provider::provider_pinned_disabled();
     let backend = get_backend()?;
 
     let provider = req
@@ -1020,8 +1035,10 @@ pub async fn update_user_ai_config(
 
     // The runtime serves ONE provider registry per process: in personal
     // mode (or for admins) applying it immediately is expected. Non-admin
-    // team users' rows are resolved per user by provider_for().
-    let applied = crate::server::running_mode() == "personal" || user.is_admin();
+    // team users' rows are resolved per user by provider_for(). The pin
+    // overrides all of it: never apply while `OXO_FLOW_AI_PROVIDER=disabled`.
+    let applied =
+        !pinned_disabled && (crate::server::running_mode() == "personal" || user.is_admin());
     crate::ai_provider::invalidate_provider_for(&user.id);
     if applied
         && let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
@@ -1126,8 +1143,8 @@ mod tests {
     use axum::http::StatusCode;
 
     #[test]
-    fn pinned_config_updates_are_refused_with_a_structured_conflict() {
-        // Unpinned: handlers proceed to their normal persistence/apply path.
+    fn pinned_runtime_config_endpoint_is_refused_with_a_structured_conflict() {
+        // Unpinned: the endpoint proceeds to its normal reconfigure path.
         assert!(reject_config_update_when_pinned(false).is_ok());
 
         let (status, body) = reject_config_update_when_pinned(true).expect_err("pin must refuse");

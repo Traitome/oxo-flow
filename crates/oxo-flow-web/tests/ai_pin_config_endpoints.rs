@@ -7,8 +7,10 @@
 //! provider on a pinned process, the next `POST /api/ai/test` dialed out,
 //! and `/api/health` reported `connected`.
 //!
-//! Contract under test: configuration updates are refused with
-//! `409 AI_DISABLED_BY_ENV` before any persistence or runtime change, and
+//! Contract under test: the runtime-only `POST /api/ai/config` is refused
+//! with `409 AI_DISABLED_BY_ENV`; the persisted PUT server/user tiers save
+//! normally (Settings stays usable, the config applies after an unpinned
+//! restart) but report `applied: false` and NEVER reconfigure the runtime;
 //! the test probe answers `success: false` / `provider: "disabled"` without
 //! constructing an HTTP client. Unpinned behavior is unchanged.
 //!
@@ -134,13 +136,6 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
     )
 }
 
-async fn count_provider_rows() -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM ai_provider_config")
-        .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-        .await
-        .expect("count ai_provider_config rows")
-}
-
 fn fake_provider_body(api_url: &str) -> Value {
     json!({
         "provider": "openai",
@@ -163,33 +158,50 @@ async fn pinned_config_updates_are_rejected_and_every_state_surface_stays_disabl
     assert_eq!(status, StatusCode::OK, "{health:?}");
     assert_eq!(health["components"]["ai_provider"]["status"], "disabled");
 
-    // The exact bypass the reviewer found: every configuration-update
-    // endpoint must refuse with the shared structured error.
-    let rows_before = count_provider_rows().await;
+    // The runtime-only endpoint cannot persist anything, so under the pin it
+    // refuses outright with the shared structured error.
     let body = fake_provider_body("http://127.0.0.1:9/v1");
+    let (status, error) = request_json(&app, "POST", "/api/ai/config", body.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error:?}");
+    assert_eq!(error["code"], "AI_DISABLED_BY_ENV");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("OXO_FLOW_AI_PROVIDER=disabled")),
+        "{error:?}"
+    );
+    assert!(error["detail"].is_string(), "{error:?}");
+    assert!(error["suggestion"].is_string(), "{error:?}");
+
+    // The persisted tiers keep saving (Settings stays usable — regression
+    // #545 pins PUT user config round-trips even on a disabled server), but
+    // they must never apply to the pinned runtime.
     for (method, uri) in [
-        ("POST", "/api/ai/config"),
         ("PUT", "/api/ai/config/server"),
         ("PUT", "/api/ai/config/user"),
     ] {
-        let (status, error) = request_json(&app, method, uri, body.clone()).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {error:?}");
-        assert_eq!(error["code"], "AI_DISABLED_BY_ENV", "{method} {uri}");
-        assert!(
-            error["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("OXO_FLOW_AI_PROVIDER=disabled")),
-            "{method} {uri}: {error:?}"
+        let (status, saved) = request_json(&app, method, uri, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{method} {uri}: {saved:?}");
+        assert_eq!(
+            saved["applied_to_runtime"], false,
+            "{method} {uri}: {saved:?}"
         );
-        assert!(error["detail"].is_string(), "{method} {uri}: {error:?}");
-        assert!(error["suggestion"].is_string(), "{method} {uri}: {error:?}");
     }
-    // Refusal precedes persistence: no row was written by any variant.
+    // Persistence happened (both tiers round-trip the saved provider), yet
+    // nothing was activated. Row counts are upsert-shaped, so assert the
+    // stored values rather than a count delta.
+    let (_, server_saved) = get_json(&app, "/api/ai/config/server").await;
     assert_eq!(
-        count_provider_rows().await,
-        rows_before,
-        "a rejected configuration update must not persist"
+        server_saved["server_config"]["provider"], "openai",
+        "the server tier persisted under the pin: {server_saved:?}"
     );
+    assert_eq!(server_saved["disabled_by_env"], true, "{server_saved:?}");
+    let (_, user_saved) = get_json(&app, "/api/ai/config/user").await;
+    assert_eq!(
+        user_saved["user_config"]["provider"], "openai",
+        "the user tier persisted under the pin: {user_saved:?}"
+    );
+    assert_eq!(user_saved["disabled_by_env"], true, "{user_saved:?}");
 
     // Nothing resurrected the registry or its status surfaces.
     assert!(!oxo_flow_ai::AI.is_enabled());

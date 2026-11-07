@@ -332,7 +332,7 @@ repository.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama`, or `disabled`. An explicit `disabled` is pinned: it outranks saved config and, in the web server, refuses AI configuration updates (`409 AI_DISABLED_BY_ENV`) and answers the connectivity test with `disabled` without dialing out | unset: auto-detect from credentials; `disabled` only when none resolve |
+| `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama`, or `disabled`. An explicit `disabled` is pinned: it outranks saved config and, in the web server, refuses the runtime-only AI config endpoint (`409 AI_DISABLED_BY_ENV`), saves persisted settings without applying them (`applied_to_runtime: false`), and answers the connectivity test with `disabled` without dialing out | unset: auto-detect from credentials; `disabled` only when none resolve |
 | `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |

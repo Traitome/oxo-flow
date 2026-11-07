@@ -76,7 +76,7 @@ Returns status, version, mode, uptime, component health (database, filesystem, s
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
-`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates are pinned too: `POST /api/ai/config`, `PUT /api/ai/config/server`, and `PUT /api/ai/config/user` answer `409 AI_DISABLED_BY_ENV` before persisting or applying, and `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
+`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only `POST /api/ai/config` answers `409 AI_DISABLED_BY_ENV` (it has no durable tier, so refusing is the only honest answer), while the persisted `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still save (200, `applied_to_runtime: false`) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
 
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
@@ -883,11 +883,13 @@ than assuming the running process switched.
 An explicit `disabled` is an operator-level switch: it outranks every
 configuration tier and every runtime update. While it is set:
 
-- `POST /api/ai/config`, `PUT /api/ai/config/server`, and
-  `PUT /api/ai/config/user` return `409 AI_DISABLED_BY_ENV` with the
-  standard `{code, message, detail, suggestion}` shape. The refusal runs
-  before anything is written — the database row and the runtime registry
-  are unchanged, and the endpoint never falls back to a silent no-op.
+- `POST /api/ai/config` (runtime-only — applying to the live registry is
+  its only effect) returns `409 AI_DISABLED_BY_ENV` with the standard
+  `{code, message, detail, suggestion}` shape.
+- `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still persist
+  the row and return `200` with `applied_to_runtime: false`: Settings stays
+  usable and the saved configuration applies after an unpinned restart,
+  but the pinned runtime is never reconfigured.
 - `POST /api/ai/test` returns `200` with `success: false`,
   `provider: "disabled"`, and a message stating that no connection was
   attempted. No provider is resolved and no HTTP client is constructed.
