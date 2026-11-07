@@ -874,6 +874,18 @@ pub fn touch_command(
     Ok(())
 }
 
+/// Sample-domain placeholders that can never bind without a declared domain.
+const SAMPLE_PLACEHOLDERS: &[&str] = &[
+    "{sample}",
+    "{group}",
+    "{pair_id}",
+    "{experiment}",
+    "{control}",
+    "{tumor}",
+    "{normal}",
+    "{log}",
+];
+
 /// Inputs that resolve to no file and no producer — the CLI validate /
 /// doctor missing-input pass (issue #467).
 ///
@@ -892,16 +904,6 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
     let sample_domain_declared = !cfg.sample_groups.is_empty()
         || !cfg.pairs.is_empty()
         || cfg.workflow.sample_pattern.is_some();
-    const SAMPLE_PLACEHOLDERS: &[&str] = &[
-        "{sample}",
-        "{group}",
-        "{pair_id}",
-        "{experiment}",
-        "{control}",
-        "{tumor}",
-        "{normal}",
-        "{log}",
-    ];
     let expand = |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &cfg.config);
     let mut missing = Vec::new();
     for rule in &cfg.rules {
@@ -950,6 +952,75 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
                 }
             }
         }
+    }
+    // A wildcard input with a DECLARED sample domain must be bound before it
+    // can be existence-checked. Bind it through the SAME expansion and
+    // readiness pass dry-run/run use (`expand_wildcards` +
+    // `readiness::compute_readiness`) and report the concrete unproducible
+    // paths — otherwise validate stays green while run hard-fails on the very
+    // same inputs. Missing inputs remain warnings here, matching the
+    // documented validate contract.
+    if sample_domain_declared {
+        for path in collect_bound_wildcard_missing_inputs(cfg, workflow_dir) {
+            if !missing.contains(&path) {
+                missing.push(path);
+            }
+        }
+    }
+    missing
+}
+
+/// Concrete input paths that stay missing after binding every wildcard
+/// against the declared sample domain.
+///
+/// Delegates to the shared engine primitives — `expand_wildcards` (the
+/// executor's own expansion) and `readiness::compute_readiness` (the pass
+/// dry-run prints) — so validate cannot drift from the surfaces that gate
+/// execution. An expansion failure adds nothing here: the diagnostics that
+/// explain it are emitted by the expansion path itself.
+fn collect_bound_wildcard_missing_inputs(
+    cfg: &WorkflowConfig,
+    workflow_dir: &std::path::Path,
+) -> Vec<String> {
+    let mut expanded = cfg.clone();
+    expanded.apply_defaults();
+    if expanded.expand_wildcards().is_err() {
+        return Vec::new();
+    }
+    let report = oxo_flow_core::readiness::compute_readiness(&expanded, workflow_dir);
+    let mut missing = Vec::new();
+    for status in &report.waiting {
+        for path in &status.missing {
+            if !missing.contains(path) {
+                missing.push(path.clone());
+            }
+        }
+    }
+    for path in &report.missing_global {
+        if !missing.contains(path) {
+            missing.push(path.clone());
+        }
+    }
+    // A declared domain that binds NO value (e.g. `sample_pattern` matched no
+    // files) leaves the placeholder in the expanded rule; the run then fails
+    // on its first instance with an unbound wildcard. Report the template
+    // explicitly so validate is not the only green step in the chain.
+    let expand =
+        |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &expanded.config);
+    let mut unbound: Vec<String> = Vec::new();
+    for rule in &expanded.rules {
+        for input in rule.input.iter() {
+            let input = expand(input);
+            if input.contains('{')
+                && SAMPLE_PLACEHOLDERS.iter().any(|ph| input.contains(ph))
+                && !unbound.contains(&input)
+            {
+                unbound.push(input);
+            }
+        }
+    }
+    for input in unbound {
+        missing.push(format!("{input} (declared sample domain binds no value)"));
     }
     missing
 }

@@ -216,8 +216,11 @@ shell = "cp {input[0]} {output[0]}"
 }
 
 #[test]
-fn f3_validate_is_silent_when_sample_domain_is_declared() {
-    // Arrange — the same wildcard input, but with [[sample_groups]].
+fn f3_validate_reports_bound_wildcard_inputs_when_sample_domain_is_declared() {
+    // Arrange — the same wildcard input, but with [[sample_groups]]. The
+    // declared domain BINDS the wildcard to concrete paths, so validate can
+    // (and must) report the ones that cannot be produced; the old silence
+    // let a workflow pass validate that `run` rejects immediately.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("ok.oxoflow"),
@@ -245,15 +248,20 @@ shell = "cp {input[0]} {output[0]}"
         .args(["validate", "ok.oxoflow", "--json"])
         .output()
         .expect("oxo-flow validate spawns");
+
+    // Assert — the concrete bound path is reported, and the missing input
+    // stays a WARNING (exit 0), matching the documented validate contract.
+    assert!(
+        out.status.success(),
+        "missing inputs are warnings on the validate surface"
+    );
     let json: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-
-    // Assert — a declared sample domain keeps the input out of the report
-    // (runtime discovery resolves it; nothing to warn about statically).
     let missing = json["missing_inputs"].as_array().unwrap();
-    assert!(
-        missing.is_empty(),
-        "declared sample domain must not be reported, got {missing:?}"
+    assert_eq!(
+        missing,
+        &vec![serde_json::Value::String("missing/S1.txt".into())],
+        "the declared sample domain must bind the wildcard and report the concrete path: {json}"
     );
 }
 

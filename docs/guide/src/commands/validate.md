@@ -104,6 +104,27 @@ plain paths (file simply absent on disk) with paths annotated with a
 trailing `(...)` reason, so consumers must not exact-match the strings
 or split on whitespace — match on the path prefix instead.
 
+### Wildcard inputs with a declared sample domain
+
+When a sample domain **is** declared (`[[sample_groups]]`, `[[pairs]]`, or
+`sample_pattern`), validate binds every `{sample}`-class input through the
+same expansion and readiness pass `dry-run` and `run` use, then reports each
+concrete path that does not exist (and is not produced by another rule) in
+`missing_inputs`:
+
+```
+✓ wild.oxoflow — 1 rule, 0 dependencies
+
+  ⚠ Warning: The following input files do not exist:
+    - inputs/A.txt
+    - inputs/B.txt
+```
+
+Exit stays 0 because missing inputs are warnings on the validate surface —
+the same contract as the literal-path case above. `dry-run --json` reports
+the identical list in its own `missing_inputs` field, so a CI gate can catch
+the unproducible input before `run` hard-fails on it.
+
 ### Unbound wildcard (W024 surfaced in validate)
 
 A rule that uses a wildcard no rule in the workflow declares a source for

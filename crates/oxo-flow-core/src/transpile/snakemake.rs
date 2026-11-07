@@ -69,10 +69,13 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
         toml.push_str("[[rules]]\n");
         toml.push_str(&format!("name = \"{}\"\n", r.name));
 
-        let threads = r.threads.unwrap_or(1);
-        toml.push_str(&format!("threads = {threads}\n"));
-
+        // Canonical resource form (W025): `threads`/`memory` belong under
+        // `resources`, never at rule level. A rule without `threads:`
+        // inherits `[defaults] threads = 1` instead of restating it.
         let mut res_fields = Vec::new();
+        if let Some(threads) = r.threads {
+            res_fields.push(format!("threads = {threads}"));
+        }
         if let Some(mem) = &r.memory {
             let norm_mem = normalize_memory(mem);
             res_fields.push(format!("memory = \"{norm_mem}\""));

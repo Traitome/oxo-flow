@@ -117,6 +117,12 @@ oxo-flow graph pipeline.oxoflow -f metro --granularity process -o tools.mmd
 ignored. Omit `-f` and use only `--granularity` and the latter fails with the
 same error — pass `-f metro` explicitly.
 
+The `module` tier needs module structure to group by: `module::` rule
+prefixes or `[[include]]` modules. On a workflow with neither, every rule
+falls into one stage section and the map would collapse to a single station
+with zero edges, so the command falls back to `process` granularity and says
+so on stderr instead of silently losing the topology.
+
 ### View the expanded runtime DAG
 
 By default, `graph` shows the template DAG — one node per `[[rules]]` block, with every declared dataflow edge included (`input` paths and `expand_inputs` patterns alike). Use `--expanded` to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a `_<group>_<sample>` or `_<pair_id>` suffix). Catalog pages render the template DAG — it is the stable overview; the expanded view is the full runtime truth.

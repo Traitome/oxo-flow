@@ -1550,7 +1550,7 @@ impl ReportSectionGenerator for UniversalGenerator {
         // sample), so it must never be divided by the rule count.
         let (status_value, status, status_desc) = match ctx.checkpoint {
             None => (
-                format!("{total} tasks, 0 executed"),
+                format!("{total} rules, 0 executed"),
                 QcStatusLevel::Info,
                 "No execution data — run the workflow first".to_string(),
             ),
@@ -1587,10 +1587,16 @@ impl ReportSectionGenerator for UniversalGenerator {
                         description: status_desc,
                     },
                     QcIndicator {
-                        label: "Total Tasks".into(),
+                        // Template rules, NOT executed instances: a scattered
+                        // rule contributes one task per sample, so "Total
+                        // Tasks: 4" next to "6 tasks succeeded" read as a
+                        // contradiction. Name the unit explicitly.
+                        label: "Workflow Rules".into(),
                         value: total.to_string(),
                         status: QcStatusLevel::Info,
-                        description: "Rules in workflow".into(),
+                        description:
+                            "Rule templates in the workflow file (per-sample instances can be more)"
+                                .into(),
                     },
                     QcIndicator {
                         label: "Total Runtime".into(),
