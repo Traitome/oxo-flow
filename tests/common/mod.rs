@@ -180,6 +180,13 @@ fn spawn_web_server_once(
         .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
         .env("OXO_FLOW_HOST", "127.0.0.1")
         .env("OXO_FLOW_PORT", port.to_string())
+        // AI settings endpoints reconfigure the registry, which persists
+        // through `ai_config_path()`. Without this redirect a test run would
+        // overwrite the developer's real `$HOME/.oxo-flow/ai_config.json`.
+        .env(
+            oxo_flow_ai::provider::AI_CONFIG_OVERRIDE_ENV,
+            dir.join("ai_config.json"),
+        )
         // The bind wait greps the log for the INFO-level "Listening on"
         // line — a dev shell exporting RUST_LOG=warn filters it out and
         // stalls the suite (same pin as oxo_flow_cmd_without_rust_log in

@@ -2040,12 +2040,39 @@ impl EnvSnapshot {
 
 // ── Config persistence ─────────────────────────────────────────────────────
 
-/// Canonical AI config path — `~/.oxo-flow/ai_config.json` (matches the
-/// `AiConfig` loader docs in config.rs and the skills dir convention).
+/// Environment variable that redirects the AI config file to an explicit
+/// path (`OXO_FLOW_AI_CONFIG`).
+///
+/// This is the hermetic knob for tests and CI: without it, every save lands
+/// in `$HOME/.oxo-flow/ai_config.json`, so an in-process web test that
+/// updates AI settings silently overwrites the operator's real credential
+/// (the incident this override exists to prevent). An empty value is
+/// treated as unset. A relative path anchors to the process cwd.
+pub const AI_CONFIG_OVERRIDE_ENV: &str = "OXO_FLOW_AI_CONFIG";
+
+/// The explicit file path from [`AI_CONFIG_OVERRIDE_ENV`], when set.
+fn ai_config_override() -> Option<std::path::PathBuf> {
+    let value = std::env::var_os(AI_CONFIG_OVERRIDE_ENV)?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(value))
+}
+
+/// Canonical AI config path — `$HOME/.oxo-flow/ai_config.json` (matches the
+/// `AiConfig` loader docs in config.rs and the skills dir convention),
+/// unless [`AI_CONFIG_OVERRIDE_ENV`] names an explicit file.
+///
+/// The override is authoritative: when set, it is used for both reads and
+/// writes, and the legacy migration fallback is skipped so a redirected
+/// caller can never pick up (or be confused by) a `$HOME`-scoped file.
 /// The legacy `~/.config/oxo-flow/ai_config.json` location is still READ
 /// as a migration fallback (see `legacy_ai_config_path`) until the
 /// user's next `ai setup` rewrites it.
 pub fn ai_config_path() -> std::path::PathBuf {
+    if let Some(path) = ai_config_override() {
+        return path;
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     std::path::PathBuf::from(home)
         .join(".oxo-flow")
@@ -2166,6 +2193,11 @@ pub fn resolved_ai_config_path() -> Option<std::path::PathBuf> {
     let path = ai_config_path();
     if path.exists() {
         return Some(path);
+    }
+    // An explicit override is authoritative: never fall back to a
+    // `$HOME`-scoped legacy file the caller redirected away from.
+    if ai_config_override().is_some() {
+        return None;
     }
     let legacy = legacy_ai_config_path();
     if legacy.exists() {

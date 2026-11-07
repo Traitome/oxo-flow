@@ -43,6 +43,13 @@ fn spawn_serve_once(dir: &Path, port: u16, base_path: &str) -> ServeProcess {
     let child = Command::new(workspace_bin("oxo-flow"))
         .current_dir(dir)
         .env("OXO_FLOW_DISABLE_RATE_LIMIT", "1")
+        // AI settings endpoints reconfigure the registry, which persists
+        // through `ai_config_path()`; keep that write inside this test's
+        // directory instead of the developer's real `$HOME`.
+        .env(
+            oxo_flow_ai::provider::AI_CONFIG_OVERRIDE_ENV,
+            dir.join("ai_config.json"),
+        )
         // A developer shell may export OXO_FLOW_OPEN_BROWSER=1; without
         // this pin every test run would pop a browser window.
         .env("OXO_FLOW_OPEN_BROWSER", "false")

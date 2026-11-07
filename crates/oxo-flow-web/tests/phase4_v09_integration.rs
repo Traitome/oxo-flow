@@ -358,6 +358,32 @@ async fn test_report_visualize_nonexistent() {
 
 // ── 6. AI Config API (three-tier) ──
 
+/// Regression guard for the test-isolation incident: a settings update
+/// reconfigures the shared registry, which persists through
+/// `ai_config_path()`. The test process must have `OXO_FLOW_AI_CONFIG`
+/// redirected to [`common::ai_config_path`] so the write lands in the
+/// per-process scratch file — never the operator's real
+/// `$HOME/.oxo-flow/ai_config.json`.
+fn assert_ai_config_write_is_isolated(expected_provider: &str) {
+    let path = common::ai_config_path();
+    let configured = std::env::var_os(oxo_flow_ai::provider::AI_CONFIG_OVERRIDE_ENV)
+        .map(std::path::PathBuf::from);
+    assert_eq!(
+        configured.as_deref(),
+        Some(path),
+        "tests must redirect AI config writes to their scratch path"
+    );
+    let saved: Value = serde_json::from_str(
+        &std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("AI config not written to {}: {e}", path.display())),
+    )
+    .unwrap();
+    assert_eq!(
+        saved["provider"], expected_provider,
+        "the isolated config file must hold the updated provider"
+    );
+}
+
 #[tokio::test]
 async fn test_ai_config_effective() {
     common::ensure_db().await;
@@ -419,6 +445,10 @@ async fn test_ai_config_update_user() {
         status == StatusCode::OK || status.is_server_error(),
         "config update should respond: {status}"
     );
+    let body: Value = json_body(resp.into_body()).await;
+    if body["applied_to_runtime"] == json!(true) {
+        assert_ai_config_write_is_isolated("openai");
+    }
 }
 
 #[tokio::test]
@@ -438,6 +468,10 @@ async fn test_ai_config_update_server() {
         status == StatusCode::OK || status.is_server_error(),
         "server config update should respond: {status}"
     );
+    let body: Value = json_body(resp.into_body()).await;
+    if body["applied_to_runtime"] == json!(true) {
+        assert_ai_config_write_is_isolated("openai");
+    }
 }
 
 // ── 7. Old AI endpoints still work ──
