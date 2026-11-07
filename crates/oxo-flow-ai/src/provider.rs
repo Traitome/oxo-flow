@@ -1779,7 +1779,7 @@ pub fn create_provider_from_env() -> AiProvider {
 /// Whether an `OXO_FLOW_AI_PROVIDER` value is the explicit off switch
 /// (case-insensitive, matching the provider-kind parse).
 ///
-/// One predicate for every tier: [`resolve_provider`] pins on it,
+/// One predicate for every tier: the provider-resolution core pins on it,
 /// [`provider_pinned_disabled`] exposes the process-level pin to surfaces
 /// that load persisted config afterwards, and `AiConfig::from_env` derives
 /// `enabled` from it.
