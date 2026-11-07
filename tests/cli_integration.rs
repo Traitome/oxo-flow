@@ -7714,7 +7714,7 @@ shell = "echo reads > bam/n.bam"
 
     // The global DAG header and count are unchanged.
     assert!(
-        stderr.contains("DAG: 3 rules in execution order"),
+        stderr.contains("DAG: 3 rules in dependency order"),
         "DAG header: {stderr}"
     );
 
@@ -7769,7 +7769,7 @@ shell = "exit 1"
 
     // Flat plan listing, no module headers.
     assert!(
-        stderr.contains("DAG: 1 rules in execution order"),
+        stderr.contains("DAG: 1 rules in dependency order"),
         "{stderr}"
     );
     assert!(stderr.contains("  1. fail_rule"), "{stderr}");

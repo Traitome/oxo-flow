@@ -117,8 +117,8 @@ dir) becomes a symlink into the store, so wraps like
 unchanged. Repeated runs across many pipeline checkouts reuse the same
 environment instead of re-downloading and re-building it per tree. A broken
 link (e.g. the store dir was deleted) is detected automatically on the next
-run: the cached entry is invalidated and the environment is rebuilt, no
-manual intervention needed.
+run: the cached entry is invalidated, the dangling in-tree symlink is
+detached, and the environment is rebuilt, no manual intervention needed.
 
 ```bash
 oxo-flow env gc [--min-age-days N] [--dry-run]

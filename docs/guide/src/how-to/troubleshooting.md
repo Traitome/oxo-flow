@@ -160,6 +160,15 @@ convention.
 
 ## Environment Issues
 
+### Setup failure messages carry the tool's own output
+
+**Symptom**: `environment error (<backend>): setup failed: <cause>`.
+
+The message embeds the tail of the setup command's captured stdout/stderr
+(conda's solver conflict, Docker's registry error, pip's resolver error),
+so the underlying cause is visible in the error and in the checkpoint's
+`stderr_tail` rather than only on the terminal.
+
 ### Run aborts before any rule: environment backend unavailable
 
 **Symptom**: `N environment backends required by pending rules are unavailable; no rules were run:` followed by one entry per root cause, e.g.

@@ -1482,7 +1482,7 @@ the config surface.
 
 ```
 oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
-DAG: 5 rules in execution order
+DAG: 5 rules in dependency order
   1. fastqc
   2. trim_reads
   3. bwa_align
@@ -1513,7 +1513,7 @@ Workflows composed from `[[include]]` modules group the plan listing and the
 reads as module → rule instead of one long flat list:
 
 ```
-DAG: 6 rules in execution order
+DAG: 6 rules in dependency order
   Preprocessing — 2 rules
     1. fastqc
     2. trim_reads

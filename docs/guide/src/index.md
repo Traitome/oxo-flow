@@ -12,7 +12,7 @@ oxo-flow run pipeline.oxoflow -j 8
 
 ```
 oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
-DAG: 5 rules in execution order
+DAG: 5 rules in dependency order
   1. fastqc
   2. trim_reads
   3. bwa_align

@@ -281,9 +281,10 @@ location becomes a symlink, so `pixi run --manifest-path` and
 per-process — on a multi-user server each user who opts in gets their own
 store unless an operator deliberately points everyone at a shared path.
 Maintenance is `oxo-flow env gc` (checkpoint-reference + age gated,
-`--dry-run` first); a broken link is detected on the next run and the env
-is rebuilt automatically. A content-key change (edited `requirements.txt` or
-`pixi.toml`) gets a new store entry: the next run detaches the stale in-tree
+`--dry-run` first); a broken link is detected on the next run, the dangling
+in-tree symlink is detached, and the env is rebuilt automatically. A
+content-key change (edited `requirements.txt` or `pixi.toml`) gets a new
+store entry: the next run detaches the stale in-tree
 symlink, builds the new environment in-tree, and re-homes it under the new
 key. The previous store dir is left untouched for other workflows and for
 `env gc`. The store deliberately covers **pixi and venv
