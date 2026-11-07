@@ -1035,9 +1035,11 @@ Transport behavior:
 ### Chat session archives
 
 Every agent-loop run — including an aborted one — is persisted under
-`.oxo-flow/ai_sessions/` (or `OXO_FLOW_AI_SESSION_DIR`) as
-`<timestamp>-<command>-<id>.json`. Writes are temp-sibling + atomic rename,
-so a reader never observes a truncated file, and a run that fails archives
+`.oxo-flow/ai_sessions/` as `<timestamp>-<command>-<id>.json`; set
+`OXO_FLOW_AI_SESSION_DIR` to redirect the archive (tests and CI point it at
+a scratch directory so a run never writes into an operator's real archive).
+Writes are temp-sibling + atomic rename, so a reader never observes a
+truncated file, and a run that fails archives
 `outcome: "Failed"` with an `error` reason (the post-mortem record). Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent

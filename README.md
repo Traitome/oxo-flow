@@ -64,9 +64,9 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **AI Companion** | Architectural citizen — unified agent, 30+ domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
 | **Testing** | Rust unit/integration suites, schema-drift checks, and AI evaluations; exact results are recorded per commit | pytest-based | Spock / varied |
 
-## Design Principles (First Principles Thinking)
+## Design Principles
 
-oxo-flow is built from first principles on six architectural pillars:
+oxo-flow rests on six architectural pillars:
 
 1. **DAG as Pure Declarative Data** — A workflow is mathematically a directed acyclic graph of pure data transformations, not an imperative script. All dependencies, wildcards, environments, and resource requirements are declared statically in `.oxoflow` TOML and validated before any job starts.
 2. **Content-Addressed Evidence over File Timestamps** — Reproduction requires evidence, not a timestamp convention. oxo-flow anchors checkpoint state on SHA-256 output checksums, configuration fingerprints, content-addressable environment hashes, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with `mtime` demoted to a bounded fallback. This detects declared state changes but does not by itself prove biological correctness or bitwise reproducibility across all tools.

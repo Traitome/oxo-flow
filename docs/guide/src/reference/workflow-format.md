@@ -2769,7 +2769,7 @@ and extensible attributes — to the files flowing across DAG edges. Contracts
 are checked statically before any compute: a producer whose output violates
 a consumer's declared type fails `oxo-flow validate` (error) and aborts
 `oxo-flow run` in preflight with a `[TYPE-0xx]` diagnostic (see
-[TYPE-001..007](diagnostics-engine.md#biological-subtyping-violations-type) —
+[TYPE-001..007](diagnostics-engine.md#biological-subtyping-violations-type-) —
 each includes an automated coercion hint such as `samtools view -b` or
 `samtools sort`).
 
@@ -2866,7 +2866,7 @@ channel; and with a single channel on each side, a shared output/input path
 also matches. Beyond static checking, `oxo-flow test`'s deep check (`D005`)
 introspects the headers of input files that exist on disk and compares them
 against the declared contract — see
-[Biological Subtyping Violations](diagnostics-engine.md#biological-subtyping-violations-type)
+[Biological Subtyping Violations](diagnostics-engine.md#biological-subtyping-violations-type-)
 for the full diagnostic table with coercion hints.
 
 ---
