@@ -2649,6 +2649,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#stale-pixilock-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale pixi.lock fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pass-config-values" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4218,6 +4229,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#stale-pixilock-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale pixi.lock fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pass-config-values" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4482,6 +4504,12 @@
 <td>Proceed despite protected-tree drift: when <code>[engine]</code> <code>protected_data_trees</code> baselines no longer match the tree on disk, <code>run</code> refuses to execute; this flag is the explicit operator override to run anyway (see <a href="#protected-data-trees-protected_data_trees">Protected data trees</a>)</td>
 </tr>
 <tr>
+<td><code>--strict-envs</code></td>
+<td>—</td>
+<td>—</td>
+<td>Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see <a href="#stale-pixilock-fallback">Stale pixi.lock fallback</a>) — for GxP-style deployments that must never run on a re-solved environment</td>
+</tr>
+<tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
 <td>—</td>
@@ -4708,6 +4736,50 @@ pixi manifests up front (error
 <a href="../../reference/glossary/#diagnostic-codes">E019</a>) so the failure surfaces before you
 commit to a run; <code>run</code> keeps the check because manifests can also be
 created between validate and run.</p>
+<h3 id="stale-pixilock-fallback">Stale pixi.lock fallback<a class="headerlink" href="#stale-pixilock-fallback" title="Permanent link">#</a></h3>
+<p>A committed <code>pixi.lock</code> pins exact package builds. When an upstream channel
+later removes one of those builds (bioconda does this occasionally — old
+builds disappear), a lock-based <code>pixi install</code> fails with a fetch error
+(<code>failed to fetch … 404 Not Found</code>) and every run using that environment
+fails until the lock is refreshed by hand.</p>
+<p><code>run</code> recovers from this automatically (issue #1011). When a pixi setup
+fails with that fetch signature and a committed <code>pixi.lock</code> sits beside the
+manifest, the executor:</p>
+<ol>
+<li>Deletes the committed lock and re-runs the setup command, so pixi
+   re-solves from the manifest.</li>
+<li>Parks the fresh solution as <code>pixi.lock.new</code> beside the committed lock
+   (never silently overwriting it).</li>
+<li>Restores the committed <code>pixi.lock</code> byte-identical.</li>
+<li>Warns loudly with the package-level diff (old lock vs new solve) and
+   marks the run's environment reproducibility as <strong>degraded</strong> — the report
+   environment section carries an
+   <code>Environment Reproducibility: degraded …</code> disclosure (see
+   <a href="#report-snapshots">Report</a>).</li>
+</ol>
+<p>The run proceeds on the re-solved environment: rule commands wrap with
+<code>pixi run --as-is</code>, which skips re-validating the committed lock against the
+upstream channels — the restored lock still pins the vanished build, so the
+default wrap would fail the rule with the same 404. The degraded marker
+persists in the environment cache (a <code>pixi_degraded.json</code> sidecar beside
+<code>environment_cache.json</code>), so later runs keep wrapping with <code>--as-is</code>: they
+skip setup entirely (the re-solved environment is already materialized and
+cache-ready) but still disclose <strong>degraded</strong> reproducibility in the report.</p>
+<p>To adopt the fresh lock, replace <code>pixi.lock</code> with <code>pixi.lock.new</code> and commit
+it. The environment's cache key folds the lock content, so the stale degraded
+marker stops matching and the next run returns to the normal lock-validated
+wrap — nothing to clean up by hand.</p>
+<p><code>--strict-envs</code> disables the fallback entirely: a stale-lock failure keeps
+today's hard error with a hint explaining how to refresh the lock by hand.
+Use it for GxP-style deployments that must never run on a re-solved
+environment.</p>
+<div class="admonition note">
+<p class="admonition-title">What the fallback does not do</p>
+<p>A deterministic solver conflict (<code>failed to solve requirements</code>) is
+<strong>not</strong> recoverable — re-solving would land on the same conflict — so
+it still fails immediately. The fallback fires only for fetch failures
+(HTTP 404/410 or equivalent) with a committed lock present.</p>
+</div>
 <h3 id="pass-config-values">Pass config values<a class="headerlink" href="#pass-config-values" title="Permanent link">#</a></h3>
 <p>Every key in the <code>[config]</code> section of the workflow (including declarative
 <code>key = { default = …, required = …, … }</code> entries) can be overridden from the

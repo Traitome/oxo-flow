@@ -8002,6 +8002,15 @@ the container when the image provides it (falling back to <code>sh</code> otherw
 nf-core-derived images ship bash, and their scripts rely on bash features
 (<code>set -o pipefail</code>, <code>[[ ]]</code>) that the container default <code>sh</code> (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.</p>
+<p><strong>Stale pixi.lock fallback:</strong> a rule declared with
+<code>environment = { pixi = "envs/pixi.toml" }</code> installs from the committed
+<code>pixi.lock</code> beside that manifest. When the pinned package builds have
+vanished upstream (fetch 404/410), the engine re-solves from the manifest,
+parks the fresh solution as <code>pixi.lock.new</code> beside the committed lock
+(never silently overwriting it), and marks the run's environment
+reproducibility as <strong>degraded</strong> in the report. Adoption, the package-level
+diff warning, and the <code>--strict-envs</code> opt-out are covered in
+<a href="../../commands/run/#stale-pixilock-fallback">Stale pixi.lock fallback</a>.</p>
 <p><strong>Inline conda package lists:</strong> besides a YAML path, a conda/mamba spec may
 be a channel-qualified <strong>package list</strong> — the concise form for rules whose
 environment is a handful of pinned tools:</p>
