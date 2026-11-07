@@ -52,16 +52,23 @@ fn route_budget_for(provider_secs: u64) -> Duration {
     )
 }
 
+/// Human-readable timeout reason. One source for the `504` body and the
+/// synthetic failure archive written when the route budget drops the
+/// orchestrator future mid-flight (review wave 3 LOW-3).
+pub fn timeout_reason(budget: Duration) -> String {
+    format!(
+        "AI generation exceeded its {}-second budget",
+        budget.as_secs()
+    )
+}
+
 /// The structured timeout contract shared by `/api/chat/send/json` and
 /// `/api/ai/translate`. The suggestion names the knob so the caller can act
 /// instead of guessing.
 pub fn ai_timeout_error(budget: Duration) -> ApiError {
     ApiError {
         code: "AI_TIMEOUT".into(),
-        message: format!(
-            "AI generation exceeded its {}-second budget",
-            budget.as_secs()
-        ),
+        message: timeout_reason(budget),
         detail: Some(
             "The non-streaming AI routes cap the WHOLE generation (all tool and \
              validation rounds) at OXO_FLOW_AI_TIMEOUT_SECS. The route budget \

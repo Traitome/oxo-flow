@@ -819,7 +819,20 @@ impl LocalExecutor {
                 }
             }
             "docker" => {
-                if stderr_lower.contains("command not found")
+                // Order matters: an unreachable daemon also reports a
+                // missing socket as "no such file or directory", so the
+                // daemon/connect arm must run BEFORE the not-installed arm.
+                // Otherwise a perfectly installed Docker with a dead daemon
+                // was told to install Docker (review wave 3 LOW-1).
+                if stderr_lower.contains("cannot connect to the docker daemon")
+                    || stderr_lower.contains("is the docker daemon running")
+                    || stderr_lower.contains("failed to connect to the docker api")
+                    || stderr_lower.contains("docker daemon is not running")
+                    || stderr_lower.contains("error during connect")
+                    || stderr_lower.contains("connection refused")
+                {
+                    Some("Docker daemon is not running or unreachable. Start Docker (open Docker Desktop, or run `sudo systemctl start docker`) and verify with `docker info`.".into())
+                } else if stderr_lower.contains("command not found")
                     || stderr_lower.contains("no such file")
                 {
                     Some("Docker is not installed or not in PATH. Install Docker: https://docs.docker.com/engine/install/".into())
@@ -7126,6 +7139,49 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         )
         .unwrap();
         assert!(hint.contains("Docker image pull failed"), "got {hint}");
+    }
+
+    /// A dead/unreachable Docker daemon is not a missing binary. Its stderr
+    /// contains `no such file or directory`, which used to match the
+    /// not-installed arm first and print "Docker is not installed" for a
+    /// perfectly installed Docker (review wave 3 LOW-1). Both live client
+    /// shapes must classify as a daemon failure; a genuinely missing binary
+    /// keeps the install hint.
+    #[test]
+    fn hint_dead_docker_daemon_is_not_misread_as_missing_binary() {
+        // Shape 1: docker CLI with a DOCKER_HOST pointing at a dead socket.
+        let cli = "Cannot connect to the Docker daemon at unix:///tmp/dead-docker.sock. \
+                   Is the docker daemon running?";
+        let hint = LocalExecutor::env_setup_hint("docker", cli).unwrap();
+        assert!(hint.contains("daemon"), "{hint}");
+        assert!(
+            !hint.contains("not installed"),
+            "daemon failure must not claim Docker is missing: {hint}"
+        );
+
+        // Shape 2: API-level connect error (also contains "no such file or
+        // directory", the substring the old arm keyed on).
+        let api = "failed to connect to the docker API at unix:///tmp/dead-docker.sock; \
+                   check if the path is correct and if the daemon is running: dial unix \
+                   /tmp/dead-docker.sock: connect: no such file or directory";
+        let hint = LocalExecutor::env_setup_hint("docker", api).unwrap();
+        assert!(hint.contains("daemon"), "{hint}");
+        assert!(
+            !hint.contains("not installed"),
+            "daemon failure must not claim Docker is missing: {hint}"
+        );
+
+        // A truly absent binary keeps the install hint.
+        for stderr in [
+            "zsh: command not found: docker",
+            "No such file or directory (os error 2)",
+        ] {
+            let hint = LocalExecutor::env_setup_hint("docker", stderr).unwrap();
+            assert!(
+                hint.contains("not installed"),
+                "missing binary must keep the install hint for {stderr:?}: {hint}"
+            );
+        }
     }
 
     #[test]
