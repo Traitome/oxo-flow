@@ -26,6 +26,7 @@ oxo-flow init [OPTIONS] <NAME>
 |---|---|---|---|
 | `--dir` | `-d` | `./<NAME>` | Output directory (defaults to the project name) |
 | `--force` | — | off | Overwrite an existing workflow file (its current contents are lost) |
+| `--agent` | — | off | Also scaffold agent docs: `AGENTS.md`, `CLAUDE.md`, and the full `SKILL.md` manual ([agent-docs](./agent-docs.md)) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
@@ -48,6 +49,18 @@ oxo-flow init my-pipeline
 ```bash
 oxo-flow init my-pipeline -d /projects/genomics/my-pipeline
 ```
+
+### Create with agent docs (AI-operated projects)
+
+```bash
+oxo-flow init my-pipeline --agent
+# writes my-pipeline/AGENTS.md, CLAUDE.md, and SKILL.md alongside the workflow
+```
+
+`AGENTS.md` is an editable entry file (agent safety summary + project notes)
+that links to the full `SKILL.md` operating manual; `CLAUDE.md` imports it
+for Claude Code. See [`oxo-flow agent-docs`](./agent-docs.md) for refreshing
+these files in an existing project.
 
 ### Re-scaffold an existing project
 
@@ -128,4 +141,5 @@ shell = "echo \"$GREETING\" > {output[0]}"
 
 - The output directory is created if it does not exist
 - If the workflow file already exists, oxo-flow refuses to run unless `--force` is given — a re-init can never silently destroy manual edits. With `--force` (or a fresh directory), the scaffold is regenerated; every other starter file (`envs/example.yaml`, `scripts/example.sh`, `data/input.txt`, `.gitignore`) is only written when absent, so existing files are always kept
+- `--agent` follows the same rule: the three agent docs are only written when absent, so a re-init never overwrites a project owner's `AGENTS.md` edits (refresh explicitly with `oxo-flow agent-docs --force`)
 - The generated `.gitignore` includes common bioinformatics file types and oxo-flow internal directories
