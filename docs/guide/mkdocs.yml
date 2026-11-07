@@ -158,6 +158,7 @@ nav:
       - Troubleshooting: how-to/troubleshooting.md
       - Desktop App Packaging: how-to/desktop-app.md
   - Command Reference:
+      - agent-docs: commands/agent-docs.md
       - batch: commands/batch.md
       - clean: commands/clean.md
       - cluster: commands/cluster.md

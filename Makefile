@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -121,6 +121,17 @@ extension-integration:
 ## CLI copy — drift means users validate against an outdated schema).
 schema-drift:
 	diff -q crates/oxo-flow-cli/schema/oxoflow-v1.schema.json docs/schema/oxoflow-v1.schema.json >/dev/null 2>&1 || { echo "schema drift: sync crates/oxo-flow-cli/schema with docs/schema"; exit 1; }
+
+## Single-source rule: the SKILL.md embedded in the CLI (`oxo-flow agent-docs`
+## writes it into projects) must match the docs copy (canonical, served at
+## /latest/SKILL/). The copy lives inside the crate because cargo
+## package/publish only ships crate-local files. `make sync-skill` refreshes it.
+skill-drift:
+	diff -q crates/oxo-flow-cli/assets/SKILL.md docs/guide/src/SKILL.md >/dev/null 2>&1 || { echo "skill drift: run 'make sync-skill' (docs/guide/src/SKILL.md is canonical)"; exit 1; }
+
+sync-skill:
+	@cp docs/guide/src/SKILL.md crates/oxo-flow-cli/assets/SKILL.md
+	@echo "synced crates/oxo-flow-cli/assets/SKILL.md from docs/guide/src/SKILL.md"
 
 ## Single-source rule: every place the project version appears — Cargo.toml
 ## ([package], [workspace.package], dep pins), both lockfiles, CITATION.cff,
