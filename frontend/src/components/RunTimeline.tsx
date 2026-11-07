@@ -22,6 +22,8 @@ function stateSymbol(status: string): string {
       return '✗';
     case 'running':
       return '⏳';
+    case 'cancelled':
+      return '⊘';
     case 'skipped':
       return '·';
     default:

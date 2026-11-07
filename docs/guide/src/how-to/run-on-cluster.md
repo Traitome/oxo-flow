@@ -402,19 +402,22 @@ The web system can execute runs on a cluster login node while the server
 itself lives elsewhere (your laptop, a lab server, a container):
 
 1. **Register the connection** — Clusters page (or the platform config
-   file's `[clusters]` section): SSH host, port, user, optional key path,
-   scheduler hint, and a `remote_dir` for staged runs. Probe verifies
-   connectivity and detects the scheduler (slurm/pbs/sge/lsf) from the
-   remote's installed binaries.
+   file's `[clusters]` section): SSH host, port, user, optional SSH key
+   (a path or the key material itself), scheduler hint, and a
+   `remote_dir` for staged runs. Probe verifies connectivity and detects
+   the scheduler (slurm/pbs/sge/lsf) from the remote's installed binaries.
 2. **Run with `cluster_id`** — the Run dialog's *Execute on cluster*
    selector (or `cluster_id` in `POST /api/runs`).
 3. **What happens** — the workdir is staged to
    `{remote_dir}/runs/{run_id}` over a tar stream (no rsync needed); a
-   per-run wrapper launches `oxo-flow run` remotely under nohup; the
-   server polls the remote `.exit-code` every 5s; on completion the whole
-   workdir (logs, checkpoint, results) is pulled back, so the web logs,
-   files, preview, and report views work exactly as for local runs.
-   Cancel sends `pkill` for the per-run wrapper.
+   per-run wrapper launches `oxo-flow run` fully detached (its own
+   session via `setsid`, with `nohup` fallback), so the launch SSH call
+   returns immediately while the workflow keeps running; the server polls
+   the remote `.exit-code` every 5s; on completion the whole workdir
+   (logs, checkpoint, results) is pulled back, so the web logs, files,
+   preview, and report views work exactly as for local runs. Cancel kills
+   the wrapper's recorded process group, so the CLI and every rule
+   subprocess stop instead of being orphaned.
 
 Requirements on the remote host: the `oxo-flow` CLI on `PATH` (any recent
 release), `tar`, and non-interactive SSH access (key auth, `BatchMode`).

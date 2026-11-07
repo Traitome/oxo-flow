@@ -54,11 +54,11 @@ the window before adding retries.
 ```bash
 make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
-#       cargo build, cargo test, schema-drift, version-check, cargo audit,
-#       cargo-deny, aws-legacy-tripwire (fails if the legacy AWS TLS stack
-#       re-enters the s3-storage graph), issue-id-tripwire (fails if internal
-#       issue IDs leak into user-facing pages), secrets scan, docs build,
-#       frontend-lint, eval-tests, eval-lint, extension-test
+#       cargo build, cargo test, schema-drift, skill-drift, version-check,
+#       cargo audit, cargo-deny, aws-legacy-tripwire (fails if the legacy AWS
+#       TLS stack re-enters the s3-storage graph), issue-id-tripwire (fails if
+#       internal issue IDs leak into user-facing pages), secrets scan, docs
+#       build, frontend-lint, eval-tests, eval-lint, extension-test
 ```
 
 ---
@@ -114,13 +114,14 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All sixteen checks must pass:
+All seventeen checks must pass:
 
 - [x] `cargo fmt -- --check`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo build --workspace`
 - [x] `cargo test --workspace`
 - [x] `schema-drift` (workflow JSON schema: CLI copy matches the docs canonical copy)
+- [x] `skill-drift` (embedded SKILL.md matches the docs canonical copy)
 - [x] `version-check` (every version location agrees with Cargo.toml)
 - [x] `cargo audit`
 - [x] `cargo deny check`

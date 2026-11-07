@@ -3,6 +3,8 @@
 //! bounded timeout; every argument is passed as an argv entry, so no
 //! shell quoting or injection surface exists.
 
+use std::path::{Path, PathBuf};
+
 use super::types::{ClusterInfo, ClusterProbeResult};
 
 /// SSH option prefix shared by the probe and the remote-execution path:
@@ -21,11 +23,71 @@ pub fn ssh_base_args(port: u16) -> Vec<String> {
     ]
 }
 
+/// The `user@host` target string for an SSH invocation, shared by both
+/// cluster types (the probe holds `ClusterInfo`, remote execution a stored
+/// `ClusterRow`).
+pub fn ssh_target_string(ssh_user: Option<&str>, ssh_host: &str) -> String {
+    match ssh_user {
+        Some(user) => format!("{user}@{ssh_host}"),
+        None => ssh_host.to_string(),
+    }
+}
+
 /// The `user@host` target string for an SSH invocation.
 pub fn ssh_target(cluster: &ClusterInfo) -> String {
-    match cluster.ssh_user.as_deref() {
-        Some(user) => format!("{user}@{}", cluster.ssh_host),
-        None => cluster.ssh_host.clone(),
+    ssh_target_string(cluster.ssh_user.as_deref(), &cluster.ssh_host)
+}
+
+/// Whether a configured `ssh_key` is key *material* rather than a path.
+///
+/// `ClusterInfo.ssh_key` is documented as "path/material". Material cannot
+/// be handed to `ssh -i` directly — OpenSSH treats it as a file name and
+/// prints a multi-line warning on stderr.
+pub fn is_key_material(configured: &str) -> bool {
+    configured.contains("PRIVATE KEY") || configured.contains('\n')
+}
+
+/// A resolved `ssh -i` identity.
+///
+/// Path-form values are used verbatim (`~` is expanded by OpenSSH). Key
+/// material is written to a private temp file — `tempfile` creates it with
+/// mode 0600 on Unix — and removed when this guard drops, so the secret does
+/// not outlive the SSH invocation.
+pub struct SshIdentity {
+    path: PathBuf,
+    _material_file: Option<tempfile::NamedTempFile>,
+}
+
+impl SshIdentity {
+    /// Resolve a configured `ssh_key` value into a usable `-i` path.
+    pub fn resolve(configured: &str) -> std::io::Result<Self> {
+        if !is_key_material(configured) {
+            return Ok(Self {
+                path: PathBuf::from(configured),
+                _material_file: None,
+            });
+        }
+        use std::io::Write;
+        let mut file = tempfile::Builder::new()
+            .prefix("oxo-flow-ssh-key-")
+            .tempfile()?;
+        file.write_all(configured.as_bytes())?;
+        // OpenSSH's private-key parser rejects material whose last line has
+        // no trailing newline ("error in libcrypto"). API callers routinely
+        // lose it in transit (`$(cat key)` / JSON tooling), so normalize.
+        if !configured.ends_with('\n') {
+            file.write_all(b"\n")?;
+        }
+        file.flush()?;
+        Ok(Self {
+            path: file.path().to_path_buf(),
+            _material_file: Some(file),
+        })
+    }
+
+    /// The path to pass to `ssh -i`.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -106,20 +168,33 @@ pub async fn probe(cluster: &ClusterInfo) -> ClusterProbeResult {
 
     // tokio::process keeps the SSH round-trip off the blocking worker pool.
     let mut cmd = tokio::process::Command::new("ssh");
-    cmd.arg("-o").arg("BatchMode=yes");
-    cmd.arg("-o").arg("ConnectTimeout=8");
-    cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
-    cmd.arg("-p").arg(cluster.ssh_port.to_string());
-    // The stored value may be sealed (OXO_FLOW_MASTER_KEY set, #517) —
-    // open it just before use.
-    if let Some(key) = cluster.ssh_key.as_deref().map(crate::infra::crypto::open) {
-        cmd.arg("-i").arg(key);
+    for arg in ssh_base_args(cluster.ssh_port) {
+        cmd.arg(arg);
     }
-    let target = match cluster.ssh_user.as_deref() {
-        Some(user) => format!("{user}@{}", cluster.ssh_host),
-        None => cluster.ssh_host.clone(),
+    // The stored value may be sealed (OXO_FLOW_MASTER_KEY set, #517) —
+    // open it just before use. Material is written to a private temp file;
+    // the guard keeps it alive until the probe completes.
+    let identity = match cluster.ssh_key.as_deref().map(crate::infra::crypto::open) {
+        Some(key) => match SshIdentity::resolve(&key) {
+            Ok(identity) => Some(identity),
+            Err(e) => {
+                tracing::warn!("cluster probe failed: cannot prepare ssh identity: {e}");
+                return ClusterProbeResult {
+                    ok: false,
+                    hostname: None,
+                    scheduler: None,
+                    version: None,
+                    error: Some("Could not prepare the SSH key".into()),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                };
+            }
+        },
+        None => None,
     };
-    cmd.arg(target);
+    if let Some(identity) = &identity {
+        cmd.arg("-i").arg(identity.path());
+    }
+    cmd.arg(ssh_target(cluster));
 
     // One remote round-trip gathers hostname + scheduler signature.
     // `; exit 0` matters: the presence checks are the last commands, and a
@@ -293,6 +368,70 @@ mod tests {
             scheduler_version("n1\nslurm 23.11.7\n"),
             Some("slurm 23.11.7".into())
         );
+    }
+
+    #[test]
+    fn distinguishes_key_material_from_path() {
+        // Arrange
+        let path = "~/.ssh/id_ed25519";
+        let material = "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key-fixture\n-----END OPENSSH PRIVATE KEY-----\n";
+        let multiline_without_marker = "line one\nline two\n";
+
+        // Act / Assert
+        assert!(!is_key_material(path));
+        assert!(is_key_material(material));
+        assert!(is_key_material(multiline_without_marker));
+    }
+
+    #[test]
+    fn path_identity_is_used_verbatim() {
+        // Arrange / Act
+        let identity = SshIdentity::resolve("~/.ssh/id_ed25519").expect("path resolves");
+
+        // Assert — no temp file, the configured path is passed through so
+        // OpenSSH keeps expanding `~`.
+        assert_eq!(identity.path().to_str(), Some("~/.ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn material_identity_lands_in_private_temp_file() {
+        // Arrange
+        let material = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-material\n-----END OPENSSH PRIVATE KEY-----\n";
+
+        // Act
+        let identity = SshIdentity::resolve(material).expect("material resolves");
+        let written = std::fs::read_to_string(identity.path()).expect("temp key readable");
+
+        // Assert — content round-trips and, on Unix, the file is 0600.
+        assert_eq!(written, material);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(identity.path())
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "key material must be owner-only");
+        }
+
+        // The guard removes the file on drop.
+        let path = identity.path().to_path_buf();
+        drop(identity);
+        assert!(!path.exists(), "temp key file must be removed on drop");
+    }
+
+    #[test]
+    fn material_without_trailing_newline_is_normalized() {
+        // Arrange — what `$(cat key)` / JSON tooling sends: no final newline.
+        let stripped = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-material\n-----END OPENSSH PRIVATE KEY-----";
+
+        // Act
+        let identity = SshIdentity::resolve(stripped).expect("material resolves");
+        let written = std::fs::read_to_string(identity.path()).expect("temp key readable");
+
+        // Assert — OpenSSH's parser fails on a missing final newline
+        // ("error in libcrypto"), so the temp copy gets one.
+        assert_eq!(written, format!("{stripped}\n"));
     }
 
     /// The probe against a nonexistent host must fail gracefully and fast.

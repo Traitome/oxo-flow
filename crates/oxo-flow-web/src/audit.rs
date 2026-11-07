@@ -22,11 +22,11 @@ pub async fn audit_middleware(
     let path = request.uri().path().to_string();
     // The auth middleware (S2, issue #82 P0-4) injects a CurrentUser;
     // personal mode falls back to the 'default' pseudo-user.
-    let user = request
-        .extensions()
-        .get::<crate::domains::auth::current_user::CurrentUser>()
-        .map(|u| u.id.clone())
-        .unwrap_or_else(|| "default".to_string());
+    let user = audit_actor_id(
+        request
+            .extensions()
+            .get::<crate::domains::auth::current_user::CurrentUser>(),
+    );
 
     let response = next.run(request).await;
 
@@ -68,4 +68,47 @@ pub async fn audit_middleware(
     );
 
     response
+}
+
+/// Resolve the actor id stored in `audit_logs.user_id`.
+///
+/// Canonical form is `users.id` — the same identity every ownership column
+/// and session carries — never a display name resolved at request time.
+/// `users.id` is a UUID for DB-created/bootstrap accounts and the username
+/// itself for env-password-provisioned identities (`user`, `viewer`) and the
+/// `default` personal-mode pseudo-user, so stored rows legitimately show
+/// both shapes; existing rows are never rewritten (report finding T-F4).
+fn audit_actor_id(user: Option<&crate::domains::auth::current_user::CurrentUser>) -> String {
+    user.map(|u| u.id.clone())
+        .unwrap_or_else(|| crate::domains::auth::current_user::CurrentUser::default_user().id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domains::auth::current_user::CurrentUser;
+
+    /// Report finding T-F4: every new audit row is attributed to the
+    /// canonical `users.id` — the same value sessions and ownership columns
+    /// use — never a raw login name. The id's shape (UUID vs env-provisioned
+    /// username) belongs to the users table, not to this writer.
+    #[test]
+    fn audit_actor_is_the_canonical_user_id() {
+        let uuid_user = CurrentUser {
+            id: "5b7d0c81-0000-4000-8000-000000000000".into(),
+            role: "admin".into(),
+        };
+        assert_eq!(
+            audit_actor_id(Some(&uuid_user)),
+            "5b7d0c81-0000-4000-8000-000000000000"
+        );
+        let env_user = CurrentUser {
+            id: "user".into(),
+            role: "user".into(),
+        };
+        assert_eq!(audit_actor_id(Some(&env_user)), "user");
+        // Pre-auth/public requests have no extension: the same 'default'
+        // pseudo-user `resolve()` yields everywhere else.
+        assert_eq!(audit_actor_id(None), "default");
+    }
 }

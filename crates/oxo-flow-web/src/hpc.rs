@@ -109,6 +109,18 @@ pub fn detect_scheduler() -> SchedulerType {
     SchedulerType::None
 }
 
+static DETECTED_SCHEDULER: std::sync::OnceLock<SchedulerType> = std::sync::OnceLock::new();
+
+/// Process-lifetime cached [`detect_scheduler`].
+///
+/// `/api/health` is polled frequently and must not spawn up to four
+/// scheduler probes per request; a deployment's scheduler is fixed, so the
+/// first answer is authoritative. Shared with [`get_hpc_status`] so the two
+/// surfaces can never disagree about which backend is live.
+pub fn detected_scheduler() -> SchedulerType {
+    DETECTED_SCHEDULER.get_or_init(detect_scheduler).clone()
+}
+
 /// Whether `program args` spawns and exits with status 0.
 fn command_succeeds(program: &str, args: &[&str]) -> bool {
     Command::new(program)
@@ -687,13 +699,26 @@ fn sge_queues_from_jobs(jobs: &[JobInfo]) -> Vec<QueueStatus> {
     map.into_values().collect()
 }
 
+/// Collapse duplicate node rows by name.
+///
+/// SLURM's `sinfo -N` prints one row per node *per partition*; a host that
+/// belongs to two partitions appeared twice in `/api/hpc`, double-counting
+/// it. Node state/CPU/memory are per-node values, so the first row wins.
+fn dedup_nodes_by_name(nodes: Vec<NodeStatus>) -> Vec<NodeStatus> {
+    let mut seen = std::collections::HashSet::new();
+    nodes
+        .into_iter()
+        .filter(|node| seen.insert(node.name.clone()))
+        .collect()
+}
+
 /// Get full HPC status.
 ///
 /// Detects the available scheduler and gathers queue, node, and job status.
 pub fn get_hpc_status() -> HpcStatus {
-    let scheduler_type = detect_scheduler();
+    let scheduler_type = detected_scheduler();
 
-    match scheduler_type {
+    let mut status = match scheduler_type {
         SchedulerType::Slurm => {
             let version = get_slurm_version();
             let queues = get_slurm_queues();
@@ -794,7 +819,10 @@ pub fn get_hpc_status() -> HpcStatus {
                 "No HPC scheduler detected. Install SLURM, PBS/Torque, LSF, or SGE.".to_string(),
             ),
         },
-    }
+    };
+
+    status.nodes = dedup_nodes_by_name(status.nodes);
+    status
 }
 
 #[cfg(test)]
@@ -825,6 +853,33 @@ mod tests {
         assert!(command_succeeds("true", &[]));
         assert!(!command_succeeds("false", &[]));
         assert!(!command_succeeds("no-such-binary-xyz", &[]));
+    }
+
+    #[test]
+    fn dedups_a_node_listed_once_per_partition() {
+        // Arrange — `sinfo -N` prints n1 once for each partition it joins.
+        let node = |name: &str, state: &str| NodeStatus {
+            name: name.to_string(),
+            state: state.to_string(),
+            cpus_total: 4,
+            cpus_alloc: 0,
+            cpus_free: 4,
+            memory_total_mb: 16000,
+            memory_free_mb: 16000,
+        };
+        let nodes = vec![
+            node("n1", "idle"),
+            node("n1", "idle"),
+            node("n2", "allocated"),
+        ];
+
+        // Act
+        let deduped = dedup_nodes_by_name(nodes);
+
+        // Assert — one entry per physical node, order preserved.
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].name, "n1");
+        assert_eq!(deduped[1].name, "n2");
     }
 
     #[test]
