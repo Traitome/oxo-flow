@@ -191,11 +191,27 @@ fn x_ms_date() -> String {
 
 /// Build the canonicalized Azure headers string.
 ///
-/// Azure requires all `x-ms-*` headers to be sorted alphabetically, lowercased,
-/// and joined as `name:value\n`. We only send `x-ms-date` and `x-ms-version`,
-/// so the canonicalized string is fixed.
-fn canonicalized_headers(date: &str) -> String {
-    format!("x-ms-date:{}\nx-ms-version:{}\n", date, AZURE_API_VERSION)
+/// Azure requires all `x-ms-*` headers to be sorted alphabetically,
+/// lowercased, and joined as `name:value\n`. We always send `x-ms-date` and
+/// `x-ms-version`; `x_ms_headers` carries any additional `x-ms-*` headers
+/// (e.g. `x-ms-blob-content-md5` on Put Block List).
+fn canonicalized_headers(date: &str, extra: &[(&str, &str)]) -> String {
+    let mut headers = vec![
+        ("x-ms-date".to_string(), date.to_string()),
+        ("x-ms-version".to_string(), AZURE_API_VERSION.to_string()),
+    ];
+    for (name, value) in extra {
+        headers.push((name.to_ascii_lowercase(), (*value).to_string()));
+    }
+    headers.sort();
+    let mut result = String::new();
+    for (name, value) in &headers {
+        result.push_str(name);
+        result.push(':');
+        result.push_str(value);
+        result.push('\n');
+    }
+    result
 }
 
 /// Build the canonicalized resource string.
@@ -205,8 +221,100 @@ fn canonicalized_resource(account: &str, container: &str, key: &str) -> String {
     format!("/{account}/{container}/{key}")
 }
 
+/// Build the canonicalized resource string including query parameters.
+///
+/// SharedKey canonicalization appends every query parameter as
+/// `name:value`, each preceded by `\n`, with names lowercased, all pairs
+/// sorted lexicographically by name, and names/values URL-decoded
+/// (`?comp=block&blockid=AQ%3D%3D` yields `\nblockid:AQ==\ncomp:block`).
+fn canonicalized_resource_with_query(
+    account: &str,
+    container: &str,
+    key: &str,
+    query: &[(&str, &str)],
+) -> String {
+    let mut resource = canonicalized_resource(account, container, key);
+    let mut params: Vec<(String, String)> = query
+        .iter()
+        .map(|(name, value)| (urldecode(&name.to_ascii_lowercase()), urldecode(value)))
+        .collect();
+    params.sort();
+    for (name, value) in &params {
+        resource.push('\n');
+        resource.push_str(name);
+        resource.push(':');
+        resource.push_str(value);
+    }
+    resource
+}
+
+/// Percent-decode a query-parameter component; malformed escapes pass
+/// through untouched rather than erroring (values are ours or Azure's).
+fn urldecode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Append query parameters to a blob URL.
+///
+/// SAS tokens ride in the query string, so `url` may already carry a query —
+/// additional parameters are joined with `&`. Values are percent-encoded
+/// (`+` and `=` in base64 block ids become `%2B`/`%3D`).
+fn url_with_query(url: &str, query: &[(&str, &str)]) -> String {
+    let mut result = url.to_string();
+    for (name, value) in query {
+        result.push_str(if result.contains('?') { "&" } else { "?" });
+        result.push_str(&urlencode_key(name));
+        result.push('=');
+        result.push_str(&urlencode_key(value));
+    }
+    result
+}
+
+/// Fixed-width base64 block id for a 0-based block index.
+///
+/// Azure requires every block id of a blob to share one length (≤64 bytes
+/// pre-encoding). An 8-byte big-endian index always encodes to 12 ASCII
+/// characters, so ids compare uniformly and the commit order is explicit.
+fn block_id(index: u64) -> String {
+    base64::engine::general_purpose::STANDARD.encode(index.to_be_bytes())
+}
+
+/// Build the Put Block List XML body (`<Latest>` = use the block's content).
+fn block_list_xml(block_ids: &[String]) -> String {
+    // Base64 block ids carry no XML-special characters — no escaping needed.
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList>");
+    for id in block_ids {
+        xml.push_str("<Latest>");
+        xml.push_str(id);
+        xml.push_str("</Latest>");
+    }
+    xml.push_str("</BlockList>");
+    xml
+}
+
 /// The Azure Blob service API version we target.
 const AZURE_API_VERSION: &str = "2020-10-02";
+
+/// Bytes per Put Block when streaming uploads. Well under the 4,000 MiB
+/// per-block service limit (API 2019-12-12+); peak upload memory is one
+/// buffer of this size regardless of file size.
+const AZURE_BLOCK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Azure Blob HTTP client (shared request-level client).
 fn http_client() -> &'static reqwest::Client {
@@ -230,6 +338,15 @@ struct AuthParams<'a> {
     content_length: &'a str,
     content_md5: &'a str,
     content_type: &'a str,
+    /// `Range` header value (empty string when the request sends none) —
+    /// Azure signs the Range component only when the header is present.
+    range: &'a str,
+    /// Canonicalized x-ms headers beyond `x-ms-date`/`x-ms-version`
+    /// (e.g. `x-ms-blob-content-type` on Put Block List).
+    extra_headers: &'a [(&'a str, &'a str)],
+    /// Query parameters (already percent-encoded values) that ride on the
+    /// request URL and must be canonicalized into the resource string.
+    query: &'a [(&'a str, &'a str)],
     date: &'a str,
     account: &'a str,
     container: &'a str,
@@ -238,8 +355,9 @@ struct AuthParams<'a> {
 
 /// Build the `Authorization` header for a SharedKey request.
 fn azure_authorization(creds: &AzureCredentials, p: &AuthParams<'_>) -> Result<String> {
-    let canonical_headers = canonicalized_headers(p.date);
-    let canonical_resource = canonicalized_resource(p.account, p.container, p.key);
+    let canonical_headers = canonicalized_headers(p.date, p.extra_headers);
+    let canonical_resource =
+        canonicalized_resource_with_query(p.account, p.container, p.key, p.query);
 
     let string_to_sign = format!(
         "{}\n\
@@ -253,10 +371,10 @@ fn azure_authorization(creds: &AzureCredentials, p: &AuthParams<'_>) -> Result<S
          \n\
          \n\
          \n\
-         \n\
+         {}\n\
          {canonical_headers}\
          {canonical_resource}",
-        p.method, p.content_length, p.content_md5, p.content_type
+        p.method, p.content_length, p.content_md5, p.content_type, p.range
     );
 
     match creds {
@@ -315,6 +433,9 @@ async fn azure_get_response(
                 content_length: "",
                 content_md5: "",
                 content_type: "",
+                range: "",
+                extra_headers: &[],
+                query: &[],
                 date: &date,
                 account,
                 container,
@@ -382,6 +503,9 @@ async fn azure_get_range(
                 content_length: "",
                 content_md5: "",
                 content_type: "",
+                range: &range_header,
+                extra_headers: &[],
+                query: &[],
                 date: &date,
                 account,
                 container,
@@ -445,6 +569,9 @@ async fn azure_head_stat(
                 content_length: "",
                 content_md5: "",
                 content_type: "",
+                range: "",
+                extra_headers: &[],
+                query: &[],
                 date: &date,
                 account,
                 container,
@@ -504,24 +631,35 @@ async fn azure_put(
     let sas = sas_token(creds);
     let url = azure_url(account, container, key, sas);
     let date = x_ms_date();
-    let content_length = data.len().to_string();
+    // SharedKey signs the Content-Length component as the empty string when
+    // no content is sent (2015-02-21+ contract); only a non-empty body sends
+    // (and signs) an explicit Content-Length header.
+    let content_length = if data.is_empty() {
+        ""
+    } else {
+        &*data.len().to_string()
+    };
 
     let mut req = http_client().put(&url);
     req = req
         .header("x-ms-date", &date)
         .header("x-ms-version", AZURE_API_VERSION)
-        .header("Content-Type", content_type)
-        .header("Content-Length", &content_length)
-        .body(data.to_vec());
+        .header("Content-Type", content_type);
+    if !data.is_empty() {
+        req = req.header("Content-Length", data.len()).body(data.to_vec());
+    }
 
     if let AzureCredentials::SharedKey { .. } = creds {
         let auth = azure_authorization(
             creds,
             &AuthParams {
                 method: "PUT",
-                content_length: &content_length,
+                content_length,
                 content_md5: "",
                 content_type,
+                range: "",
+                extra_headers: &[],
+                query: &[],
                 date: &date,
                 account,
                 container,
@@ -552,7 +690,12 @@ async fn azure_put(
     Ok(())
 }
 
-/// PUT a blob from a local file (streaming).
+/// PUT a blob from a local file, streaming in fixed-size blocks.
+///
+/// The file is read in [`AZURE_BLOCK_SIZE`] chunks uploaded as Put Block
+/// requests, then committed atomically with Put Block List — peak memory is
+/// one buffer regardless of file size, and the 256 MiB single-PUT service
+/// ceiling never applies. Empty files commit an empty block list.
 async fn azure_put_file(
     creds: &AzureCredentials,
     container: &str,
@@ -560,10 +703,169 @@ async fn azure_put_file(
     path: &Path,
     content_type: &str,
 ) -> Result<()> {
-    let data = tokio::fs::read(path)
+    let account = account_name(creds);
+    let sas = sas_token(creds);
+    let url = azure_url(account, container, key, sas);
+
+    let mut file = tokio::fs::File::open(path)
         .await
-        .map_err(|e| azure_io_error("PUT file read", container, key, &e.to_string()))?;
-    azure_put(creds, container, key, &data, content_type).await
+        .map_err(|e| azure_io_error("PUT file open", container, key, &e.to_string()))?;
+
+    // One reused buffer: reads may return short counts, so a block is only
+    // complete once `filled == AZURE_BLOCK_SIZE` (or EOF leaves a tail).
+    let mut block_buf = vec![0u8; AZURE_BLOCK_SIZE];
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut filled = 0usize;
+    let mut index: u64 = 0;
+    loop {
+        if filled == block_buf.len() {
+            let id = block_id(index);
+            put_block(creds, &url, container, key, &id, &block_buf).await?;
+            block_ids.push(id);
+            index += 1;
+            filled = 0;
+        }
+        let n = tokio::io::AsyncReadExt::read(&mut file, &mut block_buf[filled..])
+            .await
+            .map_err(|e| azure_io_error("PUT file read", container, key, &e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    if filled > 0 {
+        let id = block_id(index);
+        put_block(creds, &url, container, key, &id, &block_buf[..filled]).await?;
+        block_ids.push(id);
+    }
+
+    put_block_list(creds, &url, container, key, &block_ids, content_type).await
+}
+
+/// Upload one block of a streaming upload (Put Block: `?comp=block&blockid=…`).
+async fn put_block(
+    creds: &AzureCredentials,
+    url: &str,
+    container: &str,
+    key: &str,
+    id: &str,
+    data: &[u8],
+) -> Result<()> {
+    let block_url = url_with_query(url, &[("blockid", id), ("comp", "block")]);
+    let date = x_ms_date();
+    let content_length = data.len().to_string();
+
+    let mut req = http_client()
+        .put(&block_url)
+        .header("x-ms-date", &date)
+        .header("x-ms-version", AZURE_API_VERSION)
+        .header("Content-Length", data.len())
+        .body(data.to_vec());
+
+    if let AzureCredentials::SharedKey { .. } = creds {
+        let auth = azure_authorization(
+            creds,
+            &AuthParams {
+                method: "PUT",
+                content_length: &content_length,
+                content_md5: "",
+                content_type: "",
+                range: "",
+                extra_headers: &[],
+                query: &[("blockid", id), ("comp", "block")],
+                date: &date,
+                account: account_name(creds),
+                container,
+                key,
+            },
+        )?;
+        req = req.header("Authorization", &auth);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| azure_io_error("PUT block send", container, key, &e.to_string()))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unreadable>"));
+        return Err(azure_io_error(
+            "PUT block",
+            container,
+            key,
+            &format!("HTTP {status}: {body}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Commit staged blocks as the blob content (Put Block List: `?comp=blocklist`).
+///
+/// `content_type` rides on `x-ms-blob-content-type`, which sets the committed
+/// blob's Content-Type and participates in the canonicalized-headers signature.
+async fn put_block_list(
+    creds: &AzureCredentials,
+    url: &str,
+    container: &str,
+    key: &str,
+    block_ids: &[String],
+    content_type: &str,
+) -> Result<()> {
+    let list_url = url_with_query(url, &[("comp", "blocklist")]);
+    let date = x_ms_date();
+    let body = block_list_xml(block_ids);
+    let content_length = body.len().to_string();
+
+    let mut req = http_client()
+        .put(&list_url)
+        .header("x-ms-date", &date)
+        .header("x-ms-version", AZURE_API_VERSION)
+        .header("Content-Type", "application/xml")
+        .header("x-ms-blob-content-type", content_type)
+        .header("Content-Length", body.len())
+        .body(body);
+
+    if let AzureCredentials::SharedKey { .. } = creds {
+        let auth = azure_authorization(
+            creds,
+            &AuthParams {
+                method: "PUT",
+                content_length: &content_length,
+                content_md5: "",
+                content_type: "application/xml",
+                range: "",
+                extra_headers: &[("x-ms-blob-content-type", content_type)],
+                query: &[("comp", "blocklist")],
+                date: &date,
+                account: account_name(creds),
+                container,
+                key,
+            },
+        )?;
+        req = req.header("Authorization", &auth);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| azure_io_error("PUT block list send", container, key, &e.to_string()))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unreadable>"));
+        return Err(azure_io_error(
+            "PUT block list",
+            container,
+            key,
+            &format!("HTTP {status}: {body}"),
+        ));
+    }
+    Ok(())
 }
 
 fn azure_io_error(op: &str, container: &str, key: &str, detail: &str) -> OxoFlowError {
@@ -807,5 +1109,175 @@ mod tests {
     fn azure_storage_backend_name() {
         let backend = AzureBlobStorage;
         assert_eq!(backend.name(), "azure");
+    }
+
+    // ---- Golden-vector signature tests -------------------------------------
+    //
+    // These pin the exact SharedKey string-to-sign each request builder
+    // produces: fixed key (base64 of 32 zero bytes), fixed date, account
+    // `acct`, container `container`, key `k`. Any drift in canonicalization
+    // (header ordering, query decoding, empty-body Content-Length handling,
+    // extra-header inclusion) flips the signature and fails here.
+
+    fn golden_creds() -> AzureCredentials {
+        AzureCredentials::SharedKey {
+            account: "acct".to_string(),
+            key: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+        }
+    }
+
+    #[test]
+    fn sharedkey_signature_empty_put() {
+        // azure_put with an empty body signs no Content-Length component at
+        // all (2015-02-21+ contract) while Content-Type stays signed.
+        let sig = azure_authorization(
+            &golden_creds(),
+            &AuthParams {
+                method: "PUT",
+                content_length: "",
+                content_md5: "",
+                content_type: "application/octet-stream",
+                range: "",
+                extra_headers: &[],
+                query: &[],
+                date: "Mon, 02 Nov 2026 00:00:00 GMT",
+                account: "acct",
+                container: "container",
+                key: "k",
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig,
+            "SharedKey acct:JjSoiI3O64sBWVJt8jKMnJz8rGlDwg/4W8mhb0wOLoA="
+        );
+    }
+
+    #[test]
+    fn sharedkey_signature_range_get() {
+        // azure_get_range signs the Range header as the 12th component.
+        let sig = azure_authorization(
+            &golden_creds(),
+            &AuthParams {
+                method: "GET",
+                content_length: "",
+                content_md5: "",
+                content_type: "",
+                range: "bytes=0-99",
+                extra_headers: &[],
+                query: &[],
+                date: "Mon, 02 Nov 2026 00:00:00 GMT",
+                account: "acct",
+                container: "container",
+                key: "k",
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig,
+            "SharedKey acct:2QgDGHCSPM/fCJ25Eso728oUxL5DoBS8eOKz1DS88V8="
+        );
+    }
+
+    #[test]
+    fn sharedkey_signature_put_block() {
+        // Put Block signs the body length, an empty Content-Type, and both
+        // query params URL-decoded into the canonical resource.
+        let sig = azure_authorization(
+            &golden_creds(),
+            &AuthParams {
+                method: "PUT",
+                content_length: "3",
+                content_md5: "",
+                content_type: "",
+                range: "",
+                extra_headers: &[],
+                query: &[("blockid", "AAAAAAAAAAE="), ("comp", "block")],
+                date: "Mon, 02 Nov 2026 00:00:00 GMT",
+                account: "acct",
+                container: "container",
+                key: "k",
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig,
+            "SharedKey acct:q4uK0wChjfS6SROYYMw8wrBDoIZY9VphcenZBlTwbms="
+        );
+    }
+
+    #[test]
+    fn sharedkey_signature_put_block_list() {
+        // Put Block List signs the XML body length, the XML content type,
+        // and the extra x-ms-blob-content-type header (sorted before
+        // x-ms-date), with `comp=blocklist` in the canonical resource.
+        let sig = azure_authorization(
+            &golden_creds(),
+            &AuthParams {
+                method: "PUT",
+                content_length: "90",
+                content_md5: "",
+                content_type: "application/xml",
+                range: "",
+                extra_headers: &[("x-ms-blob-content-type", "text/plain")],
+                query: &[("comp", "blocklist")],
+                date: "Mon, 02 Nov 2026 00:00:00 GMT",
+                account: "acct",
+                container: "container",
+                key: "k",
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig,
+            "SharedKey acct:PmuSXq9+BeqBmZvSPD07ePhjq6Y5dqrkLO0xP6fvSJU="
+        );
+    }
+
+    #[test]
+    fn block_id_is_fixed_width_base64() {
+        assert_eq!(block_id(0), "AAAAAAAAAAA=");
+        assert_eq!(block_id(1), "AAAAAAAAAAE=");
+        assert_eq!(block_id(u64::MAX).len(), 12);
+    }
+
+    #[test]
+    fn block_list_xml_single_block_shape() {
+        let xml = block_list_xml(&[block_id(1)]);
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <BlockList><Latest>AAAAAAAAAAE=</Latest></BlockList>"
+        );
+        assert_eq!(xml.len(), 90);
+    }
+
+    #[test]
+    fn canonicalized_resource_with_query_decodes_and_sorts() {
+        let resource = canonicalized_resource_with_query(
+            "acct",
+            "container",
+            "k",
+            &[("comp", "block"), ("blockid", "AQ%3D%3D")],
+        );
+        assert_eq!(resource, "/acct/container/k\nblockid:AQ==\ncomp:block");
+    }
+
+    #[test]
+    fn url_with_query_encodes_values() {
+        assert_eq!(
+            url_with_query(
+                "https://acct.blob.core.windows.net/c/k",
+                &[("comp", "block")]
+            ),
+            "https://acct.blob.core.windows.net/c/k?comp=block"
+        );
+        assert_eq!(
+            url_with_query(
+                "https://acct.blob.core.windows.net/c/k?comp=block",
+                &[("blockid", "AAAAAAAAAAE=")]
+            ),
+            "https://acct.blob.core.windows.net/c/k?comp=block&blockid=AAAAAAAAAAE%3D"
+        );
     }
 }
