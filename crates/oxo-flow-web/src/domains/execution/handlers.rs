@@ -351,6 +351,91 @@ mod run_rate_limit {
     }
 }
 
+/// Stage run sources (workflow TOML + `[[include]]` files) into a
+/// per-request temp directory. This runs BEFORE the runs row is inserted
+/// and before the workdir claim is attempted: include-staging failures
+/// answer 500 here without ever leaving a ghost `queued` row behind
+/// (PR #930 NIT-3), and a request that loses the claim race has touched
+/// nothing the winner (or the active run) depends on.
+///
+/// The workflow write itself stays log-only on failure — the spawned CLI
+/// fails loudly on a missing workflow, matching the old happy-path
+/// behavior. Include failures remain fatal: the CLI could not resolve
+/// the include graph without them.
+async fn stage_run_sources(
+    staging_dir: &std::path::Path,
+    toml: &str,
+    include_paths: &[(String, String)],
+) -> Result<std::path::PathBuf, (StatusCode, Json<ApiError>)> {
+    let workflow_path = staging_dir.join("workflow.oxoflow");
+    if let Err(e) = tokio::fs::write(&workflow_path, toml).await {
+        tracing::error!("Failed to write workflow to {:?}: {e}", workflow_path);
+    }
+    for (rel, content) in include_paths {
+        let dest = staging_dir.join(rel);
+        if let Some(parent) = dest.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::error!("Failed to create include directory {:?}: {e}", parent);
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                format!("Failed to stage include file '{rel}'"),
+            ));
+        }
+        if let Err(e) = tokio::fs::write(&dest, content).await {
+            tracing::error!("Failed to write include {rel} to {:?}: {e}", dest);
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                format!("Failed to stage include file '{rel}'"),
+            ));
+        }
+    }
+    Ok(workflow_path)
+}
+
+/// Copy the staged sources into the run's real workdir after the
+/// `create_run_if_workdir_idle` claim is won. The workdir may be a saved
+/// pipeline's persistent directory shared across re-runs — writing into
+/// it before the claim let a 409 loser clobber the winner's files
+/// mid-run. Failures here are log-only: the `queued` row already exists,
+/// and a 500 after the insert would strand a row whose CLI spawn never
+/// happens; the CLI fails loudly on missing sources instead. Copies (not
+/// renames) because the per-request temp dir may live on a different
+/// filesystem than the workspace.
+async fn materialize_run_sources(
+    run_dir: &std::path::Path,
+    workflow_path: &std::path::Path,
+    include_paths: &[(String, String)],
+) {
+    let dest_workflow = run_dir.join("workflow.oxoflow");
+    if let Err(e) = tokio::fs::copy(workflow_path, &dest_workflow).await {
+        tracing::error!("Failed to write workflow to {:?}: {e}", dest_workflow);
+    } else {
+        tracing::info!("Saved workflow to {:?}", workflow_path);
+    }
+    for (rel, content) in include_paths {
+        let dest = run_dir.join(rel);
+        if let Some(parent) = dest.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::error!("Failed to create include directory {:?}: {e}", parent);
+            continue;
+        }
+        if let Err(e) = tokio::fs::write(&dest, content).await {
+            tracing::error!("Failed to write include {rel} to {:?}: {e}", dest);
+        }
+    }
+    if !include_paths.is_empty() {
+        tracing::info!(
+            "Staged {} into {:?}",
+            oxo_flow_core::plural(include_paths.len(), "include file", "include files"),
+            run_dir
+        );
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/runs",
@@ -449,7 +534,9 @@ pub async fn create_run(
     // Validate BEFORE anything is persisted: `validate_config_overrides`
     // and the two pure include-key gates below answer 400s, and a 400 must
     // never leave a ghost `queued` runs row behind (PR #930 NIT-3). IO
-    // staging (mkdir/write) still happens after the row exists.
+    // staging (mkdir/write) runs into a per-request temp directory, also
+    // before the row exists — the shared workdir is only touched after the
+    // workdir claim below is won.
     let validated_overrides = validate_config_overrides(&req)?;
     let mut include_paths = Vec::new();
     let mut canonical_keys = std::collections::BTreeSet::new();
@@ -520,50 +607,27 @@ pub async fn create_run(
         // Save pipeline TOML to the working directory so the executor (CLI
         // subprocess) can read it. `tokio::fs` keeps the small write off
         // the async runtime's blocking threads (#268 item 4, web minor).
-        let workflow_path = run_dir.join("workflow.oxoflow");
-        if let Err(e) = tokio::fs::write(&workflow_path, toml).await {
-            tracing::error!("Failed to write workflow to {:?}: {e}", workflow_path);
-        } else {
-            tracing::info!("Saved workflow to {:?}", workflow_path);
-        }
+        //
+        // The sources are NOT written into run_dir here: a saved pipeline
+        // reuses its persistent workdir, so a request that loses the
+        // concurrent-run race below (409 RUN_NOT_TERMINAL) must not have
+        // already clobbered the winner's on-disk files. Stage into a
+        // per-request temp dir instead; the claim's Ok(true) arm copies
+        // them into the workdir (claim-then-stage).
+        let staging = tempfile::tempdir().map_err(|e| {
+            tracing::error!("Failed to create staging directory: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                "Failed to create staging directory".to_string(),
+            )
+        })?;
+        let workflow_path = stage_run_sources(staging.path(), toml, &include_paths).await?;
 
         // Config-override passthrough: shape-validated above, before the
         // row was persisted (PR #930 NIT-3); full semantics stay inside
         // the CLI, which warns on unknown keys and hard-fails on invalid
         // values for declared keys.
-        // Write [[include]] source files beside workflow.oxoflow so the
-        // CLI's `from_file` re-parse resolves them via resolve_includes —
-        // the same machinery local `oxo-flow run` uses. Keys are
-        // workflow-relative workspace paths, gated above; the staging loop
-        // below only performs the IO.
-        for (rel, content) in &include_paths {
-            let dest = run_dir.join(rel);
-            if let Some(parent) = dest.parent()
-                && let Err(e) = tokio::fs::create_dir_all(parent).await
-            {
-                tracing::error!("Failed to create include directory {:?}: {e}", parent);
-                return Err(err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "RUN_ERROR",
-                    "Failed to stage include files".to_string(),
-                ));
-            }
-            if let Err(e) = tokio::fs::write(&dest, content).await {
-                tracing::error!("Failed to write include {rel} to {:?}: {e}", dest);
-                return Err(err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "RUN_ERROR",
-                    format!("Failed to stage include file '{rel}'"),
-                ));
-            }
-        }
-        if !include_paths.is_empty() {
-            tracing::info!(
-                "Staged {} into {:?}",
-                oxo_flow_core::plural(include_paths.len(), "include file", "include files"),
-                run_dir
-            );
-        }
 
         // Issue #1018: resolved-workflow BioType admission. When the host
         // declares type contracts AND has includes (or config overrides),
@@ -642,13 +706,19 @@ pub async fn create_run(
         // The guarded insert is the atomic workdir claim (same contract as
         // retry/resume-checkpoint): a saved pipeline reuses its persistent
         // workdir, so two concurrent "run again" clicks used to produce two
-        // `queued` rows and two CLIs on one checkpoint. The loser answers
-        // 409. An insert failure also stops the spawn here — swallowing it
+        // `queued` rows and two CLIs on one checkpoint — and both requests
+        // used to overwrite the shared workdir's files before either claim
+        // landed. The sources now wait in the per-request temp dir above,
+        // so the loser answers 409 with the winner's files untouched. The
+        // loser's staging temp dir is dropped when this handler returns.
+        // An insert failure also stops the spawn here — swallowing it
         // (the old behavior) launched a ghost run the list endpoints could
         // never see or cancel.
         let claim = backend.create_run_if_workdir_idle(&run).await;
         match claim {
-            Ok(true) => {}
+            Ok(true) => {
+                materialize_run_sources(&run_dir, &workflow_path, &include_paths).await;
+            }
             Ok(false) => {
                 return Err(err(
                     StatusCode::CONFLICT,
@@ -3274,6 +3344,94 @@ mod bounded_subprocess_tests {
         assert!(
             !CheckpointState::default_path(&workdir).exists(),
             "preview must not persist baselines"
+        );
+    }
+}
+
+/// Regression tests for the claim-then-stage run-source staging (the HIGH
+/// fix on this branch): sources are staged into a per-request temp dir
+/// before the workdir claim, and only a claim winner's staged files are
+/// copied into the real workdir. These tests pin the helper contracts the
+/// race fix rests on — byte-identical materialization, and include-staging
+/// failures answering 500 before any runs row could exist (PR #930 NIT-3).
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+
+    /// Materialization copies the staged workflow and both flat and nested
+    /// include files byte-identically into the workdir, creating parent
+    /// directories as needed.
+    #[tokio::test]
+    async fn materialization_copies_staged_sources_byte_identically() {
+        let staging = tempfile::tempdir().unwrap();
+        let run_dir = tempfile::tempdir().unwrap();
+
+        let workflow = "[runner] name = \"staging-test\"\n";
+        let includes = vec![
+            (
+                "flat.oxoflow".to_string(),
+                "[[rule]]\nname = \"flat\"\n".to_string(),
+            ),
+            (
+                "modules/trim.oxoflow".to_string(),
+                "[[rule]]\nname = \"trim\"\n".to_string(),
+            ),
+        ];
+
+        let workflow_path = match stage_run_sources(staging.path(), workflow, &includes).await {
+            Ok(p) => p,
+            Err((status, body)) => panic!(
+                "staging succeeds but failed with {status}: {}",
+                body.0.message
+            ),
+        };
+        assert_eq!(workflow_path, staging.path().join("workflow.oxoflow"));
+        assert_eq!(std::fs::read_to_string(&workflow_path).unwrap(), workflow);
+
+        materialize_run_sources(run_dir.path(), &workflow_path, &includes).await;
+
+        assert_eq!(
+            std::fs::read_to_string(run_dir.path().join("workflow.oxoflow")).unwrap(),
+            workflow,
+            "workflow must be byte-identical in the workdir"
+        );
+        for (rel, content) in &includes {
+            assert_eq!(
+                std::fs::read_to_string(run_dir.path().join(rel)).unwrap(),
+                *content,
+                "include {rel} must be byte-identical in the workdir"
+            );
+        }
+    }
+
+    /// An include whose parent path collides with an existing file cannot
+    /// be staged: the handler answers 500 (which `create_run` returns
+    /// before any runs row exists — the no-ghost-row property), naming the
+    /// offending include in the message.
+    #[tokio::test]
+    async fn include_staging_failure_surfaces_as_500() {
+        let staging = tempfile::tempdir().unwrap();
+        // Occupy the include's parent directory slot with a regular file so
+        // create_dir_all must fail.
+        std::fs::write(staging.path().join("modules"), b"not a directory").unwrap();
+
+        let (status, body) = match stage_run_sources(
+            staging.path(),
+            "[runner]\nname = \"x\"\n",
+            &[("modules/inc.oxoflow".to_string(), "[[rule]]\n".to_string())],
+        )
+        .await
+        {
+            Ok(_) => panic!("blocked include parent must fail staging"),
+            Err(e) => e,
+        };
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0.code, "RUN_ERROR");
+        assert!(
+            body.0.message.contains("modules/inc.oxoflow"),
+            "message names the failed include: {}",
+            body.0.message
         );
     }
 }
