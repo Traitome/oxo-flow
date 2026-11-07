@@ -1358,28 +1358,58 @@ impl EnvironmentBackend for VenvBackend {
     }
 
     fn cache_key(&self, spec: &str) -> String {
-        // #532: fold the requirements-file content hash into the key —
-        // editing requirements.txt must invalidate the cached env (the
-        // venv backend has no verify command, so a stale hit silently
-        // served every subsequent rule).
-        format!("venv:{spec}{}", spec_content_tag(spec))
+        self.cache_key_with_reqs(spec, None)
     }
 }
 
 impl VenvBackend {
+    /// Cache key folding in the requirements-file content hash (#532).
+    ///
+    /// `requirements` is the RESOLVED requirements path. `None` means the
+    /// caller did not resolve the spec against a workflow base, so the file
+    /// identity is unknown and the key degrades to the plain venv path
+    /// (same policy as an unreadable file).
+    pub fn cache_key_with_reqs(&self, spec: &str, requirements: Option<&str>) -> String {
+        // Editing requirements.txt must invalidate the cached env: the venv
+        // backend has no verify command, so a stale cache hit silently
+        // serves every subsequent rule (#532).
+        let tag = requirements.map(spec_content_tag).unwrap_or_default();
+        format!("venv:{spec}{tag}")
+    }
+
     /// Setup command with configurable requirements file.
     ///
-    /// `requirements` is a path to the pip requirements file. Defaults to
-    /// `requirements.txt` when `None`.
+    /// `requirements` is the RESOLVED pip requirements path (see
+    /// [`EnvironmentSpec::resolve_relative_paths`]). A missing file skips
+    /// the `pip install` leg with a warning naming the expected path
+    /// (#1040): declaring `venv` on an existing environment must not fail
+    /// the rule inside pip with "Could not open requirements file".
+    /// `None` — an unresolved default — keeps the legacy literal
+    /// `requirements.txt` command, whose resolution is the shell's cwd.
     pub fn setup_command_with_reqs(
         &self,
         spec: &str,
         requirements: Option<&str>,
     ) -> Result<String> {
-        let reqs = requirements.unwrap_or("requirements.txt");
         // POSIX `.` (not `source` — a bashism): setup commands run under sh.
         // #534: quote the client-controlled spec like setup_command does.
         let quoted = escape_for_sh_single_quote(spec);
+        let Some(reqs) = requirements else {
+            return Ok(format!(
+                "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate && pip install -r requirements.txt"
+            ));
+        };
+        if !std::path::Path::new(reqs).is_file() {
+            tracing::warn!(
+                venv = spec,
+                requirements = reqs,
+                "venv requirements file not found — creating/reusing the venv without \
+                 `pip install`; add the file or declare `environment.venv_requirements`"
+            );
+            return Ok(format!(
+                "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate"
+            ));
+        }
         // The requirements path is client-controlled too — same escape-only
         // treatment as the spec (backend boundary; E016/shell_risk already
         // rejects quotes at workflow level, and the escaper is a no-op for
@@ -1963,7 +1993,9 @@ impl EnvironmentResolver {
             return self.singularity.cache_key(singularity);
         }
         if let Some(ref venv) = env_spec.venv {
-            return self.venv.cache_key(venv);
+            return self
+                .venv
+                .cache_key_with_reqs(venv, env_spec.venv_requirements.as_deref());
         }
         if !env_spec.modules.is_empty() {
             return self.modules.cache_key(&env_spec.modules.join(","));
@@ -2296,9 +2328,9 @@ mod tests {
         std::fs::write(&reqs, "numpy==1.26\n").unwrap();
         let spec = reqs.to_str().unwrap();
 
-        let k1 = VenvBackend.cache_key(spec);
+        let k1 = VenvBackend.cache_key_with_reqs(".venv", Some(spec));
         std::fs::write(&reqs, "numpy==2.0\n").unwrap();
-        let k2 = VenvBackend.cache_key(spec);
+        let k2 = VenvBackend.cache_key_with_reqs(".venv", Some(spec));
         assert_ne!(k1, k2, "edited requirements must change the venv cache key");
 
         let c1 = CondaBackend.cache_key_with_opts(spec, Some(".oxo-conda"));
@@ -2311,12 +2343,14 @@ mod tests {
             CondaBackend.cache_key("bioconda::fastp=0.23.4"),
             "conda:bioconda::fastp=0.23.4"
         );
-        // A missing file also degrades to the plain key (setup fails
-        // later on its own terms).
+        // A missing requirements file (or an unresolved spec) degrades to
+        // the plain venv-path key — same policy as every other file-backed
+        // backend.
         assert_eq!(
-            VenvBackend.cache_key("/no/such/requirements.txt"),
-            "venv:/no/such/requirements.txt"
+            VenvBackend.cache_key_with_reqs(".venv", Some("/no/such/requirements.txt")),
+            "venv:.venv"
         );
+        assert_eq!(VenvBackend.cache_key(".venv"), "venv:.venv");
     }
 
     use super::*;
@@ -3183,6 +3217,47 @@ mod tests {
     }
 
     #[test]
+    fn venv_setup_with_requirements_installs_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let reqs = dir.path().join("requirements.txt");
+        std::fs::write(&reqs, "numpy==1.26\n").unwrap();
+        let cmd = VenvBackend
+            .setup_command_with_reqs(".venv", Some(reqs.to_str().unwrap()))
+            .unwrap();
+        assert!(cmd.contains("python3 -m venv '.venv'"));
+        assert!(
+            cmd.contains(&format!("pip install -r {}", reqs.display())),
+            "a present requirements file must be installed: {cmd}"
+        );
+    }
+
+    #[test]
+    fn venv_setup_missing_requirements_skips_pip() {
+        // #1040: declaring `venv` on an existing environment without a
+        // requirements file must not fail inside pip — create/reuse the
+        // venv and warn instead.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("requirements.txt");
+        let cmd = VenvBackend
+            .setup_command_with_reqs(".venv", Some(missing.to_str().unwrap()))
+            .unwrap();
+        assert!(cmd.contains("python3 -m venv '.venv'"));
+        assert!(cmd.contains(". '.venv'/bin/activate"));
+        assert!(
+            !cmd.contains("pip install"),
+            "missing requirements must skip the install: {cmd}"
+        );
+    }
+
+    #[test]
+    fn venv_setup_unresolved_requirements_keeps_legacy_command() {
+        // Unresolved spec (no workflow base): the shell's cwd decides the
+        // default file — keep the historical command byte-identical.
+        let cmd = VenvBackend.setup_command_with_reqs(".venv", None).unwrap();
+        assert!(cmd.contains("pip install -r requirements.txt"));
+    }
+
+    #[test]
     fn venv_teardown_command() {
         let backend = VenvBackend;
         let cmd = backend.teardown_command(".venv").unwrap().unwrap();
@@ -3205,6 +3280,17 @@ mod tests {
     fn venv_cache_key() {
         let backend = VenvBackend;
         assert_eq!(backend.cache_key(".venv"), "venv:.venv");
+        // A resolved, readable requirements file contributes its content
+        // hash. The venv path alone never does — it names a directory, not
+        // a file.
+        let dir = tempfile::tempdir().unwrap();
+        let reqs = dir.path().join("requirements.txt");
+        std::fs::write(&reqs, "numpy==1.26\n").unwrap();
+        let with_reqs = backend.cache_key_with_reqs(".venv", Some(reqs.to_str().unwrap()));
+        assert!(
+            with_reqs.starts_with("venv:.venv:") && with_reqs.len() > "venv:.venv:".len(),
+            "requirements content must ride in the key: {with_reqs}"
+        );
     }
 
     // ── PixiBackend ────────────────────────────────────────────────
@@ -4151,12 +4237,15 @@ mod tests {
 
     #[test]
     fn venv_setup_command_with_custom_requirements() {
+        let dir = tempfile::tempdir().unwrap();
+        let reqs = dir.path().join("requirements-dev.txt");
+        std::fs::write(&reqs, "").unwrap();
         let backend = VenvBackend;
         let cmd = backend
-            .setup_command_with_reqs(".venv", Some("requirements-dev.txt"))
+            .setup_command_with_reqs(".venv", Some(reqs.to_str().unwrap()))
             .unwrap();
         assert!(cmd.contains("python3 -m venv '.venv'"));
-        assert!(cmd.contains("pip install -r requirements-dev.txt"));
+        assert!(cmd.contains(&format!("pip install -r {}", reqs.display())));
     }
 
     #[test]
@@ -4172,8 +4261,12 @@ mod tests {
         // level, but the builder must not hand a raw `'` to the shell even
         // when a caller skips validation (#534 pattern — escape-only, so a
         // quoted path cannot close the `-r` token early).
+        let dir = tempfile::tempdir().unwrap();
+        let evil_name = "reqs'; touch pwn; #.txt";
+        let evil = dir.path().join(evil_name);
+        std::fs::write(&evil, "").unwrap();
+        let evil = evil.to_str().unwrap();
         let backend = VenvBackend;
-        let evil = "reqs'; touch pwn; #.txt";
         let cmd = backend
             .setup_command_with_reqs(".venv", Some(evil))
             .unwrap();
@@ -4341,14 +4434,56 @@ mod tests {
 
     #[test]
     fn resolver_venv_custom_requirements_integration() {
+        let dir = tempfile::tempdir().unwrap();
+        let reqs = dir.path().join("requirements-test.txt");
+        std::fs::write(&reqs, "pandas==2.2\n").unwrap();
         let resolver = EnvironmentResolver::new();
         let spec = EnvironmentSpec {
             venv: Some(".venv".to_string()),
-            venv_requirements: Some("requirements-test.txt".to_string()),
+            venv_requirements: Some(reqs.to_string_lossy().into_owned()),
             ..Default::default()
         };
         let cmd = resolver.setup_command(&spec).unwrap();
-        assert!(cmd.contains("pip install -r requirements-test.txt"));
+        assert!(
+            cmd.contains(&format!("pip install -r {}", reqs.display())),
+            "custom requirements file must be installed: {cmd}"
+        );
+    }
+
+    #[test]
+    fn resolver_venv_missing_requirements_resolves_to_skip_branch() {
+        // #1040 end to end at the resolver boundary: resolving the spec
+        // against a workflow base materializes the default requirements
+        // path, the missing file keeps the key at the plain venv path, and
+        // setup skips pip. When the file appears, the key moves (content
+        // tag) so the next run installs.
+        let dir = tempfile::tempdir().unwrap();
+        let spec = EnvironmentSpec {
+            venv: Some(".venv".to_string()),
+            ..Default::default()
+        };
+        let resolved = spec.resolve_relative_paths(Some(dir.path()));
+        assert_eq!(
+            resolved.venv_requirements.as_deref(),
+            Some(dir.path().join("requirements.txt").to_str().unwrap())
+        );
+
+        let resolver = EnvironmentResolver::new();
+        assert_eq!(resolver.cache_key(&resolved), "venv:.venv");
+        let cmd = resolver.setup_command(&resolved).unwrap();
+        assert!(
+            !cmd.contains("pip install"),
+            "missing file skips pip: {cmd}"
+        );
+
+        std::fs::write(dir.path().join("requirements.txt"), "numpy==1.26\n").unwrap();
+        let key_with_file = resolver.cache_key(&resolved);
+        assert_ne!(key_with_file, "venv:.venv", "file content must key the env");
+        let cmd = resolver.setup_command(&resolved).unwrap();
+        assert!(
+            cmd.contains("pip install -r"),
+            "present file installs: {cmd}"
+        );
     }
 
     #[test]

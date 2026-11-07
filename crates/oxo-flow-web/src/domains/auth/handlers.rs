@@ -344,9 +344,12 @@ pub async fn login(
     Ok(Json(result))
 }
 
-/// True when an env-password login response carries the admin identity —
-/// only the ADMIN_PASSWORD branch can produce it (service::authenticate
-/// rejects "admin" on the shared user/viewer branches, #516).
+/// True when an env-password login response carries the admin identity.
+///
+/// Production only mints it from OXO_FLOW_ADMIN_PASSWORD: the shared
+/// user/viewer branches reject "admin" (#516). The explicitly enabled,
+/// loopback-only dev-mode fallback is the one other path — password ==
+/// username for "admin" is part of its documented contract (#1040).
 fn result_is_admin_identity(response: &LoginResponse) -> bool {
     response.username == "admin" && response.role == "admin"
 }
