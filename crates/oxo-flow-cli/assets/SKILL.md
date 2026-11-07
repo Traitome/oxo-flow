@@ -6,6 +6,9 @@ description: >-
   pass static gates (validate/dry-run/lint), execute on local or cluster
   backends, monitor and correct failures via checkpoint resume, QC outputs
   independently, and deliver reports plus a reproducibility receipt.
+  Treats input data as read-only, confines agent scratch work and journaling
+  to the project working directory, and requires human authorization before
+  any destructive operation.
   Use when the user asks to analyze sequencing data with oxo-flow, design or
   fix an oxo-flow workflow, run/validate/debug oxo-flow, or produce a
   reproducible analysis report or receipt.
@@ -110,6 +113,41 @@ Seven stages, three approval gates. Every stage ends with a
 - Optional archival: `oxo-flow export -f toml|docker|singularity`.
 - Done when: PI signs off against the original task.
 
+## Data Safety & Workspace Discipline (BINDING)
+
+You are the actual operator of the user's data. Input data is **read-only**.
+The engine protects rule shells at run time (E011 blocks deletions outside
+the run workdir; `[engine] protected_data_trees` detects drift), but those
+gates do not cover your own terminal. These rules bind every command you run:
+
+1. **Never delete or overwrite inputs without explicit human authorization.**
+   This includes `rm`, `mv`, `truncate`, `dd of=`, `sed -i`, `git checkout
+   --`, `git clean`, and any `>` redirect into a path you did not create
+   this task. Ask first: quote the exact command, name the target, say why —
+   then wait for a human "yes". Destructive + no human reachable = stop.
+2. **Snapshot before mutating.** Copy what you are about to change into your
+   scratch tree (`cp -a`) and record `sha256sum`. Write to NEW paths and
+   rename on success; never edit in place. Append with `>>`; never `>` an
+   existing file you did not create.
+3. **Do all probing in one scratch tree inside the project** —
+   `<project>/.oxo-flow/agent/<date>-<task>/` (gitignored), not `$HOME`,
+   not a global `/tmp` scatter, not outside the working directory. Point
+   tools there with `OXO_FLOW_TMPDIR=<scratch>/tmp` (or `[engine] tmp_dir`).
+   Delete only your own scratch, and only when the task is done.
+4. **Journal every mutating operation** — one JSON line per command appended
+   to `.oxo-flow/agent/operations.log`:
+   `{"ts":"<ISO8601>","cwd":"<dir>","cmd":"<argv>","exit":<code>,"note":"<why>"}`.
+   Read-only inspections need not be journaled.
+5. **Protect input trees at plan time.** For every workflow consuming vendor
+   data, recommend `[engine] protected_data_trees = ["raw/", "reference/"]`
+   — drift is then detected before the next run. Detection, not prevention:
+   the deletion itself must still never happen.
+6. **Inspect without mutating.** Prefer `oxo-flow status`, `oxo-flow report`,
+   `oxo-flow provenance verify` over ad-hoc shell. When unsure, dry-run.
+
+Recipes (snapshots, journal helper, scratch layout, protected-tree config):
+`how-to/agent-safety`.
+
 ## Guardrails
 
 - **Evidence first** — never claim success without checkpoint/report evidence.
@@ -156,6 +194,7 @@ Progressive disclosure — open only what the current stage needs.
 | QC | `commands/validate`, `commands/dry-run`, `commands/lint`, `commands/debug`, `commands/graph`, `how-to/troubleshooting` |
 | Delivery | `how-to/generate-reports`, `commands/report`, `commands/provenance`, `commands/export`, `reference/versioning`, `reference/reporting-system` |
 | Reference | `reference/architecture`, `gallery/`, `tutorials/custom-scripts`, `tutorials/environment-management` |
+| Data safety (read early) | `how-to/agent-safety`, `reference/security`, `reference/workflow-format` (`[engine] protected_data_trees`, `tmp_dir`) |
 | Knowledge bases (raw) | `crates/oxo-flow-ai/src/knowledge/bioconda_tools.jsonl`, `skills_index.jsonl`, `nfcore_modules.jsonl`, `pipeline_graph.jsonl` |
 
 Docs links resolve under `https://traitome.github.io/oxo-flow/latest/<path>`
