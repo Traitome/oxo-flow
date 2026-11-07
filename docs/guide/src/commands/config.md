@@ -53,6 +53,10 @@ oxo-flow config get pipeline.oxoflow reference
 # Output: "/data/references/GRCh38/genome.fa"
 ```
 
+The value is printed in its native TOML type representation (strings stay
+quoted, integers bare, arrays in bracket form). If the key is not found,
+the command errors and exits with code 1 — scripts can gate on that.
+
 ---
 
 ## Output
@@ -108,5 +112,4 @@ Some rules depend on multiple upstream outputs (e.g., a merge rule that combines
 
 - `config show` displays workflow metadata (name, version, description, author) and configuration variables
 - `config stats` provides a high-level overview of the workflow's complexity
-- `config get` exits with code 1 if the key is not found
-- `config get` returns values in their native TOML type representation
+- `config get` prints the value in its native TOML type and exits with code 1 when the key is not found (see [Get a specific config value](#get-a-specific-config-value))

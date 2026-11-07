@@ -56,6 +56,8 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
 | `--strict-envs` | — | — | Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see [Stale pixi.lock fallback](#stale-pixilock-fallback)) — for GxP-style deployments that must never run on a re-solved environment |
 | `--verbose` | `-v` | — | Enable debug-level logging |
+| `--quiet` | — | — | Global log-level flag: suppresses `info`-level log lines and the banner. Run progress and the summary are printed regardless |
+| `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
 ---
 

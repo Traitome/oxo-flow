@@ -31,7 +31,7 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 | `--no-color` | — | — | Disable colored output |
 
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `schema`, `license`, `ai`, and `provenance verify`.
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify`.
 
 ---
 
