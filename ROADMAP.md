@@ -1,6 +1,6 @@
 # oxo-flow Roadmap
 
-> **Mission**: Build a Rust-native bioinformatics pipeline engine with first-principles design,
+> **Mission**: Build a Rust-native bioinformatics pipeline engine with a reproducibility-first design,
 > reporting designed for clinical rigor, environment management, and a full-featured web interface.
 >
 > Licensing is per crate: the core, AI, CLI, and desktop components are
