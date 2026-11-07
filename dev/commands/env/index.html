@@ -4187,8 +4187,8 @@ dir) becomes a symlink into the store, so wraps like
 unchanged. Repeated runs across many pipeline checkouts reuse the same
 environment instead of re-downloading and re-building it per tree. A broken
 link (e.g. the store dir was deleted) is detected automatically on the next
-run: the cached entry is invalidated and the environment is rebuilt, no
-manual intervention needed.</p>
+run: the cached entry is invalidated, the dangling in-tree symlink is
+detached, and the environment is rebuilt, no manual intervention needed.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span><span class="o">[</span>--min-age-days<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
 </span></code></pre></div>
 <table>

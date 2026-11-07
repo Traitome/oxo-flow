@@ -362,10 +362,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#built-from-first-principles" class="md-nav__link">
+  <a href="#design-principles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Built from First Principles
+        Design Principles
       
     </span>
   </a>
@@ -4071,10 +4071,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#built-from-first-principles" class="md-nav__link">
+  <a href="#design-principles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Built from First Principles
+        Design Principles
       
     </span>
   </a>
@@ -4292,7 +4292,7 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>DAG: 5 rules in execution order
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>DAG: 5 rules in dependency order
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  1. fastqc
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  2. trim_reads
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  3. bwa_align
@@ -4371,7 +4371,7 @@ and community submissions.</p>
 </tbody>
 </table>
 <hr />
-<h2 id="built-from-first-principles">Built from First Principles<a class="headerlink" href="#built-from-first-principles" title="Permanent link">#</a></h2>
+<h2 id="design-principles">Design Principles<a class="headerlink" href="#design-principles" title="Permanent link">#</a></h2>
 <p>oxo-flow rethinks bioinformatics workflow orchestration from the ground up:</p>
 <ol>
 <li><strong>DAG as pure declarative data, not imperative code</strong> — <code>.oxoflow</code> TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.</li>

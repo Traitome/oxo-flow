@@ -10377,7 +10377,7 @@ and extensible attributes — to the files flowing across DAG edges. Contracts
 are checked statically before any compute: a producer whose output violates
 a consumer's declared type fails <code>oxo-flow validate</code> (error) and aborts
 <code>oxo-flow run</code> in preflight with a <code>[TYPE-0xx]</code> diagnostic (see
-<a href="../diagnostics-engine/#biological-subtyping-violations-type">TYPE-001..007</a> —
+<a href="../diagnostics-engine/#biological-subtyping-violations-type-">TYPE-001..007</a> —
 each includes an automated coercion hint such as <code>samtools view -b</code> or
 <code>samtools sort</code>).</p>
 <h3 id="named-type-declarations">Named type declarations<a class="headerlink" href="#named-type-declarations" title="Permanent link">#</a></h3>
@@ -10491,7 +10491,7 @@ channel; and with a single channel on each side, a shared output/input path
 also matches. Beyond static checking, <code>oxo-flow test</code>'s deep check (<code>D005</code>)
 introspects the headers of input files that exist on disk and compares them
 against the declared contract — see
-<a href="../diagnostics-engine/#biological-subtyping-violations-type">Biological Subtyping Violations</a>
+<a href="../diagnostics-engine/#biological-subtyping-violations-type-">Biological Subtyping Violations</a>
 for the full diagnostic table with coercion hints.</p>
 <hr />
 <h2 id="transform-unified-scatter-gather-operator"><code>transform</code> — Unified Scatter-Gather Operator<a class="headerlink" href="#transform-unified-scatter-gather-operator" title="Permanent link">#</a></h2>

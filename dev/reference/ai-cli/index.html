@@ -5127,6 +5127,11 @@ repository.</p>
 <td><code>$HOME/.oxo-flow/ai_config.json</code></td>
 </tr>
 <tr>
+<td><code>OXO_FLOW_AI_SESSION_DIR</code></td>
+<td>Directory for archived AI sessions (CLI AI commands and web chat/translate agent-loop runs). Empty = unset. Tests and CI set it to a scratch directory for hermetic runs, so a session archive never lands in the operator's real archive</td>
+<td><code>&lt;cwd&gt;/.oxo-flow/ai_sessions</code> when a project-local <code>.oxo-flow</code> exists, else <code>$HOME/.oxo-flow/ai_sessions</code></td>
+</tr>
+<tr>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
 <td>Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced</td>
 <td><code>16384</code></td>
@@ -5138,7 +5143,7 @@ repository.</p>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
-<td>Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (<code>/api/chat/send/json</code>, <code>/api/ai/translate</code>), which answer <code>504 AI_TIMEOUT</code> when it expires</td>
+<td>Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (<code>/api/chat/send/json</code>, <code>/api/ai/translate</code>), which answer <code>504 AI_TIMEOUT</code> when it expires — the route budget sits one second under the provider timeout and timeout-class provider errors map to the same 504</td>
 <td><code>300</code></td>
 </tr>
 <tr>

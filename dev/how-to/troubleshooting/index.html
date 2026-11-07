@@ -1820,6 +1820,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#setup-failure-messages-carry-the-tools-own-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup failure messages carry the tool's own output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-aborts-before-any-rule-environment-backend-unavailable" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4515,6 +4526,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#setup-failure-messages-carry-the-tools-own-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup failure messages carry the tool's own output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-aborts-before-any-rule-environment-backend-unavailable" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4964,6 +4986,12 @@ must be resolved from:</p>
 your workflow. Check that your input filenames follow the expected naming
 convention.</p>
 <h2 id="environment-issues">Environment Issues<a class="headerlink" href="#environment-issues" title="Permanent link">#</a></h2>
+<h3 id="setup-failure-messages-carry-the-tools-own-output">Setup failure messages carry the tool's own output<a class="headerlink" href="#setup-failure-messages-carry-the-tools-own-output" title="Permanent link">#</a></h3>
+<p><strong>Symptom</strong>: <code>environment error (&lt;backend&gt;): setup failed: &lt;cause&gt;</code>.</p>
+<p>The message embeds the tail of the setup command's captured stdout/stderr
+(conda's solver conflict, Docker's registry error, pip's resolver error),
+so the underlying cause is visible in the error and in the checkpoint's
+<code>stderr_tail</code> rather than only on the terminal.</p>
 <h3 id="run-aborts-before-any-rule-environment-backend-unavailable">Run aborts before any rule: environment backend unavailable<a class="headerlink" href="#run-aborts-before-any-rule-environment-backend-unavailable" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>N environment backends required by pending rules are unavailable; no rules were run:</code> followed by one entry per root cause, e.g.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rules, e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
