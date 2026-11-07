@@ -245,6 +245,15 @@ where
         match result {
             Ok(decoded) => return Ok(decoded),
             Err(StepFailure::Transport(e)) if !is_transient_transport_error(&e) => {
+                // A timeout is its own failure class: HTTP surfaces map it
+                // to the documented 504 AI_TIMEOUT, so it must not be
+                // flattened into the generic provider error (review HIGH-1).
+                if e.is_timeout() {
+                    return Err(AiError::Timeout {
+                        provider: provider.into(),
+                        message: mask(describe(e)),
+                    });
+                }
                 return Err(AiError::Provider {
                     provider: provider.into(),
                     message: mask(describe(e)),
@@ -2502,7 +2511,7 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            matches!(err, AiError::Provider { .. }),
+            matches!(err, AiError::Timeout { .. }),
             "timeouts must not be retried, got {err:?}"
         );
     }

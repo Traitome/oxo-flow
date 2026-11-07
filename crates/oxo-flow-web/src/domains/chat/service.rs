@@ -6,6 +6,7 @@
 use super::types::*;
 use crate::ai_provider::AiProvider;
 use crate::domains::workflow::service as workflow_svc;
+use oxo_flow_ai::error::AiError;
 
 use super::intent::{ChatMode, classify_message};
 
@@ -29,6 +30,43 @@ Keep answers short and specific.";
 /// correction pass in one budget) apply identically here.
 fn chat_max_rounds() -> u32 {
     oxo_flow_ai::config::default_max_retries()
+}
+
+/// Why a chat turn produced no answer.
+///
+/// `TimedOut` is kept distinct from a generic failure so the non-streaming
+/// route can honor the documented `504 AI_TIMEOUT` contract even when the
+/// provider's own per-request timeout — not the route's total budget — fired
+/// first (review wave 2 HIGH-1).
+#[derive(Debug)]
+pub enum ChatError {
+    TimedOut,
+    Failed(String),
+}
+
+impl std::fmt::Display for ChatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("AI provider request timed out"),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<AiError> for ChatError {
+    fn from(error: AiError) -> Self {
+        if error.is_timeout() {
+            Self::TimedOut
+        } else {
+            Self::Failed(error.to_string())
+        }
+    }
+}
+
+impl From<String> for ChatError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
 }
 
 /// Who is asking, and what the request is scoped to. `run_id` admits the
@@ -73,7 +111,7 @@ async fn run_chat_generation(
     invocation: &ChatInvocation<'_>,
     provider: &AiProvider,
     wiring: ChatRunWiring<'_>,
-) -> Result<AgentOutcome, String> {
+) -> Result<AgentOutcome, ChatError> {
     let ChatRunWiring { sink, cancel } = wiring;
     let ctx = oxo_flow_ai::agent::AgentContext {
         intent,
@@ -96,7 +134,13 @@ async fn run_chat_generation(
         .execute_with_sink(&agent, &ctx, sink, cancel)
         .await;
     // Token spend is logged by the orchestrator itself (all surfaces).
-    outcome.map_err(|e| e.to_string())
+    // Failures archive themselves inside the orchestrator; a completed run is
+    // handed back to the caller, so the web layer persists it here (review
+    // wave 2 MEDIUM-2: successful runs used to leave no audit record).
+    if let Ok(outcome) = &outcome {
+        crate::domains::ai::session_archive::archive_agent_session(&outcome.session);
+    }
+    outcome.map_err(ChatError::from)
 }
 
 /// Answer a conversational turn with one plain-text completion.
@@ -105,17 +149,21 @@ async fn run_chat_generation(
 /// one provider round-trip, no tools, no validation loop, no TOML. Kept in
 /// the service layer so the JSON and SSE routes share the exact same
 /// prompt and error mapping.
-pub async fn run_chat_reply(provider: &AiProvider, message: &str) -> Result<String, String> {
+pub async fn run_chat_reply(provider: &AiProvider, message: &str) -> Result<String, ChatError> {
     provider
         .chat(CHAT_SYSTEM_PROMPT, message)
         .await
         .map(|text| text.trim().to_string())
         .map_err(|error| {
             tracing::warn!("AI chat reply for {} failed: {error}", provider.name());
-            format!(
-                "AI provider request failed for {}: {error}",
-                provider.name()
-            )
+            if error.is_timeout() {
+                ChatError::TimedOut
+            } else {
+                ChatError::Failed(format!(
+                    "AI provider request failed for {}: {error}",
+                    provider.name()
+                ))
+            }
         })
 }
 
@@ -138,7 +186,7 @@ pub async fn process_chat(
     templates: &[String],
     provider: &AiProvider,
     invocation: &ChatInvocation<'_>,
-) -> Result<(String, serde_json::Value), String> {
+) -> Result<(String, serde_json::Value), ChatError> {
     let mode = classify_message(message, context, invocation.run_id.is_some());
 
     // Conversational intent: answer in text and stop before any generation
@@ -210,12 +258,15 @@ pub async fn process_chat(
         },
     )
     .await
-    .map_err(|e| {
-        tracing::warn!("AI provider {} request failed: {e}", provider.name());
-        format!(
-            "AI provider request failed for {}: please check the provider configuration and network connectivity",
-            provider.name()
-        )
+    .map_err(|error| {
+        tracing::warn!("AI provider {} request failed: {error}", provider.name());
+        match error {
+            ChatError::TimedOut => ChatError::TimedOut,
+            ChatError::Failed(_) => ChatError::Failed(format!(
+                "AI provider request failed for {}: please check the provider configuration and network connectivity",
+                provider.name()
+            )),
+        }
     })?;
     let toml_content = outcome
         .content
@@ -446,7 +497,9 @@ pub async fn run_chat_agent(
         user_id,
         is_admin,
     };
-    run_chat_generation(agent, message, intent, &invocation, provider, wiring).await
+    run_chat_generation(agent, message, intent, &invocation, provider, wiring)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

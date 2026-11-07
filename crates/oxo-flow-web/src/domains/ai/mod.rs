@@ -9,5 +9,6 @@ pub mod agents;
 pub mod copilot;
 pub mod handlers;
 pub mod service;
+pub mod session_archive;
 pub mod timeout;
 pub mod types;

@@ -112,11 +112,13 @@ pub fn generation_available(user_provider: &AiProvider) -> bool {
 }
 
 /// Why a translate request produced no pipeline. `Unavailable` is the
-/// structured AI_NOT_CONFIGURED case (503); `Failed` is a generation or
-/// validation failure (400).
+/// structured AI_NOT_CONFIGURED case (503); `TimedOut` is the documented
+/// `504 AI_TIMEOUT` case (the last attempted provider hit its per-request
+/// timeout); `Failed` is a generation or validation failure (400).
 #[derive(Debug)]
 pub enum TranslateError {
     Unavailable,
+    TimedOut,
     Failed(String),
 }
 
@@ -206,6 +208,10 @@ pub async fn translate_intent(
     let candidates = provider_candidates(provider);
     let mut generated: Option<(String, String)> = None;
     let mut last_failure = "no provider was attempted".to_string();
+    // Whether the LAST failure was the provider's per-request timeout; the
+    // route maps that class to the documented 504 even when the provider
+    // timer fired before the route budget (review wave 2 HIGH-1).
+    let mut last_failure_timed_out = false;
     for (idx, candidate) in candidates.iter().enumerate() {
         let label = if idx == 0 {
             candidate.name().to_string()
@@ -236,11 +242,17 @@ pub async fn translate_intent(
         );
         match orchestrator.execute(&agent, &ctx).await {
             Ok(outcome) if outcome.success && outcome.content.is_some() => {
+                // Failures archive themselves inside the orchestrator; the
+                // successful generation is returned here, so the web layer
+                // persists it (review wave 2 MEDIUM-2).
+                crate::domains::ai::session_archive::archive_agent_session(&outcome.session);
                 generated = Some((outcome.content.unwrap(), label));
                 break;
             }
             Ok(outcome) => {
+                crate::domains::ai::session_archive::archive_agent_session(&outcome.session);
                 last_failure = outcome.summary.clone();
+                last_failure_timed_out = false;
                 tracing::warn!(
                     "translate provider {} produced no valid pipeline: {}",
                     candidate.name(),
@@ -257,6 +269,7 @@ pub async fn translate_intent(
                 }
             }
             Err(e) => {
+                last_failure_timed_out = e.is_timeout();
                 last_failure = e.to_string();
                 tracing::warn!("translate provider {} failed: {e}", candidate.name());
             }
@@ -264,6 +277,9 @@ pub async fn translate_intent(
     }
 
     let Some((toml_content, provider_used)) = generated else {
+        if last_failure_timed_out {
+            return Err(TranslateError::TimedOut);
+        }
         return Err(match template_match {
             Some(name) => TranslateError::Failed(format!(
                 "AI generation failed: {last_failure}. Try the '{name}' template."
