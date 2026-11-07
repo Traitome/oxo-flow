@@ -24,22 +24,53 @@ pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
         mode,
         db_healthy,
         crate::infra::crypto::master_key_configured(),
+        scheduler_component(mode),
     )
 }
 
-/// Pure core of [`health_check`] — `encrypted_keys` is injected so tests need
-/// no environment mutation (mirrors `effective_bind_host_with` in lib.rs).
-pub fn health_check_with(mode: &str, db_healthy: bool, encrypted_keys: bool) -> HealthResponse {
-    build_health(mode, db_healthy, encrypted_keys, engine_version_info())
+/// Scheduler health for `/api/health`: hpc mode only, from the cached
+/// detection probe shared with `/api/hpc` — health must not report
+/// `scheduler: null` on a host where `/api/hpc` says a backend is live.
+/// `None` when the mode does not manage a scheduler or none is installed.
+fn scheduler_component(mode: &str) -> Option<ComponentStatus> {
+    if mode != "hpc" {
+        return None;
+    }
+    if crate::hpc::detected_scheduler() == crate::hpc::SchedulerType::None {
+        return None;
+    }
+    Some(ComponentStatus {
+        status: "ok".into(),
+        latency_ms: None,
+    })
 }
 
-/// Shared builder — `engine` is injected so the pure core stays testable
-/// without touching the process-global probe cache.
+/// Pure core of [`health_check`] — `encrypted_keys` and `scheduler` are
+/// injected so tests need no environment mutation (mirrors
+/// `effective_bind_host_with` in lib.rs).
+pub fn health_check_with(
+    mode: &str,
+    db_healthy: bool,
+    encrypted_keys: bool,
+    scheduler: Option<ComponentStatus>,
+) -> HealthResponse {
+    build_health(
+        mode,
+        db_healthy,
+        encrypted_keys,
+        engine_version_info(),
+        scheduler,
+    )
+}
+
+/// Shared builder — `engine` and `scheduler` are injected so the pure core
+/// stays testable without touching the process-global probe caches.
 fn build_health(
     mode: &str,
     db_healthy: bool,
     encrypted_keys: bool,
     engine: Option<EngineBinaryInfo>,
+    scheduler: Option<ComponentStatus>,
 ) -> HealthResponse {
     let uptime = uptime_secs();
 
@@ -65,7 +96,7 @@ fn build_health(
                 status: "ok".into(),
                 latency_ms: None,
             },
-            scheduler: None,
+            scheduler,
             ai_provider: {
                 let config = crate::ai_provider::AiProviderRegistry::global().get_config();
                 // Report the state that actually executes: a provider that
@@ -155,10 +186,10 @@ mod tests {
     fn test_health_reports_ai_key_storage_flag() {
         // The flag is the only API-visible signal that third-party AI keys
         // are being written to the database unencrypted (issue #205 audit).
-        let plaintext = health_check_with("personal", true, false);
+        let plaintext = health_check_with("personal", true, false, None);
         assert_eq!(plaintext.components.ai_key_storage, "plaintext");
 
-        let encrypted = health_check_with("personal", true, true);
+        let encrypted = health_check_with("personal", true, true, None);
         assert_eq!(encrypted.components.ai_key_storage, "encrypted");
     }
 
@@ -178,7 +209,7 @@ mod tests {
             path: "/usr/local/bin/oxo-flow".into(),
             version_mismatch: true,
         };
-        let h = build_health("personal", true, true, Some(engine.clone()));
+        let h = build_health("personal", true, true, Some(engine.clone()), None);
         assert_eq!(
             h.components.engine.as_ref().expect("engine set").version,
             "0.18.0"
@@ -192,9 +223,33 @@ mod tests {
 
     #[test]
     fn test_build_health_without_engine_probe() {
-        let h = build_health("personal", true, true, None);
+        let h = build_health("personal", true, true, None, None);
         assert!(h.components.engine.is_none());
         assert_eq!(h.status, "ok");
+    }
+
+    #[test]
+    fn test_health_reports_detected_scheduler() {
+        // Arrange — an injected scheduler component (the real probe is
+        // host-dependent and cached per process).
+        let scheduler = ComponentStatus {
+            status: "ok".into(),
+            latency_ms: None,
+        };
+
+        // Act
+        let h = build_health("hpc", true, true, None, Some(scheduler));
+
+        // Assert — hpc mode no longer reports `scheduler: null` when a
+        // backend is live.
+        assert_eq!(
+            h.components.scheduler.as_ref().map(|s| s.status.as_str()),
+            Some("ok")
+        );
+
+        // Non-hpc modes and scheduler-less hosts stay None.
+        let personal = build_health("personal", true, true, None, None);
+        assert!(personal.components.scheduler.is_none());
     }
 
     #[test]

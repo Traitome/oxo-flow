@@ -120,10 +120,36 @@ const ALL_ROUTES: &[&str] = &[
     "/api/hpc",
 ];
 
+/// The spec is mode-aware: `/api/hpc` is mounted only in hpc mode, so only
+/// that mode may advertise it (a generated client would otherwise call a
+/// route that answers 404).
+#[test]
+fn hpc_route_is_advertised_only_in_hpc_mode() {
+    let hpc: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
+    assert!(
+        hpc["paths"]["/api/hpc"].is_object(),
+        "hpc mode must advertise /api/hpc"
+    );
+
+    for mode in ["personal", "team"] {
+        let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json(mode))
+            .expect("generated spec must parse as JSON");
+        assert!(
+            spec["paths"].get("/api/hpc").is_none(),
+            "{mode} mode must not advertise /api/hpc"
+        );
+        assert!(
+            spec["paths"]["/api/runs"].is_object(),
+            "{mode} spec must still carry the common routes"
+        );
+    }
+}
+
 /// Serialize the generated spec, parse it back, and assert the shape.
 #[test]
 fn generated_spec_is_valid_json_and_openapi_3_1() {
-    let json = oxo_flow_web::openapi::spec_json();
+    let json = oxo_flow_web::openapi::spec_json("hpc");
 
     let spec: serde_json::Value =
         serde_json::from_str(&json).expect("generated spec must parse as JSON");
@@ -142,7 +168,7 @@ fn generated_spec_is_valid_json_and_openapi_3_1() {
 /// The drift gate: every route in the router must appear in the spec.
 #[test]
 fn every_router_route_is_in_the_generated_spec() {
-    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json())
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
         .expect("generated spec must parse as JSON");
 
     let paths = spec["paths"].as_object().expect("paths must be an object");
@@ -216,7 +242,7 @@ fn bearer_auth_does_not_declare_a_jwt_format() {
 /// forces API consumers to read source instead of the spec.
 #[test]
 fn post_runs_documents_its_request_body() {
-    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json())
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
         .expect("generated spec must parse as JSON");
 
     let post = &spec["paths"]["/api/runs"]["post"];
@@ -235,7 +261,7 @@ fn post_runs_documents_its_request_body() {
 /// (TicketResponse), not just an untyped 200 JSON blob.
 #[test]
 fn events_ticket_documents_its_response_body() {
-    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json())
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
         .expect("generated spec must parse as JSON");
 
     let post = &spec["paths"]["/api/events/ticket"]["post"];

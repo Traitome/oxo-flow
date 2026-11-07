@@ -1662,8 +1662,7 @@ pub async fn cancel_run(
 
     // Terminal states are final — cancelling a finished run would silently
     // rewrite its result.
-    let is_terminal = matches!(run.status.as_str(), "completed" | "failed" | "cancelled");
-    if is_terminal {
+    if models::is_terminal_run_status(&run.status) {
         return Err(err(
             StatusCode::CONFLICT,
             "RUN_NOT_ACTIVE",
@@ -1671,17 +1670,34 @@ pub async fn cancel_run(
         ));
     }
 
-    // Persist the cancellation BEFORE signaling: the executor's exit path
-    // checks for a 'cancelled' row and skips its own terminal write, so the
-    // kill fallout can never flip the status back to completed/failed.
+    // Persist the cancellation BEFORE signaling: the storage layer makes the
+    // first terminal write win, so the executor's exit path (and the remote
+    // launch/poll failure paths) can never flip the status back to
+    // completed/failed. A competing finalizer that landed between the check
+    // above and this write makes the cancel a no-op — report the truth
+    // instead of a 200 the row does not reflect.
     // The quota reservation is released here — the executor's finalize path
     // early-returns for cancelled runs and never reaches its own release.
     crate::infra::quota::release_and_complete(&id);
     let now = now_iso();
-    backend
+    let cancelled = backend
         .record_run_terminal(&id, "cancelled", "cancelled", &now)
         .await
         .map_err(|e| db_err(format!("DB error cancelling run {id}: {e}")))?;
+    if !cancelled {
+        let current = backend
+            .get_run(&id)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.status)
+            .unwrap_or_else(|| "terminal".into());
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_ACTIVE",
+            format!("Run {id} is already {current} — cannot cancel"),
+        ));
+    }
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
@@ -1815,7 +1831,7 @@ pub async fn pause_run(
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     // Terminal states are final — pausing a finished run would leave a
     // 'paused' row nothing ever finalizes again (ghost run).
-    if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
+    if models::is_terminal_run_status(&run.status) {
         return Err(err(
             StatusCode::CONFLICT,
             "RUN_NOT_ACTIVE",

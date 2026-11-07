@@ -75,3 +75,12 @@ regexes = [
   '''sk-1234567890abcdef''',
 ]
 
+[[allowlists]]
+description = "ssh-key-material unit tests in clusters/service.rs: placeholder key blocks, not credentials"
+paths = ['''oxo-flow-web/src/domains/clusters/service\.rs$''']
+regexes = [
+  '''BEGIN OPENSSH PRIVATE KEY''',
+  '''secret-material''',
+  '''not-a-real-key-fixture''',
+]
+

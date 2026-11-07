@@ -789,16 +789,21 @@ impl StorageBackend for PostgresBackend {
         status: &str,
         phase: &str,
         finished_at: &str,
-    ) -> Result<(), String> {
-        sqlx::query("UPDATE runs SET status = $1, phase = $2, finished_at = $3 WHERE id = $4")
-            .bind(status)
-            .bind(phase)
-            .bind(finished_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
+    ) -> Result<bool, String> {
+        // First terminal write wins (mirrors models::is_terminal_run_status):
+        // cancel-vs-failed races must never rewrite an already-final row.
+        let res = sqlx::query(
+            "UPDATE runs SET status = $1, phase = $2, finished_at = $3 \
+             WHERE id = $4 AND status NOT IN ('completed', 'failed', 'cancelled')",
+        )
+        .bind(status)
+        .bind(phase)
+        .bind(finished_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {

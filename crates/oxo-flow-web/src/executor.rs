@@ -734,14 +734,23 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         );
         return;
     };
-    if let Err(e) = backend
+    match backend
         .record_run_terminal(run_id, final_state, final_state, &end_str)
         .await
     {
-        // Write failure is logged but not fatal: the run's output is done,
-        // so the remaining terminal bookkeeping (broadcast, webhook) still
-        // runs — only the DB row is stale.
-        error!("Failed to update final status for run {run_id} via backend: {e}");
+        Ok(true) => {}
+        Ok(false) => {
+            // A terminal state (cancel, or a competing finalizer) landed
+            // first. Broadcasting a completion/failure for it would lie.
+            info!("Run {run_id} is already terminal; keeping its persisted state");
+            return;
+        }
+        Err(e) => {
+            // Write failure is logged but not fatal: the run's output is
+            // done, so the remaining terminal bookkeeping (broadcast,
+            // webhook) still runs — only the DB row is stale.
+            error!("Failed to update final status for run {run_id} via backend: {e}");
+        }
     }
     // Read the log once, bounded to the head window: both consumers below
     // (dry-run preview JSON, invalidation summary) print at run start,
@@ -1086,13 +1095,23 @@ async fn mark_run_failed(run_id: &str) {
         return;
     };
 
-    if let Err(e) = backend
+    match backend
         .record_run_terminal(run_id, "failed", "failed", &end_str)
         .await
     {
-        // Write failure is logged but not fatal — the broadcast below still
-        // tells the owner the run died.
-        error!("Failed to mark run {run_id} as failed via backend: {e}");
+        Ok(true) => {}
+        Ok(false) => {
+            // The run already reached a terminal state (e.g. the user's
+            // cancel won the race) — broadcasting a failure would lie.
+            info!("Run {run_id} is already terminal; not marking it failed");
+            crate::infra::quota::release_and_complete(run_id);
+            return;
+        }
+        Err(e) => {
+            // Write failure is logged but not fatal — the broadcast below
+            // still tells the owner the run died.
+            error!("Failed to mark run {run_id} as failed via backend: {e}");
+        }
     }
 
     // Broadcast run failure event, scoped to the run owner (issue #82 P0-5).

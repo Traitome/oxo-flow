@@ -98,13 +98,17 @@ pub trait StorageBackend: Send + Sync {
     async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String>;
     async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String>;
     async fn is_run_cancelled(&self, id: &str) -> Result<bool, String>;
+    /// Record a terminal state. Terminal states are final: the first
+    /// terminal write wins, so a late failure path can never overwrite a
+    /// `cancelled` (or `completed`) row — the cancel-vs-failed race.
+    /// Returns `true` when this call made the transition.
     async fn record_run_terminal(
         &self,
         id: &str,
         status: &str,
         phase: &str,
         finished_at: &str,
-    ) -> Result<(), String>;
+    ) -> Result<bool, String>;
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String>;
     async fn list_runs_cursor(
         &self,

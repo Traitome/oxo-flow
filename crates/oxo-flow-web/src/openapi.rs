@@ -176,21 +176,35 @@ impl Modify for SecurityAddon {
 )]
 pub struct ApiDoc;
 
-/// Serialized spec, generated once per process. The schema graph is fully
-/// determined by the `#[utoipa::path]` annotations compiled into the binary,
-/// so regenerating per request only burns CPU.
-static SPEC_JSON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// Serialized specs, one per mode family, generated once per process. The
+/// schema graph is fully determined by the `#[utoipa::path]` annotations
+/// compiled into the binary, so regenerating per request only burns CPU.
+static SPEC_HPC: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static SPEC_DEFAULT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// Serialize the generated spec to a JSON string (served at
+/// Serialize the generated spec for `mode` to a JSON string (served at
 /// `GET /api/openapi.json`). The serialization is cached after the first
 /// call; each call clones the cached string.
-pub fn spec_json() -> String {
-    SPEC_JSON
-        .get_or_init(|| {
-            // The schema graph is static and known-good; serialization cannot fail.
-            ApiDoc::openapi()
-                .to_json()
-                .expect("generated OpenAPI spec is always serializable")
-        })
-        .clone()
+///
+/// `/api/hpc` is mounted only in `hpc` mode (see `server::build_router`), so
+/// other modes must not advertise it either — generated clients and the
+/// embedded Swagger UI would otherwise call a route that answers 404.
+pub fn spec_json(mode: &str) -> String {
+    if mode == "hpc" {
+        SPEC_HPC.get_or_init(|| build_spec(true)).clone()
+    } else {
+        SPEC_DEFAULT.get_or_init(|| build_spec(false)).clone()
+    }
+}
+
+/// Build the spec once; `include_hpc` drops the hpc-only route for modes
+/// whose router does not mount it.
+fn build_spec(include_hpc: bool) -> String {
+    let mut doc = ApiDoc::openapi();
+    if !include_hpc {
+        doc.paths.paths.remove("/api/hpc");
+    }
+    // The schema graph is static and known-good; serialization cannot fail.
+    doc.to_json()
+        .expect("generated OpenAPI spec is always serializable")
 }
