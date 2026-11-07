@@ -23,7 +23,11 @@ oxo-flow env list [WORKFLOW]
 ```
 
 When called without arguments, lists all backends detected on the system.
-When given a workflow file, lists the environments used by each rule.
+When given a workflow file, lists the environment each rule will actually run
+in. Resolution follows the run's own precedence — `env_group` → the rule's
+`environment` → `[defaults] environment` — so a rule that inherits the
+defaults is reported with the backend the run will bootstrap, not as
+`system`. A rule that resolves to no environment is reported as `system`.
 
 **Output:**
 
@@ -41,7 +45,7 @@ The two banner lines print only at an interactive terminal. All of this output g
 
 ### `env check`
 
-Check that all environments declared in a workflow file are valid and their backends are available.
+Check that all environments declared in a workflow file are valid and their backends are available. Each rule's environment is resolved with the same precedence the run uses (`env_group` → rule `environment` → `[defaults] environment`), so a rule that inherits the defaults is validated against the backend that will actually execute.
 
 ```bash
 oxo-flow env check [WORKFLOW]

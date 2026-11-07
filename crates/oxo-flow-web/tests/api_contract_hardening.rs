@@ -290,6 +290,36 @@ async fn run_endpoints_do_not_expose_the_host_pid() {
 }
 
 // ---------------------------------------------------------------------------
+// P8 — run detail carries the same identity fields as list items
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_detail_matches_list_items_on_workflow_name_and_duration() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query(
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at, workflow_name) \
+         VALUES ('detail-shape-run', 'default', NULL, '[workflow]\nname = \"api-tiny\"', 'completed', 'done', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:01:10Z', '2026-01-01T00:00:00Z', 'api-tiny')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let (status, detail) = get(&app, "/api/runs/detail-shape-run").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["workflow_name"], "api-tiny",
+        "run detail must name the workflow: {detail}"
+    );
+    assert_eq!(
+        detail["duration_secs"], 70,
+        "run detail must derive the same duration as list items: {detail}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F5a — plaintext key storage is visible to API consumers
 // ---------------------------------------------------------------------------
 

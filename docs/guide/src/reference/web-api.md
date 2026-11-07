@@ -526,7 +526,7 @@ Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_ca
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
+The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. `workflow_name` and `duration_secs` are the same values list items carry (`duration_secs` is the elapsed time between `started_at` and `finished_at`, `null` until the run finishes). (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
 
 ### Run Preview
 ```
@@ -839,7 +839,7 @@ POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done eve
 POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
 POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
 POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
-GET  /api/ai/config             # Get AI provider configuration (public)
+GET  /api/ai/config             # Get AI provider configuration (public; authenticated admins see provider/model)
 POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
 POST /api/ai/test               # Test the provider (admin-only outside personal mode)
 GET  /api/ai/config/user        # The acting user's private provider config
@@ -869,6 +869,14 @@ answers `504 {code: "AI_TIMEOUT"}` with the standard
 `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
 Use `POST /api/ai/translate/stream` for generations expected to run longer:
 the SSE route is not capped by this total budget.
+
+`GET /api/ai/config` stays public for anonymous feature discoverability:
+anonymous callers (and non-admin callers outside personal mode) receive only
+`{provider: "", model: null, api_url: null, is_configured}`. Presenting a
+valid credential opts the request into normal authentication, so an admin
+sees the configured provider, model, and URL (never the API key); an invalid
+credential is rejected with `401` rather than silently downgraded to the
+masked anonymous payload.
 
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment

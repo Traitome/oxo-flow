@@ -1091,6 +1091,32 @@ impl LocalExecutor {
                 }
             }
         }
+        // The new content key's store dir is not ready (the fast path above
+        // returned otherwise), but the in-tree path may still be a symlink
+        // into the OLD key's store dir — `python -m venv` / `pixi install`
+        // would follow it and mutate that env, which then serves stale
+        // packages under a fresh key (journey-power P2). Detach the link so
+        // setup materializes a fresh in-tree env; re-home then moves it under
+        // the new key. A failure is fatal here: installing through the wrong
+        // env is silent corruption, not a best-effort degradation.
+        if let Some(kind) = store_kind
+            && self.env_store.is_enabled()
+        {
+            let spec_str = Self::store_spec(kind, env_spec);
+            if let Err(e) = self
+                .env_store
+                .detach_link_to_other_store_dir(kind, &spec_str, store_base, &key)
+            {
+                return Err(OxoFlowError::Environment {
+                    kind: env_spec.kind().to_string(),
+                    message: format!(
+                        "failed to detach the stale env-store symlink for '{spec_str}' before \
+                         rebuilding (refusing to install through a link into a different \
+                         content-key environment): {e}"
+                    ),
+                });
+            }
+        }
         // Serialize setup per environment: concurrent rule instances sharing
         // an env (e.g. S1 + S2 instances of the same rule) used to run two
         // `conda env create` in parallel — the loser's transaction removes
@@ -1263,6 +1289,28 @@ impl LocalExecutor {
                             self.env_resolver.cache_mark_ready(&key).await;
                             Ok(())
                         } else {
+                            // The retry failed too. The first failed attempt
+                            // was already torn down; the second broken env
+                            // used to stay on disk while the error only spoke
+                            // of "tearing down" (journey-power P4/P10).
+                            // Remove it so the next run starts clean.
+                            if let Ok(Some(teardown)) = self.env_resolver.teardown_command(env_spec)
+                            {
+                                tracing::warn!(
+                                    rule = %rule.name,
+                                    "environment verification failed after retry — \
+                                     tearing down the broken environment"
+                                );
+                                let mut teardown_cmd = Command::new("sh");
+                                teardown_cmd
+                                    .kill_on_drop(true)
+                                    .arg("-c")
+                                    .arg(&teardown)
+                                    .current_dir(&self.config.workdir);
+                                if let Ok(child) = teardown_cmd.spawn() {
+                                    let _ = wait_bounded(child, None).await;
+                                }
+                            }
                             Err(OxoFlowError::Environment {
                                 kind: env_spec.kind().to_string(),
                                 message:

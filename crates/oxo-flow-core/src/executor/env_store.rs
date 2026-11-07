@@ -198,6 +198,58 @@ impl EnvStore {
         }
     }
 
+    /// Detach an in-tree store symlink that points at a DIFFERENT content
+    /// key's store dir.
+    ///
+    /// A store-managed in-tree path (`venv` dir / `.pixi`) survives across
+    /// content-key changes as a symlink to the OLD store dir. Running setup
+    /// through that link would mutate the old env, and the new key could
+    /// never be re-homed (the in-tree path is already a symlink) — the
+    /// requirement-change case served stale packages while keeping the old
+    /// link (journey-power P2). Removing just the link lets setup
+    /// materialize a fresh in-tree env for the new key; the old store dir
+    /// stays untouched for other workflows and `env gc`.
+    ///
+    /// Returns `true` when a link was removed. A real directory, a missing
+    /// path, or a link already pointing at `cache_key`'s store dir is left
+    /// alone.
+    pub fn detach_link_to_other_store_dir(
+        &self,
+        kind: StoreKind,
+        spec: &str,
+        base: Option<&std::path::Path>,
+        cache_key: &str,
+    ) -> std::io::Result<bool> {
+        #[cfg(not(unix))]
+        {
+            let _ = (kind, spec, base, cache_key);
+            Ok(false)
+        }
+        #[cfg(unix)]
+        {
+            let in_tree = kind.in_tree_path(spec, base);
+            let Ok(meta) = std::fs::symlink_metadata(&in_tree) else {
+                return Ok(false);
+            };
+            if !meta.file_type().is_symlink() {
+                return Ok(false);
+            }
+            let expected = self.store_dir(kind, cache_key);
+            match std::fs::read_link(&in_tree) {
+                Ok(target) if target == expected => return Ok(false),
+                Ok(_) => {}
+                // A concurrent run already detached the link — idempotent.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e),
+            }
+            match std::fs::remove_file(&in_tree) {
+                Ok(()) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(e),
+            }
+        }
+    }
+
     /// Re-points the in-tree path at `store_dir` and writes the ready
     /// marker.
     ///
@@ -610,6 +662,77 @@ mod tests {
         assert!(name.starts_with("pixi-"));
         assert_eq!(name.len(), "pixi-".len() + 16);
         assert!(store.root().ends_with("never-created-store"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_link_removes_only_symlinks_to_other_content_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = EnvStore::from_root(dir.path().join("store"));
+        store.ensure_root().unwrap();
+        let base = dir.path().join("wf");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let old_store = store.store_dir(StoreKind::Venv, "venv:key-old");
+        std::fs::create_dir_all(old_store.join("bin")).unwrap();
+        let in_tree = base.join(".venv");
+        std::os::unix::fs::symlink(&old_store, &in_tree).unwrap();
+
+        // A different content key detaches the stale link but keeps the old
+        // store dir intact.
+        assert!(
+            store
+                .detach_link_to_other_store_dir(
+                    StoreKind::Venv,
+                    ".venv",
+                    Some(&base),
+                    "venv:key-new"
+                )
+                .unwrap()
+        );
+        assert!(std::fs::symlink_metadata(&in_tree).is_err());
+        assert!(old_store.join("bin").is_dir());
+        // Idempotent: a concurrent caller that already detached it is a
+        // no-op, not an error.
+        assert!(
+            !store
+                .detach_link_to_other_store_dir(
+                    StoreKind::Venv,
+                    ".venv",
+                    Some(&base),
+                    "venv:key-new"
+                )
+                .unwrap()
+        );
+
+        // A link already pointing at the current key's dir is kept.
+        std::os::unix::fs::symlink(&old_store, &in_tree).unwrap();
+        assert!(
+            !store
+                .detach_link_to_other_store_dir(
+                    StoreKind::Venv,
+                    ".venv",
+                    Some(&base),
+                    "venv:key-old"
+                )
+                .unwrap()
+        );
+        assert!(std::fs::symlink_metadata(&in_tree).is_ok());
+
+        // A real in-tree directory is never removed.
+        std::fs::remove_file(&in_tree).unwrap();
+        std::fs::create_dir_all(&in_tree).unwrap();
+        assert!(
+            !store
+                .detach_link_to_other_store_dir(
+                    StoreKind::Venv,
+                    ".venv",
+                    Some(&base),
+                    "venv:key-new"
+                )
+                .unwrap()
+        );
+        assert!(in_tree.is_dir());
     }
 
     #[test]

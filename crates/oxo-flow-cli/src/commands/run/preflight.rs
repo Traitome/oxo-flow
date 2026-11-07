@@ -77,14 +77,20 @@ impl std::fmt::Display for BackendPreflightFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{kind}: {message} — required by {count}, e.g. `{example_rule}` (environment: {spec}); {hint}",
+            "{kind}: {message} — required by {count}, e.g. `{example_rule}` (environment: {spec})",
             kind = self.kind,
             message = self.message,
             count = oxo_flow_core::plural(self.count, "pending rule", "pending rules"),
             example_rule = self.example_rule,
             spec = self.spec,
-            hint = backend_install_hint(self),
-        )
+        )?;
+        // A spec defect already names its remedy in the message; appending
+        // the generic install hint would contradict it. Empty hint = none.
+        let hint = backend_install_hint(self);
+        if !hint.is_empty() {
+            write!(f, "; {hint}")?;
+        }
+        Ok(())
     }
 }
 
@@ -95,6 +101,13 @@ impl std::fmt::Display for BackendPreflightFailure {
 pub(crate) fn backend_install_hint(failure: &BackendPreflightFailure) -> &'static str {
     if failure.kind == "pixi" && failure.message.contains("not found") {
         return "create the manifest or correct the rule's `pixi` path (resolved relative to the workflow directory)";
+    }
+    // A spec defect (e.g. a conda YAML with an empty `dependencies:` list)
+    // is a workflow error, not a missing tool — installing the backend
+    // cannot fix it, and the message already names the remedy
+    // (journey-power P4).
+    if failure.message.contains("declares no dependencies") {
+        return "";
     }
     match failure.kind.as_str() {
         "pixi" => "install pixi (https://pixi.sh) and ensure it is on PATH",
@@ -403,6 +416,18 @@ mod tests {
             count: 1,
         };
         assert!(backend_install_hint(&missing_binary).contains("install conda"));
+
+        let empty_conda_deps = BackendPreflightFailure {
+            kind: "conda".to_string(),
+            message: "environment file 'empty.yaml' declares no dependencies".to_string(),
+            example_rule: "rule_c".to_string(),
+            spec: "empty.yaml".to_string(),
+            count: 1,
+        };
+        assert!(
+            backend_install_hint(&empty_conda_deps).is_empty(),
+            "a spec defect must not be answered with an install hint"
+        );
     }
     #[test]
     fn pending_rule_environments_filters_skipped_and_empty() {

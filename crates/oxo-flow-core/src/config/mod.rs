@@ -125,34 +125,6 @@ impl WorkflowConfig {
         // known, template builds must declare an output, names must be unique.
         crate::references::validate_reference_defs(&self.references)?;
 
-        // Warn about rules exceeding system capacity (but don't block)
-        let system_threads = num_cpus::get() as u32;
-        let system_memory_mb = {
-            use sysinfo::System;
-            // Only memory is needed here; `System::new_all()` would walk all of
-            // /proc (every process, disk, and network interface) just to read
-            // total RAM, adding ~50ms to every parse/validate/dry-run/run call.
-            // `System::new()` is fallible since sysinfo 0.40 — 0 means unknown
-            // (init failed), and the validator skips the memory check in that
-            // case rather than warning on every rule.
-            System::new()
-                .map(|mut sys| {
-                    sys.refresh_memory();
-                    sys.total_memory() / 1024 / 1024
-                })
-                .unwrap_or(0)
-        };
-
-        for rule in &self.rules {
-            for warning in crate::scheduler::validate_resources_against_system(
-                rule,
-                system_threads,
-                system_memory_mb,
-            ) {
-                tracing::warn!("{}", warning);
-            }
-        }
-
         // Validate wildcard constraints
         for (name, pattern) in &self.wildcard_constraints {
             if let Err(e) = regex::Regex::new(pattern) {
@@ -217,6 +189,44 @@ impl WorkflowConfig {
         }
 
         Ok(())
+    }
+
+    /// Emit the local-execution resource-fit warnings: a rule declaring more
+    /// threads/RAM than this host offers will oversubscribe or may OOM.
+    ///
+    /// Deliberately separate from [`Self::validate`]: validation runs while
+    /// parsing, before a caller knows whether the workflow executes here or
+    /// is submitted to a cluster. On a cluster the scheduler node provides
+    /// the capacity — comparing against the submit host was pure noise
+    /// (journey-power P7). Local `run` and `dry-run` call this explicitly;
+    /// static commands (`graph`, `env`, `validate`, cluster submission) do
+    /// not.
+    pub fn warn_host_resource_fit(&self) {
+        let system_threads = num_cpus::get() as u32;
+        let system_memory_mb = {
+            use sysinfo::System;
+            // Only memory is needed here; `System::new_all()` would walk all
+            // of /proc (every process, disk, and network interface) just to
+            // read total RAM, adding ~50ms to every parse/validate/run call.
+            // `System::new()` is fallible since sysinfo 0.40 — 0 means
+            // unknown (init failed), and the check is skipped in that case
+            // rather than warning on every rule.
+            System::new()
+                .map(|mut sys| {
+                    sys.refresh_memory();
+                    sys.total_memory() / 1024 / 1024
+                })
+                .unwrap_or(0)
+        };
+        for rule in &self.rules {
+            for warning in crate::scheduler::validate_resources_against_system(
+                rule,
+                system_threads,
+                system_memory_mb,
+            ) {
+                tracing::warn!("{}", warning);
+            }
+        }
     }
 
     /// Validate `[[values]]` tables: non-empty names/values, unique names,

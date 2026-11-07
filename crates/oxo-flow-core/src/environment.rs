@@ -512,6 +512,98 @@ fn conda_family_cache_key(key_prefix: &str, spec: &str, prefix: Option<&str>) ->
 /// named envs — their identity already rides elsewhere). The named-env
 /// conda path is the precedent: its content hash lives in the derived
 /// env name, so its cache-hit verify catches edits.
+/// True when a file-backed conda/mamba YAML declares no packages.
+///
+/// `false` for anything that is not a readable regular `.yaml`/`.yml` file:
+/// the scanner only judges the standard conda environment format. Inline
+/// package lists, named environments, and conda-lock files carry their
+/// dependencies elsewhere and are left to conda.
+///
+/// The format is simple enough to scan line-wise (the same approach
+/// `conda_env_name_from_spec` uses for `name:`): a top-level `dependencies:`
+/// key followed by an indented `- <package>` block or an inline flow list.
+/// Comments and blank lines do not count as items. A missing key also means
+/// "no dependencies" — conda creates an empty prefix either way.
+fn conda_yaml_dependencies_empty(spec: &str) -> bool {
+    if !(spec.ends_with(".yaml") || spec.ends_with(".yml")) {
+        return false;
+    }
+    let Ok(meta) = std::fs::metadata(spec) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    let Ok(content) = std::fs::read_to_string(spec) else {
+        return false;
+    };
+
+    let mut in_dependencies = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !in_dependencies {
+            if !(line.starts_with("dependencies:") || line.starts_with("dependencies :")) {
+                continue;
+            }
+            let rest = trimmed.split_once(':').map_or("", |(_, v)| v).trim();
+            // Drop an inline `# comment` before judging the scalar.
+            let rest = rest.split('#').next().unwrap_or("").trim();
+            if rest.starts_with('[') {
+                // Flow list: `[]` / `[ ]` are empty, `[pkg]` is not.
+                return rest.trim_start_matches('[').trim_start().starts_with(']')
+                    || rest.trim_start_matches('[').trim().is_empty();
+            }
+            if !rest.is_empty() {
+                // Mapping or scalar value — not the conda list form; do not
+                // guess.
+                return false;
+            }
+            in_dependencies = true;
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // A non-indented line ends the block (the next top-level key).
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        if let Some(item) = trimmed.strip_prefix('-') {
+            let item = item.trim();
+            if !item.is_empty() && !item.starts_with('#') {
+                return false;
+            }
+        }
+    }
+    // No `dependencies:` key, or a key with no items: empty either way.
+    true
+}
+
+/// Reject a file-backed conda/mamba YAML whose resolved dependency set is
+/// empty before any solve starts (journey-power P4).
+///
+/// `conda env create` accepts `dependencies: []`, exits 0, and leaves a
+/// prefix with no `bin/`; verification then fails after a full (expensive)
+/// solve and the error blames an interrupted creation. The spec itself is
+/// the problem, so name it here — `env check` and run preflight go through
+/// [`EnvironmentResolver::validate_spec`], and [`EnvironmentResolver::setup_command`]
+/// calls this too so no engine path can start the solve.
+fn ensure_conda_dependencies_nonempty(kind: &str, spec: &str) -> Result<()> {
+    if !conda_yaml_dependencies_empty(spec) {
+        return Ok(());
+    }
+    Err(OxoFlowError::Environment {
+        kind: kind.to_string(),
+        message: format!(
+            "environment file '{spec}' declares no dependencies (`dependencies:` is empty \
+             or missing) — conda would create an environment with no packages, fail \
+             verification after a full solve, and leave a broken prefix. Add at least one \
+             package (for example a `- python=3.11` item under `dependencies:`) or remove \
+             the rule's environment declaration"
+        ),
+    })
+}
+
 pub(crate) fn spec_content_tag(spec: &str) -> String {
     // Stat-first regular-file gate (issue #714): read() on a writer-less
     // FIFO blocks forever; non-regular specs keep the empty tag.
@@ -2013,6 +2105,14 @@ impl EnvironmentResolver {
     /// runs from there too).
     pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
         ensure_no_backend_conflict(env_spec)?;
+        // Defense in depth for callers that skip preflight (journey-power
+        // P4): refuse an empty dependency set before any solve is spawned.
+        if let Some(ref conda) = env_spec.conda {
+            ensure_conda_dependencies_nonempty("conda", conda)?;
+        }
+        if let Some(ref mamba) = env_spec.mamba {
+            ensure_conda_dependencies_nonempty("mamba", mamba)?;
+        }
         // Announce the bootstrap and start its timer: this is the single
         // choke point right before the executor runs the setup command, and
         // `cache_mark_ready` reports the duration from here. Backends with
@@ -2219,6 +2319,12 @@ impl EnvironmentResolver {
     /// Validate that the required environment backend is available for a spec.
     pub fn validate_spec(&self, env_spec: &EnvironmentSpec) -> Result<()> {
         ensure_no_backend_conflict(env_spec)?;
+        if let Some(ref conda) = env_spec.conda {
+            ensure_conda_dependencies_nonempty("conda", conda)?;
+        }
+        if let Some(ref mamba) = env_spec.mamba {
+            ensure_conda_dependencies_nonempty("mamba", mamba)?;
+        }
         if env_spec.mamba.is_some() && !self.mamba.is_available() {
             return Err(OxoFlowError::Environment {
                 kind: "mamba".to_string(),
@@ -2351,6 +2457,54 @@ mod tests {
             "venv:.venv"
         );
         assert_eq!(VenvBackend.cache_key(".venv"), "venv:.venv");
+    }
+
+    #[test]
+    fn conda_yaml_dependencies_empty_detects_empty_and_missing_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, body: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            path
+        };
+        let empty_flow = write("empty_flow.yaml", "name: demo\ndependencies: []\n");
+        assert!(conda_yaml_dependencies_empty(empty_flow.to_str().unwrap()));
+        let empty_block = write(
+            "empty_block.yaml",
+            "name: demo\ndependencies:\n  # nothing pinned yet\n\nchannels:\n  - conda-forge\n",
+        );
+        assert!(conda_yaml_dependencies_empty(empty_block.to_str().unwrap()));
+        let missing = write("missing.yaml", "name: demo\n");
+        assert!(conda_yaml_dependencies_empty(missing.to_str().unwrap()));
+        let filled = write(
+            "filled.yaml",
+            "name: demo\ndependencies:\n  - python=3.11\n  - pip:\n      - numpy\n",
+        );
+        assert!(!conda_yaml_dependencies_empty(filled.to_str().unwrap()));
+        // Non-environment specs are never judged: named envs, lock files,
+        // inline package lists.
+        let lock = write("x.lock", "dependencies: []\n");
+        assert!(!conda_yaml_dependencies_empty(lock.to_str().unwrap()));
+        assert!(!conda_yaml_dependencies_empty("bioconda::fastp=0.23.4"));
+    }
+
+    #[test]
+    fn empty_conda_dependency_file_is_rejected_before_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("empty.yaml");
+        std::fs::write(&yaml, "name: demo\ndependencies: []\n").unwrap();
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some(yaml.to_string_lossy().into_owned()),
+            ..EnvironmentSpec::default()
+        };
+        // Preflight (`env check`, `run` admission) rejects the spec...
+        let err = resolver.validate_spec(&spec).unwrap_err().to_string();
+        assert!(err.contains("declares no dependencies"), "{err}");
+        assert!(err.contains("empty.yaml"), "{err}");
+        // ...and the setup choke point refuses before spawning a solve.
+        let err = resolver.setup_command(&spec).unwrap_err().to_string();
+        assert!(err.contains("declares no dependencies"), "{err}");
     }
 
     use super::*;

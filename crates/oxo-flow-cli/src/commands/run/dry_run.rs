@@ -136,6 +136,13 @@ pub async fn dry_run_command(
     }
 
     config.apply_defaults();
+    // Local-execution advice only: a profile that routes to a scheduler runs
+    // on cluster nodes, so the submit host's capacity is irrelevant — the
+    // same rule the `run` local path applies (journey-power P7). Emitted
+    // before wildcard expansion so warnings stay per template rule.
+    if cluster_path::routed_cluster_profile(profile.as_deref(), config.cluster.as_ref()).is_none() {
+        config.warn_host_resource_fit();
+    }
     config
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;

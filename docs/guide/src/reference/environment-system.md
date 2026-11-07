@@ -112,6 +112,7 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 - **Naming**: A file-backed spec resolves to the env name `<name>-<hash8>`, where `<name>` is the YAML's `name:` field (falling back to the file stem) and `<hash8>` is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one. Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (`conda env create -n <name>-<hash8> -f envs/spec.yaml`); the engine prints the expected name when it detects the env is missing under `--skip-env-setup`
 - **Activation**: Runs `conda run --no-capture-output -n <env_name> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` — `--no-capture-output` (conda ≥ 4.13) keeps stdout/stderr live, and the `PATH` prefix makes the rule see the env's own tools first
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
+- **Empty dependency sets**: a file-backed YAML whose `dependencies:` list is empty (or absent) is rejected at validation — `env check` and the run's backend preflight name the offending file before any solve starts. `conda env create` otherwise exits 0 after a full solve and leaves a prefix with no `bin/`, which then fails verification and reads like an interrupted creation. Add at least one package or remove the environment declaration. Mamba specs use the same format and the same check
 
 ### Mamba
 
@@ -281,7 +282,11 @@ per-process — on a multi-user server each user who opts in gets their own
 store unless an operator deliberately points everyone at a shared path.
 Maintenance is `oxo-flow env gc` (checkpoint-reference + age gated,
 `--dry-run` first); a broken link is detected on the next run and the env
-is rebuilt automatically. The store deliberately covers **pixi and venv
+is rebuilt automatically. A content-key change (edited `requirements.txt` or
+`pixi.toml`) gets a new store entry: the next run detaches the stale in-tree
+symlink, builds the new environment in-tree, and re-homes it under the new
+key. The previous store dir is left untouched for other workflows and for
+`env gc`. The store deliberately covers **pixi and venv
 only**: conda/mamba name-based environments already live in a shared central
 prefix, conda prefix environments are not relocatable (absolute paths baked
 into the env), containers pull images into their own registries, and HPC

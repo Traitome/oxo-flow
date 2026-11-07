@@ -939,12 +939,18 @@ pub async fn get_run(
     let backend = get_backend()?;
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
+    // Same derivation the list items use — the detail used to omit
+    // `workflow_name`/`duration_secs`, forcing consumers to join against
+    // the list or parse `pipeline_snapshot` (journey-power P8).
+    let duration_secs = service::run_duration_secs(&run);
 
     Ok(Json(serde_json::json!({
         "id": run.id,
         "user_id": run.user_id,
         "pipeline_id": run.pipeline_id,
+        "workflow_name": run.workflow_name,
         "pipeline_snapshot": run.pipeline_snapshot,
+        "duration_secs": duration_secs,
         "status": run.status,
         "phase": run.phase,
         "dry_run": run.dry_run,
