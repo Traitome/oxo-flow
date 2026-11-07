@@ -338,7 +338,7 @@ repository.
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
 | `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced | `16384` |
 | `OXO_FLOW_AI_CONTEXT_TOKENS` | Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. `131072`). The Claude backend clamps `max_tokens` per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side) | unset |
-| `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints | `300` |
+| `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (`/api/chat/send/json`, `/api/ai/translate`), which answer `504 AI_TIMEOUT` when it expires | `300` |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |
 | `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key (the variable Anthropic SDKs and gateway deployments export) | — |

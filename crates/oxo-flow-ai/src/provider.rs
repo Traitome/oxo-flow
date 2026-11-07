@@ -94,7 +94,12 @@ fn provider_http_client() -> reqwest::Client {
     }
 }
 
-fn request_timeout_secs() -> u64 {
+/// Per-provider-request timeout from `OXO_FLOW_AI_TIMEOUT_SECS` (default
+/// 300 s). Web surfaces ALSO use it as the total budget for the non-streaming
+/// AI JSON routes (issue #1040 P3-5), so a multi-round generation cannot
+/// outlive the documented knob while a reverse proxy is holding the
+/// connection.
+pub fn request_timeout_secs() -> u64 {
     parse_timeout_secs(std::env::var("OXO_FLOW_AI_TIMEOUT_SECS").ok().as_deref())
 }
 
@@ -137,19 +142,27 @@ fn is_transient_http_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 502 | 503 | 504 | 522 | 524)
 }
 
-/// Send a prepared request and hand the response to `decode` inside the
-/// retry scope, so a transient failure in either half — the send, or
-/// reading/decoding the body — replays the whole attempt with `backoffs`
-/// pauses between tries (see [`is_transient_transport_error`]). HTTP error
-/// statuses carry provider semantics (429 back-off, auth, context
-/// overflow) that the caller classifies from the returned status and body,
-/// so they are *not* retried — except a transient status (see
+/// Send a request produced by `build_request` and hand the response to
+/// `decode` inside the retry scope, so a transient failure in either half —
+/// the send, or reading/decoding the body — replays the whole attempt with
+/// `backoffs` pauses between tries (see [`is_transient_transport_error`]).
+///
+/// The request is built FRESH on every attempt instead of being cloned:
+/// `reqwest::RequestBuilder::try_clone` cannot clone a streaming body, and
+/// the old clone-inside-the-loop shape made a transient failure fatal with
+/// "request body is not replayable for retry" (issue #1040 B8). JSON callers
+/// go through [`json_post`], which serializes the payload to bytes once, so
+/// every attempt transmits the identical body.
+///
+/// HTTP error statuses carry provider semantics (429 back-off, auth,
+/// context overflow) that the caller classifies from the returned status
+/// and body, so they are *not* retried — except a transient status (see
 /// [`is_transient_http_status`]) answering with an empty body, the
 /// gateway-outage signature, which is replayed. When the failure stays
 /// transient after every retry, [`AiError::RetryExhausted`] reports the
 /// total attempt count.
-async fn send_with_retry<T, Fut>(
-    request: reqwest::RequestBuilder,
+async fn send_with_retry<T, Fut, F>(
+    build_request: F,
     provider: &str,
     secret: Option<&str>,
     backoffs: &[std::time::Duration],
@@ -157,9 +170,9 @@ async fn send_with_retry<T, Fut>(
 ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, T), AiError>
 where
     Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
+    F: Fn() -> reqwest::RequestBuilder,
 {
     enum StepFailure {
-        NonReplayable,
         Transport(reqwest::Error),
         /// A decode failure on a non-2xx response: the status carries
         /// provider semantics (429 back-off, auth), so the request must
@@ -192,13 +205,8 @@ where
     };
     let mut attempt = 0usize;
     loop {
-        // The decode closure buffers the body, so the builder is
-        // replayable; a non-clonable body would be a construction bug,
-        // not a runtime case.
         let result = async {
-            let response = request
-                .try_clone()
-                .ok_or(StepFailure::NonReplayable)?
+            let response = build_request()
                 .send()
                 .await
                 .map_err(StepFailure::Transport)?;
@@ -236,12 +244,6 @@ where
         .await;
         match result {
             Ok(decoded) => return Ok(decoded),
-            Err(StepFailure::NonReplayable) => {
-                return Err(AiError::Provider {
-                    provider: provider.into(),
-                    message: "request body is not replayable for retry".into(),
-                });
-            }
             Err(StepFailure::Transport(e)) if !is_transient_transport_error(&e) => {
                 return Err(AiError::Provider {
                     provider: provider.into(),
@@ -305,6 +307,40 @@ where
             }
         }
     }
+}
+
+/// Build the per-attempt request factory consumed by [`send_with_retry`] for
+/// a JSON POST.
+///
+/// The body is serialized to bytes ONCE, before the retry loop; every
+/// attempt clones those bytes into a fresh request. This is the structural
+/// guarantee behind transport replay: a body attached as a stream cannot be
+/// cloned by reqwest, and the retry used to die with "request body is not
+/// replayable for retry" (issue #1040 B8). The Claude/Anthropic-compatible,
+/// OpenAI-compatible, and Ollama backends all build their request here so
+/// the guarantee cannot drift between them.
+fn json_post<'a>(
+    client: &'a reqwest::Client,
+    url: &'a str,
+    headers: &[(&'static str, String)],
+    body: &serde_json::Value,
+    provider: &str,
+) -> Result<impl Fn() -> reqwest::RequestBuilder + 'a, AiError> {
+    let bytes = serde_json::to_vec(body).map_err(|error| AiError::Provider {
+        provider: provider.into(),
+        message: format!("request body serialization failed: {error}"),
+    })?;
+    let headers: Vec<(&'static str, String)> = headers.to_vec();
+    Ok(move || {
+        let mut request = client
+            .post(url)
+            .header("content-type", "application/json")
+            .body(bytes.clone());
+        for (name, value) in &headers {
+            request = request.header(*name, value.as_str());
+        }
+        request
+    })
 }
 
 // ── AiProvider enum ────────────────────────────────────────────────────────
@@ -763,18 +799,22 @@ impl ClaudeBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
+        // Both credential headers: the official API reads x-api-key, while
+        // many Anthropic-compatible gateways (Bearer-only deployments) read
+        // Authorization — sending both is what Claude Code itself does.
+        let request = json_post(
+            &self.client,
+            &self.api_url,
+            &[
+                ("x-api-key", self.api_key.clone()),
+                ("Authorization", format!("Bearer {}", self.api_key)),
+                ("anthropic-version", "2023-06-01".to_string()),
+            ],
+            &body,
+            "claude",
+        )?;
         let (status, headers, json) = send_with_retry(
-            self.client
-                .post(&self.api_url)
-                // Both credential headers: the official API reads
-                // x-api-key, while many Anthropic-compatible gateways
-                // (Bearer-only deployments) read Authorization — sending
-                // both is what Claude Code itself does.
-                .header("x-api-key", &self.api_key)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&body),
+            request,
             "claude",
             Some(&self.api_key),
             TRANSPORT_BACKOFFS,
@@ -1254,12 +1294,15 @@ impl OpenAiBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
+        let request = json_post(
+            &self.client,
+            &self.api_url,
+            &[("Authorization", format!("Bearer {}", self.api_key))],
+            &body,
+            &self.label,
+        )?;
         let (status, headers, json) = send_with_retry(
-            self.client
-                .post(&self.api_url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("content-type", "application/json")
-                .json(&body),
+            request,
             &self.label,
             Some(&self.api_key),
             TRANSPORT_BACKOFFS,
@@ -1420,17 +1463,12 @@ impl OllamaBackend {
     ) -> Result<AiResponse, AiError> {
         let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
-        let (status, headers, json) = send_with_retry(
-            self.client
-                .post(&self.api_url)
-                .header("content-type", "application/json")
-                .json(&body),
-            "ollama",
-            None,
-            TRANSPORT_BACKOFFS,
-            |resp| resp.json::<serde_json::Value>(),
-        )
-        .await?;
+        let request = json_post(&self.client, &self.api_url, &[], &body, "ollama")?;
+        let (status, headers, json) =
+            send_with_retry(request, "ollama", None, TRANSPORT_BACKOFFS, |resp| {
+                resp.json::<serde_json::Value>()
+            })
+            .await?;
 
         if !status.is_success() {
             // Ollama error bodies are a top-level `{"error": "..."}` object,
@@ -2170,6 +2208,52 @@ pub struct ProviderConfig {
 mod tests {
     use super::*;
 
+    /// Adapt a static test request to the factory-based retry API. Test
+    /// bodies are byte-reusable, so `try_clone` is total here.
+    fn replayable(request: reqwest::RequestBuilder) -> impl Fn() -> reqwest::RequestBuilder {
+        move || {
+            request
+                .try_clone()
+                .expect("static test request bodies are replayable")
+        }
+    }
+
+    /// Read one HTTP/1.1 request off `stream`, returning its body. The retry
+    /// tests assert the replay transmits byte-identical payloads.
+    fn read_request_body(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+
+        let mut received = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => return String::new(),
+                Ok(read) => received.extend_from_slice(&chunk[..read]),
+            }
+            let Some(head_end) = received.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&received[..head_end]);
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let body_start = head_end + 4;
+            while received.len() < body_start + content_length {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => received.extend_from_slice(&chunk[..read]),
+                }
+            }
+            return String::from_utf8_lossy(&received[body_start..]).into_owned();
+        }
+    }
+
     #[test]
     fn max_tokens_env_override_parses_strictly() {
         // Thinking backends burn the default budget on reasoning blocks and
@@ -2282,6 +2366,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transport_retry_replays_the_identical_json_body() {
+        // Issue #1040 B8: the first attempt dies with an empty-body 503 (the
+        // gateway-outage signature) and the retry must replay the SAME
+        // buffered body bytes. The old clone-inside-the-loop shape surfaced
+        // "request body is not replayable for retry" instead of retrying
+        // (verified red against a streaming body before this fix).
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = bodies.clone();
+        std::thread::spawn(move || {
+            let responses = [
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+            ];
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                seen.lock().unwrap().push(read_request_body(&mut stream));
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/v1/messages");
+        let client = reqwest::Client::new();
+        let request = json_post(
+            &client,
+            &url,
+            &[("x-test-header", "kept-on-every-attempt".to_string())],
+            &serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hello"}],
+            }),
+            "test",
+        )
+        .unwrap();
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap();
+
+        assert!(status.is_success());
+        assert_eq!(json, serde_json::json!({}));
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2, "exactly one replay");
+        assert_eq!(
+            bodies[0], bodies[1],
+            "the retry must replay the identical body bytes"
+        );
+        assert!(bodies[0].contains("\"model\":\"test-model\""));
+    }
+
+    #[tokio::test]
     async fn transport_retry_exhausts_connection_failures_into_retry_exhausted() {
         // Connection-refused is the benchmark's observed transport flake
         // class: the send path must retry through the backoff budget and
@@ -2299,9 +2443,13 @@ mod tests {
         let backoffs = [std::time::Duration::from_millis(1)];
         // Pass-through decode, as the streaming site uses: only the send
         // half is under test here.
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
-            Ok::<_, reqwest::Error>(resp)
-        })
+        let err = send_with_retry(
+            replayable(request),
+            "test",
+            None,
+            &backoffs,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
+        )
         .await
         .unwrap_err();
 
@@ -2343,9 +2491,13 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
-            Ok::<_, reqwest::Error>(resp)
-        })
+        let err = send_with_retry(
+            replayable(request),
+            "test",
+            None,
+            &backoffs,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
+        )
         .await
         .unwrap_err();
 
@@ -2386,11 +2538,12 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
-            resp.json::<serde_json::Value>()
-        })
-        .await
-        .unwrap();
+        let (status, _, json) =
+            send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
+                resp.json::<serde_json::Value>()
+            })
+            .await
+            .unwrap();
 
         assert!(status.is_success());
         assert_eq!(json, serde_json::json!({}));
@@ -2421,7 +2574,7 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+        let err = send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
             resp.json::<serde_json::Value>()
         })
         .await
@@ -2471,7 +2624,7 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+        let err = send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
             resp.json::<serde_json::Value>()
         })
         .await
@@ -2526,11 +2679,12 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
-            resp.json::<serde_json::Value>()
-        })
-        .await
-        .unwrap();
+        let (status, _, json) =
+            send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
+                resp.json::<serde_json::Value>()
+            })
+            .await
+            .unwrap();
 
         assert_eq!(hits.load(Ordering::SeqCst), 2, "exactly one replay");
         assert!(status.is_success());
@@ -2571,12 +2725,15 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let (status, _, resp) =
-            send_with_retry(request, "test", None, &backoffs, |resp| async move {
-                Ok::<_, reqwest::Error>(resp)
-            })
-            .await
-            .unwrap();
+        let (status, _, resp) = send_with_retry(
+            replayable(request),
+            "test",
+            None,
+            &backoffs,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(hits.load(Ordering::SeqCst), 2, "exactly one replay");
         assert!(status.is_success());
@@ -2609,9 +2766,13 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
-            Ok::<_, reqwest::Error>(resp)
-        })
+        let err = send_with_retry(
+            replayable(request),
+            "test",
+            None,
+            &backoffs,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
+        )
         .await
         .unwrap_err();
 
@@ -2661,7 +2822,7 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+        let err = send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
             resp.json::<serde_json::Value>()
         })
         .await
@@ -2712,11 +2873,12 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
-            resp.json::<serde_json::Value>()
-        })
-        .await
-        .unwrap();
+        let (status, _, json) =
+            send_with_retry(replayable(request), "test", None, &backoffs, |resp| {
+                resp.json::<serde_json::Value>()
+            })
+            .await
+            .unwrap();
 
         assert_eq!(
             hits.load(Ordering::SeqCst),
