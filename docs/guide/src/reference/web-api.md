@@ -901,6 +901,58 @@ POST /api/chat/send/json   # Same, single JSON response
 GET  /api/chat/sessions    # The acting user's chat sessions
 ```
 
+### `POST /api/chat/send` — SSE event contract
+
+The stream opens with a `ready` handshake, then forwards the real agent
+loop (tool rounds, validation rounds) as typed events:
+
+| Event | Payload | Meaning |
+|-------|---------|---------|
+| `ready` | `{keepalive_secs, idle_timeout_secs}` | Handshake, sent before the first provider call. `keepalive_secs` is the comment-frame cadence; `idle_timeout_secs` (`3 × keepalive_secs`) is the **client watchdog budget** — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever. |
+| `status` | `{message}` | Human-readable phase (`planning`, `executing tools`). |
+| `progress` | `{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}` | Structured loop progress, emitted at every phase boundary: `step` is `plan`, `generate`, `tool` (with `tool` naming the running tool), or `validate`. `elapsed_ms` is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead". |
+| `tool_call` | `{name, args}` | The model requested a grounded tool call. |
+| `tool_result` | `{name, summary}` | The tool finished; `summary` is a truncated preview (errors ride here too). |
+| `text` | `{chunk}` | One complete round response (token-level streaming is not implemented). |
+| `action` | `{action_type, data}` | Structured action — `pipeline_ready` carries the validated TOML and its validation result. |
+| `error` | `{code, message}` | Terminal failure (`CHAT_ERROR`, `AI_NOT_CONFIGURED`, `EMPTY_MESSAGE`). The loop aborts and its transcript is archived with `outcome: "Failed"` and the reason. |
+| `done` | `{session_id, rounds, prompt_tokens, completion_tokens}` | Terminal success marker. Always sent after `action`; clients stop reading here. |
+
+Transport behavior:
+
+- Keep-alive **comment frames** (`: ping`) are emitted every 15 s. They are
+  not events, but they are bytes on the wire — an inactivity watchdog must
+  treat them as traffic so a slow but healthy generation (8–14 minute runs
+  are normal) is never cut off.
+- Each provider request is bounded by `OXO_FLOW_AI_TIMEOUT_SECS` (default
+  300 s). A stalled endpoint surfaces as an `error` event within that budget,
+  never as an indefinite hang.
+- A client that disconnects mid-generation flips the loop's cancel flag; the
+  orchestrator stops between provider calls and before each tool rather than
+  burning paid rounds nobody is reading. The aborted run is archived (below).
+- The browser-side watchdog is derived from `ready.idle_timeout_secs`; on
+  expiry the client aborts the fetch, renders the error with a Retry action,
+  and re-enables the send button.
+
+### Chat session archives
+
+Every agent-loop run — including an aborted one — is persisted under
+`.oxo-flow/ai_sessions/` (or `OXO_FLOW_AI_SESSION_DIR`) as
+`<timestamp>-<command>-<id>.json`. Writes are temp-sibling + atomic rename,
+so a reader never observes a truncated file, and a run that fails archives
+`outcome: "Failed"` with an `error` reason (the post-mortem record). Pruning
+only reclaims archives older than ten minutes, so a fresh failure record — or
+the file an operator is inspecting — is never rotated out by concurrent
+writers.
+
+### AI provider probe
+
+`POST /api/ai/test` is **single-flight**: concurrent callers share one
+outbound provider round-trip (queued behind an async mutex) and a result
+younger than 10 seconds is reused. The probe calls the provider directly and
+never writes an `ai_sessions` archive, so repeated settings checks cannot
+pollute the audit trail or trip the provider's rate limiter.
+
 ---
 
 ## OAuth

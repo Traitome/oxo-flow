@@ -65,6 +65,7 @@ export default function Settings() {
   const [apiUrl, setApiUrl] = useState('');
   const [model, setModel] = useState('');
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refs, setRefs] = useState<ReferenceStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -133,6 +134,11 @@ export default function Settings() {
   };
 
   const handleTest = async () => {
+    // One probe at a time: double-clicks and impatient re-clicks used to
+    // fire concurrent paid provider calls (issue #1040 B3). The server also
+    // single-flights them; this stops the storm at the source.
+    if (testing) return;
+    setTesting(true);
     setTestResult({ ok: false, text: t('settings.ai.testing') });
     try {
       const r = await api.aiTest();
@@ -142,6 +148,8 @@ export default function Settings() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('common.unknownError');
       setTestResult({ ok: false, text: t('settings.ai.testFailed').replace('{{error}}', msg) });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -201,7 +209,7 @@ export default function Settings() {
               <div><SettingLabel text={t('settings.ai.url')} /><SettingInput type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
               <div className="row">
                 <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
-                <button onClick={handleTest} className="action-btn">{t('settings.ai.test')}</button>
+                <button onClick={handleTest} className="action-btn" disabled={testing}>{t('settings.ai.test')}</button>
               </div>
               {testResult && <div className={`result-bar ${testResult.ok ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult.text}</div>}
             </div>

@@ -34,8 +34,28 @@ pub fn db_url() -> &'static String {
     })
 }
 
+/// Point the AI session archive at a per-process scratch directory.
+///
+/// Integration tests exercise real chat/generation paths; an aborted run
+/// used to archive into the operator's `$HOME/.oxo-flow/ai_sessions`, where
+/// test records could rotate out the very session under investigation
+/// (issue #1040 B1/B3). One shared directory per test binary.
+fn isolate_ai_sessions() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir =
+            std::env::temp_dir().join(format!("oxo-flow-test-ai-sessions-{}", std::process::id()));
+        // SAFETY: set exactly once during test setup. The AI session writer
+        // is the only consumer, and no test depends on a pre-existing value
+        // for this variable.
+        unsafe { std::env::set_var("OXO_FLOW_AI_SESSION_DIR", &dir) };
+    });
+}
+
 /// Initialize the database once. Concurrent calls are safe: the pool
-/// registry is a OnceLock and repeat calls are no-ops.
+/// registry is a OnceLock and repeat calls are no-ops. Also isolates the AI
+/// session archive from the operator's real one.
 pub async fn ensure_db() {
+    isolate_ai_sessions();
     oxo_flow_web::db::init_db(db_url()).await.ok();
 }

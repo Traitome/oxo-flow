@@ -177,10 +177,15 @@ where
         None => message,
     };
     // Decode failures keep the callers' familiar "response parse failed"
-    // prefix; plain transport errors render as reqwest names them.
+    // prefix; plain transport errors render as reqwest names them. A timeout
+    // is called out explicitly — reqwest's Display drops the cause, leaving
+    // "error sending request for url (...)" with no hint that the endpoint
+    // stalled (issue #1040 B1: the chat error state must say why).
     let describe = |e: reqwest::Error| {
         if e.is_decode() {
             format!("response parse failed: {e}")
+        } else if e.is_timeout() {
+            format!("request timed out: {e}")
         } else {
             e.to_string()
         }
