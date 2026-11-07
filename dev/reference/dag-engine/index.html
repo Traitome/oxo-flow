@@ -4790,16 +4790,9 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 </tbody>
 </table>
 <h4 id="critical-path-prioritized-scheduling">Critical-Path-Prioritized Scheduling<a class="headerlink" href="#critical-path-prioritized-scheduling" title="Permanent link">#</a></h4>
-<p>The scheduler can prioritize rules on the critical path so they execute before non-critical rules at the same level:</p>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">ready</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">state</span><span class="p">.</span><span class="n">ready_rules_critical_path</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dag</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rules</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
-</span></code></pre></div>
-<p>Sort order:</p>
-<ol>
-<li><strong>Critical path membership</strong> — critical rules first</li>
-<li><strong>Explicit priority</strong> (<code>priority</code> field, higher first)</li>
-<li><strong>Alphabetical name</strong> (deterministic tie-breaker)</li>
-</ol>
-<p>This minimizes total workflow wall-clock time by ensuring the bottleneck chain never waits.</p>
+<p>Rules on the critical path determine the minimum total execution time, so
+priority should be spent on them: mark bottleneck rules with a high
+<code>priority</code> field and the run loop schedules them before other ready rules.</p>
 <h4 id="example">Example<a class="headerlink" href="#example" title="Permanent link">#</a></h4>
 <p>In a diamond DAG (<code>source → left, source → right → merge</code>):</p>
 <ul>
@@ -4807,7 +4800,7 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <li><code>right</code> is not on the critical path — it can be scheduled after <code>left</code> without affecting total time</li>
 <li>The <code>graph</code> command prints the critical path length as a step count:</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Depth: 3, Width: 2, Critical path: 3 steps
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Depth: 3, Width: 2, Critical path: 3 steps
 </span></code></pre></div>
 <h4 id="interpreting-the-output">Interpreting the Output<a class="headerlink" href="#interpreting-the-output" title="Permanent link">#</a></h4>
 <ul>
@@ -4819,18 +4812,18 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <h2 id="dot-export">DOT Export<a class="headerlink" href="#dot-export" title="Permanent link">#</a></h2>
 <h3 id="to_dot"><code>to_dot()</code><a class="headerlink" href="#to_dot" title="Permanent link">#</a></h3>
 <p>Generates a Graphviz DOT representation of the DAG:</p>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">dot</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">to_dot</span><span class="p">();</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">dot</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">to_dot</span><span class="p">();</span>
 </span></code></pre></div>
 <p>Output:</p>
-<div class="language-dot highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">digraph</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"fastqc"</span><span class="p">]</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"trim_reads"</span><span class="p">]</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"align"</span><span class="p">]</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"multiqc"</span><span class="p">]</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="p">}</span>
+<div class="language-dot highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">digraph</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"fastqc"</span><span class="p">]</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"trim_reads"</span><span class="p">]</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"align"</span><span class="p">]</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"multiqc"</span><span class="p">]</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <hr />
 <h2 id="graph-metrics">Graph Metrics<a class="headerlink" href="#graph-metrics" title="Permanent link">#</a></h2>
@@ -4903,12 +4896,9 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <hr />
 <h2 id="priority-scheduling">Priority Scheduling<a class="headerlink" href="#priority-scheduling" title="Permanent link">#</a></h2>
 <p>Rules can declare a <code>priority</code> field (integer, default <code>0</code>). When multiple rules are ready to execute, the scheduler sorts them by priority (higher values first), then by name for deterministic tie-breaking:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"critical_qc"</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">   </span><span class="c1"># Runs before other ready rules</span>
-</span></code></pre></div>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">ready</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">state</span><span class="p">.</span><span class="n">ready_rules_prioritized</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dag</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rules</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="c1">// ["critical_qc", "fastqc", "trim_reads"]  — sorted by priority desc, then name asc</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"critical_qc"</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">   </span><span class="c1"># Runs before other ready rules</span>
 </span></code></pre></div>
 <p><strong>Important:</strong> Priority only affects ordering <em>among ready rules at the same time</em>. A low-priority rule with all dependencies satisfied will still run before a high-priority rule waiting on a dependency. Priority does not override topological constraints.</p>
 <hr />
@@ -4926,7 +4916,7 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 <li>If no rules are running but pending rules remain (none can ever become
    ready — e.g. their dependencies failed) → <strong>Deadlock</strong></li>
 </ol>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">state</span><span class="p">.</span><span class="n">check_deadlock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dag</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">state</span><span class="p">.</span><span class="n">check_deadlock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dag</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 </span></code></pre></div>
 <h3 id="deadlock-scenarios">Deadlock Scenarios<a class="headerlink" href="#deadlock-scenarios" title="Permanent link">#</a></h3>
 <table>
@@ -4953,8 +4943,8 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 <hr />
 <h2 id="dag-analysis-utilities">DAG Analysis Utilities<a class="headerlink" href="#dag-analysis-utilities" title="Permanent link">#</a></h2>
 <h3 id="root-leaf-rules">Root &amp; Leaf Rules<a class="headerlink" href="#root-leaf-rules" title="Permanent link">#</a></h3>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">entry_points</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">root_rules</span><span class="p">();</span><span class="w">  </span><span class="c1">// Rules with no upstream deps — start here first</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="kd">let</span><span class="w"> </span><span class="n">final_outputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">leaf_rules</span><span class="p">();</span><span class="w"> </span><span class="c1">// Rules with no downstream deps — your end products</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">entry_points</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">root_rules</span><span class="p">();</span><span class="w">  </span><span class="c1">// Rules with no upstream deps — start here first</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="kd">let</span><span class="w"> </span><span class="n">final_outputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">leaf_rules</span><span class="p">();</span><span class="w"> </span><span class="c1">// Rules with no downstream deps — your end products</span>
 </span></code></pre></div>
 <p>Use these to understand workflow structure: root rules are your entry points (typically consuming raw data), and leaf rules produce your final deliverables.</p>
 <h3 id="orphan-rules">Orphan Rules<a class="headerlink" href="#orphan-rules" title="Permanent link">#</a></h3>
@@ -4965,7 +4955,7 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 wildcards over one template (<code>variants/{smp}.vcf</code> vs
 <code>variants/{sample}.vcf</code>) and identical literal paths count too — trigger
 a warning, because the second to finish silently overwrites the first.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path
 </span></code></pre></div>
 <p>Resolve by giving each rule distinct output paths (e.g., <code>caller_a/{sample}.vcf</code>, <code>caller_b/{sample}.vcf</code>). See
 <a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.</p>
@@ -5049,7 +5039,7 @@ starvation <strong>impossible</strong>, not merely unlikely:</p>
 <li><strong>The wait is visible.</strong> After 60 seconds of waiting, the run log
    emits, for each waiting rule:</li>
 </ol>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
 </span></code></pre></div>
 <p>For workflows that still wait: remove the shared-group claim (give each
 rule set its own group), restore the missing <code>depends_on</code> edge so

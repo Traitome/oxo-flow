@@ -4087,6 +4087,11 @@ reference and the jokergoo/bsub client. Re-attach to in-flight jobs,
 cancellation reconciliation, per-element accounting, and crash recovery
 remain evidence gaps. See the audit ledger before describing any backend
 as production-ready.</p>
+<p>Freshness note (2026-11-07): this evidence is a point-in-time campaign —
+the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a
+schedule. Before citing these artifacts against current behavior, re-run
+<code>scripts/real-cluster-matrix/</code> locally (its runners now propagate case
+failures, so a rotted backend can no longer pass silently).</p>
 <p>Accounting is read once per job as it settles, not once per poll, and feeds
 both the run directory and the checkpoint benchmarks — see
 <a href="../../commands/run/#what-a-finished-job-records">what a finished job records</a>.
