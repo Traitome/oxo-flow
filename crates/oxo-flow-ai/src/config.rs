@@ -202,7 +202,8 @@ impl AiConfig {
     /// Create a config from environment variables.
     pub fn from_env() -> Self {
         let provider_str = std::env::var("OXO_FLOW_AI_PROVIDER").unwrap_or_default();
-        let enabled = !provider_str.is_empty() && !provider_str.eq_ignore_ascii_case("disabled");
+        let enabled =
+            !provider_str.is_empty() && !crate::provider::provider_name_is_disabled(&provider_str);
 
         let provider = if enabled {
             provider_str

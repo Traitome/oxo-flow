@@ -70,6 +70,23 @@ fn runtime_api_key(stored: Option<&str>) -> Option<String> {
     runtime_optional(&crate::infra::crypto::open(stored.unwrap_or_default()))
 }
 
+/// Fail fast with the same structured `AI_NOT_CONFIGURED` chat and translate
+/// answer when the acting user resolves to no usable provider — an explicit
+/// `OXO_FLOW_AI_PROVIDER=disabled` pin, a disabled settings row, or an
+/// unconfigured instance. No outbound HTTP is attempted in that state.
+fn require_usable_provider(
+    provider: &crate::ai_provider::AiProvider,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if provider.is_usable() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ai_not_configured_error()),
+        ))
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/ai/translate",
@@ -268,6 +285,7 @@ pub async fn explain(
         )
     };
 
+    require_usable_provider(&provider)?;
     super::service::explain_failure(
         &provider,
         &diagnostics,
@@ -355,6 +373,7 @@ pub async fn interpret(
         String::new()
     };
 
+    require_usable_provider(&provider)?;
     super::service::interpret_results(
         &provider,
         &req.run_id,
@@ -408,6 +427,7 @@ pub async fn optimize(
         String::new()
     };
 
+    require_usable_provider(&provider)?;
     super::service::optimize_pipeline(&provider, &toml_content, &req.goal, req.constraints)
         .await
         .map(Json)

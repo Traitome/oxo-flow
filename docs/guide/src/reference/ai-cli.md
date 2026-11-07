@@ -194,8 +194,10 @@ the audience cannot be inferred from the workflow itself; experts opt in.
 layer is unavailable — provider errors, quota limits, dead endpoints, or
 explicit disable:
 
-- `OXO_FLOW_AI_PROVIDER=disabled` overrides any saved provider
-  configuration and produces the skeleton with a "disabled" note on stderr.
+- `OXO_FLOW_AI_PROVIDER=disabled` overrides any saved provider and is pinned
+  after the saved config loads — a `~/.oxo-flow/ai_config.json` cannot
+  re-enable AI. It produces the skeleton with a "disabled" note on stderr;
+  AI calls fail with `AI_NOT_CONFIGURED` without contacting a provider.
 - A failed provider call degrades the same way, with the error summarized
   in the note; the skeleton and its knowledge-base grounding (bioSkills,
   tool table, pipeline graph) are still emitted in full, and `--json`

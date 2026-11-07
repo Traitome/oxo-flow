@@ -53,6 +53,21 @@ fn push_unique(candidates: &mut Vec<AiProvider>, provider: AiProvider) {
 /// provider-selection concern and stays here; generation itself is the
 /// shared agent + orchestrator.)
 fn provider_candidates(user_provider: &AiProvider) -> Vec<AiProvider> {
+    provider_candidates_for(
+        user_provider,
+        oxo_flow_ai::provider::provider_pinned_disabled(),
+    )
+}
+
+/// [`provider_candidates`] against an explicit pin state — the testable
+/// core. An explicit `OXO_FLOW_AI_PROVIDER=disabled` pins the process off:
+/// the env-discovered tiers below would otherwise resurrect a real (paid)
+/// provider from ordinary shell credentials even though every runtime
+/// config tier is disabled.
+fn provider_candidates_for(user_provider: &AiProvider, pinned_disabled: bool) -> Vec<AiProvider> {
+    if pinned_disabled {
+        return Vec::new();
+    }
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
     let mut candidates = Vec::new();
@@ -570,6 +585,31 @@ mod tests {
         // The exact same configuration again: dropped.
         push_unique(&mut candidates, user);
         assert_eq!(candidates.len(), 2);
+    }
+
+    #[test]
+    fn pinned_disabled_yields_no_provider_candidates() {
+        // Regression: `OXO_FLOW_AI_PROVIDER=disabled` plus a stray shell
+        // credential used to make /api/ai/translate call the real provider —
+        // the env-discovered fallback tier ignored the pin. The pin must
+        // empty the chain even when the acting user has a usable provider.
+        let user = AiProvider::OpenAi(oxo_flow_ai::provider::OpenAiBackend::new(
+            "user-key".into(),
+            Some("m".into()),
+            Some("http://127.0.0.1:9/v1".into()),
+        ));
+        assert!(provider_candidates_for(&user, true).is_empty());
+
+        // Control: unpinned resolution still honors the user's provider
+        // first (ambient env credentials may append fallbacks, so only the
+        // first entry is asserted).
+        let unpinned = provider_candidates_for(&user, false);
+        assert!(
+            unpinned
+                .first()
+                .is_some_and(|candidate| candidate.same_configuration(&user)),
+            "the acting user's provider must lead the unpinned chain"
+        );
     }
 
     // ── Section extraction tests ──
