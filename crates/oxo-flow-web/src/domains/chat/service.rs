@@ -7,6 +7,23 @@ use super::types::*;
 use crate::ai_provider::AiProvider;
 use crate::domains::workflow::service as workflow_svc;
 
+use super::intent::{ChatMode, classify_message};
+
+/// System prompt for conversational turns.
+///
+/// Deliberately narrow: the chat route answered a pipeline-every-time bug
+/// (issue #1040 P2-4), so the reply prompt keeps the model in plain-text
+/// copilot territory and out of workflow generation. A message that
+/// actually asks for a pipeline never reaches this prompt — the classifier
+/// routes it to the generation agent first.
+const CHAT_SYSTEM_PROMPT: &str = "\
+You are the oxo-flow AI copilot, embedded in a bioinformatics pipeline engine. \
+Answer the user's message conversationally and concisely in plain text. \
+Do not generate a workflow TOML unless the user explicitly asks for one; \
+if they describe a pipeline they want, say that they can ask you to build \
+or design it and you will generate a validated .oxoflow workflow. \
+Keep answers short and specific.";
+
 /// Correction-round budget shared by both chat routes — the shipped
 /// `[ai] max_retries` default, whose economics (knowledge lookups + a
 /// correction pass in one budget) apply identically here.
@@ -82,16 +99,39 @@ async fn run_chat_generation(
     outcome.map_err(|e| e.to_string())
 }
 
-/// Process a chat message and return the validated pipeline. This is the
-/// JSON variant of the conversational AI pipeline.
+/// Answer a conversational turn with one plain-text completion.
+///
+/// This is the non-pipeline half of the chat surface (issue #1040 P2-4):
+/// one provider round-trip, no tools, no validation loop, no TOML. Kept in
+/// the service layer so the JSON and SSE routes share the exact same
+/// prompt and error mapping.
+pub async fn run_chat_reply(provider: &AiProvider, message: &str) -> Result<String, String> {
+    provider
+        .chat(CHAT_SYSTEM_PROMPT, message)
+        .await
+        .map(|text| text.trim().to_string())
+        .map_err(|error| {
+            tracing::warn!("AI chat reply for {} failed: {error}", provider.name());
+            format!(
+                "AI provider request failed for {}: {error}",
+                provider.name()
+            )
+        })
+}
+
+/// Process a chat message and return either a conversational reply or the
+/// validated pipeline. This is the JSON variant of the conversational AI
+/// pipeline.
 ///
 /// `provider` is the ACTING USER's provider (issue #82 follow-up: chat
 /// runs on the caller's own AI credentials, never the shared runtime).
 ///
-/// This endpoint previously ran its own one-shot prompt with no tools and
-/// no correction loop — the weakest of the four generation paths. It now
-/// runs the same shared persona + orchestrator harness as the SSE chat
-/// route and the CLI, differing only in presentation.
+/// Pipeline-intent messages run the shared persona + orchestrator harness
+/// (same as the SSE chat route and the CLI, differing only in
+/// presentation). Chat-intent messages (issue #1040 P2-4) take the
+/// single-completion [`run_chat_reply`] path instead — a chat page must
+/// answer "Reply with the single word OK." with text, not a 163-second
+/// workflow generation.
 pub async fn process_chat(
     message: &str,
     context: Option<&ChatContext>,
@@ -99,6 +139,20 @@ pub async fn process_chat(
     provider: &AiProvider,
     invocation: &ChatInvocation<'_>,
 ) -> Result<(String, serde_json::Value), String> {
+    let mode = classify_message(message, context, invocation.run_id.is_some());
+
+    // Conversational intent: answer in text and stop before any generation
+    // machinery runs. The response shape carries `mode` so clients render
+    // text instead of pipeline cards.
+    if mode == ChatMode::Chat {
+        let reply = run_chat_reply(provider, message).await?;
+        let response = serde_json::json!({
+            "mode": mode.as_str(),
+            "message": reply,
+        });
+        return Ok((reply, response));
+    }
+
     // Phase 1: Orchestrator — understand intent
     let intent = if let Some(ctx) = context {
         if let Some(ref i) = ctx.intent {
@@ -176,6 +230,7 @@ pub async fn process_chat(
     let parsed = workflow_svc::parse_pipeline(&toml_content, None).ok();
 
     let response = serde_json::json!({
+        "mode": ChatMode::Pipeline.as_str(),
         "pipeline_id": pipeline_id,
         "toml_content": toml_content,
         "intent": intent,
