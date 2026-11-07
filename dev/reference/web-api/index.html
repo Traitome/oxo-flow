@@ -3959,6 +3959,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="AI (Phase 2 — calls deterministic APIs above)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pinned-disabled-ai-oxo_flow_ai_providerdisabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinned disabled AI (OXO_FLOW_AI_PROVIDER=disabled)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3969,6 +3986,45 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Chat (v0.8 AI Companion)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-apichatsend-sse-event-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/chat/send — SSE event contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chat-session-archives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chat session archives
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-provider-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI provider probe
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5392,6 +5448,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="AI (Phase 2 — calls deterministic APIs above)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pinned-disabled-ai-oxo_flow_ai_providerdisabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinned disabled AI (OXO_FLOW_AI_PROVIDER=disabled)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5402,6 +5475,45 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Chat (v0.8 AI Companion)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-apichatsend-sse-event-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/chat/send — SSE event contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chat-session-archives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chat session archives
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-provider-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI provider probe
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5621,7 +5733,7 @@ in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <c
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.</p>
 <p>In <code>hpc</code> mode, <code>components.scheduler</code> reports <code>{"status":"ok"}</code> when a scheduler backend is detected (the same cached probe <code>/api/hpc</code> uses); it is <code>null</code> in other modes or when no backend is installed.</p>
 <p><code>components.ai_key_storage</code> is <code>"encrypted"</code> when <code>OXO_FLOW_MASTER_KEY</code> is set, <code>"plaintext"</code> otherwise.</p>
-<p><code>components.ai_provider</code> is <code>{"status": "connected", "latency_ms": null}</code> while a provider is active and <code>{"status": "disabled", "latency_ms": null}</code> when AI is off — explicitly pinned with <code>OXO_FLOW_AI_PROVIDER=disabled</code>, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: <code>~/.oxo-flow/ai_config.json</code>, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured <code>AI_NOT_CONFIGURED</code> error without any outbound request.</p>
+<p><code>components.ai_provider</code> is <code>{"status": "connected", "latency_ms": null}</code> while a provider is active and <code>{"status": "disabled", "latency_ms": null}</code> when AI is off — explicitly pinned with <code>OXO_FLOW_AI_PROVIDER=disabled</code>, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: <code>~/.oxo-flow/ai_config.json</code>, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured <code>AI_NOT_CONFIGURED</code> error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only <code>POST /api/ai/config</code> answers <code>409 AI_DISABLED_BY_ENV</code> (it has no durable tier, so refusing is the only honest answer), while the persisted <code>PUT /api/ai/config/server</code> and <code>PUT /api/ai/config/user</code> still save (200, <code>applied_to_runtime: false</code>) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. <code>POST /api/ai/test</code> answers <code>success: false</code> with <code>provider: "disabled"</code> without constructing a provider or opening a connection (see the AI endpoints section below).</p>
 <p><code>components.engine</code> reports the engine CLI the server spawns for runs, resolved once at startup by running <code>&lt;binary&gt; --version</code>:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
@@ -6277,6 +6389,31 @@ runtime cannot activate the new provider, the endpoint returns
 <code>500 AI_RECONFIGURE_FAILED</code>; the durable row remains available for the
 next startup, but the caller must correct the provider settings rather
 than assuming the running process switched.</p>
+<h3 id="pinned-disabled-ai-oxo_flow_ai_providerdisabled">Pinned disabled AI (<code>OXO_FLOW_AI_PROVIDER=disabled</code>)<a class="headerlink" href="#pinned-disabled-ai-oxo_flow_ai_providerdisabled" title="Permanent link">#</a></h3>
+<p>An explicit <code>disabled</code> is an operator-level switch: it outranks every
+configuration tier and every runtime update. While it is set:</p>
+<ul>
+<li><code>POST /api/ai/config</code> (runtime-only — applying to the live registry is
+  its only effect) returns <code>409 AI_DISABLED_BY_ENV</code> with the standard
+  <code>{code, message, detail, suggestion}</code> shape.</li>
+<li><code>PUT /api/ai/config/server</code> and <code>PUT /api/ai/config/user</code> still persist
+  the row and return <code>200</code> with <code>applied_to_runtime: false</code>: Settings stays
+  usable and the saved configuration applies after an unpinned restart,
+  but the pinned runtime is never reconfigured.</li>
+<li><code>POST /api/ai/test</code> returns <code>200</code> with <code>success: false</code>,
+  <code>provider: "disabled"</code>, and a message stating that no connection was
+  attempted. No provider is resolved and no HTTP client is constructed.</li>
+<li><code>GET /api/ai/config</code> and <code>GET /api/ai/config/effective</code> report
+  <code>provider: "disabled"</code> / <code>is_configured: false</code>. The per-user and
+  server reads add <code>disabled_by_env: true</code> and report the effective
+  <code>configured</code> as <code>false</code>; the stored row is still returned so the
+  Settings page can show what is saved.</li>
+<li>Generation, chat, explain, interpret, and optimize keep answering
+  <code>503 AI_NOT_CONFIGURED</code>.</li>
+</ul>
+<p>Lifting the pin requires restarting the server without the variable (or
+with a provider name); configuration saves are rejected, not queued,
+while it is set.</p>
 <p>See <a href="../ai-translation/">AI Translation Layer</a> for details.</p>
 <hr />
 <h2 id="chat-v08-ai-companion">Chat (v0.8 AI Companion)<a class="headerlink" href="#chat-v08-ai-companion" title="Permanent link">#</a></h2>
@@ -6284,6 +6421,96 @@ than assuming the running process switched.</p>
 </span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>POST /api/chat/send/json   # Same, single JSON response
 </span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
 </span></code></pre></div>
+<h3 id="post-apichatsend-sse-event-contract"><code>POST /api/chat/send</code> — SSE event contract<a class="headerlink" href="#post-apichatsend-sse-event-contract" title="Permanent link">#</a></h3>
+<p>The stream opens with a <code>ready</code> handshake, then forwards the real agent
+loop (tool rounds, validation rounds) as typed events:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Payload</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ready</code></td>
+<td><code>{keepalive_secs, idle_timeout_secs}</code></td>
+<td>Handshake, sent before the first provider call. <code>keepalive_secs</code> is the comment-frame cadence; <code>idle_timeout_secs</code> (<code>3 × keepalive_secs</code>) is the <strong>client watchdog budget</strong> — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever.</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>{message}</code></td>
+<td>Human-readable phase (<code>planning</code>, <code>executing tools</code>).</td>
+</tr>
+<tr>
+<td><code>progress</code></td>
+<td><code>{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}</code></td>
+<td>Structured loop progress, emitted at every phase boundary: <code>step</code> is <code>plan</code>, <code>generate</code>, <code>tool</code> (with <code>tool</code> naming the running tool), or <code>validate</code>. <code>elapsed_ms</code> is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead".</td>
+</tr>
+<tr>
+<td><code>tool_call</code></td>
+<td><code>{name, args}</code></td>
+<td>The model requested a grounded tool call.</td>
+</tr>
+<tr>
+<td><code>tool_result</code></td>
+<td><code>{name, summary}</code></td>
+<td>The tool finished; <code>summary</code> is a truncated preview (errors ride here too).</td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td><code>{chunk}</code></td>
+<td>One complete round response (token-level streaming is not implemented).</td>
+</tr>
+<tr>
+<td><code>action</code></td>
+<td><code>{action_type, data}</code></td>
+<td>Structured action — <code>pipeline_ready</code> carries the validated TOML and its validation result.</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>{code, message}</code></td>
+<td>Terminal failure (<code>CHAT_ERROR</code>, <code>AI_NOT_CONFIGURED</code>, <code>EMPTY_MESSAGE</code>). The loop aborts and its transcript is archived with <code>outcome: "Failed"</code> and the reason.</td>
+</tr>
+<tr>
+<td><code>done</code></td>
+<td><code>{session_id, rounds, prompt_tokens, completion_tokens}</code></td>
+<td>Terminal success marker. Always sent after <code>action</code>; clients stop reading here.</td>
+</tr>
+</tbody>
+</table>
+<p>Transport behavior:</p>
+<ul>
+<li>Keep-alive <strong>comment frames</strong> (<code>: ping</code>) are emitted every 15 s. They are
+  not events, but they are bytes on the wire — an inactivity watchdog must
+  treat them as traffic so a slow but healthy generation (8–14 minute runs
+  are normal) is never cut off.</li>
+<li>Each provider request is bounded by <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default
+  300 s). A stalled endpoint surfaces as an <code>error</code> event within that budget,
+  never as an indefinite hang.</li>
+<li>A client that disconnects mid-generation flips the loop's cancel flag; the
+  orchestrator stops between provider calls and before each tool rather than
+  burning paid rounds nobody is reading. The aborted run is archived (below).</li>
+<li>The browser-side watchdog is derived from <code>ready.idle_timeout_secs</code>; on
+  expiry the client aborts the fetch, renders the error with a Retry action,
+  and re-enables the send button.</li>
+</ul>
+<h3 id="chat-session-archives">Chat session archives<a class="headerlink" href="#chat-session-archives" title="Permanent link">#</a></h3>
+<p>Every agent-loop run — including an aborted one — is persisted under
+<code>.oxo-flow/ai_sessions/</code> (or <code>OXO_FLOW_AI_SESSION_DIR</code>) as
+<code>&lt;timestamp&gt;-&lt;command&gt;-&lt;id&gt;.json</code>. Writes are temp-sibling + atomic rename,
+so a reader never observes a truncated file, and a run that fails archives
+<code>outcome: "Failed"</code> with an <code>error</code> reason (the post-mortem record). Pruning
+only reclaims archives older than ten minutes, so a fresh failure record — or
+the file an operator is inspecting — is never rotated out by concurrent
+writers.</p>
+<h3 id="ai-provider-probe">AI provider probe<a class="headerlink" href="#ai-provider-probe" title="Permanent link">#</a></h3>
+<p><code>POST /api/ai/test</code> is <strong>single-flight</strong>: concurrent callers share one
+outbound provider round-trip (queued behind an async mutex) and a result
+younger than 10 seconds is reused. The probe calls the provider directly and
+never writes an <code>ai_sessions</code> archive, so repeated settings checks cannot
+pollute the audit trail or trip the provider's rate limiter.</p>
 <hr />
 <h2 id="oauth">OAuth<a class="headerlink" href="#oauth" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL

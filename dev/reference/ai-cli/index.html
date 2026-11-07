@@ -3599,6 +3599,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#archive-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Archive guarantees
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4557,6 +4568,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#archive-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Archive guarantees
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5076,7 +5098,7 @@ repository.</p>
 <tbody>
 <tr>
 <td><code>OXO_FLOW_AI_PROVIDER</code></td>
-<td>Provider: <code>deepseek</code>, <code>claude</code>, <code>openai</code>, <code>ollama</code>, or <code>disabled</code></td>
+<td>Provider: <code>deepseek</code>, <code>claude</code>, <code>openai</code>, <code>ollama</code>, or <code>disabled</code>. An explicit <code>disabled</code> is pinned: it outranks saved config and, in the web server, refuses the runtime-only AI config endpoint (<code>409 AI_DISABLED_BY_ENV</code>), saves persisted settings without applying them (<code>applied_to_runtime: false</code>), and answers the connectivity test with <code>disabled</code> without dialing out</td>
 <td>unset: auto-detect from credentials; <code>disabled</code> only when none resolve</td>
 </tr>
 <tr>
@@ -5231,6 +5253,36 @@ in one scratch tree inside the project.</p>
 </span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">  </span><span class="nt">"confidence"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.91</span>
 </span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="p">}</span>
 </span></code></pre></div>
+<h3 id="archive-guarantees">Archive guarantees<a class="headerlink" href="#archive-guarantees" title="Permanent link">#</a></h3>
+<ul>
+<li><strong>Failures are archived too.</strong> A run that aborts (provider error, round cap,
+  cancellation, client disconnect) persists <code>outcome: "Failed"</code> with an
+  <code>error</code> reason and the accumulated transcript/usage — the record you need
+  for a post-mortem instead of an empty directory. Successful runs archive
+  <code>outcome: "Success"</code>.</li>
+<li><strong>Writes are crash-safe.</strong> Each session is serialized to a temp sibling in
+  the same directory and atomically renamed into place, so a concurrent
+  reader (or <code>oxo-flow ai</code> status scan) always sees a complete JSON document,
+  never a partial write.</li>
+<li><strong>Fresh archives are never pruned.</strong> Retention keeps the newest 200
+  sessions per directory, but files younger than ten minutes are exempt: a
+  run archived seconds ago — or the session an operator is inspecting — is
+  never rotated out by concurrent writers.</li>
+<li><strong>Test processes do not touch the operator's archive.</strong> Unit tests skip
+  session writes entirely; integration tests point
+  <code>OXO_FLOW_AI_SESSION_DIR</code> at a scratch directory. Set that variable to
+  relocate archives on shared HPC homes or read-only project trees:</li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_SESSION_DIR</span><span class="o">=</span>/scratch/<span class="nv">$USER</span>/oxo-flow-sessions
+</span></code></pre></div>
+<ul>
+<li><strong>The <code>scripted</code> test backend cannot be installed in production.</strong> Its
+  constructors are compiled out unless the crate is built for tests
+  (<code>cfg(test)</code>) or with the <code>test-scripted</code> Cargo feature (dev-dependencies
+  only), so a real server can never run a stub provider — the
+  <code>Rate limited by scripted</code> archive entries from the browser test came from
+  unit tests writing into the real archive, and that path is now closed.</li>
+</ul>
 <p><code>prompt_tokens</code> is the <strong>full prompt bill</strong>: on caching-enabled
 Anthropic-compatible endpoints it includes <code>cache_read_tokens</code> (served from
 the provider's prompt cache) and <code>cache_creation_tokens</code> (written to it);
@@ -5434,19 +5486,19 @@ unchanged.</p>
 </table>
 <h2 id="ai-command-explanation-debug-ai">AI Command Explanation (<code>debug --ai</code>)<a class="headerlink" href="#ai-command-explanation-debug-ai" title="Permanent link">#</a></h2>
 <p>Analyze expanded shell commands with AI:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow<span class="w"> </span>debug<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>oxo-flow<span class="w"> </span>debug<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai<span class="w"> </span>-r<span class="w"> </span>specific_rule
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>oxo-flow<span class="w"> </span>debug<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>oxo-flow<span class="w"> </span>debug<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai<span class="w"> </span>-r<span class="w"> </span>specific_rule
 </span></code></pre></div>
 <p>The AI explains what each command does and flags potential issues like resource mismatches, missing flags, or incorrect parameter usage.</p>
 <hr />
 <h2 id="ai-linting-lint-ai">AI Linting (<code>lint --ai</code>)<a class="headerlink" href="#ai-linting-lint-ai" title="Permanent link">#</a></h2>
 <p>Add semantic best-practice checks beyond the deterministic linter:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>oxo-flow<span class="w"> </span>lint<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow<span class="w"> </span>lint<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
 </span></code></pre></div>
 <hr />
 <h2 id="ai-workflow-analysis-dry-run-ai">AI Workflow Analysis (<code>dry-run --ai</code>)<a class="headerlink" href="#ai-workflow-analysis-dry-run-ai" title="Permanent link">#</a></h2>
 <p>Validate workflow correctness, safety, and resource allocation before running:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
 </span></code></pre></div>
 <p>The AI checks:</p>
 <ul>
@@ -5460,12 +5512,12 @@ unchanged.</p>
 <hr />
 <h2 id="ai-semantic-validation-validate-ai">AI Semantic Validation (<code>validate --ai</code>)<a class="headerlink" href="#ai-semantic-validation-validate-ai" title="Permanent link">#</a></h2>
 <p>Combine schema validation with AI-powered semantic analysis:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>oxo-flow<span class="w"> </span>validate<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>oxo-flow<span class="w"> </span>validate<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
 </span></code></pre></div>
 <hr />
 <h2 id="ai-error-recovery-run-ai-recover">AI Error Recovery (<code>run --ai-recover</code>)<a class="headerlink" href="#ai-error-recovery-run-ai-recover" title="Permanent link">#</a></h2>
 <p>When a workflow fails, the AI diagnoses the error and proposes a fix:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai-recover
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai-recover
 </span></code></pre></div>
 <p><strong>Recovery flow:</strong></p>
 <ol>
@@ -5490,19 +5542,19 @@ they only change when the binary is rebuilt. Every data file is documented
 by <code>crates/oxo-flow-ai/src/knowledge/knowledge_meta.json</code> — a plain JSON
 document listing each source's record count, generation timestamp, and
 whether it is auto-updated or manually curated:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span><span class="nt">"sources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">    </span><span class="nt">"bioconda_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">      </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">6525</span><span class="p">,</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">      </span><span class="nt">"url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://conda.anaconda.org/bioconda/channeldata.json"</span><span class="p">,</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">      </span><span class="nt">"excluded"</span><span class="p">:</span><span class="w"> </span><span class="mi">6200</span><span class="p">,</span>
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="w">      </span><span class="nt">"data_file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bioconda_tools.jsonl"</span><span class="p">,</span>
-</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="w">      </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span><span class="p">,</span>
-</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="w">      </span><span class="nt">"auto"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span>
-</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="nt">"sources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">    </span><span class="nt">"bioconda_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">      </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">6525</span><span class="p">,</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="w">      </span><span class="nt">"url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://conda.anaconda.org/bioconda/channeldata.json"</span><span class="p">,</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="w">      </span><span class="nt">"excluded"</span><span class="p">:</span><span class="w"> </span><span class="mi">6200</span><span class="p">,</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="w">      </span><span class="nt">"data_file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bioconda_tools.jsonl"</span><span class="p">,</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="w">      </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span><span class="p">,</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="w">      </span><span class="nt">"auto"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>count</code> always equals the number of records in <code>data_file</code> — a drift-guard
 test fails the build if the two ever diverge.</p>
@@ -5533,15 +5585,15 @@ workflow, merge its PR, and re-dispatch the release.</p>
 <hr />
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">#</a></h2>
 <h3 id="ai-provider-not-configured">"AI provider not configured"<a class="headerlink" href="#ai-provider-not-configured" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Check your configuration</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>oxo-flow<span class="w"> </span>ai<span class="w">                    </span><span class="c1"># Shows provider status and connectivity</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$OXO_FLOW_AI_PROVIDER</span><span class="w">     </span><span class="c1"># Should not be empty or "disabled"</span>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="c1"># Set up any provider</span>
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_PROVIDER</span><span class="o">=</span>&lt;provider&gt;
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># then the matching credential:</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="c1">#   deepseek → DEEPSEEK_API_KEY, openai → OPENAI_API_KEY,</span>
-</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="c1">#   claude → ANTHROPIC_AUTH_TOKEN, ollama → OLLAMA_HOST (no key)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Check your configuration</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>oxo-flow<span class="w"> </span>ai<span class="w">                    </span><span class="c1"># Shows provider status and connectivity</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$OXO_FLOW_AI_PROVIDER</span><span class="w">     </span><span class="c1"># Should not be empty or "disabled"</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="c1"># Set up any provider</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_PROVIDER</span><span class="o">=</span>&lt;provider&gt;
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1"># then the matching credential:</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1">#   deepseek → DEEPSEEK_API_KEY, openai → OPENAI_API_KEY,</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a><span class="c1">#   claude → ANTHROPIC_AUTH_TOKEN, ollama → OLLAMA_HOST (no key)</span>
 </span></code></pre></div>
 <h3 id="ai-response-did-not-contain-valid-toml">"AI response did not contain valid TOML"<a class="headerlink" href="#ai-response-did-not-contain-valid-toml" title="Permanent link">#</a></h3>
 <p>The AI returned a response without valid <code>.oxoflow</code> TOML content. This is rare — try again with a more specific description.</p>
