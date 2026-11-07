@@ -211,7 +211,7 @@ pub async fn openapi_json() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/json")],
-        crate::openapi::spec_json(),
+        crate::openapi::spec_json(crate::server::running_mode()),
     )
 }
 

@@ -74,6 +74,8 @@ GET /api/health
 ```
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.
 
+In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler backend is detected (the same cached probe `/api/hpc` uses); it is `null` in other modes or when no backend is installed.
+
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
@@ -1028,10 +1030,15 @@ response (including the upsert echo) — clients see `ssh_key_set: true |
 false` instead. When `OXO_FLOW_MASTER_KEY` is set, the key is sealed at
 rest with the same AES-256-GCM scheme as AI provider keys; without it, the
 database stores plaintext compatibility-mode rows.
+`ssh_key` accepts a **path or key material**: material is written to a
+private `0600` temp file for the SSH invocation, so either form works.
 `POST /api/runs` accepts `cluster_id`: the run then stages its workdir to
-the remote host (tar over stdio — no rsync), executes under a per-run
-nohup wrapper, and pulls the results back on completion so every
-downstream endpoint (logs, files, report) works unchanged. See
+the remote host (tar over stdio — no rsync), launches it detached (own
+session via `setsid`, with `nohup` fallback) so the launch call returns
+while the workflow keeps running, and pulls the results back on completion
+so every downstream endpoint (logs, files, report) works unchanged.
+Cancel kills the wrapper's recorded process group, so the remote CLI and
+rule subprocesses stop rather than being orphaned. See
 [Run on a cluster](../how-to/run-on-cluster.md).
 
 ---
@@ -1041,7 +1048,7 @@ downstream endpoint (logs, files, report) works unchanged. See
 ```
 GET /api/hpc
 ```
-Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. This route is only mounted when the server runs in `hpc` mode.
+Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. Nodes are deduplicated by name (SLURM lists a node once per partition it belongs to). This route is only mounted when the server runs in `hpc` mode, and the generated OpenAPI document only advertises it in that mode.
 
 ---
 

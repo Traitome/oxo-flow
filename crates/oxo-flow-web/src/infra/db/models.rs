@@ -51,6 +51,15 @@ pub struct RunRow {
     pub created_at: String,
 }
 
+/// Whether a run status is terminal — final and never overwritable.
+///
+/// Single definition shared by the handlers and the storage layer's
+/// `record_run_terminal` predicate (which spells the same set in SQL), so a
+/// cancel and a late failure can never both "win".
+pub fn is_terminal_run_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunFilters {
     pub user_id: Option<String>,
@@ -144,10 +153,8 @@ pub fn assemble_run_list_query_dialect(
         clauses.push((USER_CLAUSE, vec![user_id.clone()]));
     }
     if let Some(status) = &filters.status
-        && matches!(
-            status.as_str(),
-            "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
-        )
+        && (matches!(status.as_str(), "queued" | "running" | "paused")
+            || is_terminal_run_status(status))
     {
         clauses.push((STATUS_CLAUSE, vec![status.clone()]));
     }
