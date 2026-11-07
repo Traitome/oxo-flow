@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod handlers;
+pub mod intent;
 pub mod service;
 pub mod tools;
 pub mod types;

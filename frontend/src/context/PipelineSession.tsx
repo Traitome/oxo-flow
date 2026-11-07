@@ -33,6 +33,10 @@ export interface ChatMessage {
   progress?: ChatProgress;
   /** Grounded tool calls the agent made (rendered as collapsible cards). */
   toolCalls?: ChatMessageToolCall[];
+  /** How the server routed this turn (issue #1040 P2-4): a conversational
+   * text reply versus a generated pipeline. Chat turns never grow pipeline
+   * cards. */
+  mode?: 'chat' | 'pipeline';
 }
 
 export interface ChatAction {

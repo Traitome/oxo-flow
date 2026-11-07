@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use std::convert::Infallible;
 
+use super::intent::{ChatMode, classify_message};
 use super::service;
 use super::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
@@ -91,6 +92,10 @@ pub async fn chat_send(
     // pipeline.
     let empty_message = message.trim().is_empty();
 
+    // Route before spending anything (issue #1040 P2-4): conversational
+    // turns answer with one text completion; pipeline turns run the agent.
+    let mode = classify_message(&message, context.as_ref(), req.run_id.is_some());
+
     // Server-side persistence (issue #81): the session + user message are
     // recorded up front; the assistant's answer is appended on completion.
     if !empty_message {
@@ -137,7 +142,47 @@ pub async fn chat_send(
             .data(serde_json::json!({
                 "keepalive_secs": SSE_KEEPALIVE_SECS,
                 "idle_timeout_secs": SSE_CLIENT_IDLE_TIMEOUT_SECS,
+                // Classification is deterministic and known before the
+                // first provider call, so the client can pick its renderer
+                // (text vs pipeline cards) up front.
+                "mode": mode.as_str(),
             }).to_string()));
+
+        // Conversational intent (issue #1040 P2-4): one plain-text
+        // completion, no agent loop, no pipeline. The reply travels as a
+        // `text` event and is repeated in the terminal `done` payload so
+        // non-streaming consumers still receive it.
+        if mode == ChatMode::Chat {
+            match service::run_chat_reply(&provider, &message).await {
+                Ok(reply) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("text")
+                        .data(serde_json::json!({"chunk": reply}).to_string()));
+                    persist_assistant_message(&user, &session_id, &reply).await;
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("done")
+                        .data(serde_json::json!({
+                            "session_id": session_id,
+                            "mode": mode.as_str(),
+                            "message": reply,
+                        }).to_string()));
+                }
+                Err(error) => {
+                    yield Ok::<_, Infallible>(error_event(&err(
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "CHAT_ERROR",
+                        error,
+                    ).1));
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("done")
+                        .data(serde_json::json!({
+                            "session_id": session_id,
+                            "mode": mode.as_str(),
+                        }).to_string()));
+                }
+            }
+            return;
+        }
 
         let run = service::spawn_chat_agent(
             message,
@@ -226,6 +271,7 @@ pub async fn chat_send(
                         .event("done")
                         .data(serde_json::json!({
                             "session_id": session_id,
+                            "mode": mode.as_str(),
                             "rounds": outcome.rounds,
                             "prompt_tokens": outcome.session.total_usage.prompt_tokens,
                             "completion_tokens": outcome.session.total_usage.completion_tokens,

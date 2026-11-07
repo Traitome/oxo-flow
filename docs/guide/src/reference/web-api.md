@@ -926,6 +926,49 @@ POST /api/chat/send/json   # Same, single JSON response
 GET  /api/chat/sessions    # The acting user's chat sessions
 ```
 
+### Intent routing
+
+Chat requests are classified before any generation work happens, by a
+deterministic keyword/pattern classifier (`domains/chat/intent.rs`) — no
+extra model call, so routing never doubles a request's token cost. The
+decision is returned as the `mode` field:
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| `pipeline` | Pipeline vocabulary (workflow/pipeline/rules/TOML/DAG, omics assays, file formats, tool names), run-diagnosis wording, an attached `data_paths`/`samplesheet`, or an explicit `run_id` scope | The existing `PipelineGenAgent` loop: validated `.oxoflow` TOML plus `toml_content`, `rules`, and `dag` |
+| `chat` | Greetings/small talk, explanation questions ("What is FastQC?"), meta-instructions ("Reply with the single word OK.") — i.e. no pipeline vocabulary | One plain-text completion; `message` carries the reply; **no** pipeline generation |
+
+The bias is deliberately conservative: a message naming a workflow, an
+assay, a file format, or a tool routes to generation unless it is phrased
+as an explanation question. `context.data_paths` / `context.samplesheet`
+and a request-level `run_id` always force generation (data analysis and
+run diagnosis need the tool loop). `context.intent` is a pipeline label
+hint only — it never changes the route, so the SPA's page name cannot turn
+conversational turns into pipelines.
+
+### `POST /api/chat/send/json` — response shapes
+
+Chat intent (one provider completion, no workflow):
+
+```json
+{ "mode": "chat", "message": "OK" }
+```
+
+Pipeline intent (the existing fields are unchanged; `mode` is added):
+
+```json
+{
+  "mode": "pipeline",
+  "pipeline_id": "…",
+  "toml_content": "[workflow]\n…",
+  "intent": "RNA-seq analysis",
+  "data_report": null,
+  "validation": { "valid": true, "errors": [] },
+  "rules": [ … ],
+  "dag": { "nodes": [ … ], "edges": [ … ], "parallel_groups": [ … ] }
+}
+```
+
 ### `POST /api/chat/send` — SSE event contract
 
 The stream opens with a `ready` handshake, then forwards the real agent
@@ -933,15 +976,15 @@ loop (tool rounds, validation rounds) as typed events:
 
 | Event | Payload | Meaning |
 |-------|---------|---------|
-| `ready` | `{keepalive_secs, idle_timeout_secs}` | Handshake, sent before the first provider call. `keepalive_secs` is the comment-frame cadence; `idle_timeout_secs` (`3 × keepalive_secs`) is the **client watchdog budget** — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever. |
-| `status` | `{message}` | Human-readable phase (`planning`, `executing tools`). |
-| `progress` | `{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}` | Structured loop progress, emitted at every phase boundary: `step` is `plan`, `generate`, `tool` (with `tool` naming the running tool), or `validate`. `elapsed_ms` is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead". |
-| `tool_call` | `{name, args}` | The model requested a grounded tool call. |
-| `tool_result` | `{name, summary}` | The tool finished; `summary` is a truncated preview (errors ride here too). |
-| `text` | `{chunk}` | One complete round response (token-level streaming is not implemented). |
-| `action` | `{action_type, data}` | Structured action — `pipeline_ready` carries the validated TOML and its validation result. |
-| `error` | `{code, message}` | Terminal failure (`CHAT_ERROR`, `AI_NOT_CONFIGURED`, `EMPTY_MESSAGE`). The loop aborts and its transcript is archived with `outcome: "Failed"` and the reason. |
-| `done` | `{session_id, rounds, prompt_tokens, completion_tokens}` | Terminal success marker. Always sent after `action`; clients stop reading here. |
+| `ready` | `{keepalive_secs, idle_timeout_secs, mode}` | Handshake, sent before the first provider call. `keepalive_secs` is the comment-frame cadence; `idle_timeout_secs` (`3 × keepalive_secs`) is the **client watchdog budget** — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever. `mode` is the intent route (`chat` or `pipeline`), so the client can pick its renderer up front. |
+| `status` | `{message}` | Human-readable phase (`planning`, `executing tools`). Pipeline mode only. |
+| `progress` | `{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}` | Structured loop progress, emitted at every phase boundary: `step` is `plan`, `generate`, `tool` (with `tool` naming the running tool), or `validate`. `elapsed_ms` is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead". Pipeline mode only. |
+| `tool_call` | `{name, args}` | The model requested a grounded tool call. Pipeline mode only. |
+| `tool_result` | `{name, summary}` | The tool finished; `summary` is a truncated preview (errors ride here too). Pipeline mode only. |
+| `text` | `{chunk}` | One complete round response (token-level streaming is not implemented). In `chat` mode this carries the whole plain-text reply. |
+| `action` | `{action_type, data}` | Structured action — `pipeline_ready` carries the validated TOML and its validation result. Pipeline mode only; chat turns never emit it. |
+| `error` | `{code, message}` | Terminal failure (`CHAT_ERROR`, `AI_NOT_CONFIGURED`, `EMPTY_MESSAGE`). In pipeline mode the loop aborts and its transcript is archived with `outcome: "Failed"` and the reason. |
+| `done` | `{session_id, mode, rounds, prompt_tokens, completion_tokens}` / `{session_id, mode: "chat", message}` | Terminal success marker. Pipeline mode: always sent after `action`, clients stop reading here. Chat mode: `message` repeats the full reply (so a lost `text` frame cannot leave an empty bubble), and the token counters are omitted. |
 
 Transport behavior:
 
@@ -968,7 +1011,9 @@ so a reader never observes a truncated file, and a run that fails archives
 `outcome: "Failed"` with an `error` reason (the post-mortem record). Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent
-writers.
+writers. Chat-intent replies do not run the agent loop and therefore produce
+no archive; they are appended to the chat session store like every other
+assistant message.
 
 ### AI provider probe
 

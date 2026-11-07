@@ -181,6 +181,9 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       let doneReading = false;
       let idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS;
       let finalPipelineData: { toml_content?: string; validation?: unknown; pipeline_id?: string } | null = null;
+      // Server-side intent routing (issue #1040 P2-4): `ready` announces the
+      // decision up front so a chat turn never grows pipeline cards.
+      let streamMode: 'chat' | 'pipeline' | null = null;
 
       while (!doneReading) {
         // Bound every wait: a silently dropped connection (proxy, network
@@ -223,6 +226,10 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
               if (Number.isFinite(secs) && secs > 0) {
                 idleTimeoutMs = Math.min(Math.max(secs * 1000, MIN_IDLE_TIMEOUT_MS), MAX_IDLE_TIMEOUT_MS);
               }
+              if (payload.mode === 'chat' || payload.mode === 'pipeline') {
+                streamMode = payload.mode;
+                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, mode: payload.mode as 'chat' | 'pipeline' } : m));
+              }
             } else if (currentEvent === 'progress') {
               const progress: ChatProgress = {
                 round: Number(payload.round ?? 0),
@@ -251,10 +258,21 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
             } else if (currentEvent === 'text') {
               setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + String(payload.chunk ?? '') } : m));
             } else if (currentEvent === 'action') {
-              if (payload.action_type === 'pipeline_ready') {
+              // A chat-routed turn must never grow pipeline cards, even if
+              // a stray `action` frame arrives.
+              if (payload.action_type === 'pipeline_ready' && streamMode !== 'chat') {
                 finalPipelineData = payload.data as { toml_content?: string; validation?: unknown; pipeline_id?: string } | null;
               }
             } else if (currentEvent === 'done') {
+              if (payload.mode === 'chat' || payload.mode === 'pipeline') {
+                streamMode = payload.mode;
+                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, mode: payload.mode as 'chat' | 'pipeline' } : m));
+              }
+              // The terminal payload repeats the conversational reply so a
+              // lost `text` frame cannot leave the bubble empty.
+              if (streamMode === 'chat' && typeof payload.message === 'string') {
+                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content || String(payload.message) } : m));
+              }
               doneReading = true;
             } else if (currentEvent === 'error') {
               throw new Error(String(payload.message ?? JSON.stringify(payload)));
