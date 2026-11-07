@@ -1587,8 +1587,13 @@ pub fn lint_format(
             });
         }
 
-        // W008: No environment specified
-        if rule.environment.is_empty() && rule.shell.is_some() {
+        // W008: No environment resolvable anywhere. Must mirror
+        // WorkflowConfig::resolve_environment (config/expand.rs) — env_group →
+        // rule.environment → defaults.environment — or the lint fires on rules
+        // that actually inherit a real environment at run time (live: a
+        // workflow with only [defaults] environment saw every rule told
+        // "will use system environment" while dry-run applied conda).
+        if rule.shell.is_some() && config.resolve_environment(rule).is_none() {
             diagnostics.push(Diagnostic {
                 severity: Severity::Info,
                 message: "rule has no environment specification; will use system environment"
@@ -4781,6 +4786,78 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W010"));
+    }
+
+    // ---- W008: environment resolution chain -------------------------------------
+    // W008 must mirror WorkflowConfig::resolve_environment (env_group →
+    // rule.environment → defaults.environment): a rule that inherits a real
+    // environment is NOT "using the system environment".
+
+    #[test]
+    fn lint_w008_silent_for_defaults_inherited_environment() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            environment = { conda = "envs/base.yaml" }
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W008"),
+            "rule inheriting [defaults] environment must not be told it uses the system environment"
+        );
+    }
+
+    #[test]
+    fn lint_w008_silent_for_env_group_membership() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [env_groups.qc]
+            conda = "envs/qc.yaml"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+            env_group = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W008"),
+            "rule with a defined env_group must not be told it uses the system environment"
+        );
+    }
+
+    #[test]
+    fn lint_w008_fires_when_nothing_resolves() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W008"),
+            "rule with no environment anywhere in the chain must still be flagged"
+        );
     }
 
     #[test]
