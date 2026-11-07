@@ -92,6 +92,37 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
         },
     ]);
     let text = post_chat(json!({"message": "run fastqc on my samples"})).await;
+    // Issue #1040 B1/B2: the stream opens with a ready handshake carrying
+    // the keep-alive cadence + client idle budget, and every loop phase is
+    // observable as a structured progress frame.
+    assert!(
+        text.contains("event: ready"),
+        "missing ready handshake: {text}"
+    );
+    assert!(
+        text.contains("\"keepalive_secs\":15") && text.contains("\"idle_timeout_secs\":45"),
+        "ready must advertise the stream cadence: {text}"
+    );
+    assert!(
+        text.contains("event: progress"),
+        "missing progress events: {text}"
+    );
+    assert!(
+        text.contains("\"step\":\"plan\"") && text.contains("\"step\":\"generate\""),
+        "progress must report plan and generate phases: {text}"
+    );
+    assert!(
+        text.contains("\"step\":\"tool\"") && text.contains("\"tool\":\"lookup_tool\""),
+        "progress must name the executing tool: {text}"
+    );
+    assert!(
+        text.contains("\"step\":\"validate\""),
+        "progress must report the validation phase: {text}"
+    );
+    assert!(
+        text.contains("\"max_rounds\""),
+        "progress must carry the round budget: {text}"
+    );
     assert!(
         text.contains("event: tool_call"),
         "missing tool_call: {text}"

@@ -14,6 +14,15 @@ use super::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
 
+/// SSE keep-alive cadence: a comment frame every 15 s keeps proxies from
+/// reaping a stream that looks idle between long provider rounds.
+const SSE_KEEPALIVE_SECS: u64 = 15;
+
+/// Advertised client inactivity budget. Three missed keep-alives mean the
+/// connection is silently dead (the 14-minute "planning forever" case in
+/// issue #1040 B1); the browser aborts the stream and offers a retry.
+const SSE_CLIENT_IDLE_TIMEOUT_SECS: u64 = 3 * SSE_KEEPALIVE_SECS;
+
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
 /// Server-side chat persistence (issue #81): upsert the session row and
@@ -119,6 +128,17 @@ pub async fn chat_send(
             return;
         }
 
+        // Stream contract for the browser: the cadence of keep-alive frames
+        // and the inactivity budget it should enforce. Sent before the first
+        // provider call so a dead connection is detected even when the
+        // generation itself is slow (8–14 minute runs are normal).
+        yield Ok::<_, Infallible>(Event::default()
+            .event("ready")
+            .data(serde_json::json!({
+                "keepalive_secs": SSE_KEEPALIVE_SECS,
+                "idle_timeout_secs": SSE_CLIENT_IDLE_TIMEOUT_SECS,
+            }).to_string()));
+
         let run = service::spawn_chat_agent(
             message,
             session_id.clone(),
@@ -136,6 +156,19 @@ pub async fn chat_send(
                     yield Ok::<_, Infallible>(Event::default()
                         .event("status")
                         .data(serde_json::json!({"message": msg}).to_string()));
+                }
+                service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::Progress(progress)) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("progress")
+                        .data(serde_json::json!({
+                            "round": progress.round,
+                            "max_rounds": progress.max_rounds,
+                            "step": progress.step,
+                            "tool": progress.tool,
+                            "elapsed_ms": progress.elapsed_ms,
+                            "prompt_tokens": progress.prompt_tokens,
+                            "completion_tokens": progress.completion_tokens,
+                        }).to_string()));
                 }
                 service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::ToolCall { name, args }) => {
                     yield Ok::<_, Infallible>(Event::default()
@@ -194,6 +227,8 @@ pub async fn chat_send(
                         .data(serde_json::json!({
                             "session_id": session_id,
                             "rounds": outcome.rounds,
+                            "prompt_tokens": outcome.session.total_usage.prompt_tokens,
+                            "completion_tokens": outcome.session.total_usage.completion_tokens,
                         }).to_string()));
                     if let Some(content) = outcome.content.as_deref() {
                         persist_assistant_message(&user, &session_id, content).await;
@@ -205,7 +240,7 @@ pub async fn chat_send(
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
-            .interval(std::time::Duration::from_secs(15))
+            .interval(std::time::Duration::from_secs(SSE_KEEPALIVE_SECS))
             .text("ping"),
     )
 }

@@ -1,10 +1,52 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Square, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
+import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction, type ChatProgress } from '../context/PipelineSession';
 import { useServerVersion } from '../api/version';
 import { api, ApiError } from '../api/client';
 import { useI18n } from '../context/I18n';
+
+/** Fallback inactivity budget before the server's `ready` event arrives.
+ * The server advertises the real value (3× its keep-alive cadence); if the
+ * connection dies silently, this is what turns an endless "planning" spinner
+ * into a visible error with a retry (issue #1040 B1). */
+const DEFAULT_IDLE_TIMEOUT_MS = 45_000;
+const MIN_IDLE_TIMEOUT_MS = 10_000;
+const MAX_IDLE_TIMEOUT_MS = 300_000;
+
+class ChatStreamIdleError extends Error {
+  constructor(seconds: number) {
+    super(`No data from the server for ${seconds}s — the connection appears to be dead.`);
+    this.name = 'ChatStreamIdleError';
+  }
+}
+
+/**
+ * Read one SSE chunk, rejecting when the stream stays silent past
+ * `timeoutMs`. Keep-alive comment frames count as traffic (they arrive as
+ * bytes), so a slow-but-healthy generation is never cut off.
+ */
+function readWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(
+      () => reject(new ChatStreamIdleError(Math.round(timeoutMs / 1000))),
+      timeoutMs,
+    );
+  });
+  return Promise.race([reader.read(), timeout]).finally(() => {
+    if (timer !== undefined) window.clearTimeout(timer);
+  });
+}
+
+function formatElapsed(ms: number): string {
+  const totalSecs = Math.max(0, Math.round(ms / 1000));
+  if (totalSecs < 60) return `${totalSecs}s`;
+  return `${Math.floor(totalSecs / 60)}m ${totalSecs % 60}s`;
+}
 
 function useContextLabels(t: (key: string) => string): Record<ChatContextType, string> {
   return {
@@ -85,6 +127,29 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
 
   const lastPrompt = useRef('');
 
+  // Round-progress label: the server sends structured frames every phase
+  // (plan/generate/tool/validate) so a long generation shows motion instead
+  // of one static word (issue #1040 B2).
+  const progressLabel = (p: ChatProgress): string => {
+    const round = t('chat.progress.round')
+      .replace('{{round}}', String(p.round))
+      .replace('{{max}}', String(p.max_rounds));
+    switch (p.step) {
+      case 'plan':
+        return t('chat.progress.plan');
+      case 'generate':
+        return p.round > 0 ? `${round} · ${t('chat.progress.generate')}` : t('chat.progress.generate');
+      case 'tool':
+        return p.round > 0
+          ? `${round} · ${t('chat.progress.tool').replace('{{tool}}', p.tool ?? '…')}`
+          : t('chat.progress.tool').replace('{{tool}}', p.tool ?? '…');
+      case 'validate':
+        return p.round > 0 ? `${round} · ${t('chat.progress.validate')}` : t('chat.progress.validate');
+      default:
+        return round;
+    }
+  };
+
   const sendMessage = async (override?: string) => {
     const text = (override ?? input).trim();
     if (!text || loading) return;
@@ -114,10 +179,14 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       const decoder = new TextDecoder();
       let buffer = '';
       let doneReading = false;
+      let idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS;
       let finalPipelineData: { toml_content?: string; validation?: unknown; pipeline_id?: string } | null = null;
 
       while (!doneReading) {
-        const { value, done } = await reader.read();
+        // Bound every wait: a silently dropped connection (proxy, network
+        // change) never fires an error, so `reader.read()` would hang
+        // forever and leave the UI "planning" indefinitely.
+        const { value, done } = await readWithIdleTimeout(reader, idleTimeoutMs);
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let nextIndex;
@@ -147,7 +216,25 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
               console.warn('chat: skipping unparseable SSE frame', currentEvent, currentData.slice(0, 120));
               continue;
             }
-            if (currentEvent === 'status') {
+            if (currentEvent === 'ready') {
+              // Server-declared stream cadence: derive the client watchdog
+              // from server guidance instead of hard-coding one.
+              const secs = Number(payload.idle_timeout_secs);
+              if (Number.isFinite(secs) && secs > 0) {
+                idleTimeoutMs = Math.min(Math.max(secs * 1000, MIN_IDLE_TIMEOUT_MS), MAX_IDLE_TIMEOUT_MS);
+              }
+            } else if (currentEvent === 'progress') {
+              const progress: ChatProgress = {
+                round: Number(payload.round ?? 0),
+                max_rounds: Number(payload.max_rounds ?? 0),
+                step: String(payload.step ?? ''),
+                tool: typeof payload.tool === 'string' ? payload.tool : null,
+                elapsed_ms: Number(payload.elapsed_ms ?? 0),
+                prompt_tokens: Number(payload.prompt_tokens ?? 0),
+                completion_tokens: Number(payload.completion_tokens ?? 0),
+              };
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, progress } : m));
+            } else if (currentEvent === 'status') {
               setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: String(payload.message ?? '') } : m));
             } else if (currentEvent === 'tool_call') {
               setMessages(prev => prev.map(m => m.id === assistantId ? {
@@ -183,6 +270,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
             ...m,
             content: m.content + `\n\n✅ ${t('chat.generated')}\n\n\`\`\`toml\n${tomlPreview}\n...\n\`\`\``,
             agentStatus: undefined,
+            progress: undefined,
             actions: [
               { type: 'primary', label: `✅ ${t('chat.accept')}`, action: 'accept', data: finalPipelineData },
               { type: 'secondary', label: `✏️ ${t('chat.edit')}`, action: 'edit', data: finalPipelineData },
@@ -192,20 +280,33 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         ));
         onPipelineReady?.(finalPipelineData);
       } else {
-        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined, progress: undefined } : m));
       }
     } catch (e: unknown) {
       // Aborted streams (stop button, navigation away, re-entry) are not
       // errors — leave whatever streamed content is already on screen.
       if (e instanceof DOMException && e.name === 'AbortError') {
-        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined, progress: undefined } : m));
       } else {
         if (e instanceof ApiError && e.code === 'AI_NOT_CONFIGURED') {
           setAiConfigured(false);
         }
+        if (e instanceof ChatStreamIdleError) {
+          // Release the dead connection and surface a retry entry instead
+          // of leaving the send button disabled forever.
+          ac.abort();
+        }
         const errMsg = e instanceof Error ? e.message : 'Connection error.';
         setMessages(prev => prev.map(m =>
-          m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
+          m.id === assistantId ? {
+            ...m,
+            content: m.content + `\n❌ ${errMsg}`,
+            agentStatus: undefined,
+            progress: undefined,
+            // The failure archive lives on the server; the browser keeps a
+            // one-click retry so a dropped stream is recoverable.
+            actions: [{ type: 'secondary', label: `🔄 ${t('chat.retry')}`, action: 'retry' }],
+          } : m
         ));
       }
     } finally {
@@ -237,7 +338,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       } catch (err: unknown) {
         setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', err instanceof Error ? err.message : 'unknown error')}` }]);
       }
-    } else if (action.action === 'regenerate') {
+    } else if (action.action === 'regenerate' || action.action === 'retry') {
       // #550: input was cleared on the first send — the button read empty
       // input and did nothing. Re-send the retained last prompt.
       void sendMessage(lastPrompt.current || undefined);
@@ -313,6 +414,20 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
               {msg.agentStatus && (
                 <div className="chat-status">
                   <Loader2 size={12} className="spin" /> {msg.agentStatus}
+                </div>
+              )}
+              {msg.progress && (
+                <div className="chat-progress" role="status">
+                  <Loader2 size={12} className="spin" aria-hidden="true" />
+                  <span>{progressLabel(msg.progress)}</span>
+                  {msg.progress.elapsed_ms > 0 && (
+                    <span className="chat-progress-meta">{formatElapsed(msg.progress.elapsed_ms)}</span>
+                  )}
+                  {(msg.progress.prompt_tokens > 0 || msg.progress.completion_tokens > 0) && (
+                    <span className="chat-progress-meta">
+                      {msg.progress.prompt_tokens.toLocaleString()} + {msg.progress.completion_tokens.toLocaleString()} tok
+                    </span>
+                  )}
                 </div>
               )}
               {msg.toolCalls && msg.toolCalls.length > 0 && (

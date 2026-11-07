@@ -505,6 +505,47 @@ pub async fn update_ai_config(
     }))
 }
 
+/// `/api/ai/test` probe de-duplication window (issue #1040 B3).
+///
+/// Concurrent callers share one outbound provider round-trip (single-flight:
+/// the async mutex is held across the probe, so queued callers then read the
+/// fresh result) and any result younger than this window is reused. A
+/// settings page left open, or a concurrent scripted poller, can no longer
+/// emit a burst of paid probes that trips the provider's rate limiter and
+/// spams the session archive.
+const AI_TEST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+struct AiTestProbeCache {
+    at: std::time::Instant,
+    provider: String,
+    model: Option<String>,
+    response: AiTestResponse,
+}
+
+static AI_TEST_PROBE_CACHE: tokio::sync::Mutex<Option<AiTestProbeCache>> =
+    tokio::sync::Mutex::const_new(None);
+
+/// One outbound connectivity probe (the only paid call in this module).
+async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestResponse {
+    match provider
+        .chat("You are a helpful assistant.", "Reply with exactly: OK")
+        .await
+    {
+        Ok(response) => AiTestResponse {
+            success: true,
+            message: format!("Test successful: {response}"),
+            provider: provider.name().to_string(),
+            model: None,
+        },
+        Err(e) => AiTestResponse {
+            success: false,
+            message: format!("Test failed: {e}"),
+            provider: provider.name().to_string(),
+            model: None,
+        },
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/ai/test",
@@ -515,6 +556,11 @@ pub async fn update_ai_config(
     )
 )]
 /// POST /api/ai/test
+///
+/// Single-flight: concurrent probes collapse into one provider call and a
+/// result younger than `AI_TEST_CACHE_TTL` is reused. The probe never
+/// writes an `ai_sessions` archive — only agent-loop runs do — so repeated
+/// settings checks cannot pollute the audit trail.
 pub async fn test_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
     ApiJson(_req): ApiJson<AiConfigRequest>,
@@ -524,23 +570,26 @@ pub async fn test_ai_config(
     // admin-only outside personal mode.
     require_ai_admin(&user)?;
     let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
-    match provider
-        .chat("You are a helpful assistant.", "Reply with exactly: OK")
-        .await
+    let provider_name = provider.name().to_string();
+    let provider_model = provider.model();
+
+    let mut cache = AI_TEST_PROBE_CACHE.lock().await;
+    if let Some(cached) = cache.as_ref()
+        && cached.at.elapsed() < AI_TEST_CACHE_TTL
+        && cached.provider == provider_name
+        && cached.model == provider_model
     {
-        Ok(response) => Ok(Json(AiTestResponse {
-            success: true,
-            message: format!("Test successful: {response}"),
-            provider: provider.name().to_string(),
-            model: None,
-        })),
-        Err(e) => Ok(Json(AiTestResponse {
-            success: false,
-            message: format!("Test failed: {e}"),
-            provider: provider.name().to_string(),
-            model: None,
-        })),
+        return Ok(Json(cached.response.clone()));
     }
+
+    let response = probe_ai_provider(&provider).await;
+    *cache = Some(AiTestProbeCache {
+        at: std::time::Instant::now(),
+        provider: provider_name,
+        model: provider_model,
+        response: response.clone(),
+    });
+    Ok(Json(response))
 }
 
 // ---------------------------------------------------------------------------

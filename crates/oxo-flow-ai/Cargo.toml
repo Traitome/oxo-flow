@@ -8,6 +8,12 @@ repository.workspace = true
 homepage.workspace = true
 description = "AI provider abstraction, agent framework, and knowledge system for oxo-flow"
 
+[features]
+# Test-only: exposes the `scripted` stub provider constructors to integration
+# tests of downstream crates (dev-dependencies). Production builds never
+# enable it, so a real server cannot install a test stub (issue #1040 B3).
+test-scripted = []
+
 [dependencies]
 futures = "0.3.32"
 # Workspace
