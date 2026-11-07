@@ -629,6 +629,21 @@ the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
 Like every `ApiResult` error, the 429 carries no `Retry-After` header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error `message` instead (`retry in {wait_secs}s`).
+`skip_succeeded` (default `true`) chooses which rules re-execute. The
+returned plan and the spawned CLI flags are derived from the same mapping
+(`retry_spawn_flags`), so the promise and the execution cannot drift:
+
+- `skip_succeeded: true` — the retry spawns with `--resume-failed` (no
+  `--rerun`). Failed and cancelled rules re-execute, the checkpoint's
+  cascade invalidation re-runs their downstream dependents, and completed
+  rules outside that closure keep their checkpoint records and are skipped.
+  `will_rerun` lists the re-executed set; `will_skip` lists the skipped
+  completed rules.
+- `skip_succeeded: false` — the retry spawns with `--rerun`, which
+  re-executes EVERY rule regardless of checkpoint state. `will_rerun` lists
+  every rule in the workflow (DAG order) and `will_skip` is empty — the same
+  set the execution runs.
+
 `from_rule` (issue #1017): when set to a rule name (e.g. `"b"`), the retry
 re-runs from that rule **downstream** — the engine computes the
 transitive-dependent closure of the named rule in the DAG and invalidates
@@ -636,15 +651,16 @@ their checkpoint entries before the freshness gate runs, so downstream rules
 re-execute with the new upstream outputs instead of silently passing the
 freshness gate with stale artifacts. The spawned CLI receives
 `--from-rule <name>` directly (the same closure computation the CLI's own
-`--from-rule` flag runs — one engine, two surfaces). When `from_rule` is
-absent the retry uses the default failed-set semantics (`--resume-failed
---rerun`). A `from_rule` naming a rule not in the DAG surfaces as a
-`400 RuleNotFound` from the spawned CLI's own DAG walk.
+`--from-rule` flag runs — one engine, two surfaces). `--from-rule` subsumes
+`skip_succeeded` for the re-executed set: completed rules outside the
+closure keep their checkpoint state, so the plan lists them in `will_skip`
+regardless of `skip_succeeded`. A `from_rule` naming a rule not in the DAG
+surfaces as a `400 RuleNotFound` from the spawned CLI's own DAG walk.
 
 The retry **really executes**: the returned `new_run_id` is a real run in
-the database (same workdir, same owner), spawned with `--resume-failed
---rerun` so the failed rules re-execute despite their existing outputs and
-the checkpoint's cascade invalidation re-runs their downstream dependents.
+the database (same workdir, same owner), spawned with the flag pair above so
+the rules the plan lists re-execute despite their existing outputs and the
+checkpoint's cascade invalidation re-runs their downstream dependents.
 The retry **replays the original run's `config_overrides`**:
 the new row carries the stored overrides forward and the spawned CLI
 receives the same `--arg=KEY=VALUE` entries, so a retry re-executes with the
@@ -866,8 +882,11 @@ only a `prompt` field fails deserialization); `context` is optional.
 
 `POST /api/ai/translate` (the non-streaming variant) budgets the WHOLE
 generation — every tool and validation round — at
-`OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
-answers `504 {code: "AI_TIMEOUT"}` with the standard
+`OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). The route budget fires one
+second before the provider client's per-request timeout, and a
+timeout-class provider error is classified into the same answer, so the
+documented response holds whichever timer expires first. When the budget
+expires it answers `504 {code: "AI_TIMEOUT"}` with the standard
 `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
 Use `POST /api/ai/translate/stream` for generations expected to run longer:
 the SSE route is not capped by this total budget.
@@ -1007,7 +1026,7 @@ loop (tool rounds, validation rounds) as typed events:
 | `text` | `{chunk}` | One complete round response (token-level streaming is not implemented). In `chat` mode this carries the whole plain-text reply. |
 | `action` | `{action_type, data}` | Structured action — `pipeline_ready` carries the validated TOML and its validation result. Pipeline mode only; chat turns never emit it. |
 | `error` | `{code, message}` | Terminal failure (`CHAT_ERROR`, `AI_NOT_CONFIGURED`, `EMPTY_MESSAGE`). In pipeline mode the loop aborts and its transcript is archived with `outcome: "Failed"` and the reason. |
-| `done` | `{session_id, mode, rounds, prompt_tokens, completion_tokens}` / `{session_id, mode: "chat", message}` | Terminal success marker. Pipeline mode: always sent after `action`, clients stop reading here. Chat mode: `message` repeats the full reply (so a lost `text` frame cannot leave an empty bubble), and the token counters are omitted. |
+| `done` | `{session_id, mode, rounds, prompt_tokens, completion_tokens}` / `{session_id, mode: "chat", message}` | Terminal success marker. Pipeline mode: always sent after `action`, clients stop reading here. Chat mode: `message` repeats the full reply (so a lost `text` frame cannot leave an empty bubble), and the token counters are omitted. The early `EMPTY_MESSAGE` / `AI_NOT_CONFIGURED` error paths also terminate with `{session_id, mode}`. |
 
 Transport behavior:
 
@@ -1026,7 +1045,10 @@ Transport behavior:
   and re-enables the send button.
 - `POST /api/chat/send/json` (the non-streaming variant) budgets the WHOLE
   generation — every tool and validation round — at
-  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
+  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). The route budget fires one
+  second before the provider client's per-request timeout, and a
+  timeout-class provider error is classified into the same answer, so the
+  504 below holds whichever timer expires first. When the budget expires it
   answers `504 {code: "AI_TIMEOUT"}` with the standard
   `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
   The SSE route above is not capped by this total budget; use it for
@@ -1034,13 +1056,14 @@ Transport behavior:
 
 ### Chat session archives
 
-Every agent-loop run — including an aborted one — is persisted under
+Every agent-loop run — successful or aborted — is persisted under
 `.oxo-flow/ai_sessions/` as `<timestamp>-<command>-<id>.json`; set
 `OXO_FLOW_AI_SESSION_DIR` to redirect the archive (tests and CI point it at
 a scratch directory so a run never writes into an operator's real archive).
-Writes are temp-sibling + atomic rename, so a reader never observes a
-truncated file, and a run that fails archives
-`outcome: "Failed"` with an `error` reason (the post-mortem record). Pruning
+Successful generations archive `outcome: "Success"`; a run that fails
+archives `outcome: "Failed"` with an `error` reason (the post-mortem
+record). Writes are temp-sibling + atomic rename, so a reader never observes
+a truncated file. Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent
 writers. Chat-intent replies do not run the agent loop and therefore produce

@@ -18,6 +18,14 @@ pub enum AiError {
     #[error("AI provider '{provider}' failed: {message}")]
     Provider { provider: String, message: String },
 
+    /// The request exceeded the provider client's per-request timeout
+    /// (`OXO_FLOW_AI_TIMEOUT_SECS`). Kept distinct from [`AiError::Provider`]
+    /// so HTTP surfaces can map this class to the documented
+    /// `504 AI_TIMEOUT` even when the client timer fires before the route's
+    /// total budget (review wave 2 HIGH-1).
+    #[error("AI provider '{provider}' request timed out: {message}")]
+    Timeout { provider: String, message: String },
+
     #[error("AI request failed after {attempts} attempts: {message}")]
     RetryExhausted { attempts: u32, message: String },
 
@@ -77,6 +85,17 @@ pub enum AiError {
     /// The provider rejected the requested output size.
     #[error("Output limit exceeded for {provider}: {message}")]
     OutputLimit { provider: String, message: String },
+}
+
+impl AiError {
+    /// Whether this failure is the provider's per-request timeout.
+    ///
+    /// The non-streaming AI JSON routes answer `504 AI_TIMEOUT` for this
+    /// class, whether the route's total budget or the provider client's
+    /// timer expired first.
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout { .. })
+    }
 }
 
 impl From<serde_json::Error> for AiError {

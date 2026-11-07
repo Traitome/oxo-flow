@@ -7,6 +7,12 @@
 //! proxy's idle limit, which then kills the connection with no structured
 //! answer. These helpers cap the WHOLE generation at the same documented
 //! knob and answer `504 AI_TIMEOUT` instead (issue #1040 P3-5).
+//!
+//! The route budget fires `ROUTE_TIMEOUT_MARGIN_SECS` before the provider
+//! client's per-request timeout, so the structured 504 normally wins the
+//! race. Timeout-class provider errors are additionally classified into the
+//! same response by the handlers, so the documented contract holds even when
+//! the two deadlines coincide (review wave 2 HIGH-1).
 
 use std::future::Future;
 use std::time::Duration;
@@ -16,12 +22,34 @@ use axum::http::StatusCode;
 
 use crate::domains::workflow::handlers::ApiError;
 
-/// The JSON routes' total generation budget: the same
+/// Seconds reserved between the route budget and the provider client's
+/// per-request timeout. Both are configured from the same
+/// `OXO_FLOW_AI_TIMEOUT_SECS` knob, and with equal deadlines the inner
+/// provider error used to win and surface as `400 CHAT_ERROR` /
+/// `AI_TRANSLATE_ERROR` instead of the documented 504 (review HIGH-1). The
+/// margin only orders the timers; it barely shortens real budgets (295 s of
+/// the 300 s default).
+const ROUTE_TIMEOUT_MARGIN_SECS: u64 = 1;
+
+/// The JSON routes' total generation budget: one second below the same
 /// `OXO_FLOW_AI_TIMEOUT_SECS` knob that bounds one provider request (default
 /// 300 s), read per request so an operator's setting is honored without a
-/// rebuild or provider reconstruction.
+/// rebuild or provider reconstruction. Never drops below one second: at the
+/// knob's minimum the timeout-class classification covers the tie.
 pub fn json_route_timeout() -> Duration {
-    Duration::from_secs(oxo_flow_ai::provider::request_timeout_secs())
+    route_budget_for(oxo_flow_ai::provider::request_timeout_secs())
+}
+
+/// Derive the route budget from the provider's per-request timeout.
+///
+/// Pure core of [`json_route_timeout`] so the margin math is testable
+/// without mutating the process environment.
+fn route_budget_for(provider_secs: u64) -> Duration {
+    Duration::from_secs(
+        provider_secs
+            .saturating_sub(ROUTE_TIMEOUT_MARGIN_SECS)
+            .max(1),
+    )
 }
 
 /// The structured timeout contract shared by `/api/chat/send/json` and
@@ -36,7 +64,9 @@ pub fn ai_timeout_error(budget: Duration) -> ApiError {
         ),
         detail: Some(
             "The non-streaming AI routes cap the WHOLE generation (all tool and \
-             validation rounds) at OXO_FLOW_AI_TIMEOUT_SECS."
+             validation rounds) at OXO_FLOW_AI_TIMEOUT_SECS. The route budget \
+             fires one second before the provider's per-request timeout, and a \
+             timeout-class provider error maps to this same answer."
                 .into(),
         ),
         suggestion: Some(
@@ -100,13 +130,28 @@ mod tests {
     #[tokio::test]
     async fn total_timeout_uses_the_documented_knob() {
         // The helper must read the same knob as the provider client; with the
-        // knob unset both report the shipped 300 s default. (This test does
-        // not mutate the process environment — other tests run concurrently.)
+        // knob unset the provider gets the shipped 300 s default and the
+        // route budget sits one second below it. (This test does not mutate
+        // the process environment — other tests run concurrently.)
         if std::env::var("OXO_FLOW_AI_TIMEOUT_SECS").is_err() {
-            assert_eq!(json_route_timeout(), Duration::from_secs(300));
+            assert_eq!(json_route_timeout(), Duration::from_secs(299));
         }
         let result = with_total_timeout(async { 42 }).await;
         assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn route_budget_fires_before_the_provider_timeout() {
+        // The margin orders the two timers that share one knob; the floor
+        // keeps the documented minimum (1 s) usable, where the handler's
+        // timeout-class classification covers the tie.
+        assert_eq!(route_budget_for(300), Duration::from_secs(299));
+        assert_eq!(route_budget_for(5), Duration::from_secs(4));
+        assert_eq!(route_budget_for(2), Duration::from_secs(1));
+        assert_eq!(route_budget_for(1), Duration::from_secs(1));
+        for provider_secs in 1..=600 {
+            assert!(route_budget_for(provider_secs) <= Duration::from_secs(provider_secs));
+        }
     }
 
     #[test]

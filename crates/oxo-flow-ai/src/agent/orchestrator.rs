@@ -666,8 +666,9 @@ fn emit_progress(
 
 /// Emit the paid-for token spend of a finished run to the operation log.
 /// Every surface that runs an agent goes through here, so a generation's
-/// cost is visible even when the session itself is dropped by the caller
-/// (web surfaces intentionally do not archive sessions to disk).
+/// cost is visible even when the caller drops the returned session. Failed
+/// runs are archived by [`archive_failed_generation`]; web callers archive
+/// successful runs through their session-archive helper.
 fn log_session_usage(session: &crate::session::AiSession) {
     let usage = &session.total_usage;
     if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {

@@ -136,7 +136,8 @@ pub fn broadcast_event_for(event_type: &str, data: &serde_json::Value, user: Opt
 ///   unauthenticated management endpoints to the network, so the bind is
 ///   forced to `127.0.0.1` with a loud warning.
 /// - **`OXO_FLOW_DEV_MODE=1`** accepts `password == username` logins for
-///   any user — refusing to start on a non-loopback bind.
+///   any user — team/hpc modes refuse a non-loopback bind; personal mode is
+///   already forced to loopback by the branch above.
 pub fn effective_bind_host(mode: &str, host: &str) -> anyhow::Result<String> {
     let dev_mode = std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1");
     effective_bind_host_with(mode, host, dev_mode)

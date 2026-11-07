@@ -119,9 +119,15 @@ pub async fn chat_send(
                 "EMPTY_MESSAGE",
                 "Message must not be empty".into(),
             ).1));
+            // The terminal payload keeps the documented `{session_id, mode}`
+            // shape on error paths too (review wave 2 LOW-2): a client that
+            // reads `mode` from `done` must not get `undefined` here.
             yield Ok::<_, Infallible>(Event::default()
                 .event("done")
-                .data(serde_json::json!({"session_id": session_id}).to_string()));
+                .data(serde_json::json!({
+                    "session_id": session_id,
+                    "mode": mode.as_str(),
+                }).to_string()));
             return;
         }
 
@@ -129,7 +135,10 @@ pub async fn chat_send(
             yield Ok::<_, Infallible>(error_event(&crate::domains::workflow::handlers::ai_not_configured_error()));
             yield Ok::<_, Infallible>(Event::default()
                 .event("done")
-                .data(serde_json::json!({"session_id": session_id}).to_string()));
+                .data(serde_json::json!({
+                    "session_id": session_id,
+                    "mode": mode.as_str(),
+                }).to_string()));
             return;
         }
 
@@ -171,7 +180,7 @@ pub async fn chat_send(
                     yield Ok::<_, Infallible>(error_event(&err(
                         axum::http::StatusCode::BAD_REQUEST,
                         "CHAT_ERROR",
-                        error,
+                        error.to_string(),
                     ).1));
                     yield Ok::<_, Infallible>(Event::default()
                         .event("done")
@@ -349,6 +358,7 @@ pub async fn chat_send_json(
         is_admin: user.is_admin(),
     };
     let budget = crate::domains::ai::timeout::json_route_timeout();
+    let started = std::time::Instant::now();
     let generated = match crate::domains::ai::timeout::with_budget(
         budget,
         service::process_chat(
@@ -376,7 +386,32 @@ pub async fn chat_send_json(
             persist_assistant_message(&user, &session_id, &text).await;
             Ok(Json(data))
         }
-        Err(e) => Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", e)),
+        // The provider client's own timeout can fire before the route timer
+        // (same knob, equal deadlines): classify it into the DOCUMENTED
+        // answer instead of a generic chat error (review wave 2 HIGH-1).
+        Err(service::ChatError::TimedOut) => {
+            tracing::warn!(
+                endpoint = "/api/chat/send/json",
+                budget_secs = budget.as_secs(),
+                "AI provider request timed out inside the route budget"
+            );
+            Err(crate::domains::ai::timeout::timeout_response(budget))
+        }
+        Err(service::ChatError::Failed(message)) => {
+            // A spent route budget takes precedence over whichever error the
+            // LAST fallback candidate produced: the 504 describes the stall
+            // the client should retry, not the tail of the fallback chain
+            // (review wave 2 HIGH-1).
+            if started.elapsed() >= budget {
+                tracing::warn!(
+                    endpoint = "/api/chat/send/json",
+                    budget_secs = budget.as_secs(),
+                    "AI JSON route spent its total budget before answering"
+                );
+                return Err(crate::domains::ai::timeout::timeout_response(budget));
+            }
+            Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", message))
+        }
     }
 }
 

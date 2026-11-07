@@ -33,19 +33,27 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
 /// translate routes: JSON routes pair the `ApiError` with its status code,
 /// the SSE route serializes the same `ApiError` into its terminal `error`
 /// event so clients can branch on `code` on both surfaces.
-fn translate_error_parts(error: &super::service::TranslateError) -> (StatusCode, ApiError) {
+fn translate_error_parts(
+    error: &super::service::TranslateError,
+    budget: std::time::Duration,
+) -> (StatusCode, Json<ApiError>) {
     match error {
-        super::service::TranslateError::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, ai_not_configured_error())
-        }
+        super::service::TranslateError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ai_not_configured_error()),
+        ),
+        // The provider client's own timeout can fire before the route timer
+        // (both read the same knob): classify it into the documented 504
+        // instead of a generic 400 (review wave 2 HIGH-1).
+        super::service::TranslateError::TimedOut => super::timeout::timeout_response(budget),
         super::service::TranslateError::Failed(message) => (
             StatusCode::BAD_REQUEST,
-            ApiError {
+            Json(ApiError {
                 code: "AI_TRANSLATE_ERROR".into(),
                 message: message.clone(),
                 detail: None,
                 suggestion: None,
-            },
+            }),
         ),
     }
 }
@@ -172,6 +180,7 @@ pub async fn translate(
     let templates = super::super::workflow::handlers::top_template_names().await;
 
     let budget = super::timeout::json_route_timeout();
+    let started = std::time::Instant::now();
     let translated = match super::timeout::with_budget(
         budget,
         super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates),
@@ -188,9 +197,20 @@ pub async fn translate(
             return Err(super::timeout::timeout_response(budget));
         }
     };
-    translated.map(Json).map_err(|e| {
-        let (status, error) = translate_error_parts(&e);
-        (status, Json(error))
+    translated.map(Json).map_err(|error| {
+        // A spent route budget takes precedence over whichever error the
+        // LAST fallback candidate produced: the 504 describes the stall the
+        // client should retry, not the tail of the fallback chain (review
+        // wave 2 HIGH-1).
+        if started.elapsed() >= budget {
+            tracing::warn!(
+                endpoint = "/api/ai/translate",
+                budget_secs = budget.as_secs(),
+                "AI JSON route spent its total budget before answering"
+            );
+            return super::timeout::timeout_response(budget);
+        }
+        translate_error_parts(&error, budget)
     })
 }
 
@@ -275,7 +295,11 @@ pub async fn translate_sse(
                     .data(json));
             }
             Err(e) => {
-                let (_, error) = translate_error_parts(&e);
+                // The SSE route is not bounded by the JSON total budget, but
+                // a provider-side timeout maps to the same AI_TIMEOUT error
+                // shape; the budget only supplies the message text.
+                let (_, Json(error)) =
+                    translate_error_parts(&e, super::timeout::json_route_timeout());
                 yield Ok::<_, Infallible>(error_event(&error));
                 yield Ok::<_, Infallible>(Event::default().event("done").data("{}"));
             }

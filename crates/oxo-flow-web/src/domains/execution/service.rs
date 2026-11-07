@@ -172,7 +172,16 @@ pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) 
 }
 
 /// Compute retry plan: which rules to rerun and which to skip.
-/// Reruns all failed nodes + their downstream dependents.
+///
+/// - `skip_succeeded` (default true): reruns the failed/cancelled set plus
+///   their downstream dependents; completed rules outside that closure are
+///   skipped via the checkpoint.
+/// - `!skip_succeeded`: the spawn receives `--rerun`, which re-executes
+///   EVERY rule, so `will_rerun` lists every rule in the DAG and
+///   `will_skip` is empty.
+/// - `from_rule`: the downstream closure of the named rule re-executes;
+///   completed rules outside it keep their checkpoint state (the flag pair
+///   is suppressed), so they are listed in `will_skip`.
 pub fn compute_retry_plan(
     run_nodes: &[NodeStatusItem],
     dag: &WorkflowDag,
@@ -192,15 +201,14 @@ pub fn compute_retry_plan(
                 }
             }
         }
-        let will_skip: Vec<String> = if skip_succeeded {
-            run_nodes
-                .iter()
-                .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
-                .map(|n| n.rule.clone())
-                .collect()
-        } else {
-            vec![]
-        };
+        // `--from-rule` subsumes the retry flag pair, so the checkpoint
+        // skip set applies regardless of `skip_succeeded`; listing the
+        // completed rules outside the closure is honest in both cases.
+        let will_skip: Vec<String> = run_nodes
+            .iter()
+            .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
+            .map(|n| n.rule.clone())
+            .collect();
         return Ok(RetryResponse {
             new_run_id: uuid::Uuid::new_v4().to_string(),
             will_rerun,
@@ -209,6 +217,26 @@ pub fn compute_retry_plan(
                 "from-rule: re-running from '{rule}' downstream — the transitive-dependent \
                  closure is invalidated and re-executed regardless of checkpoint state."
             )),
+        });
+    }
+
+    // `skip_succeeded: false` spawns `--rerun` (see `retry_spawn_flags`),
+    // which re-executes EVERY rule regardless of status. The plan must
+    // describe that executed set; listing only the failed closure left
+    // succeeded rules in neither list while execution re-ran them (review
+    // wave 2 MEDIUM-3).
+    if !skip_succeeded {
+        let all_rules = dag
+            .topological_order()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|node| node.name.clone())
+            .collect();
+        return Ok(RetryResponse {
+            new_run_id: uuid::Uuid::new_v4().to_string(),
+            will_rerun: all_rules,
+            will_skip: vec![],
+            note: None,
         });
     }
 
@@ -234,15 +262,14 @@ pub fn compute_retry_plan(
         }
     }
 
-    let will_skip: Vec<String> = if skip_succeeded {
-        run_nodes
-            .iter()
-            .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
-            .map(|n| n.rule.clone())
-            .collect()
-    } else {
-        vec![]
-    };
+    // Reached only when `skip_succeeded` is true (the full-rerun case
+    // returned above): completed rules outside the failed closure are
+    // skipped by the checkpoint.
+    let will_skip: Vec<String> = run_nodes
+        .iter()
+        .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
+        .map(|n| n.rule.clone())
+        .collect();
 
     Ok(RetryResponse {
         new_run_id: uuid::Uuid::new_v4().to_string(),
@@ -414,6 +441,19 @@ pub fn diagnose_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn retry_node(rule: &str, status: NodeStatus) -> NodeStatusItem {
+        NodeStatusItem {
+            rule: rule.into(),
+            status,
+            started_at: None,
+            duration_ms: None,
+            exit_code: None,
+            progress_pct: None,
+            stderr_tail: None,
+            stdout_tail: None,
+        }
+    }
 
     #[test]
     fn retry_spawn_flags_honor_the_plan_promise() {
@@ -657,6 +697,53 @@ output = ["b.txt"]
         let plan = compute_retry_plan(&nodes, &dag, true, None).unwrap();
         assert!(plan.will_rerun.contains(&"step1".to_string()));
         assert!(plan.will_rerun.contains(&"step2".to_string()));
+    }
+
+    /// `skip_succeeded: false` spawns `--rerun`, which re-executes EVERY
+    /// rule (including succeeded ones). The plan must list the same set —
+    /// otherwise `will_rerun` is a promise the execution breaks (review
+    /// wave 2 MEDIUM-3: a succeeded "a" appeared in neither list while the
+    /// retry re-ran it).
+    #[test]
+    fn test_compute_retry_full_rerun_lists_every_rule() {
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+[[rules]]
+name = "a"
+shell = "echo a"
+output = ["a.txt"]
+[[rules]]
+name = "b"
+shell = "echo b"
+input = ["a.txt"]
+output = ["b.txt"]
+[[rules]]
+name = "c"
+shell = "echo c"
+input = ["b.txt"]
+output = ["c.txt"]
+"#;
+        let wf = WorkflowConfig::parse(toml).unwrap();
+        let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+        let nodes = vec![
+            retry_node("a", NodeStatus::Success),
+            retry_node("b", NodeStatus::Failed),
+            retry_node("c", NodeStatus::Pending),
+        ];
+
+        let plan = compute_retry_plan(&nodes, &dag, false, None).unwrap();
+
+        let mut rerun = plan.will_rerun.clone();
+        rerun.sort();
+        assert_eq!(rerun, vec!["a", "b", "c"], "plan: {plan:?}");
+        assert!(
+            plan.will_skip.is_empty(),
+            "a full rerun skips nothing: {plan:?}"
+        );
+        // The spawn pair this plan must match is the full-rerun branch.
+        assert_eq!(retry_spawn_flags(false, false), (false, true));
     }
 
     /// Report finding P-F4: a cancelled node never completed, so the retry
