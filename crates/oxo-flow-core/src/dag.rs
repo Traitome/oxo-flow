@@ -2394,45 +2394,97 @@ impl WorkflowDag {
         Ok(output)
     }
 
-    /// Generate a compact ASCII graph showing the dependency tree.
+    /// Generate an indented dependency tree: one lineage per root rule,
+    /// branching into its dependents, with repeated nodes marked after
+    /// their first appearance so a diamond DAG stays readable.
     ///
-    /// This produces a tree-like visualization focused on the dependency
-    /// structure, suitable for quick inspection in the terminal.
+    /// The flat numbered list this used to emit (one line per rule plus a
+    /// `↓ downstream` line) was not a tree despite the format's name and
+    /// help text (journey-power P9). Roots and siblings follow execution
+    /// order, so the same workflow always renders identically.
     #[must_use = "generating compact ASCII graph returns a Result that must be used"]
     pub fn to_ascii_tree(&self) -> Result<String> {
         let order = self.execution_order()?;
-        let mut output = String::new();
-
-        output.push_str("Workflow Graph (terminal output)\n");
-        output.push_str(&format!(
+        let rank: HashMap<String, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+        let roots: Vec<&String> = order
+            .iter()
+            .filter(|name| self.dependencies(name).is_ok_and(|deps| deps.is_empty()))
+            .collect();
+        let mut renderer = AsciiTreeRenderer {
+            dag: self,
+            rank,
+            expanded: HashSet::new(),
+            output: String::new(),
+        };
+        renderer
+            .output
+            .push_str("Workflow Graph (dependency tree)\n");
+        renderer.output.push_str(&format!(
             "{} rules, {} edges\n\n",
             self.node_count(),
             self.edge_count()
         ));
-
-        for (i, rule_name) in order.iter().enumerate() {
-            let mut deps = self.dependencies(rule_name)?;
-            deps.sort();
-            deps.dedup();
-            let dep_str = if deps.is_empty() {
-                " ──●".to_string()
-            } else {
-                format!(" ──● [{}]", deps.join(", "))
-            };
-
-            // Draw position indicator
-            output.push_str(&format!("{:3}. {}{}\n", i + 1, rule_name, dep_str));
-
-            // Show downstream if exists (deduplicated)
-            let mut downstream = self.dependents(rule_name)?;
-            downstream.sort();
-            downstream.dedup();
-            if !downstream.is_empty() {
-                output.push_str(&format!("      ↓ {}\n", downstream.join(", ")));
+        for (i, root) in roots.iter().enumerate() {
+            if i > 0 {
+                renderer.output.push('\n');
             }
+            renderer.render_node(root, "", true, true)?;
         }
+        Ok(renderer.output)
+    }
+}
 
-        Ok(output)
+/// Mutable state for the recursive [`WorkflowDag::to_ascii_tree`] renderer.
+struct AsciiTreeRenderer<'a> {
+    dag: &'a WorkflowDag,
+    /// Execution-order position per rule — the deterministic sibling order.
+    rank: HashMap<String, usize>,
+    /// Rules already expanded once; repeats are marked, never re-expanded.
+    expanded: HashSet<String>,
+    output: String,
+}
+
+impl AsciiTreeRenderer<'_> {
+    fn render_node(
+        &mut self,
+        name: &str,
+        prefix: &str,
+        is_root: bool,
+        is_last: bool,
+    ) -> Result<()> {
+        let connector = if is_root {
+            ""
+        } else if is_last {
+            "└── "
+        } else {
+            "├── "
+        };
+        let line_prefix = if is_root { "" } else { prefix };
+        if !self.expanded.insert(name.to_string()) {
+            self.output
+                .push_str(&format!("{line_prefix}{connector}{name} (already shown)\n"));
+            return Ok(());
+        }
+        self.output
+            .push_str(&format!("{line_prefix}{connector}{name}\n"));
+        let mut children = self.dag.dependents(name)?;
+        children.sort_by_key(|child| self.rank.get(child).copied().unwrap_or(usize::MAX));
+        children.dedup();
+        let child_prefix = if is_root {
+            String::new()
+        } else if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}│   ")
+        };
+        for (i, child) in children.iter().enumerate() {
+            self.render_node(child, &child_prefix, false, i + 1 == children.len())?;
+        }
+        Ok(())
     }
 }
 
@@ -3382,11 +3434,33 @@ mod tests {
         ];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let tree = dag.to_ascii_tree().unwrap();
-        assert!(tree.contains("Workflow Graph"));
-        assert!(tree.contains("1."));
-        assert!(tree.contains("2."));
-        assert!(tree.contains("a"));
-        assert!(tree.contains("b"));
+        assert!(tree.contains("Workflow Graph (dependency tree)"), "{tree}");
+        assert!(tree.contains("a\n└── b\n"), "{tree}");
+    }
+
+    #[test]
+    fn ascii_tree_nests_branches_and_marks_repeats() {
+        let rules = vec![
+            make_rule("root", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("left", vec!["mid.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["mid.txt"], vec!["right.txt"]),
+            make_rule("join", vec!["left.txt", "right.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let tree = dag.to_ascii_tree().unwrap();
+        assert!(
+            tree.contains("root\n├── ") || tree.contains("root\n└── "),
+            "children must be nested under the root: {tree}"
+        );
+        assert!(tree.contains("└── join"), "{tree}");
+        assert!(
+            tree.contains("(already shown)"),
+            "a diamond's shared node must be marked on its second path: {tree}"
+        );
+        assert!(
+            !tree.contains("1. "),
+            "the tree must not be the old flat list: {tree}"
+        );
     }
 
     // ---- Post-expansion edge inference (wave 2-1) --------------------------

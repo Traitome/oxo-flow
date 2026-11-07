@@ -60,7 +60,7 @@ each persona actually uses:
 | Format | Purpose | Typical `--granularity` | Consumers |
 |---|---|---|---|
 | `ascii` | one-glance terminal DAG | — | operator |
-| `tree` | indented dependency tree | — | operator |
+| `tree` | indented dependency tree (roots → dependents; a node reached twice is marked `(already shown)` instead of re-expanded) | — | operator |
 | `dot` | graphviz input | `--expanded` for the runtime DAG | auditor, CI |
 | `dot-clustered` | graphviz input grouped by workflow modules | — | auditor |
 | `mermaid` | plain Mermaid `graph LR` for docs | — | documentation |

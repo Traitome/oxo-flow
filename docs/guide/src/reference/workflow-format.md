@@ -995,7 +995,7 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 **Local execution:**
 
 - Resources are tracked to prevent over-allocation
-- Warnings emitted when declaring resources exceeding system capacity
+- Local `run` and `dry-run` emit warnings when a rule declares resources exceeding this host's capacity
 - Jobs may oversubscribe if user intentionally requests more than available
 
 **HPC clusters:**
@@ -1003,6 +1003,8 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 - Resources translated to scheduler directives (SLURM, PBS, SGE, LSF, k8s,
   AWS/GCP Batch)
 - Scheduler enforces limits - jobs requesting more than allocated will fail
+- No submit-host capacity warnings: the job runs on a scheduler node, so the
+  submit host's RAM/thread count is not the relevant ceiling
 
 ### Platform Detection
 

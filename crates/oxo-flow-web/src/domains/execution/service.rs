@@ -258,13 +258,14 @@ pub fn compute_retry_plan(
 /// threshold is conservative.
 const MEMORY_BOTTLENECK_THRESHOLD_PCT: u64 = 80;
 
-/// Shape one `RunRow` into the API's public list-item JSON (#948 P2-6).
+/// Elapsed seconds between `started_at` and `finished_at`.
 ///
-/// Deliberately NO `pid`: the host process id is engine bookkeeping (cancel
-/// and liveness probes use it server-side) and discloses host internals to
-/// API consumers.
-pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
-    let duration_secs = match (&r.started_at, &r.finished_at) {
+/// Single source for both the list items and the run detail (journey-power
+/// P8): the detail used to omit the field even though the list carried it.
+/// Unparseable or missing timestamps yield `None` rather than a fabricated
+/// duration.
+pub fn run_duration_secs(r: &models::RunRow) -> Option<i64> {
+    match (&r.started_at, &r.finished_at) {
         (Some(s), Some(f)) => {
             let start = chrono::DateTime::parse_from_rfc3339(s).ok();
             let end = chrono::DateTime::parse_from_rfc3339(f).ok();
@@ -274,7 +275,16 @@ pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
             }
         }
         _ => None,
-    };
+    }
+}
+
+/// Shape one `RunRow` into the API's public list-item JSON (#948 P2-6).
+///
+/// Deliberately NO `pid`: the host process id is engine bookkeeping (cancel
+/// and liveness probes use it server-side) and discloses host internals to
+/// API consumers.
+pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
+    let duration_secs = run_duration_secs(r);
     serde_json::json!({
         "id": r.id,
         "user_id": r.user_id,

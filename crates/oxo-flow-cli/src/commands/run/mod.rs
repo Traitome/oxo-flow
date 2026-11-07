@@ -347,6 +347,13 @@ pub async fn run_command(
     }
 
     config.apply_defaults();
+    // Host-fit warnings are local-execution advice (journey-power P7): a
+    // cluster profile runs on scheduler nodes, so the submit host's capacity
+    // is irrelevant. Emitted before wildcard expansion so a 100-sample
+    // scatter warns once per template rule, not once per instance.
+    if cluster_path::routed_cluster_profile(profile.as_deref(), config.cluster.as_ref()).is_none() {
+        config.warn_host_resource_fit();
+    }
     // Issue #427: when the run workdir differs from the workflow directory,
     // tell expansion so relative input_groups disk-scan patterns emit
     // workflow-absolute paths — rule shells run with cwd = workdir, and

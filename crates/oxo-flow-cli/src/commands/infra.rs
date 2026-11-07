@@ -6,6 +6,21 @@ use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction};
 
+/// The environment a rule will actually execute in.
+///
+/// `run` applies `[defaults] environment` to every rule and honors
+/// `[env_groups]`; `WorkflowConfig::resolve_environment` is the shared
+/// precedence resolver for both. `env list` and `env check` must answer the
+/// same question, so they call that same function instead of reading
+/// `rule.environment` directly (journey-power P1: defaulted rules were
+/// reported as `system` while the run bootstrapped conda).
+fn resolved_rule_environment(
+    config: &WorkflowConfig,
+    rule: &oxo_flow_core::rule::Rule,
+) -> oxo_flow_core::rule::EnvironmentSpec {
+    config.resolve_environment(rule).unwrap_or_default()
+}
+
 pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
@@ -20,10 +35,15 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                 );
                 let mut seen = std::collections::HashSet::new();
                 for rule in &config.rules {
-                    let kind = rule.environment.kind();
-                    let spec = kind.to_string();
-                    if seen.insert(format!("{}:{spec}", rule.name)) {
-                        eprintln!("  {} {} [{}]", "✓".green(), rule.name, spec);
+                    // Share the resolver `run` uses ([defaults] environment,
+                    // [env_groups], then the rule's own spec) — reading
+                    // `rule.environment` directly reported defaulted rules
+                    // as `system` while the run bootstrapped conda
+                    // (journey-power P1).
+                    let env = resolved_rule_environment(&config, rule);
+                    let kind = env.kind().to_string();
+                    if seen.insert(format!("{}:{kind}", rule.name)) {
+                        eprintln!("  {} {} [{}]", "✓".green(), rule.name, kind);
                     }
                 }
                 if seen.is_empty() {
@@ -60,15 +80,14 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
 
                     let mut all_ok = true;
                     for rule in &config.rules {
-                        let spec = rule.environment.resolve_relative_paths(Some(workflow_dir));
+                        // Same resolution as `run` / `env list` (journey-power
+                        // P1): checking `rule.environment` alone validated the
+                        // wrong backend for rules that inherit [defaults].
+                        let resolved = resolved_rule_environment(&config, rule);
+                        let spec = resolved.resolve_relative_paths(Some(workflow_dir));
                         match resolver.validate_spec(&spec) {
                             Ok(()) => {
-                                eprintln!(
-                                    "  {} {} ({})",
-                                    "✓".green(),
-                                    rule.name,
-                                    rule.environment.kind()
-                                );
+                                eprintln!("  {} {} ({})", "✓".green(), rule.name, resolved.kind());
                             }
                             Err(e) => {
                                 eprintln!("  {} {} — {}", "✗".red(), rule.name, e);
@@ -305,6 +324,67 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
         } => env_gc(min_age_days, dry_run)?,
     }
     Ok(())
+}
+
+/// `oxo-flow env gc` — delete unreferenced, age-eligible store dirs.
+#[cfg(test)]
+mod env_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn env_resolution_matches_run_defaults_and_overrides() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "env-parity"
+
+[defaults.environment]
+conda = "envs/default.yaml"
+
+[env_groups.grouped]
+docker = "ubuntu:22.04"
+
+[[rules]]
+name = "defaulted"
+shell = "echo hi"
+
+[[rules]]
+name = "override"
+[rules.environment]
+venv = ".venv"
+
+[[rules]]
+name = "grouped"
+env_group = "grouped"
+shell = "echo hi"
+"#,
+        )
+        .expect("workflow parses");
+        let by_name = |name: &str| {
+            let rule = config.get_rule(name).expect("rule exists");
+            resolved_rule_environment(&config, rule).kind().to_string()
+        };
+        assert_eq!(by_name("defaulted"), "conda");
+        assert_eq!(by_name("override"), "venv");
+        assert_eq!(by_name("grouped"), "docker");
+    }
+
+    #[test]
+    fn env_resolution_without_declarations_stays_system() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "plain"
+
+[[rules]]
+name = "plain_rule"
+shell = "echo hi"
+"#,
+        )
+        .expect("workflow parses");
+        let rule = config.get_rule("plain_rule").expect("rule exists");
+        assert_eq!(resolved_rule_environment(&config, rule).kind(), "system");
+    }
 }
 
 /// `oxo-flow env gc` — delete unreferenced, age-eligible store dirs.

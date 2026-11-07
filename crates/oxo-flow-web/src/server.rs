@@ -1120,6 +1120,19 @@ async fn require_auth(
     // NOT public in team/hpc modes — anonymous callers must not see cluster
     // internals or reconfigure the shared AI provider.
     let method = request.method().clone();
+    // Presenting credentials opts into normal authentication even on a
+    // public route: `GET /api/ai/config` stays discoverable anonymously, but
+    // the middleware must resolve the caller's identity so an admin sees the
+    // real provider/model instead of the masked anonymous payload
+    // (journey-power P3).
+    let has_credentials = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| !v.trim().is_empty())
+        || headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| !v.trim().is_empty());
     let is_public = path == "/api/auth/login"
         || path == "/api/auth/me"
         || path.starts_with("/api/auth/oauth")
@@ -1133,9 +1146,14 @@ async fn require_auth(
         // Share landing pages are the product of a share link — the share
         // token IS the authorization (issue #82 P0-6).
         || path.starts_with("/api/share/")
-        // AI config GET is public (feature discoverability); writes are
-        // gated (admin-only) inside the handler.
-        || (path == "/api/ai/config" && method == axum::http::Method::GET)
+        // AI config GET is public for anonymous callers (feature
+        // discoverability); writes are gated (admin-only) inside the
+        // handler. A caller that presents credentials is authenticated
+        // above instead — `has_credentials` keeps the public bypass
+        // anonymous-only (journey-power P3).
+        || (path == "/api/ai/config"
+            && method == axum::http::Method::GET
+            && !has_credentials)
         || path == "/"
         || path.starts_with("/assets/")
         || path == "/favicon.svg"
