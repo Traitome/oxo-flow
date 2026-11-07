@@ -1172,6 +1172,8 @@
       
         
       
+        
+      
     
     
     
@@ -1563,6 +1565,34 @@
     
   
     Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/agent-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Safety & Workspace Discipline
   
 
     
@@ -4862,8 +4892,10 @@ the audience cannot be inferred from the workflow itself; experts opt in.</p>
 layer is unavailable — provider errors, quota limits, dead endpoints, or
 explicit disable:</p>
 <ul>
-<li><code>OXO_FLOW_AI_PROVIDER=disabled</code> overrides any saved provider
-  configuration and produces the skeleton with a "disabled" note on stderr.</li>
+<li><code>OXO_FLOW_AI_PROVIDER=disabled</code> overrides any saved provider and is pinned
+  after the saved config loads — a <code>~/.oxo-flow/ai_config.json</code> cannot
+  re-enable AI. It produces the skeleton with a "disabled" note on stderr;
+  AI calls fail with <code>AI_NOT_CONFIGURED</code> without contacting a provider.</li>
 <li>A failed provider call degrades the same way, with the error summarized
   in the note; the skeleton and its knowledge-base grounding (bioSkills,
   tool table, pipeline graph) are still emitted in full, and <code>--json</code>
@@ -5146,6 +5178,12 @@ in a manuscript or release claim.</p>
 <code>[ai] skills = [...]</code> — their <code>prompt_additions</code> are appended to the system
 prompt. See <a href="../custom-skills/">Custom Skills</a>.</p>
 <h3 id="session-logs">Session Logs<a class="headerlink" href="#session-logs" title="Permanent link">#</a></h3>
+<blockquote>
+<p><strong>Agents operating oxo-flow directly</strong> should also follow
+<a href="../../how-to/agent-safety/">Agent Safety &amp; Workspace Discipline</a>: inputs are
+read-only, mutations are snapshotted and journaled, and all probing stays
+in one scratch tree inside the project.</p>
+</blockquote>
 <p>Every AI interaction is logged to <code>.oxo-flow/ai_sessions/</code> for audit and debugging:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"20260809-230000-template-a1b2c3d4"</span><span class="p">,</span>

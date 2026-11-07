@@ -1172,6 +1172,8 @@
       
         
       
+        
+      
     
     
     
@@ -1563,6 +1565,34 @@
     
   
     Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/agent-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Safety & Workspace Discipline
   
 
     
@@ -3591,6 +3621,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#agent-driven-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent-Driven Use
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4026,6 +4067,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#agent-driven-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent-Driven Use
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4379,10 +4431,21 @@ app, pinned by the <code>base_path_mount_headers</code> integration test.</p>
 <li><strong>Use script files for complex logic</strong> — The <code>script</code> field avoids shell escaping issues</li>
 </ol>
 <hr />
+<h2 id="agent-driven-use">Agent-Driven Use<a class="headerlink" href="#agent-driven-use" title="Permanent link">#</a></h2>
+<p>The run-time gates above protect <strong>rule shells</strong> — they do not constrain an
+AI agent's own terminal. An agent that probes inputs, authors workflows, and
+repairs failures needs the operating contract in
+<a href="../../how-to/agent-safety/">Agent Safety &amp; Workspace Discipline</a>: read-only
+inputs, snapshot-before-mutate, one scratch tree inside the project, an
+append-only operation journal, and <code>[engine] protected_data_trees</code> as a
+drift backstop. The canonical agent skill (<a href="../../SKILL/">SKILL.md</a>) embeds
+the same rules so they load with the skill.</p>
+<hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../workflow-format/">Workflow Format</a> — rule field reference</li>
 <li><a href="../ai-cli/">AI CLI</a> — AI-powered workflow analysis</li>
+<li><a href="../../how-to/agent-safety/">Agent Safety &amp; Workspace Discipline</a> — operating contract for AI agents</li>
 <li><a href="../../how-to/troubleshooting/">Troubleshooting</a> — common issues</li>
 </ul>
 

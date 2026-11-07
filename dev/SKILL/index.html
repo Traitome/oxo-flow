@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Run reproducible bioinformatics analyses with the oxo-flow pipeline engine from natural-language tasks: plan workflows, author .oxoflow TOML projects, pass static gates (validate/dry-run/lint), execute on local or cluster backends, monitor and correct failures via checkpoint resume, QC outputs independently, and deliver reports plus a reproducibility receipt. Use when the user asks to analyze sequencing data with oxo-flow, design or fix an oxo-flow workflow, run/validate/debug oxo-flow, or produce a reproducible analysis report or receipt.">
+        <meta name="description" content="Run reproducible bioinformatics analyses with the oxo-flow pipeline engine from natural-language tasks: plan workflows, author .oxoflow TOML projects, pass static gates (validate/dry-run/lint), execute on local or cluster backends, monitor and correct failures via checkpoint resume, QC outputs independently, and deliver reports plus a reproducibility receipt. Treats input data as read-only, confines agent scratch work and journaling to the project working directory, and requires human authorization before any destructive operation. Use when the user asks to analyze sequencing data with oxo-flow, design or fix an oxo-flow workflow, run/validate/debug oxo-flow, or produce a reproducible analysis report or receipt.">
       
       
       
@@ -453,6 +453,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-safety-workspace-discipline-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Safety &amp; Workspace Discipline (BINDING)
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1346,6 +1357,8 @@
       
         
       
+        
+      
     
     
     
@@ -1737,6 +1750,34 @@
     
   
     Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how-to/agent-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Safety & Workspace Discipline
   
 
     
@@ -3990,6 +4031,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#data-safety-workspace-discipline-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Safety &amp; Workspace Discipline (BINDING)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#guardrails" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4172,6 +4224,39 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
 <li>Optional archival: <code>oxo-flow export -f toml|docker|singularity</code>.</li>
 <li>Done when: PI signs off against the original task.</li>
 </ul>
+<h2 id="data-safety-workspace-discipline-binding">Data Safety &amp; Workspace Discipline (BINDING)<a class="headerlink" href="#data-safety-workspace-discipline-binding" title="Permanent link">#</a></h2>
+<p>You are the actual operator of the user's data. Input data is <strong>read-only</strong>.
+The engine protects rule shells at run time (E011 blocks deletions outside
+the run workdir; <code>[engine] protected_data_trees</code> detects drift), but those
+gates do not cover your own terminal. These rules bind every command you run:</p>
+<ol>
+<li><strong>Never delete or overwrite inputs without explicit human authorization.</strong>
+   This includes <code>rm</code>, <code>mv</code>, <code>truncate</code>, <code>dd of=</code>, <code>sed -i</code>, <code>git checkout
+   --</code>, <code>git clean</code>, and any <code>&gt;</code> redirect into a path you did not create
+   this task. Ask first: quote the exact command, name the target, say why —
+   then wait for a human "yes". Destructive + no human reachable = stop.</li>
+<li><strong>Snapshot before mutating.</strong> Copy what you are about to change into your
+   scratch tree (<code>cp -a</code>) and record <code>sha256sum</code>. Write to NEW paths and
+   rename on success; never edit in place. Append with <code>&gt;&gt;</code>; never <code>&gt;</code> an
+   existing file you did not create.</li>
+<li><strong>Do all probing in one scratch tree inside the project</strong> —
+   <code>&lt;project&gt;/.oxo-flow/agent/&lt;date&gt;-&lt;task&gt;/</code> (gitignored), not <code>$HOME</code>,
+   not a global <code>/tmp</code> scatter, not outside the working directory. Point
+   tools there with <code>OXO_FLOW_TMPDIR=&lt;scratch&gt;/tmp</code> (or <code>[engine] tmp_dir</code>).
+   Delete only your own scratch, and only when the task is done.</li>
+<li><strong>Journal every mutating operation</strong> — one JSON line per command appended
+   to <code>.oxo-flow/agent/operations.log</code>:
+   <code>{"ts":"&lt;ISO8601&gt;","cwd":"&lt;dir&gt;","cmd":"&lt;argv&gt;","exit":&lt;code&gt;,"note":"&lt;why&gt;"}</code>.
+   Read-only inspections need not be journaled.</li>
+<li><strong>Protect input trees at plan time.</strong> For every workflow consuming vendor
+   data, recommend <code>[engine] protected_data_trees = ["raw/", "reference/"]</code>
+   — drift is then detected before the next run. Detection, not prevention:
+   the deletion itself must still never happen.</li>
+<li><strong>Inspect without mutating.</strong> Prefer <code>oxo-flow status</code>, <code>oxo-flow report</code>,
+   <code>oxo-flow provenance verify</code> over ad-hoc shell. When unsure, dry-run.</li>
+</ol>
+<p>Recipes (snapshots, journal helper, scratch layout, protected-tree config):
+<code>how-to/agent-safety</code>.</p>
 <h2 id="guardrails">Guardrails<a class="headerlink" href="#guardrails" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Evidence first</strong> — never claim success without checkpoint/report evidence.</li>
@@ -4257,6 +4342,10 @@ their own work).</p>
 <tr>
 <td>Reference</td>
 <td><code>reference/architecture</code>, <code>gallery/</code>, <code>tutorials/custom-scripts</code>, <code>tutorials/environment-management</code></td>
+</tr>
+<tr>
+<td>Data safety (read early)</td>
+<td><code>how-to/agent-safety</code>, <code>reference/security</code>, <code>reference/workflow-format</code> (<code>[engine] protected_data_trees</code>, <code>tmp_dir</code>)</td>
 </tr>
 <tr>
 <td>Knowledge bases (raw)</td>

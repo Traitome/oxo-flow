@@ -1172,6 +1172,8 @@
       
         
       
+        
+      
     
     
     
@@ -1563,6 +1565,34 @@
     
   
     Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/agent-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Safety & Workspace Discipline
   
 
     
@@ -5556,6 +5586,7 @@ in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <c
 </span></code></pre></div>
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.</p>
 <p><code>components.ai_key_storage</code> is <code>"encrypted"</code> when <code>OXO_FLOW_MASTER_KEY</code> is set, <code>"plaintext"</code> otherwise.</p>
+<p><code>components.ai_provider</code> is <code>{"status": "connected", "latency_ms": null}</code> while a provider is active and <code>{"status": "disabled", "latency_ms": null}</code> when AI is off — explicitly pinned with <code>OXO_FLOW_AI_PROVIDER=disabled</code>, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: <code>~/.oxo-flow/ai_config.json</code>, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured <code>AI_NOT_CONFIGURED</code> error without any outbound request.</p>
 <p><code>components.engine</code> reports the engine CLI the server spawns for runs, resolved once at startup by running <code>&lt;binary&gt; --version</code>:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
