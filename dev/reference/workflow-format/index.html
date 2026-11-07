@@ -8374,7 +8374,7 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <p><strong>Local execution:</strong></p>
 <ul>
 <li>Resources are tracked to prevent over-allocation</li>
-<li>Warnings emitted when declaring resources exceeding system capacity</li>
+<li>Local <code>run</code> and <code>dry-run</code> emit warnings when a rule declares resources exceeding this host's capacity</li>
 <li>Jobs may oversubscribe if user intentionally requests more than available</li>
 </ul>
 <p><strong>HPC clusters:</strong></p>
@@ -8382,6 +8382,8 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <li>Resources translated to scheduler directives (SLURM, PBS, SGE, LSF, k8s,
   AWS/GCP Batch)</li>
 <li>Scheduler enforces limits - jobs requesting more than allocated will fail</li>
+<li>No submit-host capacity warnings: the job runs on a scheduler node, so the
+  submit host's RAM/thread count is not the relevant ceiling</li>
 </ul>
 <h3 id="platform-detection">Platform Detection<a class="headerlink" href="#platform-detection" title="Permanent link">#</a></h3>
 <table>

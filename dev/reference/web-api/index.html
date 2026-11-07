@@ -3991,6 +3991,28 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#intent-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Intent routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-apichatsendjson-response-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/chat/send/json — response shapes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#post-apichatsend-sse-event-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5480,6 +5502,28 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#intent-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Intent routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-apichatsendjson-response-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/chat/send/json — response shapes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#post-apichatsend-sse-event-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6103,7 +6147,7 @@ Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, like
 <h3 id="run-detail">Run Detail<a class="headerlink" href="#run-detail" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}
 </span></code></pre></div>
-The full run row: <code>{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, workdir, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.) <code>dry_run</code> mirrors the creation request (<code>true</code> for preview runs spawned by <code>dry_run: true</code>) and appears in both the list and detail responses — legacy rows created before the column existed read as <code>false</code>.</p>
+The full run row: <code>{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. <code>workflow_name</code> and <code>duration_secs</code> are the same values list items carry (<code>duration_secs</code> is the elapsed time between <code>started_at</code> and <code>finished_at</code>, <code>null</code> until the run finishes). (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.) <code>dry_run</code> mirrors the creation request (<code>true</code> for preview runs spawned by <code>dry_run: true</code>) and appears in both the list and detail responses — legacy rows created before the column existed read as <code>false</code>.</p>
 <h3 id="run-preview">Run Preview<a class="headerlink" href="#run-preview" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/preview
 </span></code></pre></div>
@@ -6348,7 +6392,7 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 </span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
 </span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
 </span><span id="__span-58-5"><a id="__codelineno-58-5" name="__codelineno-58-5" href="#__codelineno-58-5"></a>POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
-</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6" href="#__codelineno-58-6"></a>GET  /api/ai/config             # Get AI provider configuration (public)
+</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6" href="#__codelineno-58-6"></a>GET  /api/ai/config             # Get AI provider configuration (public; authenticated admins see provider/model)
 </span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7" href="#__codelineno-58-7"></a>POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
 </span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8" href="#__codelineno-58-8"></a>POST /api/ai/test               # Test the provider (admin-only outside personal mode)
 </span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9" href="#__codelineno-58-9"></a>GET  /api/ai/config/user        # The acting user's private provider config
@@ -6375,6 +6419,13 @@ answers <code>504 {code: "AI_TIMEOUT"}</code> with the standard
 <code>{code, message, detail, suggestion}</code> body, and <code>suggestion</code> names the knob.
 Use <code>POST /api/ai/translate/stream</code> for generations expected to run longer:
 the SSE route is not capped by this total budget.</p>
+<p><code>GET /api/ai/config</code> stays public for anonymous feature discoverability:
+anonymous callers (and non-admin callers outside personal mode) receive only
+<code>{provider: "", model: null, api_url: null, is_configured}</code>. Presenting a
+valid credential opts the request into normal authentication, so an admin
+sees the configured provider, model, and URL (never the API key); an invalid
+credential is rejected with <code>401</code> rather than silently downgraded to the
+masked anonymous payload.</p>
 <p>The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. <code>GET /api/ai/config/effective</code> shows the resolved result and
@@ -6434,6 +6485,55 @@ while it is set.</p>
 </span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>POST /api/chat/send/json   # Same, single JSON response
 </span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
 </span></code></pre></div>
+<h3 id="intent-routing">Intent routing<a class="headerlink" href="#intent-routing" title="Permanent link">#</a></h3>
+<p>Chat requests are classified before any generation work happens, by a
+deterministic keyword/pattern classifier (<code>domains/chat/intent.rs</code>) — no
+extra model call, so routing never doubles a request's token cost. The
+decision is returned as the <code>mode</code> field:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Trigger</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pipeline</code></td>
+<td>Pipeline vocabulary (workflow/pipeline/rules/TOML/DAG, omics assays, file formats, tool names), run-diagnosis wording, an attached <code>data_paths</code>/<code>samplesheet</code>, or an explicit <code>run_id</code> scope</td>
+<td>The existing <code>PipelineGenAgent</code> loop: validated <code>.oxoflow</code> TOML plus <code>toml_content</code>, <code>rules</code>, and <code>dag</code></td>
+</tr>
+<tr>
+<td><code>chat</code></td>
+<td>Greetings/small talk, explanation questions ("What is FastQC?"), meta-instructions ("Reply with the single word OK.") — i.e. no pipeline vocabulary</td>
+<td>One plain-text completion; <code>message</code> carries the reply; <strong>no</strong> pipeline generation</td>
+</tr>
+</tbody>
+</table>
+<p>The bias is deliberately conservative: a message naming a workflow, an
+assay, a file format, or a tool routes to generation unless it is phrased
+as an explanation question. <code>context.data_paths</code> / <code>context.samplesheet</code>
+and a request-level <code>run_id</code> always force generation (data analysis and
+run diagnosis need the tool loop). <code>context.intent</code> is a pipeline label
+hint only — it never changes the route, so the SPA's page name cannot turn
+conversational turns into pipelines.</p>
+<h3 id="post-apichatsendjson-response-shapes"><code>POST /api/chat/send/json</code> — response shapes<a class="headerlink" href="#post-apichatsendjson-response-shapes" title="Permanent link">#</a></h3>
+<p>Chat intent (one provider completion, no workflow):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"chat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"OK"</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
+<p>Pipeline intent (the existing fields are unchanged; <code>mode</code> is added):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a><span class="p">{</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a><span class="w">  </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline"</span><span class="p">,</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a><span class="w">  </span><span class="nt">"pipeline_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4" href="#__codelineno-61-4"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\n…"</span><span class="p">,</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5" href="#__codelineno-61-5"></a><span class="w">  </span><span class="nt">"intent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RNA-seq analysis"</span><span class="p">,</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6" href="#__codelineno-61-6"></a><span class="w">  </span><span class="nt">"data_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7" href="#__codelineno-61-7"></a><span class="w">  </span><span class="nt">"validation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8" href="#__codelineno-61-8"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9" href="#__codelineno-61-9"></a><span class="w">  </span><span class="nt">"dag"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"edges"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"parallel_groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10" href="#__codelineno-61-10"></a><span class="p">}</span>
+</span></code></pre></div>
 <h3 id="post-apichatsend-sse-event-contract"><code>POST /api/chat/send</code> — SSE event contract<a class="headerlink" href="#post-apichatsend-sse-event-contract" title="Permanent link">#</a></h3>
 <p>The stream opens with a <code>ready</code> handshake, then forwards the real agent
 loop (tool rounds, validation rounds) as typed events:</p>
@@ -6448,48 +6548,48 @@ loop (tool rounds, validation rounds) as typed events:</p>
 <tbody>
 <tr>
 <td><code>ready</code></td>
-<td><code>{keepalive_secs, idle_timeout_secs}</code></td>
-<td>Handshake, sent before the first provider call. <code>keepalive_secs</code> is the comment-frame cadence; <code>idle_timeout_secs</code> (<code>3 × keepalive_secs</code>) is the <strong>client watchdog budget</strong> — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever.</td>
+<td><code>{keepalive_secs, idle_timeout_secs, mode}</code></td>
+<td>Handshake, sent before the first provider call. <code>keepalive_secs</code> is the comment-frame cadence; <code>idle_timeout_secs</code> (<code>3 × keepalive_secs</code>) is the <strong>client watchdog budget</strong> — silence longer than this means the connection is dead (proxies can drop it silently), and the client must abort and offer a retry rather than spin forever. <code>mode</code> is the intent route (<code>chat</code> or <code>pipeline</code>), so the client can pick its renderer up front.</td>
 </tr>
 <tr>
 <td><code>status</code></td>
 <td><code>{message}</code></td>
-<td>Human-readable phase (<code>planning</code>, <code>executing tools</code>).</td>
+<td>Human-readable phase (<code>planning</code>, <code>executing tools</code>). Pipeline mode only.</td>
 </tr>
 <tr>
 <td><code>progress</code></td>
 <td><code>{round, max_rounds, step, tool, elapsed_ms, prompt_tokens, completion_tokens}</code></td>
-<td>Structured loop progress, emitted at every phase boundary: <code>step</code> is <code>plan</code>, <code>generate</code>, <code>tool</code> (with <code>tool</code> naming the running tool), or <code>validate</code>. <code>elapsed_ms</code> is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead".</td>
+<td>Structured loop progress, emitted at every phase boundary: <code>step</code> is <code>plan</code>, <code>generate</code>, <code>tool</code> (with <code>tool</code> naming the running tool), or <code>validate</code>. <code>elapsed_ms</code> is measured from loop start; token counts are cumulative. Clients render this to distinguish "slow" from "dead". Pipeline mode only.</td>
 </tr>
 <tr>
 <td><code>tool_call</code></td>
 <td><code>{name, args}</code></td>
-<td>The model requested a grounded tool call.</td>
+<td>The model requested a grounded tool call. Pipeline mode only.</td>
 </tr>
 <tr>
 <td><code>tool_result</code></td>
 <td><code>{name, summary}</code></td>
-<td>The tool finished; <code>summary</code> is a truncated preview (errors ride here too).</td>
+<td>The tool finished; <code>summary</code> is a truncated preview (errors ride here too). Pipeline mode only.</td>
 </tr>
 <tr>
 <td><code>text</code></td>
 <td><code>{chunk}</code></td>
-<td>One complete round response (token-level streaming is not implemented).</td>
+<td>One complete round response (token-level streaming is not implemented). In <code>chat</code> mode this carries the whole plain-text reply.</td>
 </tr>
 <tr>
 <td><code>action</code></td>
 <td><code>{action_type, data}</code></td>
-<td>Structured action — <code>pipeline_ready</code> carries the validated TOML and its validation result.</td>
+<td>Structured action — <code>pipeline_ready</code> carries the validated TOML and its validation result. Pipeline mode only; chat turns never emit it.</td>
 </tr>
 <tr>
 <td><code>error</code></td>
 <td><code>{code, message}</code></td>
-<td>Terminal failure (<code>CHAT_ERROR</code>, <code>AI_NOT_CONFIGURED</code>, <code>EMPTY_MESSAGE</code>). The loop aborts and its transcript is archived with <code>outcome: "Failed"</code> and the reason.</td>
+<td>Terminal failure (<code>CHAT_ERROR</code>, <code>AI_NOT_CONFIGURED</code>, <code>EMPTY_MESSAGE</code>). In pipeline mode the loop aborts and its transcript is archived with <code>outcome: "Failed"</code> and the reason.</td>
 </tr>
 <tr>
 <td><code>done</code></td>
-<td><code>{session_id, rounds, prompt_tokens, completion_tokens}</code></td>
-<td>Terminal success marker. Always sent after <code>action</code>; clients stop reading here.</td>
+<td><code>{session_id, mode, rounds, prompt_tokens, completion_tokens}</code> / <code>{session_id, mode: "chat", message}</code></td>
+<td>Terminal success marker. Pipeline mode: always sent after <code>action</code>, clients stop reading here. Chat mode: <code>message</code> repeats the full reply (so a lost <code>text</code> frame cannot leave an empty bubble), and the token counters are omitted.</td>
 </tr>
 </tbody>
 </table>
@@ -6524,7 +6624,9 @@ so a reader never observes a truncated file, and a run that fails archives
 <code>outcome: "Failed"</code> with an <code>error</code> reason (the post-mortem record). Pruning
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent
-writers.</p>
+writers. Chat-intent replies do not run the agent loop and therefore produce
+no archive; they are appended to the chat session store like every other
+assistant message.</p>
 <h3 id="ai-provider-probe">AI provider probe<a class="headerlink" href="#ai-provider-probe" title="Permanent link">#</a></h3>
 <p><code>POST /api/ai/test</code> is <strong>single-flight</strong>: concurrent callers share one
 outbound provider round-trip (queued behind an async mutex) and a result
@@ -6533,8 +6635,8 @@ never writes an <code>ai_sessions</code> archive, so repeated settings checks ca
 pollute the audit trail or trip the provider's rate limiter.</p>
 <hr />
 <h2 id="oauth">OAuth<a class="headerlink" href="#oauth" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
-</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
+<div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2" href="#__codelineno-62-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
 </span></code></pre></div>
 <p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
 fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
@@ -6551,10 +6653,10 @@ the callback answers <code>503 {code:"DB_ERROR"}</code> instead of minting a ses
 that would fail closed on every subsequent request.</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
-</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a>POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
-</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a>POST /api/pipelines/import       # Import from oxo+http(s):// share URL
-</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4" href="#__codelineno-61-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a>POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a>POST /api/pipelines/import       # Import from oxo+http(s):// share URL
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4" href="#__codelineno-63-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 </span></code></pre></div>
 <code>GET /api/share/{token}</code> powers the share landing page: pipeline identity,
 DAG rule order, TOML, owner, expiry, and the most recent terminal run —
@@ -6567,22 +6669,22 @@ An override that carries its own mount path (e.g.
 local <code>--base-path</code> prefix instead of being appended to it.</p>
 <p>See <a href="../../how-to/collaboration/">Collaboration</a> for details.</p>
 <h3 id="version-history">Version History<a class="headerlink" href="#version-history" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2" href="#__codelineno-62-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3" href="#__codelineno-62-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
+</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
+</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3" href="#__codelineno-64-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
 </span></code></pre></div>
 Every save/update snapshots the previous content; rollback preserves the
 current version as a new revision (nothing is lost).</p>
 <h2 id="run-administration">Run Administration<a class="headerlink" href="#run-administration" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
-</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
 </span></code></pre></div>
 <code>resume-checkpoint</code> continues an unfinished run in place as a NEW run row
 (<code>{"max_jobs": 2}</code> optional). Both are ownership-checked like every other
 run endpoint.</p>
 <h2 id="webhooks">Webhooks<a class="headerlink" href="#webhooks" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a>GET /api/webhook   # admin-only outside personal mode — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
-</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>GET /api/webhook   # admin-only outside personal mode — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
+</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 </span></code></pre></div>
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:</p>
@@ -6611,9 +6713,9 @@ supplied — silently signing with an empty key would
 produce forgeable deliveries.</p>
 <p>Admin-only outside personal mode — the endpoint is shared infrastructure.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
-</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
+</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
+</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
 </span></code></pre></div>
 Machine credentials: send <code>X-API-Key: oxo_...</code> instead of a Bearer session.
 Keys resolve to the same ownership context (a key's requests see exactly
@@ -6623,16 +6725,16 @@ immediate.</p>
 <p>Runs pre-flight the quota tracker with the workflow's declared threads and
 memory; over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the violation
 list.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>GET  /api/quota           # current limits and usage
-</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>GET  /api/quota           # current limits and usage
+</span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 </span></code></pre></div>
 <p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side).
 Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>).</p>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a>GET    /api/clusters                  # configured SSH connections
-</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
-</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a>DELETE /api/clusters/{id}
-</span><span id="__span-67-4"><a id="__codelineno-67-4" name="__codelineno-67-4" href="#__codelineno-67-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>GET    /api/clusters                  # configured SSH connections
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
+</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a>DELETE /api/clusters/{id}
+</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 </span></code></pre></div>
 The stored <code>ssh_key</code> is a secret: it is never returned by any
 response (including the upsert echo) — clients see <code>ssh_key_set: true |
@@ -6651,14 +6753,14 @@ rule subprocesses stop rather than being orphaned. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
 <hr />
 <h2 id="hpc">HPC<a class="headerlink" href="#hpc" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>GET /api/hpc
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a>GET /api/hpc
 </span></code></pre></div>
 Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. Nodes are deduplicated by name (SLURM lists a node once per partition it belongs to). This route is only mounted when the server runs in <code>hpc</code> mode, and the generated OpenAPI document only advertises it in that mode.</p>
 <hr />
 <h2 id="dag-editing">DAG Editing<a class="headerlink" href="#dag-editing" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
-</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
+<div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
+</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
+</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
 </span></code></pre></div>
 <p><code>undo</code>/<code>redo</code> require a JSON body carrying the caller's current TOML; the
 stacked edit is applied only when it matches that state (otherwise <code>404</code>).
