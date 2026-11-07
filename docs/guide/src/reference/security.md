@@ -213,8 +213,22 @@ app, pinned by the `base_path_mount_headers` integration test.
 
 ---
 
+## Agent-Driven Use
+
+The run-time gates above protect **rule shells** — they do not constrain an
+AI agent's own terminal. An agent that probes inputs, authors workflows, and
+repairs failures needs the operating contract in
+[Agent Safety & Workspace Discipline](../how-to/agent-safety.md): read-only
+inputs, snapshot-before-mutate, one scratch tree inside the project, an
+append-only operation journal, and `[engine] protected_data_trees` as a
+drift backstop. The canonical agent skill ([SKILL.md](../SKILL.md)) embeds
+the same rules so they load with the skill.
+
+---
+
 ## See Also
 
 - [Workflow Format](./workflow-format.md) — rule field reference
 - [AI CLI](./ai-cli.md) — AI-powered workflow analysis
+- [Agent Safety & Workspace Discipline](../how-to/agent-safety.md) — operating contract for AI agents
 - [Troubleshooting](../how-to/troubleshooting.md) — common issues

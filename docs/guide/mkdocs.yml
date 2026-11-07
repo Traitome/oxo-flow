@@ -156,6 +156,7 @@ nav:
       - China Mirrors: how-to/china-mirrors.md
       - Editor Setup: how-to/editor-setup.md
       - Troubleshooting: how-to/troubleshooting.md
+      - Agent Safety & Workspace Discipline: how-to/agent-safety.md
       - Desktop App Packaging: how-to/desktop-app.md
   - Command Reference:
       - batch: commands/batch.md
