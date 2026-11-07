@@ -510,11 +510,13 @@ GET /api/runs/{id}/status
 ```
 Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule that did not run — when-gated off (`when_verdicts == false`) or abort-cancelled (`rule_runs` status `cancelled`, which records no set membership) — is surfaced as `skipped`, never as a forever-`pending` node.
 
+Timing guarantees for `nodes[]`: a terminal node that actually executed (`success`, `failed`, or run-level `cancelled`) reports `started_at` (RFC 3339 UTC) and `duration_ms` from the checkpoint's `rule_runs` start/end pair — completed rules pair the recorded start with their benchmark wall time; failed and cancelled rules derive the duration from the pair. Both fields are `null` when the underlying data genuinely does not exist: `pending`, `running`, `skipped`, synthetic "outputs up-to-date" completions (the rule did not execute in this run), and checkpoints written by engines predating the timestamp fields. The one legacy exception is a `success` node from an old checkpoint that recorded a benchmark but no start: it keeps the real `duration_ms` with `started_at: null` rather than fabricating a start.
+
 ### DAG Status
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. A rule killed because the *run* was cancelled reports `status: "cancelled"` — never `failed` — while a rule with its own recorded exit code stays `failed` even if the run was later cancelled. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled siblings of a failed run) plus `cancelled_nodes` (run-level cancellations) keep `completed + failed + cancelled + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. Each node also carries the same `started_at`/`duration_ms` timing contract as [Run Status](#run-status) (`started_at` is an RFC 3339 UTC timestamp, not a duration substitute). A rule killed because the *run* was cancelled reports `status: "cancelled"` — never `failed` — while a rule with its own recorded exit code stays `failed` even if the run was later cancelled. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled siblings of a failed run) plus `cancelled_nodes` (run-level cancellations) keep `completed + failed + cancelled + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.
 
 ### Diagnostics
 ```
@@ -603,7 +605,7 @@ Content-Type: application/json
 Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim.
 
 ### Run Status exit codes and failure tails
-`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records: completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (some tools print their root cause on stdout). The AI monitor (`/ai-status`) receives the same tails and classifies failures through the shared `DiagnosticsEngine` pattern table before falling back to exit-code-only signatures; its alerts carry a stable `alert_id` for cross-poll dedup. The AI chat `get_run_status` tool carries the same fields.
+`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` and the terminal timing fields from the checkpoint's `rule_runs` records: completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (some tools print their root cause on stdout). The AI monitor (`/ai-status`) receives the same tails and classifies failures through the shared `DiagnosticsEngine` pattern table before falling back to exit-code-only signatures; its alerts carry a stable `alert_id` for cross-poll dedup. The AI chat `get_run_status` tool carries the same fields.
 
 ### Report Visualization
 ```

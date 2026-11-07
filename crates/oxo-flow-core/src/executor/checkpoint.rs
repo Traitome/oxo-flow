@@ -1,6 +1,7 @@
 use crate::error::{OxoFlowError, Result};
 use crate::executor::JobRecord;
 use crate::rule::{FilePatterns, Rule};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -370,6 +371,19 @@ pub struct RuleRunRecord {
     /// rule was skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Wall-clock start of the execution attempt (post resource acquisition,
+    /// same stamp the benchmark wall time is measured from). Persisted so
+    /// status consumers can report `started_at` alongside `duration_ms`
+    /// instead of dropping one of the pair; absent in legacy checkpoints and
+    /// for rules that never actually started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    /// Wall-clock end of the execution attempt. With `started_at` this
+    /// yields a duration for failed rules (whose failures carry no
+    /// benchmark record); absent in legacy checkpoints and for rules that
+    /// never actually started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
     /// The expanded command that was executed (wildcards and `{config.x}`
     /// resolved). Absent in legacy checkpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -954,6 +968,8 @@ impl CheckpointState {
             record.rule.clone(),
             RuleRunRecord {
                 exit_code: record.exit_code,
+                started_at: record.started_at,
+                finished_at: record.finished_at,
                 command: record.command.clone(),
                 stderr_tail: stream_tail(record.stderr.as_deref(), tail_bytes),
                 stdout_tail: stream_tail(record.stdout.as_deref(), tail_bytes),
@@ -990,10 +1006,14 @@ impl CheckpointState {
             let stdout_tail = existing.stdout_tail.clone();
             let caption = existing.caption.clone();
             let signal = existing.signal;
+            let started_at = existing.started_at;
+            let finished_at = existing.finished_at;
             self.rule_runs.insert(
                 rule.to_string(),
                 RuleRunRecord {
                     exit_code: None,
+                    started_at,
+                    finished_at,
                     command,
                     stderr_tail,
                     stdout_tail,
@@ -2302,12 +2322,14 @@ mod tests {
         // terminal status) distinct from a failure, and carry the
         // signal-death evidence.
         let mut ck = CheckpointState::default();
+        let started_at = chrono::Utc::now() - chrono::Duration::seconds(3);
+        let finished_at = chrono::Utc::now();
         let record = JobRecord {
             rule: "slow_scan".into(),
             status: crate::executor::JobStatus::Cancelled,
             enqueued_at: None,
-            started_at: None,
-            finished_at: Some(chrono::Utc::now()),
+            started_at: Some(started_at),
+            finished_at: Some(finished_at),
             exit_code: None,
             stdout: None,
             stderr: Some("[oxo-flow] command terminated by SIGTERM (15)".into()),
@@ -2324,6 +2346,11 @@ mod tests {
         assert_eq!(r.status.as_deref(), Some("cancelled"));
         assert_eq!(r.skip_reason.as_deref(), Some("run aborted"));
         assert_eq!(r.signal, Some(15));
+        // Issue #1040 P3-3: the execution timestamps are part of the
+        // persisted record, not dropped at the checkpoint boundary — status
+        // consumers derive both `started_at` and a duration from them.
+        assert_eq!(r.started_at, Some(started_at));
+        assert_eq!(r.finished_at, Some(finished_at));
     }
 
     #[test]
@@ -2346,7 +2373,7 @@ mod tests {
                 rule: "slow_scan".into(),
                 status,
                 enqueued_at: None,
-                started_at: None,
+                started_at: Some(chrono::Utc::now() - chrono::Duration::seconds(2)),
                 finished_at: Some(chrono::Utc::now()),
                 exit_code,
                 stdout: None,
@@ -2371,6 +2398,10 @@ mod tests {
         let r = &ck.rule_runs["slow_scan"];
         assert_eq!(r.status.as_deref(), Some("cancelled"));
         assert!(r.stderr_tail.is_none() || r.signal == Some(15));
+        assert!(
+            r.started_at.is_some() && r.finished_at.is_some(),
+            "demotion must preserve the execution timestamps (issue #1040 P3-3)"
+        );
 
         // Exit-code failure → kept.
         let mut ck = mk(base(crate::executor::JobStatus::Failed, Some(1), None));
@@ -2384,6 +2415,8 @@ mod tests {
             "legacy".into(),
             RuleRunRecord {
                 exit_code: None,
+                started_at: None,
+                finished_at: None,
                 command: None,
                 stderr_tail: None,
                 stdout_tail: None,

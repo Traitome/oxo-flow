@@ -1881,6 +1881,8 @@ mod tests {
         cp.rule_runs.insert(
             "count_reads".into(),
             oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,
@@ -1913,6 +1915,8 @@ mod tests {
         cp.rule_runs.insert(
             "greet".into(),
             oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                started_at: None,
+                finished_at: None,
                 status: None,
                 skip_reason: None,
                 signal: None,

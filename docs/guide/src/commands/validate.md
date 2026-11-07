@@ -123,14 +123,40 @@ so a green validate no longer hides a workflow that cannot run:
 ```
 
 Warnings keep exit code `0` — only errors fail. `validate` scopes itself
-to `W024` (runnability); the full best-practice sweep remains
-[`lint`](lint.md)'s job, and the `warnings` array is empty when nothing
-blocks runnability. At run time the corresponding unbound-placeholder
-WARN is emitted once per (instance, placeholder): the multiple render
-sites within one instance (output pattern + command) collapse to a
-single line — the double-print the issue reporter saw — while each
-fan-out instance still logs its own line, because the message names the
-expanded instance (`step1_lane_L1`) rather than the template rule.
+to `W024` and `SCI-AGG-RACE` (runnability); the full best-practice sweep
+remains [`lint`](lint.md)'s job, and the `warnings` array is empty when
+nothing blocks runnability. At run time the corresponding
+unbound-placeholder WARN is emitted once per (instance, placeholder):
+the multiple render sites within one instance (output pattern + command)
+collapse to a single line — the double-print the issue reporter saw —
+while each fan-out instance still logs its own line, because the message
+names the expanded instance (`step1_lane_L1`) rather than the template
+rule.
+
+### Aggregation race (SCI-AGG-RACE surfaced in validate)
+
+A rule that fans out across a sample, pair, `[[values]]`, or
+`output_pattern` dimension while its declared outputs are **not keyed by
+that dimension** makes every expanded instance write the same concrete
+path — the instances race or duplicate work N−1 times. The shape is
+statically detectable (no expansion needed), and `validate` now reports
+it with the same detector and code [`dry-run`](dry-run.md#scientific-preflight)
+uses, so the first gate no longer waves through a workflow that will
+crash or corrupt results at run time:
+
+```
+✓ agg.oxoflow — 1 rule, 0 dependencies
+
+  warning [SCI-AGG-RACE]: rule fans out per the sample domain — no {sample}/{group} wildcard keys the outputs: … (rule: multiqc)
+    hint: if the fan-out is unintentional … for a genuine per-element rule, key the outputs by that dimension's wildcard …
+```
+
+`--json` carries the same finding in `warnings`. The warning keeps exit
+code `0` — it identifies a design defect, not a parse/DAG error — and
+`--as-include` skips it because a standalone fragment does not declare
+the parent workflow's fan-out domains. `dry-run` still prints the full
+scientific-preflight sweep; `validate` surfaces only this
+runnability-relevant code.
 
 ---
 

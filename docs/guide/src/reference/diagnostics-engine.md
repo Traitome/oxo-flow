@@ -253,7 +253,7 @@ Deterministic, evidence-backed rules covering genomics, transcriptomics, epigeno
 
 #### 6. Workflow Concurrency, Hardware & Dataflow
 
-- `SCI-AGG-RACE`: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other.
+- `SCI-AGG-RACE`: Rule fans out across samples, pairs, or values dimensions but declares instance-independent output paths; concurrent instances race and overwrite each other. Statically detectable, so [`validate`](../commands/validate.md#aggregation-race-sci-agg-race-surfaced-in-validate) reports it too (warning, exit 0), not just `dry-run`.
 - `SCI-SORT-THREADS-MEM-PRODUCT`: `samtools sort -m` per-thread memory multiplied by thread count exceeds the rule resource budget; leads to kernel OOM kills.
 - `SCI-TMPDIR-NOT-SCRATCH`: Heavy I/O tools write intermediate files to system `/tmp` instead of engine-managed scratch space (`${TMPDIR}`).
 - `SCI-PIPE-FAIL-DISABLED`: Multi-stage shell pipelines (`cmd1 | cmd2 | cmd3`) lack `set -o pipefail`; upstream tool crashes are silently masked.
