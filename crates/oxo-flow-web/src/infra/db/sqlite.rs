@@ -962,16 +962,21 @@ impl StorageBackend for SqliteBackend {
         status: &str,
         phase: &str,
         finished_at: &str,
-    ) -> Result<(), String> {
-        sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
-            .bind(status)
-            .bind(phase)
-            .bind(finished_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
+    ) -> Result<bool, String> {
+        // First terminal write wins (mirrors models::is_terminal_run_status):
+        // cancel-vs-failed races must never rewrite an already-final row.
+        let res = sqlx::query(
+            "UPDATE runs SET status = ?, phase = ?, finished_at = ? \
+             WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
+        )
+        .bind(status)
+        .bind(phase)
+        .bind(finished_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
@@ -2550,7 +2555,7 @@ mod tests {
         };
         let created = backend.create_run(&run).await.unwrap();
 
-        backend
+        let applied = backend
             .record_run_terminal(
                 &created.id,
                 "cancelled",
@@ -2559,10 +2564,60 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(applied, "first terminal write must apply");
         let cancelled = backend.get_run(&created.id).await.unwrap().unwrap();
         assert_eq!(cancelled.status, "cancelled");
         assert_eq!(cancelled.phase, "cancelled");
         assert!(cancelled.finished_at.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: first terminal state wins (cancel vs. late failure race)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_terminal_state_is_never_overwritten_by_late_failure() {
+        // Arrange — a running run cancelled by the user.
+        let backend = create_backend().await;
+        let user = create_test_user(&backend, "terminal-race").await;
+        let pipeline = create_test_pipeline(&backend, &user.id, "terminal-race-pipeline").await;
+
+        let run = models::RunRow {
+            id: String::new(),
+            user_id: user.id.clone(),
+            pipeline_id: Some(pipeline.id.clone()),
+            pipeline_snapshot: pipeline.toml_content.clone(),
+            workflow_name: None,
+            status: "running".to_string(),
+            phase: "executing".to_string(),
+            dry_run: false,
+            pid: None,
+            workdir: None,
+            config_overrides: None,
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            finished_at: None,
+            created_at: String::new(),
+        };
+        let created = backend.create_run(&run).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        assert!(
+            backend
+                .record_run_terminal(&created.id, "cancelled", "cancelled", &now)
+                .await
+                .unwrap()
+        );
+
+        // Act — the remote launch/poll failure path fires late.
+        let applied = backend
+            .record_run_terminal(&created.id, "failed", "failed", &now)
+            .await
+            .unwrap();
+
+        // Assert — the cancelled terminal state survives untouched.
+        assert!(!applied, "a late failure must not rewrite a terminal row");
+        let row = backend.get_run(&created.id).await.unwrap().unwrap();
+        assert_eq!(row.status, "cancelled");
+        assert_eq!(row.phase, "cancelled");
     }
 
     // -----------------------------------------------------------------------

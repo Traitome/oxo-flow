@@ -1,7 +1,7 @@
 /// CLI command: oxo-flow import <source> [--from nextflow|snakemake] [-o <output>]
 use anyhow::{Context, Result};
 use colored::Colorize;
-use oxo_flow_core::transpile::{SourceFormat, transpile};
+use oxo_flow_core::transpile::{SourceFormat, transpile_with_warnings};
 use std::fs;
 use std::path::Path;
 
@@ -26,11 +26,17 @@ pub fn handle_import(
             })?,
     };
 
-    let transpiled = transpile(&source_content, format)
+    let transpiled = transpile_with_warnings(&source_content, format)
         .with_context(|| format!("failed to transpile '{}'", source_path.display()))?;
 
+    // Translation losses are loud, not silent: a construct the importer could
+    // not map is reported on stderr before the workflow is written.
+    for warning in &transpiled.warnings {
+        eprintln!("{} {}", "warning:".yellow().bold(), warning);
+    }
+
     // Validate generated workflow TOML with oxo-flow parser
-    oxo_flow_core::config::WorkflowConfig::parse(&transpiled)
+    oxo_flow_core::config::WorkflowConfig::parse(&transpiled.toml)
         .with_context(|| "generated workflow failed oxo-flow parse validation")?;
 
     match output {
@@ -49,7 +55,7 @@ pub fn handle_import(
             {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(out_path, &transpiled)
+            fs::write(out_path, &transpiled.toml)
                 .with_context(|| format!("failed to write output to '{}'", out_path.display()))?;
             eprintln!(
                 "{} Transpiled {} ({:?}) -> {}",
@@ -60,7 +66,7 @@ pub fn handle_import(
             );
         }
         None => {
-            println!("{transpiled}");
+            println!("{}", transpiled.toml);
         }
     }
 

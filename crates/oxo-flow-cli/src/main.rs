@@ -8,6 +8,7 @@ pub mod banner;
 pub mod commands;
 mod logging;
 
+use crate::commands::agent_docs::agent_docs_command;
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
 use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
@@ -445,6 +446,22 @@ pub enum Commands {
             long,
             help = "Overwrite an existing workflow file (its contents are lost)"
         )]
+        force: bool,
+        #[arg(
+            long,
+            help = "Also scaffold agent docs (AGENTS.md, CLAUDE.md, SKILL.md)"
+        )]
+        agent: bool,
+    },
+    /// Scaffold agent-facing docs (AGENTS.md, CLAUDE.md, SKILL.md) in a project.
+    AgentDocs {
+        #[arg(
+            short = 'd',
+            long,
+            help = "Target directory (default: current directory)"
+        )]
+        dir: Option<PathBuf>,
+        #[arg(long, help = "Overwrite existing agent docs (user edits are lost)")]
         force: bool,
     },
     /// Generate a workflow from a predefined template or via AI.
@@ -1720,7 +1737,13 @@ async fn main() -> Result<()> {
             crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
         }
         Commands::Knowledge { action, format } => knowledge_command(action, format)?,
-        Commands::Init { name, dir, force } => init_command(name, dir, force)?,
+        Commands::Init {
+            name,
+            dir,
+            force,
+            agent,
+        } => init_command(name, dir, force, agent)?,
+        Commands::AgentDocs { dir, force } => agent_docs_command(dir, force)?,
         Commands::Template {
             template,
             output,

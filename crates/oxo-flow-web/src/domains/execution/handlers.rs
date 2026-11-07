@@ -982,7 +982,7 @@ pub async fn get_run_status(
     // The checkpoint reads are synchronous file I/O and this endpoint is
     // polled — run the combined block on the blocking pool (#268 item 4).
     let workdir = run.workdir.clone().unwrap_or_default();
-    let running = run.status == "running";
+    let run_status = run.status.clone();
     let snapshot = run.pipeline_snapshot.clone();
     let (node_items, metrics) = blocking_checkpoint_io(move || {
         let dag = oxo_flow_core::WorkflowConfig::parse(&snapshot)
@@ -995,7 +995,7 @@ pub async fn get_run_status(
                 .ok()
             });
         let node_items =
-            checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running);
+            checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), &run_status);
         let node_items = match &dag {
             Some(d) => checkpoint_status::with_all_rules(
                 node_items,
@@ -1079,9 +1079,9 @@ pub async fn get_dag_status(
     // blocking pool (#268 item 4). The DAG parse itself only consumes the
     // in-memory snapshot string, so it stays on the async path.
     let workdir = run.workdir.clone().unwrap_or_default();
-    let running = run.status == "running";
+    let run_status = run.status.clone();
     let node_items = blocking_checkpoint_io(move || {
-        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), &run_status)
     })
     .await;
     let node_items = match &dag {
@@ -1097,7 +1097,9 @@ pub async fn get_dag_status(
                 NodeStatus::Success => "green",
                 NodeStatus::Running => "blue",
                 NodeStatus::Failed => "red",
-                NodeStatus::Skipped => "gray",
+                // Cancellation is a terminal non-failure state — same gray
+                // as skipped, never the failure red (report finding P-F4).
+                NodeStatus::Cancelled | NodeStatus::Skipped => "gray",
                 NodeStatus::Pending => "lightgray",
             };
             DagNode {
@@ -1138,6 +1140,10 @@ pub async fn get_dag_status(
     let running_nodes = dag_nodes.iter().filter(|n| n.status == "running").count();
     let pending_nodes = dag_nodes.iter().filter(|n| n.status == "pending").count();
     let skipped_nodes = dag_nodes.iter().filter(|n| n.status == "skipped").count();
+    // Cancelled nodes get their own bucket (report finding P-F4): counting
+    // them as failed misreported a cancelled run's failure tally, and
+    // folding them into skipped would contradict the node's own status.
+    let cancelled_nodes = dag_nodes.iter().filter(|n| n.status == "cancelled").count();
 
     // ETA based on SUCCESSFUL node durations only (issue #907 P1-2): failed
     // and skipped nodes must not inflate the average, and the remaining-work
@@ -1174,12 +1180,14 @@ pub async fn get_dag_status(
                 + running_nodes
                 + pending_nodes
                 + skipped_nodes
+                + cancelled_nodes
                 + completed_count,
             completed_nodes: completed_count,
             failed_nodes,
             running_nodes,
             pending_nodes,
             skipped_nodes,
+            cancelled_nodes,
             eta_ms,
         },
     }))
@@ -1210,9 +1218,9 @@ pub async fn get_run_instances(
     // The checkpoint read is synchronous file I/O and this endpoint is
     // polled — run it on the blocking pool (#268 item 4).
     let workdir = run.workdir.clone().unwrap_or_default();
-    let running = run.status == "running";
+    let run_status = run.status.clone();
     let items = blocking_checkpoint_io(move || {
-        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), running)
+        checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), &run_status)
     })
     .await;
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
@@ -1291,10 +1299,11 @@ pub async fn get_diagnostics(
     // The checkpoint/log reads are synchronous file I/O — run the combined
     // block on the blocking pool (#268 item 4, web minor).
     let workdir = run.workdir.clone();
-    let running = run.status == "running";
+    let run_status = run.status.clone();
     let (node_items, log_output, benchmarks) = blocking_checkpoint_io(move || {
         let dir = workdir.clone().unwrap_or_default();
-        let node_items = checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running);
+        let node_items =
+            checkpoint_status::load_node_statuses(std::path::Path::new(&dir), &run_status);
 
         // Try to read log output from workdir — the newest 256 KiB only:
         // execution.log is the run's full unbounded log, and diagnosis keys
@@ -1478,7 +1487,7 @@ pub async fn retry_run(
 
     let node_items = checkpoint_status::load_node_statuses(
         std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-        run.status == "running",
+        &run.status,
     );
 
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
@@ -1653,8 +1662,7 @@ pub async fn cancel_run(
 
     // Terminal states are final — cancelling a finished run would silently
     // rewrite its result.
-    let is_terminal = matches!(run.status.as_str(), "completed" | "failed" | "cancelled");
-    if is_terminal {
+    if models::is_terminal_run_status(&run.status) {
         return Err(err(
             StatusCode::CONFLICT,
             "RUN_NOT_ACTIVE",
@@ -1662,17 +1670,34 @@ pub async fn cancel_run(
         ));
     }
 
-    // Persist the cancellation BEFORE signaling: the executor's exit path
-    // checks for a 'cancelled' row and skips its own terminal write, so the
-    // kill fallout can never flip the status back to completed/failed.
+    // Persist the cancellation BEFORE signaling: the storage layer makes the
+    // first terminal write win, so the executor's exit path (and the remote
+    // launch/poll failure paths) can never flip the status back to
+    // completed/failed. A competing finalizer that landed between the check
+    // above and this write makes the cancel a no-op — report the truth
+    // instead of a 200 the row does not reflect.
     // The quota reservation is released here — the executor's finalize path
     // early-returns for cancelled runs and never reaches its own release.
     crate::infra::quota::release_and_complete(&id);
     let now = now_iso();
-    backend
+    let cancelled = backend
         .record_run_terminal(&id, "cancelled", "cancelled", &now)
         .await
         .map_err(|e| db_err(format!("DB error cancelling run {id}: {e}")))?;
+    if !cancelled {
+        let current = backend
+            .get_run(&id)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.status)
+            .unwrap_or_else(|| "terminal".into());
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_ACTIVE",
+            format!("Run {id} is already {current} — cannot cancel"),
+        ));
+    }
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
@@ -1806,7 +1831,7 @@ pub async fn pause_run(
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
     // Terminal states are final — pausing a finished run would leave a
     // 'paused' row nothing ever finalizes again (ghost run).
-    if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
+    if models::is_terminal_run_status(&run.status) {
         return Err(err(
             StatusCode::CONFLICT,
             "RUN_NOT_ACTIVE",
@@ -2197,11 +2222,11 @@ pub async fn get_ai_status(
     // polled every 5s while the monitor tab is visible — run the combined
     // block on the blocking pool (#268 item 4).
     let workdir = _run.workdir.clone();
-    let running = _run.status == "running";
+    let run_status = _run.status.clone();
     let (exec_nodes, metrics) = blocking_checkpoint_io(move || {
         let dir = workdir.clone().unwrap_or_default();
         let exec_nodes: Vec<NodeExecutionStatus> =
-            checkpoint_status::load_node_statuses(std::path::Path::new(&dir), running)
+            checkpoint_status::load_node_statuses(std::path::Path::new(&dir), &run_status)
                 .iter()
                 .map(|n| NodeExecutionStatus {
                     rule: n.rule.clone(),
@@ -2341,7 +2366,7 @@ async fn build_report_for_run(
     let diagnostics: Vec<String> = match run.workdir.as_deref() {
         Some(wd) => {
             let dir = std::path::Path::new(wd);
-            let node_items = checkpoint_status::load_node_statuses(dir, run.status == "running");
+            let node_items = checkpoint_status::load_node_statuses(dir, &run.status);
             let benchmarks = checkpoint_status::load_benchmarks(dir);
             let diag = service::diagnose_run(&node_items, &log_summary, &benchmarks);
             diag.failed_nodes
@@ -2462,7 +2487,7 @@ pub async fn visualize_report(
     } else {
         checkpoint_status::load_node_statuses(
             std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-            false,
+            &run.status,
         )
         .into_iter()
         .map(|n| {

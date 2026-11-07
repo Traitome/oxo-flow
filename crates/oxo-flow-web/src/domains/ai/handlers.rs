@@ -303,12 +303,12 @@ pub async fn explain(
         // checkpoint/log reads are synchronous file I/O — run the
         // combined block on the blocking pool (#268 item 4, web minor).
         let workdir = run.workdir.clone();
-        let running = run.status == "running";
+        let run_status = run.status.clone();
         let (node_items, log, benchmarks) = tokio::task::spawn_blocking(move || {
             let wd = workdir.as_deref().unwrap_or("");
             let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
                 std::path::Path::new(wd),
-                running,
+                &run_status,
             );
             let log = crate::domains::execution::checkpoint_status::read_tail_bounded(
                 std::path::Path::new(&format!("{wd}/execution.log")),

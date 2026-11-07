@@ -114,12 +114,13 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
     let started_at = run.started_at;
     let finished_at = run.finished_at;
     let workdir = run.workdir;
+    let run_status = run.status;
     let workflow_name = workflow_name.unwrap_or_else(|| "pipeline".to_string());
 
     // Rule counts from the engine's checkpoint (single source of truth).
     let nodes = crate::domains::execution::checkpoint_status::load_node_statuses(
         std::path::Path::new(workdir.as_deref().unwrap_or("")),
-        false,
+        &run_status,
     );
     let succeeded = nodes
         .iter()
