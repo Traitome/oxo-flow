@@ -298,9 +298,15 @@ pub async fn chat_send(
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
+        (status = 504, description = "AI generation exceeded OXO_FLOW_AI_TIMEOUT_SECS", body = ApiError),
     )
 )]
 /// POST /api/chat/send/json — non-streaming JSON response.
+///
+/// The whole generation (all tool and validation rounds) is bounded by
+/// `OXO_FLOW_AI_TIMEOUT_SECS`; expiry answers `504 AI_TIMEOUT` instead of
+/// letting a reverse proxy kill the connection with no structured answer
+/// (issue #1040 P3-5).
 pub async fn chat_send_json(
     authenticated: Option<Extension<CurrentUser>>,
     ApiJson(req): ApiJson<ChatRequest>,
@@ -342,15 +348,30 @@ pub async fn chat_send_json(
         user_id: &user.id,
         is_admin: user.is_admin(),
     };
-    match service::process_chat(
-        &req.message,
-        req.context.as_ref(),
-        &templates,
-        &provider,
-        &invocation,
+    let budget = crate::domains::ai::timeout::json_route_timeout();
+    let generated = match crate::domains::ai::timeout::with_budget(
+        budget,
+        service::process_chat(
+            &req.message,
+            req.context.as_ref(),
+            &templates,
+            &provider,
+            &invocation,
+        ),
     )
     .await
     {
+        Some(result) => result,
+        None => {
+            tracing::warn!(
+                endpoint = "/api/chat/send/json",
+                budget_secs = budget.as_secs(),
+                "AI JSON route exceeded its total timeout budget"
+            );
+            return Err(crate::domains::ai::timeout::timeout_response(budget));
+        }
+    };
+    match generated {
         Ok((text, data)) => {
             persist_assistant_message(&user, &session_id, &text).await;
             Ok(Json(data))

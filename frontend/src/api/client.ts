@@ -3,7 +3,7 @@ import type {
   ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
   RunItem, RunList, Diagnostics, RetryPlan, RunResponse,
-  AiConfig, AiExplainResponse,
+  AiConfig, AiConfigEffective, AiExplainResponse,
   Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
   ReferenceStatus, AuditLogResponse,
   DagEditResponse, MonitorStatus, RunInstance,
@@ -159,7 +159,18 @@ export const api = {
   upsertCluster: (cluster: ClusterUpsert) => post<ClusterInfo>('/api/clusters', cluster),
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
   probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
-  getRunPreview: (id: string, signal?: AbortSignal) => get<DryRunPreview>(`/api/runs/${id}/preview`, signal),
+  // A run without a dry-run preview is the normal case (only --dry-run runs
+  // persist one), not a load failure: `NO_PREVIEW` maps to null so the run
+  // page and list stop surfacing "No dry-run preview for this run" as a
+  // warning banner on every regular run (issue #1040 B6).
+  getRunPreview: async (id: string, signal?: AbortSignal): Promise<DryRunPreview | null> => {
+    try {
+      return await get<DryRunPreview>(`/api/runs/${id}/preview`, signal);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'NO_PREVIEW') return null;
+      throw err;
+    }
+  },
 
   // ── Auth & License ──
   login: (username: string, password: string) => post<LoginResponse>('/api/auth/login', { username, password }),
@@ -291,6 +302,7 @@ export const api = {
 
   // ── AI Companion ──
   aiConfig: () => get<AiConfig>('/api/ai/config'),
+  aiConfigEffective: () => get<AiConfigEffective>('/api/ai/config/effective'),
   aiConfigUser: () => get<UserAiConfig>('/api/ai/config/user'),
   aiUpdateConfig: (provider: string, apiKey?: string, apiUrl?: string, model?: string) =>
     post<AiConfig>('/api/ai/config', { provider, api_key: apiKey, api_url: apiUrl, model }),

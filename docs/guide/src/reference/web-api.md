@@ -862,10 +862,23 @@ The translate endpoints take `{ "intent": "<natural-language description>",
 "context": { "data_analysis_id": "<uuid>" } }` — `intent` is REQUIRED (sending
 only a `prompt` field fails deserialization); `context` is optional.
 
+`POST /api/ai/translate` (the non-streaming variant) budgets the WHOLE
+generation — every tool and validation round — at
+`OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
+answers `504 {code: "AI_TIMEOUT"}` with the standard
+`{code, message, detail, suggestion}` body, and `suggestion` names the knob.
+Use `POST /api/ai/translate/stream` for generations expected to run longer:
+the SSE route is not capped by this total budget.
+
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. `GET /api/ai/config/effective` shows the resolved result and
-which level supplied each field. API keys are never echoed back — responses
+which level supplied each field. The `effective.model` field is the model
+the active backend was actually constructed with: an explicit config model
+wins, otherwise the environment override (`ANTHROPIC_MODEL`,
+`OPENAI_MODEL`, `OLLAMA_MODEL`, `OXO_FLOW_AI_MODEL`) or the provider
+default is reported — it is `null` only when no provider is configured.
+`GET /api/ai/config` returns the same resolved model. API keys are never echoed back — responses
 mark `key_set` instead. Rows are encrypted at rest only when
 `OXO_FLOW_MASTER_KEY` is configured; without it, the local database uses the
 documented plaintext compatibility mode.
@@ -1001,6 +1014,13 @@ Transport behavior:
 - The browser-side watchdog is derived from `ready.idle_timeout_secs`; on
   expiry the client aborts the fetch, renders the error with a Retry action,
   and re-enables the send button.
+- `POST /api/chat/send/json` (the non-streaming variant) budgets the WHOLE
+  generation — every tool and validation round — at
+  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). When the budget expires it
+  answers `504 {code: "AI_TIMEOUT"}` with the standard
+  `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
+  The SSE route above is not capped by this total budget; use it for
+  generations expected to run longer.
 
 ### Chat session archives
 

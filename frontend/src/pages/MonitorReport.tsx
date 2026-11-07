@@ -7,6 +7,7 @@ import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
+import { isTerminalRunStatus } from '../utils/runStatus';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances' | 'verification';
 
@@ -154,6 +155,17 @@ export default function MonitorReport() {
   const { id: routeId } = useParams();
   const navigate = useNavigate();
 
+  // The session object gets a new identity on every session-state update
+  // (chat messages included). Callbacks and the SSE effect therefore read
+  // the active-run setter/id through refs — depending on `session` directly
+  // would re-subscribe the event stream on unrelated state changes.
+  const activeRunIdRef = useRef(session.state.activeRunId);
+  const setActiveRunIdRef = useRef(session.setActiveRunId);
+  useEffect(() => {
+    activeRunIdRef.current = session.state.activeRunId;
+    setActiveRunIdRef.current = session.setActiveRunId;
+  }, [session.state.activeRunId, session.setActiveRunId]);
+
 
   // The selected run's owner id — the value the SSE stream scopes events by
   // (sse.rs emits the canonical users.id, not the login name the client
@@ -216,7 +228,12 @@ export default function MonitorReport() {
     // expanded to its one-line summary (issue #907 NIT-4).
     setCollapsedAlerts(new Set());
     setEventsOpen(false);
-    session.setActiveRunId(id);
+    // Selecting a historical run must not light the sidebar's "active run"
+    // dot: only a run the list still reports as live is the active one
+    // (issue #1040 B5). An unknown id (deep link) is kept and re-validated
+    // by the layout's status check.
+    const known = runsRef.current.find((r) => r.id === id);
+    session.setActiveRunId(known && isTerminalRunStatus(known.status) ? null : id);
     session.setChatContext('monitor');
     await fetchDetail(id, ctrl.signal);
     // A row click means the user wants the detail — bring it into view
@@ -244,6 +261,14 @@ export default function MonitorReport() {
       const page = await api.listRuns();
       setRuns(page.items);
       setNextCursor(page.next_cursor);
+      // The list is the cheapest "is my run still going?" oracle: once the
+      // tracked run reports a terminal status, the sidebar dot must drop —
+      // including when the refreshed list contains no active runs at all
+      // (issue #1040 B5).
+      const active = activeRunIdRef.current;
+      if (active && page.items.some((r) => r.id === active && isTerminalRunStatus(r.status))) {
+        setActiveRunIdRef.current(null);
+      }
     } catch { /* keep the previous list on a failed refresh */ }
   }, []);
 
@@ -350,6 +375,17 @@ export default function MonitorReport() {
               event.type === 'run_paused' ||
               event.type === 'run_resumed'
             ) {
+              // Terminal event for the tracked run: drop the sidebar's
+              // "active run" dot immediately — the list refresh below can
+              // lag a beat and the run may already be gone from it
+              // (issue #1040 B5).
+              if (
+                event.type === 'run_completed' ||
+                event.type === 'run_failed' ||
+                event.type === 'run_cancelled'
+              ) {
+                if (activeRunIdRef.current === selId) setActiveRunIdRef.current(null);
+              }
               void refreshRuns();
               setLogs(null);
               setInstances(null);

@@ -183,7 +183,85 @@ export default function WorkflowCanvas({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RuleNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastNodeSet = useRef('');
+  const lastScopeKey = useRef(scopeKey);
   const rfInstance = useRef<ReactFlowInstance<Node<RuleNodeData>> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Armed when the node set (or its scope) changes and consumed by the
+  // first fit that lands on a measured canvas — see scheduleFit below.
+  const pendingFit = useRef(false);
+  const pendingFitFrame = useRef<number | null>(null);
+  const fitTarget = useRef<ReactFlowInstance<Node<RuleNodeData>> | null>(null);
+
+  // Manual fit: React Flow's instance.fitView kept returning a viewport that
+  // clipped the graph on narrow panes even with fully measured nodes, so the
+  // bounds math lives here — deterministic and testable. Returns false when
+  // the canvas cannot be fitted YET (hidden pane, zero-size container, nodes
+  // not measured) so the caller can retry instead of losing the fit.
+  const fitToNodes = useCallback((instance: ReactFlowInstance<Node<RuleNodeData>>) => {
+    const container = wrapperRef.current;
+    if (!container) return false;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw === 0 || ch === 0) return false;
+    const current = instance.getNodes();
+    // Fit only fully measured batches: bounds computed from unmeasured
+    // (0×0) nodes clip exactly the nodes that were still settling — the
+    // regression this retry loop exists to prevent.
+    if (current.length === 0 || !current.every((n) => (n.measured?.width ?? 0) > 0 && (n.measured?.height ?? 0) > 0)) {
+      return false;
+    }
+    const rects = current.map((n) => ({
+      x: n.position.x,
+      y: n.position.y,
+      w: n.measured?.width ?? 0,
+      h: n.measured?.height ?? 0,
+    }));
+    const minX = Math.min(...rects.map((r) => r.x));
+    const minY = Math.min(...rects.map((r) => r.y));
+    const maxX = Math.max(...rects.map((r) => r.x + r.w));
+    const maxY = Math.max(...rects.map((r) => r.y + r.h));
+    const bw = Math.max(maxX - minX, 1);
+    const bh = Math.max(maxY - minY, 1);
+    const padding = 0.25;
+    const zoom = Math.min(
+      Math.max((cw * (1 - padding * 2)) / bw, 0.5),
+      Math.max((ch * (1 - padding * 2)) / bh, 0.5),
+      1.2,
+    );
+    instance.setViewport({
+      x: (cw - bw * zoom) / 2 - minX * zoom,
+      y: (ch - bh * zoom) / 2 - minY * zoom,
+      zoom,
+    });
+    wrapperRef.current?.setAttribute('data-fitted', 'true');
+    return true;
+  }, []);
+
+  // Retry an armed fit across frames. Dimension-change events used to be the
+  // only trigger, but they can fire before the canvas panel has a real size
+  // (hidden tab, just-mounted flex pane) — the fit then no-ops while the
+  // flag was consumed, leaving the graph clipped until a manual Fit View
+  // (issue #1040 B4). The flag is now cleared only by a fit that actually
+  // applied, and the bounded retry covers the settle window.
+  const scheduleFit = useCallback((instance: ReactFlowInstance<Node<RuleNodeData>>) => {
+    // Latest instance wins: a remount mid-retry must not fit the dead one.
+    fitTarget.current = instance;
+    if (pendingFitFrame.current !== null) return;
+    let frames = 0;
+    const attempt = () => {
+      pendingFitFrame.current = null;
+      if (!pendingFit.current || !fitTarget.current) return;
+      if (fitToNodes(fitTarget.current)) {
+        pendingFit.current = false;
+        return;
+      }
+      // Give the pane ~2s (at 60fps) to materialize; a ResizeObserver
+      // re-arms the attempt when a hidden pane becomes visible later.
+      if (frames++ >= 120) return;
+      pendingFitFrame.current = requestAnimationFrame(attempt);
+    };
+    pendingFitFrame.current = requestAnimationFrame(attempt);
+  }, [fitToNodes]);
 
   // Rebuild the graph whenever the DAG document changes. Saved positions are
   // reused only while the node set is unchanged; a changed set gets a fresh
@@ -193,10 +271,15 @@ export default function WorkflowCanvas({
       setNodes([]);
       setEdges([]);
       lastNodeSet.current = '';
+      pendingFit.current = false;
       return;
     }
     const nodeSet = dag.nodes.map((n) => n.id).sort().join('|');
-    const sameSet = nodeSet === lastNodeSet.current;
+    // A new scopeKey is a different run/pipeline even when the rule ids are
+    // identical — it gets its own layout and its own initial fit.
+    const scopeChanged = scopeKey !== lastScopeKey.current;
+    lastScopeKey.current = scopeKey;
+    const sameSet = nodeSet === lastNodeSet.current && !scopeChanged;
     lastNodeSet.current = nodeSet;
     const saved = sameSet ? positionsStore.load(scopeKey) : {};
     const layout =
@@ -237,68 +320,22 @@ export default function WorkflowCanvas({
     if (!sameSet) {
       pendingFit.current = true;
       wrapperRef.current?.removeAttribute('data-fitted');
+      if (rfInstance.current) scheduleFit(rfInstance.current);
     }
-  }, [dag, editable, scopeKey, statusById, onEditRule, setNodes, setEdges]);
+  }, [dag, editable, scopeKey, statusById, onEditRule, setNodes, setEdges, scheduleFit]);
 
-  // Fit once per node-set change: the DAG document arrives async after
-  // mount, so a bare mount-time fit sees an empty canvas, and a fit before
-  // measurement reads zero-size bounds and "succeeds" with a viewport that
-  // still clips the graph. Arm a pending fit when the set changes; the
-  // dimension changes that flow back through onNodesChange fire it once
-  // every node has a measured size.
-  const pendingFit = useRef(false);
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
-
-  // Manual fit: React Flow's instance.fitView kept returning a viewport that
-  // clipped the graph on narrow panes even with fully measured nodes, so the
-  // bounds math lives here — deterministic and testable.
-  const fitToNodes = useCallback((instance: ReactFlowInstance<Node<RuleNodeData>>) => {
-    const container = wrapperRef.current;
-    if (!container) return;
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
-    if (cw === 0 || ch === 0) return;
-    const rects = instance.getNodes().map((n) => ({
-      x: n.position.x,
-      y: n.position.y,
-      w: n.measured?.width ?? 0,
-      h: n.measured?.height ?? 0,
-    }));
-    if (rects.length === 0) return;
-    const minX = Math.min(...rects.map((r) => r.x));
-    const minY = Math.min(...rects.map((r) => r.y));
-    const maxX = Math.max(...rects.map((r) => r.x + r.w));
-    const maxY = Math.max(...rects.map((r) => r.y + r.h));
-    const bw = Math.max(maxX - minX, 1);
-    const bh = Math.max(maxY - minY, 1);
-    const padding = 0.25;
-    const zoom = Math.min(
-      Math.max((cw * (1 - padding * 2)) / bw, 0.5),
-      Math.max((ch * (1 - padding * 2)) / bh, 0.5),
-      1.2,
-    );
-    instance.setViewport({
-      x: (cw - bw * zoom) / 2 - minX * zoom,
-      y: (ch - bh * zoom) / 2 - minY * zoom,
-      zoom,
-    });
-  }, []);
-
-  // onInit fires after the first nodes mount — fit immediately only when
-  // every node already has a measured size; otherwise leave the flag armed
-  // for the completing dimension batch (a partial fit clips unmeasured nodes).
+  // A remount (metro → standard view, or a hidden tab materializing) keeps
+  // the node state but loses the viewport: re-arm the fit whenever this
+  // canvas has not fitted yet. Once fitted, panning/zooming is never fought.
   const handleCanvasInit = useCallback(
     (instance: ReactFlowInstance<Node<RuleNodeData>>) => {
       rfInstance.current = instance;
-      if (!pendingFit.current) return;
-      const current = instance.getNodes();
-      if (current.length === 0 || !current.every((n) => n.measured?.width !== undefined)) return;
-      // eslint-disable-next-line react-hooks/immutability -- consumes the pending fit exactly once, after init
-      pendingFit.current = false;
-      fitToNodes(instance);
-      wrapperRef.current?.setAttribute('data-fitted', 'true');
+      if (wrapperRef.current?.getAttribute('data-fitted') !== 'true') {
+        pendingFit.current = true;
+      }
+      if (pendingFit.current) scheduleFit(instance);
     },
-    [fitToNodes],
+    [scheduleFit],
   );
 
   // Persist positions after drags settle.
@@ -307,19 +344,10 @@ export default function WorkflowCanvas({
       onNodesChange(changes);
       const instance = rfInstance.current;
       if (pendingFit.current && instance && changes.some((c) => c.type === 'dimensions')) {
-        // Run after this batch lands in the store. Consume the pending fit
-        // only when EVERY node has a measured size — fitting on a partial
-        // batch computes bounds from the measured subset and clips the rest.
-        window.setTimeout(() => {
-          if (!pendingFit.current) return;
-          const allMeasured = instance
-            .getNodes()
-            .every((n) => n.measured?.width !== undefined);
-          if (!allMeasured) return;
-          pendingFit.current = false;
-          fitToNodes(instance);
-          wrapperRef.current?.setAttribute('data-fitted', 'true');
-        }, 0);
+        // A dimension batch is the earliest sign that measurement is
+        // landing; the scheduler re-checks the whole batch before applying
+        // (and keeps retrying if the pane is still zero-size).
+        scheduleFit(instance);
       }
       if (changes.some((c) => c.type === 'position' && c.dragging === false)) {
         const saved = positionsStore.load(scopeKey);
@@ -329,7 +357,30 @@ export default function WorkflowCanvas({
         positionsStore.save(scopeKey, saved);
       }
     },
-    [onNodesChange, scopeKey, nodes, fitToNodes],
+    [onNodesChange, scopeKey, nodes, scheduleFit],
+  );
+
+  // A pending fit that was armed while the pane had no size (hidden tab,
+  // collapsed layout) is retried when the container finally materializes.
+  // Only pending fits react — a settled viewport is never re-fitted, so
+  // manual panning/zooming survives resizes.
+  useEffect(() => {
+    const container = wrapperRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const instance = rfInstance.current;
+      if (pendingFit.current && instance) scheduleFit(instance);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [scheduleFit, dag, viewMode]);
+
+  // Cancel an in-flight retry loop when the canvas goes away.
+  useEffect(
+    () => () => {
+      if (pendingFitFrame.current !== null) cancelAnimationFrame(pendingFitFrame.current);
+    },
+    [],
   );
 
   const handleConnect = useCallback(

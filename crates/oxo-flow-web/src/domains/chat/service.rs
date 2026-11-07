@@ -47,6 +47,21 @@ pub struct ChatRunWiring<'a> {
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
+/// Session labels for a web-chat run. The usage log line prints these
+/// verbatim, so they must name what actually executes: the resolved backend
+/// and its resolved model — never a hard-coded page name and backend label
+/// that contradict `GET /api/ai/config/effective` (issue #1040 B9:
+/// `provider=web model=claude` while a GLM-class `ANTHROPIC_MODEL` override
+/// was in effect).
+fn chat_session(provider: &AiProvider) -> oxo_flow_ai::session::AiSession {
+    oxo_flow_ai::session::AiSession::new(
+        "web-chat",
+        "chat",
+        provider.name(),
+        &provider.model().unwrap_or_else(|| "default".to_string()),
+    )
+}
+
 /// Run the shared generation harness for a chat request. This is the ONE
 /// place the web chat harness is assembled — context, tool registry,
 /// session labels, round budget, orchestrator, usage logging — so the
@@ -73,7 +88,7 @@ async fn run_chat_generation(
             invocation.is_admin,
         ),
         tool_approver: None,
-        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
+        session: chat_session(provider),
     };
 
     let orchestrator = Orchestrator::new(provider.clone(), chat_max_rounds());
@@ -454,6 +469,32 @@ mod tests {
     fn test_infer_intent_qc() {
         let intent = infer_intent("run fastqc quality check");
         assert_eq!(intent, "Quality control");
+    }
+
+    #[test]
+    fn chat_session_labels_name_the_resolved_backend_and_model() {
+        // Issue #1040 B9: the usage log line printed `provider=web
+        // model=claude` while the real backend was claude + a GLM-class
+        // ANTHROPIC_MODEL override. The session must carry the resolved
+        // backend name and the resolved model.
+        let provider = AiProvider::Claude(oxo_flow_ai::provider::ClaudeBackend::new(
+            "test-key".to_string(),
+            Some("glm-4.7".to_string()),
+            Some("https://gateway.example.com".to_string()),
+        ));
+
+        let session = chat_session(&provider);
+
+        assert_eq!(session.command, "web-chat");
+        assert_eq!(session.provider, "claude");
+        assert_eq!(session.model, "glm-4.7");
+    }
+
+    #[test]
+    fn chat_session_labels_default_when_the_backend_has_no_model() {
+        let session = chat_session(&AiProvider::Noop);
+        assert_eq!(session.provider, "disabled");
+        assert_eq!(session.model, "default");
     }
 }
 
