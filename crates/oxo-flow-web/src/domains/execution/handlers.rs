@@ -482,29 +482,6 @@ pub async fn create_run(
         include_paths.push((rel, content.clone()));
     }
 
-    // BioTypes can be declared in the host workflow or an included module,
-    // and config overrides can change the graph that the checker evaluates.
-    // Full include/override resolution is not yet available in the web
-    // admission layer, so typed inputs must fail closed instead of claiming
-    // parity with the CLI's resolved-workflow preflight.
-    let admission_sources = service::scan_admission_sources(
-        toml,
-        include_paths
-            .iter()
-            .map(|(path, content)| (path.as_str(), content.as_str())),
-    );
-    let needs_resolved_admission = admission_sources.unresolved_include
-        || admission_sources.included_source_declares_type_contracts
-        || (admission_sources.host_declares_type_contracts
-            && (admission_sources.host_has_include_graph || !validated_overrides.is_empty()));
-    if needs_resolved_admission {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "TYPED_ADMISSION_UNSUPPORTED",
-            "Typed or uninspectable workflow includes, or direct typed workflows with includes or config_overrides, require the CLI's resolved-workflow admission path".into(),
-        ));
-    }
-
     let resp = service::create_run(toml, &config, None)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?;
 
@@ -586,6 +563,62 @@ pub async fn create_run(
                 oxo_flow_core::plural(include_paths.len(), "include file", "include files"),
                 run_dir
             );
+        }
+
+        // Issue #1018: resolved-workflow BioType admission. When the host
+        // declares type contracts AND has includes (or config overrides),
+        // the simple parse in service::create_run cannot resolve the full
+        // type graph — the include files are not on disk yet at that point.
+        // Now that all sources are staged, re-parse through the canonical
+        // from_file path and run the same validate_workflow_types gate the
+        // CLI preflight runs on the merged config.
+        //
+        // The old scan_admission_sources text-scan that rejected any typed
+        // workflow with includes as TYPED_ADMISSION_UNSUPPORTED is gone —
+        // this is the real resolved admission path.
+        let host_config = oxo_flow_core::config::WorkflowConfig::parse(toml)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?;
+        let host_has_types =
+            host_config.rules.iter().any(|r| r.types.is_some()) || !host_config.types.is_empty();
+        // Host workflows that declare [[include]] need the resolved path
+        // even when include_files is empty — an include pointing at a
+        // missing file must surface as a 400, not silently queue a run
+        // whose spawned CLI will fail identically.
+        let host_has_includes = !host_config.includes.is_empty();
+        if host_has_types || !include_paths.is_empty() || host_has_includes {
+            let resolved_config = oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path)
+                .map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "RUN_ERROR",
+                        format!("resolved workflow parse failed: {e}"),
+                    )
+                })?;
+            let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &resolved_config.rules,
+                &resolved_config.config_placeholder_values(),
+            )
+            .map_err(|e| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "RUN_ERROR",
+                    format!("resolved workflow DAG failed: {e}"),
+                )
+            })?;
+            if let Err(type_errors) =
+                oxo_flow_core::types::validate_workflow_types(&resolved_config, &resolved_dag)
+            {
+                let findings = type_errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "TYPE_CONTRACT_VIOLATION",
+                    format!("declared biological type contracts are violated: {findings}"),
+                ));
+            }
         }
 
         let run = models::RunRow {

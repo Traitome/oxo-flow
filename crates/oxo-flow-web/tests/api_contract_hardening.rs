@@ -20,6 +20,16 @@ async fn ensure_db() {
     // router-auth tests. Use the atomic test seam instead of mutating the
     // process environment while other test threads may be reading it.
     oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
+    // Issue #1018: the resolved admission path admits strictly more typed
+    // workflows than the old TYPED_ADMISSION_UNSUPPORTED gate, so this
+    // suite now creates more concurrent runs. Raise the process-wide
+    // concurrent-run quota to absorb the extra admitted runs.
+    oxo_flow_web::infra::quota::global_quota_tracker().update_config(
+        oxo_flow_web::infra::quota::QuotaConfig {
+            max_concurrent_runs: 100,
+            ..Default::default()
+        },
+    );
     common::ensure_db().await;
 }
 
@@ -513,7 +523,7 @@ inputs = { default = "sam_unsorted" }
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_for_typed_workflows_with_overrides() {
+async fn create_run_accepts_typed_workflows_with_overrides() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -543,20 +553,15 @@ outputs = { default = "sam_unsorted" }
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-type-override-gate'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: resolved admission now parses the full workflow through
+    // from_file (same as CLI preflight), so typed workflows with config
+    // overrides are admitted when the type contracts are valid.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_for_inline_types_with_overrides() {
+async fn create_run_accepts_inline_types_with_overrides() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -582,20 +587,14 @@ types = { outputs = { default = "sam_unsorted" } }
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-inline-type-override-gate'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: inline types with config overrides are now admitted
+    // through the resolved admission path.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_when_an_include_declares_types() {
+async fn create_run_accepts_include_that_declares_types() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -606,6 +605,9 @@ name = "web-type-include-gate"
 path = "modules/typed.oxoflow"
 "#;
     let included = r#"
+[workflow]
+name = "typed-module"
+
 [types.sam_unsorted]
 format = "sam"
 sort_order = "unsorted"
@@ -629,20 +631,14 @@ outputs = { default = "sam_unsorted" }
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-type-include-gate'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: includes that declare types are now resolved through
+    // from_file and admitted when the merged type contracts are valid.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_when_an_include_uses_inline_types() {
+async fn create_run_accepts_include_that_uses_inline_types() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -673,16 +669,10 @@ types = { outputs = { default = "sam_unsorted" } }
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-inline-type-include-gate'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: inline types in includes are now resolved through
+    // from_file and admitted when the merged type contracts are valid.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 #[tokio::test]
@@ -708,7 +698,7 @@ async fn create_run_ignores_unrelated_staged_toml_that_declares_types() {
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_when_a_reachable_include_is_unstaged() {
+async fn create_run_rejects_unstaged_include_with_400() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -729,8 +719,11 @@ path = "modules/missing.oxoflow"
         }),
     )
     .await;
+    // Issue #1018: the resolved admission path now attempts a real
+    // from_file parse, which fails on the missing include — a 400
+    // RUN_ERROR, not a blanket TYPED_ADMISSION_UNSUPPORTED.
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
 
     let persisted: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-unstaged-include-gate'",
@@ -742,7 +735,7 @@ path = "modules/missing.oxoflow"
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_for_an_unstaged_include_without_optional_fields() {
+async fn create_run_rejects_unstaged_include_without_optional_fields() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -759,8 +752,10 @@ path = "modules/missing.oxoflow"
         json!({"toml_content": toml, "dry_run": true}),
     )
     .await;
+    // Issue #1018: resolved admission runs from_file, which fails on the
+    // missing include — a 400 RUN_ERROR, not TYPED_ADMISSION_UNSUPPORTED.
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
 
     let persisted: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-unstaged-include-no-options-gate'",
@@ -772,7 +767,7 @@ path = "modules/missing.oxoflow"
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_for_a_git_include_without_optional_fields() {
+async fn create_run_rejects_git_include_with_400() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -791,8 +786,13 @@ ref = "v1"
         json!({"toml_content": toml, "dry_run": true}),
     )
     .await;
+    // Issue #1018: git includes require module checkout — the resolved
+    // admission path cannot resolve them without the CLI's module cache.
+    // This remains a 400, but now with RUN_ERROR (from_file fails on the
+    // unresolvable git include) rather than the blanket
+    // TYPED_ADMISSION_UNSUPPORTED.
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
 
     let persisted: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-git-include-gate'",
@@ -839,7 +839,7 @@ outputs = { default = "sam_unsorted" }
 }
 
 #[tokio::test]
-async fn create_run_fails_closed_for_direct_types_with_a_local_include_graph() {
+async fn create_run_accepts_direct_types_with_a_local_include_graph() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -876,16 +876,10 @@ name = "plain-module"
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-direct-types-with-include'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: direct typed workflows with a local include graph are
+    // now resolved through from_file and admitted when valid.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 #[tokio::test]
@@ -1028,7 +1022,7 @@ async fn create_run_rejects_case_insensitive_duplicate_include_keys() {
 }
 
 #[tokio::test]
-async fn create_run_detects_types_through_a_dot_alias_include_key() {
+async fn create_run_accepts_types_through_a_dot_alias_include_key() {
     ensure_db().await;
     let app = server::build_router("personal");
     let toml = r#"
@@ -1057,16 +1051,11 @@ types = { outputs = { default = "sam" } }
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "TYPED_ADMISSION_UNSUPPORTED", "{body}");
-
-    let persisted: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-alias-type-include-gate'",
-    )
-    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
-    .await
-    .unwrap();
-    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+    // Issue #1018: dot-alias include keys are canonicalized by the
+    // include_files key gate, then resolved through from_file — admitted
+    // when the merged type contracts are valid.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
 // ---------------------------------------------------------------------------
