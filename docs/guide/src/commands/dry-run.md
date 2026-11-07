@@ -52,6 +52,8 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried) |
 | `--verbose` | `-v` | Enable debug-level logging |
+| `--quiet` | — | Global log-level flag: suppresses `info`-level log lines and the banner. The preview and its summary are printed regardless |
+| `--no-color` | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
 ---
 

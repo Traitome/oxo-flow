@@ -329,7 +329,7 @@ oxo-flow/
 | `wildcard.rs` | core | Wildcard pattern expansion (`{sample}`, `{chr}`, etc.) |
 | `report.rs` | core | Modular report generation (HTML, JSON, PDF via wkhtmltopdf) |
 | `format.rs` | core | Workflow formatting, linting, and 30+ diagnostic patterns |
-| `plugin.rs` | core | Plugin system for MCP servers and custom tools |
+| `plugin.rs` | core | Plugin system: signature-verified plugins from TOML manifests (inert `[plugins]` section parsed for forward compatibility) |
 | `ai_provider.rs` | web | Multi-provider AI abstraction (Claude, OpenAI, DeepSeek, Ollama) |
 | `domains/ai/` | web | AI translation, chat SSE streaming, agent orchestration |
 | `domains/execution/` | web | Run lifecycle, diagnostics, pause/resume, retry |

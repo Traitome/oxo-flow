@@ -34,7 +34,7 @@ oxo-flow cluster <COMMAND>
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file (for `submit`) |
-| `[JOB_IDS]...` | Cluster job IDs from a submit/run output — for `status`: omitted, the command lists your queued jobs; given, it answers exactly those ids. Optional for `cancel` |
+| `[JOB_IDS]...` | Cluster job IDs from a submit/run output — for `status`: omitted, the command lists your queued jobs; given, it answers exactly those ids. Required for `cancel` |
 | `<JOB_ID>` | Job ID (for `logs`) |
 
 ---

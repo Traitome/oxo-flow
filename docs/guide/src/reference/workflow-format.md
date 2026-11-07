@@ -56,6 +56,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP Batch)
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
+[ai]                # Optional: AI companion settings (provider, model, skills activation — see the AI CLI reference)
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications
 [engine]            # Optional: runtime disk-pressure guard + global scratch dir + protected data trees
@@ -241,6 +242,7 @@ author = "Your Name"
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
 | `on_complete` | String | No | — | Shell command run once after the whole workflow completes successfully (no failed rules). Rendered with `{config.*}` and the counters `{succeeded}`/`{failed}`/`{skipped}` plus `{workdir}`; runs in the workflow root with the workflow `shell_prelude`. Best-effort: a failing hook warns, never changes the run status. |
 | `on_error` | String | No | — | Shell command run once after the workflow reaches a terminal state with at least one failed rule. Same rendering and best-effort semantics as `on_complete`. |
+| `profile_mode` | String | No | `"fill"` | How `profiles/<name>.toml` values merge into the workflow config: `"fill"` fills in only keys the workflow does not set (existing values always win); `"override"` lets the profile replace workflow values (nested tables deep-merge, scalars/arrays replace wholesale). |
 
 ### Workflow-Level Terminal Hooks
 
@@ -553,6 +555,8 @@ shell_prelude = "set -euo pipefail"
 | `memory` | String | Default memory allocation |
 | `environment` | Table | Default environment specification |
 | `shell_prelude` | String | Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line — e.g. `set -euo pipefail` for fail-fast shells. **Opt-in**: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. `pipefail` requires bash (the engine falls back to `sh` only when bash is absent) |
+| `time_limit` | String | Default wall-time limit (e.g. `"48h"`) applied to every rule whose `resources.time_limit` is unset — the cluster-path SBATCH `-t` value |
+| `staging_mode` | String | Default remote input staging mode (`"eager"`, `"stream_fifo"`/`"stream"`, `"passthrough"`) for rules that don't set their own `staging_mode` — see [Remote staging and upload](cloud-storage.md#remote-staging-and-upload) |
 
 ### Conda/mamba environment naming
 
@@ -721,6 +725,7 @@ memory = "32G"
 | `localrule` | Boolean | No | Pin the rule to local execution: cluster paths (`run --profile` with a `[cluster]` block, `oxo-flow cluster submit`) refuse to submit such rules — they fail before any submission, naming every offender, because skipping them would unblock dependents while their outputs never materialize. Run workflows that use `localrule` on the local path (`oxo-flow run`); mixed local+cluster execution in one run needs a scheduler-side local executor and is not built yet (see [Resource Tuning](../how-to/resource-tuning.md)) |
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization); `oxo-flow lint` flags every use with **W038** |
 | `pipe` | Boolean | No | Selects `staging_mode = "stream_fifo"` by default for **remote** inputs: each remote input is downloaded and streamed into a named FIFO while the rule runs (local inputs are unaffected — they are read in place); an explicit `staging_mode` on the same rule wins. Equivalent to `staging_mode = "stream_fifo"` |
+| `staging_mode` | String | No | Remote input staging mode for this rule: `"eager"` (default — download the full object to local scratch before the rule runs), `"stream_fifo"`/`"stream"` (stream on demand through a FIFO without buffering to disk), or `"passthrough"` (alias `pass_through` — leave the raw remote URI untouched for tools with native cloud I/O). Overrides the `[defaults]` / `[engine]` staging_mode for this rule — see [Remote staging and upload](cloud-storage.md#remote-staging-and-upload) |
 | `checksum` | String | No | Opt the rule's outputs into checksum recording and content verification: `"sha256"` or `"md5"`. The expanded outputs are hashed at completion and recorded in the checkpoint's `checksums` map (`<algorithm>:<hex>`) — **without** needing `--provenance`. The freshness gate recomputes each recorded output with its declared algorithm, so tampered content re-executes even when the mtime looks fresh, and `oxo-flow provenance verify` re-verifies with the recorded algorithm. Invalid algorithms are rejected at parse time. Rules without the field are only recorded under `--provenance` (sha256) |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling — `input_size` and `memory_scale` feed the memory estimator; `runtime` and `io_bound` are parsed but **not consumed** by anything today, and `lint` flags them with `W037` |
 
@@ -3467,6 +3472,95 @@ workflows whose runnable rules declare `scratch = true`** at plan time,
 naming each offender, instead of silently running the job in the shared
 workdir where fixed-filename outputs collide across concurrent instances.
 Remove the directive or run those rules on the local path).
+
+---
+
+## `[resource_groups]` — Shared Resource Pools
+
+```toml
+[resource_groups.db_conn]
+max = 4
+wait = "queue"
+
+[resource_groups.api]
+max = 2
+```
+
+Named capacity pools shared across rules. A rule consumes a pool via
+`[rules.resources]` `groups` (see
+[Resources (extended)](#resources-extended)): `groups = {db_conn = 1}`
+reserves one slot of the `db_conn` pool while the rule runs. Slots are
+released when the rule finishes, so pools cap concurrent access to
+rate-limited external resources (APIs, database connections).
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `max` | Integer | Yes | — | Pool capacity — the maximum number of slots that can be held concurrently across all rules |
+| `wait` | String | No | `"queue"` | Declared wait strategy — `"queue"` or `"fail"`. The engine queues rules that cannot get a slot (FIFO fair dispatch, see below); a declared `"fail"` does not change that behavior today |
+
+Semantics at run time:
+
+- A rule whose requirement exceeds the declared capacity (or names an
+  undeclared group) **hard-fails immediately** with
+  `ResourceGroupExhausted` — it can never be satisfied, so no wait is
+  attempted.
+- Otherwise a rule that cannot get a slot **waits**: the scheduler
+  dispatches queued rules FIFO with priority aging, so starvation is
+  impossible — see
+  [DAG Engine → "Rules print Running but never spawn a process"](./dag-engine.md#rules-print-running-but-never-spawn-a-process)
+  for the full fairness contract and the invisible-waiting diagnostic.
+
+---
+
+## `[[reference_db]]` — Tracked Reference Database Versions
+
+```toml
+[[reference_db]]
+name = "GRCh38"
+version = "p14"
+source = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"
+checksum = "sha256:abc123"
+accessed_date = "2026-01-15"
+```
+
+Declares the exact versions of external reference databases a workflow
+depends on. Entries are recorded in the run's software-versions report
+(`name`, `version`, and `checksum`), so runs stay auditable against the
+reference data they consumed.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | Yes | Database identifier (e.g. `"GRCh38"`, `"dbSNP"`) |
+| `version` | String | No | Database release/version tag (e.g. `"p14"`, `"b156"`) |
+| `source` | String | No | Download URL or origin of the database |
+| `checksum` | String | No | Checksum of the downloaded artifact (e.g. `"sha256:abc123"`) |
+| `accessed_date` | String | No | Date the database was downloaded/accessed |
+
+Repeat the `[[reference_db]]` header for each database. `name` alone is
+accepted — declare the other fields when the provenance matters.
+
+---
+
+## `[citation]` — Citation Metadata
+
+```toml
+[citation]
+doi = "10.1234/test"
+url = "https://github.com/example/test"
+authors = ["Alice", "Bob"]
+title = "My Workflow Paper"
+```
+
+Optional provenance metadata describing how the workflow itself should be
+cited. All fields are optional; entries round-trip through formatting and
+validation but are not consumed by run execution.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `authors` | Array of String | No | Author names |
+| `doi` | String | No | DOI of the associated publication |
+| `title` | String | No | Workflow or paper title |
+| `url` | String | No | Source repository or landing page URL |
 
 ## See Also
 
