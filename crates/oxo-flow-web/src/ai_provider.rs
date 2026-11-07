@@ -127,6 +127,24 @@ fn reported_provider_name(active: &Result<AiProvider, oxo_flow_ai::error::AiErro
     }
 }
 
+/// The model to report for a registry state.
+///
+/// An explicit config model wins; otherwise the ACTIVE BACKEND's resolved
+/// model is reported. Env-only deployments (`ANTHROPIC_MODEL` against an
+/// Anthropic-compatible endpoint) used to report no model at all, so the
+/// Settings status panel showed "Model: default" while every request went
+/// to the configured model (issue #1040 B7). The same value now backs
+/// `GET /api/ai/config/effective`.
+fn reported_model(
+    configured: Option<String>,
+    active: &Result<AiProvider, oxo_flow_ai::error::AiError>,
+) -> Option<String> {
+    configured.or_else(|| match active {
+        Ok(provider) if provider.is_usable() => provider.model(),
+        _ => None,
+    })
+}
+
 impl AiProviderRegistry {
     pub fn global() -> Self {
         Self
@@ -146,6 +164,7 @@ impl AiProviderRegistry {
             .map(|c| {
                 let active_provider = oxo_flow_ai::AI.provider();
                 let provider = reported_provider_name(&active_provider);
+                let model = reported_model(c.model, &active_provider);
                 let is_configured = match active_provider {
                     // Test/scripted providers are always considered configured;
                     // they do not need a real API key.
@@ -171,7 +190,7 @@ impl AiProviderRegistry {
                 ProviderConfig {
                     provider,
                     api_url: c.api_url,
-                    model: c.model,
+                    model,
                     is_configured,
                 }
             })
@@ -245,7 +264,7 @@ impl AiProviderRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{reported_provider_name, validate_provider_kind};
+    use super::{reported_model, reported_provider_name, validate_provider_kind};
 
     #[test]
     fn provider_names_are_validated_before_durable_writes() {
@@ -275,5 +294,29 @@ mod tests {
             None,
         );
         assert_eq!(reported_provider_name(&Ok(deepseek)), "deepseek");
+    }
+
+    #[test]
+    fn reported_model_falls_back_to_the_active_backend() {
+        use oxo_flow_ai::error::AiError;
+        use oxo_flow_ai::provider::{AiProvider, ProviderKind, create_provider};
+
+        let claude = create_provider(
+            ProviderKind::Claude,
+            Some("sk-test".into()),
+            Some("http://127.0.0.1:9".into()),
+            Some("glm-4.6".into()),
+        );
+        // An explicit config model always wins.
+        assert_eq!(
+            reported_model(Some("cli-model".into()), &Ok(claude.clone())),
+            Some("cli-model".into())
+        );
+        // Without one, report the backend's resolved model — it used to be
+        // None, which rendered as "Model: default" in Settings (B7).
+        assert_eq!(reported_model(None, &Ok(claude)), Some("glm-4.6".into()));
+        // Unconfigured registries never claim a model.
+        assert_eq!(reported_model(None, &Ok(AiProvider::Noop)), None);
+        assert_eq!(reported_model(None, &Err(AiError::NotConfigured)), None);
     }
 }

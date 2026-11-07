@@ -65,6 +65,67 @@ test.describe('Graphical workflow editor (canvas)', () => {
     await expect(page.locator('.rf-rule-node')).toHaveCount(2);
   });
 
+  test('initial fit centers the graph on the canvas (#1040 B4)', async ({ page }) => {
+    await page.goto('/editor');
+    // A 3-node chain — the shape reported as initially clipped at the canvas
+    // edge until Fit View was clicked by hand.
+    const toml = [
+      '[workflow]',
+      'name = "chain"',
+      '',
+      '[[rules]]',
+      'name = "a"',
+      'output = ["a.txt"]',
+      'shell = "echo a > {output[0]}"',
+      '',
+      '[[rules]]',
+      'name = "b"',
+      'input = ["a.txt"]',
+      'output = ["b.txt"]',
+      'shell = "cp {input[0]} {output[0]}"',
+      '',
+      '[[rules]]',
+      'name = "c"',
+      'input = ["b.txt"]',
+      'output = ["c.txt"]',
+      'shell = "cp {input[0]} {output[0]}"',
+    ].join('\n');
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.insertText(toml);
+    await expect(page.locator('.val-badge')).toContainText('Valid', { timeout: 10_000 });
+    await expect(page.locator('.rf-rule-node')).toHaveCount(3);
+    await waitForCanvasStable(page);
+
+    const canvas = await page.locator('.workflow-canvas').boundingBox();
+    expect(canvas, 'canvas must be laid out').not.toBeNull();
+    const boxes = await page.locator('.rf-rule-node').evaluateAll((nodes) =>
+      nodes.map((n) => {
+        const r = n.getBoundingClientRect();
+        return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
+      }),
+    );
+    expect(boxes).toHaveLength(3);
+    // The initial viewport used to stay at React Flow's identity transform
+    // until the user clicked Fit View, parking the graph against an edge.
+    // A fitted viewport centers the graph's bounds in the canvas (both axes;
+    // the horizontal axis may still overflow when minZoom=0.5 clamps a long
+    // chain, so centering — not containment — is the invariant). Allow 2px
+    // for sub-pixel rounding.
+    const minX = Math.min(...boxes.map((b) => b.x));
+    const maxX = Math.max(...boxes.map((b) => b.right));
+    const minY = Math.min(...boxes.map((b) => b.y));
+    const maxY = Math.max(...boxes.map((b) => b.bottom));
+    expect(Math.abs((minX + maxX) / 2 - (canvas!.x + canvas!.width / 2))).toBeLessThanOrEqual(2);
+    expect(Math.abs((minY + maxY) / 2 - (canvas!.y + canvas!.height / 2))).toBeLessThanOrEqual(2);
+    // The reported symptom was vertical clipping: no node may cross the
+    // canvas top/bottom edge.
+    for (const box of boxes) {
+      expect(box.y).toBeGreaterThanOrEqual(canvas!.y - 1);
+      expect(box.bottom).toBeLessThanOrEqual(canvas!.y + canvas!.height + 1);
+    }
+  });
+
   test('auto-layout arranges a diamond DAG across multiple columns (#548)', async ({ page }) => {
     // A → B, A → C, B → D, C → D: a diamond needs ≥3 distinct layers.
     // The old layout hardcoded parentIds: [] — every node was a root and

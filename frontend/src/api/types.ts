@@ -175,6 +175,17 @@ export interface RetryPlan { new_run_id: string; will_rerun: string[]; will_skip
 
 // ── AI ──
 export interface AiConfig { provider: string; model: string | null; api_url: string | null; is_configured: boolean; }
+/** GET /api/ai/config/effective — the resolved chain (user → server → env),
+ *  with an explicit field-level provenance map for the status panel. */
+export interface AiConfigEffective {
+  effective: AiConfig;
+  tiers: {
+    env_provider: string | null; env_model: string | null; env_url: string | null;
+    server_provider: string; server_model: string | null;
+    user_provider: string | null; user_model: string | null; user_api_url: string | null;
+  };
+  resolution_order: string[];
+}
 export interface AiExplainResponse { summary: string; root_cause: { rule: string; error_type: string; evidence: string; confidence: number } | null; fix_suggestion: { action: string; automated: boolean; estimated_impact: string } | null; }
 
 // ── Templates ──

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
-import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
+import type { AiConfig, AiConfigEffective, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useI18n, getLocale } from '../context/I18n';
@@ -57,6 +57,10 @@ export default function Settings() {
   const { lang, t } = useI18n();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
+  // The resolved chain (user → server → env), which is what actually runs.
+  // The stored snapshot can legitimately lack the model (env-only setups),
+  // so the status panel reads this first (issue #1040 B7).
+  const [effectiveAiConfig, setEffectiveAiConfig] = useState<AiConfigEffective | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [quotaForm, setQuotaForm] = useState<QuotaFormState>(DEFAULT_QUOTA);
   const [quotaSaving, setQuotaSaving] = useState(false);
@@ -92,6 +96,7 @@ export default function Settings() {
     Promise.allSettled([
       api.health().then(setHealth).catch(loadFailed('settings.loadFailed.health')),
       api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(loadFailed('settings.loadFailed.aiConfig')),
+      api.aiConfigEffective().then(setEffectiveAiConfig).catch(loadFailed('settings.loadFailed.aiConfigEffective')),
       api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed'))),
       api.referenceStatus().then(setRefs).catch(loadFailed('settings.loadFailed.references')),
     api.aiConfigUser().then((c) => {
@@ -124,6 +129,9 @@ export default function Settings() {
         model: model || undefined,
       });
       const c = await api.aiConfig(); setAiConfig(c);
+      // The status panel renders the resolved chain; refresh it too so a
+      // save that changes the model is visible without a reload.
+      api.aiConfigEffective().then(setEffectiveAiConfig).catch(() => { /* keep the previous status */ });
       setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider) });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('common.unknownError');
@@ -165,6 +173,12 @@ export default function Settings() {
     if (mb >= 1024) return `${(mb / 1024).toFixed(0)} GB`;
     return `${mb} MB`;
   };
+
+  // Current Status shows what actually runs: the effective (resolved) chain,
+  // falling back to the stored snapshot only when that call failed. "default"
+  // appears only when neither tier reports a value (issue #1040 B7 — an
+  // ANTHROPIC_MODEL override used to render as "Model: default").
+  const statusConfig = effectiveAiConfig?.effective ?? aiConfig;
 
   return (
     <div className="page">
@@ -208,10 +222,10 @@ export default function Settings() {
           </div>
           <div className="settings-side">
             <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{t('settings.ai.status')}</div>
-            <div>{t('settings.ai.providerLabel')}: <strong>{aiConfig?.provider || 'unknown'}</strong></div>
-            <div>{t('settings.ai.modelLabel')}: <strong>{aiConfig?.model || 'default'}</strong></div>
-            <div>{t('settings.ai.urlLabel')}: <code style={{ fontSize: '0.7rem', overflowWrap: 'anywhere' }}>{aiConfig?.api_url || 'default'}</code></div>
-            <div style={{ marginTop: '4px' }}>{t('settings.license.status')}: <span className={`status-badge ${aiConfig?.is_configured ? 'success' : 'failed'}`}>{aiConfig?.is_configured ? t('settings.ai.configured') : t('settings.ai.notConfigured')}</span></div>
+            <div>{t('settings.ai.providerLabel')}: <strong>{statusConfig?.provider || 'unknown'}</strong></div>
+            <div>{t('settings.ai.modelLabel')}: <strong>{statusConfig?.model || 'default'}</strong></div>
+            <div>{t('settings.ai.urlLabel')}: <code style={{ fontSize: '0.7rem', overflowWrap: 'anywhere' }}>{statusConfig?.api_url || 'default'}</code></div>
+            <div style={{ marginTop: '4px' }}>{t('settings.license.status')}: <span className={`status-badge ${statusConfig?.is_configured ? 'success' : 'failed'}`}>{statusConfig?.is_configured ? t('settings.ai.configured') : t('settings.ai.notConfigured')}</span></div>
             <div className="settings-note" style={{ marginTop: '1rem', marginBottom: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: '4px' }}>{t('settings.ai.advanced')}</div>
               {/* issue #82 P1-4: these controls were display-only; now they

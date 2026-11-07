@@ -6,9 +6,10 @@ import {
 } from 'lucide-react';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
-import { api, apiUrl } from '../api/client';
+import { api, apiUrl, ApiError } from '../api/client';
 import { useServerVersion, fetchServerHealth } from '../api/version';
 import { useI18n } from '../context/I18n';
+import { isTerminalRunStatus } from '../utils/runStatus';
 
 // License type renders from the server's own report, never a hardcoded
 // label (issue #82 P2-6: commercial deployments were mislabeled "Academic").
@@ -147,6 +148,34 @@ export default function Layout() {
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
   const location = useLocation();
+
+  // The sidebar dot promises "the run you started is still active". It lives
+  // in the persisted session, so it must be re-validated against the server:
+  // the monitor page clears it on terminal SSE events, but a run that
+  // finishes while the user is on another page (or an app reload mid-run)
+  // would otherwise leave the dot set forever (issue #1040 B5).
+  const activeRunId = session.state.activeRunId;
+  const setActiveRunId = session.setActiveRunId;
+  useEffect(() => {
+    if (!activeRunId) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const run = await api.getRun(activeRunId);
+        if (!cancelled && isTerminalRunStatus(run.status)) setActiveRunId(null);
+      } catch (err) {
+        // A deleted (or no longer visible) run can never be active. A
+        // network/5xx failure keeps the dot — the run may still be going.
+        if (!cancelled && err instanceof ApiError && err.code === 'NOT_FOUND') setActiveRunId(null);
+      }
+    };
+    void check();
+    const timer = setInterval(check, STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeRunId, setActiveRunId]);
 
   // Sidebar collapse (issue #947): ≥1280px the user's choice governs
   // (persisted); 1024–1279px is always the icon rail; <1024px swaps the
