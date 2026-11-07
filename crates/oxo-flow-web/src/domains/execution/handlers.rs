@@ -1591,11 +1591,14 @@ pub async fn retry_run(
     // `--rerun` are suppressed in this path: the closure invalidation
     // subsumes them (the from-rule itself is always re-executed, and every
     // transitive dependent is invalidated before the freshness gate runs).
-    let (resume_failed, rerun) = if from_rule.is_some() {
-        (false, false)
-    } else {
-        (true, true)
-    };
+    //
+    // Without `from_rule`, the spawn must match the plan `compute_retry_plan`
+    // returned: `will_skip` is non-empty exactly when `skip_succeeded` is
+    // set, and `--rerun` force-re-executes every rule (force_rerun in the
+    // CLI), silently contradicting that promise — a retry of one failed
+    // rule re-ran all succeeded ones too (live-verified). The mapping lives
+    // in `retry_spawn_flags` so the promise and the spawn share one source.
+    let (resume_failed, rerun) = service::retry_spawn_flags(from_rule.is_some(), skip_succeeded);
 
     // Same workdir → checkpoint-driven partial re-execution.
     crate::executor::spawn_background_run(
