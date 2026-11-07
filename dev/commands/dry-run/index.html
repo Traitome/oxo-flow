@@ -2114,6 +2114,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Checkpoint-Aware Rerun Preview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-json-error-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --json error contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4065,6 +4082,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Checkpoint-Aware Rerun Preview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-json-error-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --json error contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4548,30 +4582,51 @@ for CI scripts and tooling that today grep the colored text:</p>
 </span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nt">"summary"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"would_execute"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">"will_skip"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"total_rules"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">},</span>
 </span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="nt">"suggested_jobs"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
 </span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="nt">"sample_groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cohort"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">…</span><span class="p">]}],</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">}]</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">}],</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"inputs/A.txt"</span><span class="p">,</span><span class="w"> </span><span class="s2">"inputs/B.txt"</span><span class="p">]</span>
 </span></code></pre></div>
 <p><code>status</code> ∈ <code>run | skip | rerun</code> matches the stderr bracket prefix;
 <code>reason</code> carries the status text. The human stderr output is unchanged
 by <code>--json</code>. <code>inputs</code>/<code>outputs</code> carry the declared patterns as written;
 <code>inputs_expanded</code>/<code>outputs_expanded</code> are the exact per-instance paths
 the engine will touch (with <code>{config.x}</code> resolved) — the same expansion
-the human listing shows.</p>
+the human listing shows. <code>missing_inputs</code> is the flattened, deduplicated
+list behind the <code>input ✗</code> lines and <code>Sample readiness:</code> section — the same
+field and semantics <code>validate --json</code> reports, so a CI gate sees the static
+unproducible inputs without parsing the human text.</p>
+<h3 id="-json-error-contract"><code>--json</code> error contract<a class="headerlink" href="#-json-error-contract" title="Permanent link">#</a></h3>
+<p>With <code>--json</code>, stdout is always exactly <strong>one</strong> JSON document, success or
+failure. When dry-run fails before the plan can be built (unreadable
+workflow, TOML parse error, invalid <code>--arg</code> override, …) that document is
+the shared failure envelope and the command exits 1:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dry-run"</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PARSE"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">}],</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"broken.oxoflow"</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>code</code> is <code>PARSE</code> for workflow parse/deserialization failures (the same code
+<code>validate --json</code> and <code>lint --json</code> report) and <code>ERROR</code> for other pre-plan
+failures. A failure detected <strong>after</strong> the plan document is printed (declared
+pixi manifests that do not exist) keeps the single-document contract: the
+plan is printed once and the command exits non-zero — no second document is
+emitted.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <h3 id="preview-with-auto-discovery">Preview with auto-discovery<a class="headerlink" href="#preview-with-auto-discovery" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Auto-discover workflow in current directory</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>oxo-flow<span class="w"> </span>dry-run
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Auto-discover workflow in current directory</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>dry-run
 </span></code></pre></div>
 <h3 id="preview-a-specific-workflow">Preview a specific workflow<a class="headerlink" href="#preview-a-specific-workflow" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
 <h3 id="preview-a-specific-target-rule-and-its-dependencies">Preview a specific target rule and its dependencies<a class="headerlink" href="#preview-a-specific-target-rule-and-its-dependencies" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align
 </span></code></pre></div>
 <h3 id="preview-multiple-target-rules">Preview multiple target rules<a class="headerlink" href="#preview-multiple-target-rules" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align<span class="w"> </span>-t<span class="w"> </span>sort_bam
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align<span class="w"> </span>-t<span class="w"> </span>sort_bam
 </span></code></pre></div>
 <h3 id="with-verbose-output">With verbose output<a class="headerlink" href="#with-verbose-output" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-v
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-v
 </span></code></pre></div>
 <hr />
 <h3 id="checkpoint-re-entry-in-previews">Checkpoint re-entry in previews<a class="headerlink" href="#checkpoint-re-entry-in-previews" title="Permanent link">#</a></h3>
@@ -4582,37 +4637,37 @@ instances at runtime are listed under the <code>reentry</code> section of <code>
 (<code>recorded</code> + <code>possible</code>). See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a>.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>⚠ no checkpoint at ./.oxo-flow/checkpoint.json — treating every rule as never completed
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>Checkpoint: ./.oxo-flow/checkpoint.json (modified unknown time)
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  1. generate_data  [run: never completed]
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>     threads=1
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>     outputs: ["data/raw.csv"]
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>     command: mkdir -p data
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>echo 'id,name,value' &gt; data/raw.csv
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>for i in $(seq 1 100); do echo "$i,item_$i,$((i * 37 % 1000))"; done &gt;&gt; data/raw.csv
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>  2. transform  [run: never completed]
-</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>     threads=1
-</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>     outputs: ["data/filtered.csv"]
-</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>     command: head -1 data/raw.csv &gt; data/filtered.csv
-</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>awk -F',' 'NR&gt;1 &amp;&amp; $3 &gt; 500' data/raw.csv &gt;&gt; data/filtered.csv
-</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>
-</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>     input ✗: data/raw.csv
-</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a>  3. summarize  [run: never completed]
-</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a>     threads=1
-</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a>     outputs: ["results/summary.txt"]
-</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a>     command: mkdir -p results
-</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a>total=$(tail -n +2 data/filtered.csv | wc -l)
-</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a>echo 'Welcome to oxo-flow' &gt; results/summary.txt
-</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a>echo "Filtered records: $total" &gt;&gt; results/summary.txt
-</span><span id="__span-14-25"><a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a>echo "Generated by oxo-flow file-pipeline" &gt;&gt; results/summary.txt
-</span><span id="__span-14-26"><a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a>
-</span><span id="__span-14-27"><a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a>     input ✗: data/filtered.csv
-</span><span id="__span-14-28"><a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a>
-</span><span id="__span-14-29"><a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a>Summary: 3 rules, total 3 threads declared, max 1 threads/rule
-</span><span id="__span-14-30"><a id="__codelineno-14-30" name="__codelineno-14-30" href="#__codelineno-14-30"></a>
-</span><span id="__span-14-31"><a id="__codelineno-14-31" name="__codelineno-14-31" href="#__codelineno-14-31"></a>To execute:  oxo-flow run 02_file_pipeline.oxoflow -j 1
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>⚠ no checkpoint at ./.oxo-flow/checkpoint.json — treating every rule as never completed
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>Checkpoint: ./.oxo-flow/checkpoint.json (modified unknown time)
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>  1. generate_data  [run: never completed]
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>     threads=1
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>     outputs: ["data/raw.csv"]
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>     command: mkdir -p data
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>echo 'id,name,value' &gt; data/raw.csv
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>for i in $(seq 1 100); do echo "$i,item_$i,$((i * 37 % 1000))"; done &gt;&gt; data/raw.csv
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>  2. transform  [run: never completed]
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>     threads=1
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>     outputs: ["data/filtered.csv"]
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>     command: head -1 data/raw.csv &gt; data/filtered.csv
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>awk -F',' 'NR&gt;1 &amp;&amp; $3 &gt; 500' data/raw.csv &gt;&gt; data/filtered.csv
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>     input ✗: data/raw.csv
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>  3. summarize  [run: never completed]
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a>     threads=1
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a>     outputs: ["results/summary.txt"]
+</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a>     command: mkdir -p results
+</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a>total=$(tail -n +2 data/filtered.csv | wc -l)
+</span><span id="__span-15-23"><a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a>echo 'Welcome to oxo-flow' &gt; results/summary.txt
+</span><span id="__span-15-24"><a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a>echo "Filtered records: $total" &gt;&gt; results/summary.txt
+</span><span id="__span-15-25"><a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a>echo "Generated by oxo-flow file-pipeline" &gt;&gt; results/summary.txt
+</span><span id="__span-15-26"><a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a>
+</span><span id="__span-15-27"><a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a>     input ✗: data/filtered.csv
+</span><span id="__span-15-28"><a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a>
+</span><span id="__span-15-29"><a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a>Summary: 3 rules, total 3 threads declared, max 1 threads/rule
+</span><span id="__span-15-30"><a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a>
+</span><span id="__span-15-31"><a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a>To execute:  oxo-flow run 02_file_pipeline.oxoflow -j 1
 </span></code></pre></div>
 <p>The human-readable plan goes to <strong>stderr</strong> (including the <code>Summary:</code> and
 <code>To execute:</code> lines) so it stays visible above redirected job output; with

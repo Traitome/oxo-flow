@@ -2252,6 +2252,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#nextflow-wiring-forms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nextflow wiring forms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-is-not-extracted" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3997,6 +4008,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#nextflow-wiring-forms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nextflow wiring forms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-is-not-extracted" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4080,7 +4102,9 @@ never silently emits an empty command or an invented file path.</p>
 <h3 id="nextflow">Nextflow<a class="headerlink" href="#nextflow" title="Permanent link">#</a></h3>
 <ul>
 <li>Rule names (<code>process NAME</code> → lowercased rule name)</li>
-<li><code>cpus</code> → <code>threads</code>, <code>memory</code> (<code>GB</code>/<code>MB</code> canonicalized), <code>time</code> → <code>resources.time_limit</code></li>
+<li><code>cpus</code> → <code>resources.threads</code>, <code>memory</code> (<code>GB</code>/<code>MB</code> canonicalized) →
+  <code>resources.memory</code>, <code>time</code> → <code>resources.time_limit</code>; a process without
+  <code>cpus</code> inherits <code>[defaults] threads</code></li>
 <li><code>conda</code> / <code>container</code> directives → <code>environment</code></li>
 <li>The <code>script:</code> or <code>shell:</code> body, in both inline quoted form
   (<code>script: "wc -l &lt; ${x}"</code>) and triple-quoted multi-line form
@@ -4091,10 +4115,19 @@ never silently emits an empty command or an invented file path.</p>
 <li>A direct <code>Channel.fromPath("data/*.txt")</code> (or a <code>name = Channel.fromPath(…)</code>
   variable) feeding a process → the real wildcard input
   <code>data/{sample}.txt</code>, a matching <code>sample_pattern</code>, and input-derived outputs
-  (<code>output: "${x}.count"</code> → <code>data/{sample}.txt.count</code>)</li>
+  (<code>output: "${x}.count"</code> → <code>data/{sample}.txt.count</code>). Both invocation forms
+  are supported — the call form <code>COUNT(Channel.fromPath("data/*.txt"))</code> and
+  the canonical pipe form <code>Channel.fromPath("data/*.txt") | COUNT</code> — and
+  produce identical TOML.</li>
+<li>Process wiring in the documented forms (see
+  <a href="#nextflow-wiring-forms">Nextflow wiring forms</a>): a downstream input fed by
+  an upstream output is mapped to the upstream's output pattern and gets a
+  <code>depends_on</code> edge.</li>
 <li>BioType contracts only when inference actually recognizes the tool/files
   (<code>[types.fastq]</code>, <code>[types.bam_coord]</code>, <code>[types.vcf_indexed]</code> are emitted
-  <strong>only</strong> when a rule's inferred contract references them)</li>
+  <strong>only</strong> when a rule's inferred contract references them). A wired input
+  inherits the type of the upstream output it consumes, so a derived
+  intermediate never re-inherits the source file's type.</li>
 </ul>
 <h3 id="snakemake">Snakemake<a class="headerlink" href="#snakemake" title="Permanent link">#</a></h3>
 <ul>
@@ -4104,6 +4137,65 @@ never silently emits an empty command or an invented file path.</p>
   <code>temp()</code> / <code>protected()</code> markers)</li>
 <li>The <code>shell:</code> body</li>
 </ul>
+<h2 id="nextflow-wiring-forms">Nextflow wiring forms<a class="headerlink" href="#nextflow-wiring-forms" title="Permanent link">#</a></h2>
+<p>The importer resolves a process's input channels, in the order the process
+declares them, from exactly these forms:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Example</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Call, direct source</td>
+<td><code>COUNT(Channel.fromPath("data/*.txt"))</code></td>
+<td>input <code>data/{sample}.txt</code> + <code>sample_pattern</code></td>
+</tr>
+<tr>
+<td>Call, channel variable</td>
+<td><code>reads = Channel.fromPath("data/*.txt")</code> then <code>COUNT(reads)</code></td>
+<td>same as above</td>
+</tr>
+<tr>
+<td>Pipe, direct source</td>
+<td><code>Channel.fromPath("data/*.txt") \| COUNT</code></td>
+<td>same as above</td>
+</tr>
+<tr>
+<td>Pipe, channel variable</td>
+<td><code>reads \| COUNT</code></td>
+<td>same as above</td>
+</tr>
+<tr>
+<td>Upstream output</td>
+<td><code>ALIGN(TRIM.out)</code></td>
+<td>input = TRIM's single output pattern; adds <code>depends_on = ["trim"]</code></td>
+</tr>
+<tr>
+<td>Upstream emit</td>
+<td><code>ALIGN(TRIM.out.bam)</code></td>
+<td>input = TRIM's <code>emit: bam</code> output pattern; adds the edge</td>
+</tr>
+<tr>
+<td>Upstream-output pipe</td>
+<td><code>TRIM.out.bam \| ALIGN</code></td>
+<td>same as <code>TRIM.out.bam</code> above</td>
+</tr>
+</tbody>
+</table>
+<p>Wiring is positional: argument <em>i</em> feeds the process's <em>i</em>-th declared <code>path</code>
+input, and the argument count must match the declaration count.</p>
+<p><strong>Loud-abort contract.</strong> Any wiring expression outside the table above aborts
+the import with an error naming the construct — for example a channel
+operator chain (<code>Channel.fromPath(…).map { … } | COUNT</code>), an unbound channel
+variable, a chained pipe (<code>Channel.fromPath(…) | A | B</code>), a multi-output
+<code>PROC.out</code> with no <code>.out.&lt;emit&gt;</code> selector, a reference to an undefined
+upstream process, or an argument/declaration count mismatch. The importer
+never falls back to a fabricated path or type and never writes an output file
+on this path. Resolve the channel in the source or import that rule by hand.</p>
 <h2 id="what-is-not-extracted">What is not extracted<a class="headerlink" href="#what-is-not-extracted" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Nextflow workflow-local variables</strong> (<code>def args = task.ext.args ?: ''</code>):
@@ -4112,12 +4204,12 @@ never silently emits an empty command or an invented file path.</p>
   it remain as shell text and may expand to nothing at run time.</li>
 <li><strong>Nextflow channel operators and expressions</strong> (<code>params.*</code>, <code>task.ext.*</code>,
   <code>Channel.map</code>/<code>join</code>/<code>combine</code>, ternaries, closures): unsupported
-  interpolations are left verbatim and warned about by name.</li>
-<li><strong>Process wiring / dependencies</strong>: each process becomes an independent rule;
-  <code>depends_on</code> edges are not inferred. Add them by hand after import.</li>
+  interpolations are left verbatim and warned about by name. Wiring
+  expressions using these operators abort the import (see above) rather than
+  being guessed.</li>
 <li><strong>Multiple-wildcard globs</strong> (<code>Channel.fromFilePairs("data/*_{1,2}.fastq.gz")</code>)
   and character-class globs: only the first <code>*</code> maps to <code>{sample}</code>; the import
-  warns loudly.</li>
+  warns loudly. Such a channel used as a wiring source aborts instead.</li>
 <li><strong>Output expressions that reference unknown variables</strong> (e.g.
   <code>"${params.outdir}/x.txt"</code>): the output is omitted with a warning rather
   than fabricated.</li>

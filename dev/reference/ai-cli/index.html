@@ -4840,7 +4840,7 @@ Set the provider and your API key via environment variables:</p>
 </span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="c1"># (openai-compatible), oxo-flow auto-detects the provider — no extra</span>
 </span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="c1"># variables needed. See "Environment Variables" below for the exact rules.</span>
 </span></code></pre></div>
-<p>Configuration persists to <code>~/.oxo-flow/ai_config.json</code> after first use.</p>
+<p>Configuration persists to <code>~/.oxo-flow/ai_config.json</code> after first use (or to the file named by <code>OXO_FLOW_AI_CONFIG</code>, when set).</p>
 <h3 id="2-enable-ai-in-your-workflow">2. Enable AI in Your Workflow<a class="headerlink" href="#2-enable-ai-in-your-workflow" title="Permanent link">#</a></h3>
 <p>Add one section to your <code>.oxoflow</code> file:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[ai]</span>
@@ -5022,6 +5022,11 @@ is fail-closed end to end:</p>
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">"api_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sk-&lt;YOUR-KEY&gt;"</span>
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="p">}</span>
 </span></code></pre></div>
+<p>Set <code>OXO_FLOW_AI_CONFIG</code> to an explicit file path to redirect this location
+for both reads and writes. It is the hermetic knob for tests and CI: while it
+is set the legacy <code>~/.config/oxo-flow/ai_config.json</code> migration fallback is
+skipped, so a redirected process cannot touch the user's real config. Unset
+(the default) keeps the <code>$HOME</code> path above.</p>
 <h3 id="workflow-level-config-ai-section-in-oxoflow">Workflow-Level Config (<code>[ai]</code> section in <code>.oxoflow</code>)<a class="headerlink" href="#workflow-level-config-ai-section-in-oxoflow" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">[ai]</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
@@ -5115,6 +5120,11 @@ repository.</p>
 <td><code>OXO_FLOW_AI_MODEL</code></td>
 <td>Model name override</td>
 <td>(provider default)</td>
+</tr>
+<tr>
+<td><code>OXO_FLOW_AI_CONFIG</code></td>
+<td>Explicit AI config file path, used for BOTH reads and writes. When set it is authoritative: the legacy <code>~/.config/oxo-flow/ai_config.json</code> migration fallback is skipped, so a redirected process can never read or rewrite the <code>$HOME</code>-scoped file. An empty value is ignored; a relative path anchors to the process cwd, and parent directories are created on save. This is the hermetic knob for tests and CI (a web integration test once overwrote the operator's real config)</td>
+<td><code>$HOME/.oxo-flow/ai_config.json</code></td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>

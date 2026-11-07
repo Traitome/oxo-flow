@@ -4432,6 +4432,11 @@ is the only content on stdout, so piping into Graphviz works:</p>
 (before the workflow is parsed), so a zoom setting can never be silently
 ignored. Omit <code>-f</code> and use only <code>--granularity</code> and the latter fails with the
 same error — pass <code>-f metro</code> explicitly.</p>
+<p>The <code>module</code> tier needs module structure to group by: <code>module::</code> rule
+prefixes or <code>[[include]]</code> modules. On a workflow with neither, every rule
+falls into one stage section and the map would collapse to a single station
+with zero edges, so the command falls back to <code>process</code> granularity and says
+so on stderr instead of silently losing the topology.</p>
 <h3 id="view-the-expanded-runtime-dag">View the expanded runtime DAG<a class="headerlink" href="#view-the-expanded-runtime-dag" title="Permanent link">#</a></h3>
 <p>By default, <code>graph</code> shows the template DAG — one node per <code>[[rules]]</code> block, with every declared dataflow edge included (<code>input</code> paths and <code>expand_inputs</code> patterns alike). Use <code>--expanded</code> to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a <code>_&lt;group&gt;_&lt;sample&gt;</code> or <code>_&lt;pair_id&gt;</code> suffix). Catalog pages render the template DAG — it is the stable overview; the expanded view is the full runtime truth.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--expanded
