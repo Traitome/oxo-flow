@@ -252,6 +252,28 @@ when at least one `failed_rules` entry is actually when-gated-off; the
 verdicts themselves live in the checkpoint file's `when_verdicts` map and
 are not duplicated into the JSON.
 
+### `--json` error contract
+
+With `--json`, stdout is always exactly **one** JSON document, success or
+failure. A missing checkpoint, an unreadable file, or a malformed checkpoint
+used to exit 1 with empty stdout; it now prints the shared failure envelope
+and still exits 1:
+
+```json
+{
+  "command": "status",
+  "checkpoint": "absent-checkpoint.json",
+  "errors": [
+    {"code": "CHECKPOINT", "message": "failed to load checkpoint from 'absent-checkpoint.json'. …"}
+  ]
+}
+```
+
+`code` is `CHECKPOINT` for checkpoint resolution/load failures; the message
+carries the same detail the human stderr report shows (including the
+workflow-file-as-checkpoint mistake). Consumers can therefore parse one
+document shape across `validate`, `lint`, `dry-run`, and `status`.
+
 ---
 
 ## Checkpoint File Format

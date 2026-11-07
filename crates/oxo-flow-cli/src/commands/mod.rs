@@ -336,6 +336,7 @@ pub mod config_comments;
 pub mod import;
 pub mod info;
 pub mod infra;
+pub mod json_error;
 pub mod knowledge;
 pub mod output;
 pub mod project;

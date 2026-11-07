@@ -33,7 +33,7 @@ pub enum GraphFormat {
 }
 
 /// Station granularity for the `metro` graph format.
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum MetroArg {
     /// Every rule is one station (default).
     #[default]
@@ -123,13 +123,27 @@ pub fn handle_graph(
         GraphFormat::DotClustered => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
         GraphFormat::Tree => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
         GraphFormat::Mermaid => Ok(dag.to_mermaid()),
-        GraphFormat::Metro => dag
-            .to_metro(
-                &config.rules,
-                Some(&config.module_rules),
-                granularity.unwrap_or_default().into(),
-            )
-            .map_err(|e| anyhow::anyhow!(e)),
+        GraphFormat::Metro => {
+            // The module tier groups by module sections. On a workflow with
+            // no module structure (no `module::` prefixes, no [[include]]
+            // modules) every rule lands in one stage section, so the whole
+            // DAG collapses into a single station with zero edges — silent
+            // total topology loss. Fall back to the process tier (the next
+            // coarsest grouping: same-tool chains) and say so.
+            let selected = granularity.unwrap_or_default();
+            let selected = if selected == MetroArg::Module && !has_module_structure(&config) {
+                eprintln!(
+                    "  {} --granularity module needs module structure (module:: rule prefixes \
+                     or [[include]] modules); falling back to process granularity",
+                    "Note:".yellow()
+                );
+                MetroArg::Process
+            } else {
+                selected
+            };
+            dag.to_metro(&config.rules, Some(&config.module_rules), selected.into())
+                .map_err(|e| anyhow::anyhow!(e))
+        }
     }?;
 
     match output {
@@ -137,13 +151,27 @@ pub fn handle_graph(
         // (audit finding: it used to create a file literally named `-`).
         Some(path) if path.as_os_str() == "-" => println!("{result}"),
         Some(path) => {
-            std::fs::write(&path, result)?;
+            // Same bytes as stdout: `println!` terminates the document with a
+            // newline, so the file must too (a writer that strips it makes
+            // `graph -o` output differ from the piped form for no reason).
+            std::fs::write(&path, format!("{result}\n"))?;
             eprintln!("{} Graph saved to {}", "✓".green(), path.display());
         }
         None => println!("{result}"),
     }
 
     Ok(())
+}
+
+/// Whether the workflow carries module structure the metro module tier can
+/// group by: namespaced rule names (`module::rule`) or `[[include]]` modules
+/// with at least one member.
+fn has_module_structure(config: &WorkflowConfig) -> bool {
+    config.rules.iter().any(|rule| rule.name.contains("::"))
+        || config
+            .module_rules
+            .values()
+            .any(|members| !members.is_empty())
 }
 
 /// Grouped arguments for the report command — keeps the handler

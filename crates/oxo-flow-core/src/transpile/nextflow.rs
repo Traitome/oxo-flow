@@ -14,9 +14,11 @@ static CHANNEL_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid channel-variable regex")
 });
 
-/// Matches a direct `Channel.fromPath("<pattern>")` argument.
+/// Matches a whole `Channel.fromPath("<pattern>")` argument. Anchored so a
+/// fromPath call combined with a channel operator (`… .map { … }`) is
+/// rejected instead of being silently truncated to its prefix.
 static FROM_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"Channel\.fromPath\s*\(\s*["']([^"']+)["']"#).expect("valid fromPath regex")
+    Regex::new(r#"^Channel\.fromPath\s*\(\s*["']([^"']+)["']\s*\)$"#).expect("valid fromPath regex")
 });
 
 /// Matches `${name}` / `$name` interpolations, including dotted members.
@@ -24,6 +26,24 @@ static NF_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_.]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
         .expect("valid nextflow variable regex")
 });
+
+/// One `input:` path channel declaration, in declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NextflowInput {
+    /// `path reads` / `path(reads)` — the value is supplied by the workflow.
+    Var(String),
+    /// `path "data/*.txt"` — a literal pattern declared in the process body.
+    Literal(String),
+}
+
+/// One `output:` path expression plus its optional `emit:` name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NextflowOutput {
+    /// Raw expression (`"${x}.count"`, `"*.bam"`, `"versions.yml"`, …).
+    pub expr: String,
+    /// `emit: <name>` label, used by `PROCESS.out.<emit>` wiring.
+    pub emit: Option<String>,
+}
 
 /// Extracted intermediate representation of a Nextflow process.
 #[derive(Debug, Clone, Default)]
@@ -35,13 +55,10 @@ pub struct NextflowProcess {
     pub cpus: Option<u32>,
     pub memory: Option<String>,
     pub time: Option<String>,
-    /// Fallback input patterns derived from declared `path <name>` qualifiers.
-    pub inputs: Vec<String>,
-    /// Declared path variable names, in declaration order. Index `i` pairs with
-    /// `inputs[i]` on the fallback list.
-    pub input_vars: Vec<String>,
-    /// Raw output expressions (`"${x}.count"`, `"*.bam"`, `"versions.yml"`, …).
-    pub output_exprs: Vec<String>,
+    /// Declared input channels, in declaration order.
+    pub input_decls: Vec<NextflowInput>,
+    /// Declared output channels, in declaration order.
+    pub outputs: Vec<NextflowOutput>,
     pub script: String,
     /// True when the script/shell body was a single-quoted Nextflow string,
     /// which does not interpolate — recorded so the caller can warn.
@@ -51,13 +68,45 @@ pub struct NextflowProcess {
     pub script_warnings: Vec<String>,
 }
 
+impl NextflowProcess {
+    /// Declared path variable names paired with their channel position.
+    fn input_vars(&self) -> Vec<(usize, String)> {
+        self.input_decls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decl)| match decl {
+                NextflowInput::Var(var) => Some((index, var.clone())),
+                NextflowInput::Literal(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// A rendered output channel (pattern plus its `emit:` label, if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderedOutput {
+    pattern: String,
+    emit: Option<String>,
+}
+
+/// Which upstream output fed one rendered input channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WiredFrom {
+    /// Lowercased rule name of the upstream process.
+    upstream_rule: String,
+    /// Position of the selected output in the upstream's rendered outputs.
+    upstream_output_index: usize,
+}
+
 /// A process rendered into concrete oxo-flow rule fields.
 #[derive(Debug, Clone, Default)]
 struct RenderedProcess {
     inputs: Vec<String>,
-    outputs: Vec<String>,
+    outputs: Vec<RenderedOutput>,
+    depends_on: Vec<String>,
+    /// Per rendered input: the upstream output it was wired from, if any.
+    wired_inputs: Vec<Option<WiredFrom>>,
     shell: String,
-    warnings: Vec<String>,
 }
 
 /// Transpile Nextflow DSL2 source code into an oxo-flow TOML pipeline.
@@ -75,25 +124,57 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
         });
     }
 
-    let channels = parse_workflow_channels(source, &processes);
+    let wiring = parse_workflow_wiring(source, &processes)?;
     let mut warnings = Vec::new();
+    let mut cache: Vec<Option<RenderedProcess>> = vec![None; processes.len()];
+    let mut stack = Vec::new();
     let mut rendered = Vec::with_capacity(processes.len());
-    for process in &processes {
-        let rule = render_process(process, &channels)?;
-        warnings.extend(rule.warnings.iter().cloned());
-        rendered.push(rule);
+    for index in 0..processes.len() {
+        rendered.push(render_process_at(
+            index,
+            &processes,
+            &wiring,
+            &mut cache,
+            &mut stack,
+            &mut warnings,
+        )?);
     }
 
     // Infer the biological type of each rule first: only the catalog tables
     // actually referenced by an inferred contract are emitted, so an
     // unrecognized process never gets a fabricated `[types.*]` block.
-    let inferred: Vec<(Option<&'static str>, Option<&'static str>)> = processes
+    let mut inferred: Vec<(Option<&'static str>, Option<&'static str>)> = processes
         .iter()
         .zip(&rendered)
         .map(|(process, rule)| {
-            infer_bio_types(&process.name.to_lowercase(), &rule.inputs, &rule.outputs)
+            infer_bio_types(
+                &process.name.to_lowercase(),
+                &rule.inputs,
+                &rule
+                    .outputs
+                    .iter()
+                    .map(|o| o.pattern.clone())
+                    .collect::<Vec<_>>(),
+            )
         })
         .collect();
+    // A wired input inherits the type of the upstream output it consumes:
+    // re-inferring from the pattern would re-attach the SOURCE file's type
+    // (e.g. `fastq`) to a derived intermediate. Only the first input feeds
+    // the emitted contract, and only a first-output wiring is unambiguous;
+    // anything else stays untyped rather than guessed.
+    for (index, rule) in rendered.iter().enumerate() {
+        let Some(first_wired) = rule.wired_inputs.first().and_then(Option::as_ref) else {
+            continue;
+        };
+        let upstream_index = processes
+            .iter()
+            .position(|process| process.name.to_lowercase() == first_wired.upstream_rule);
+        inferred[index].0 = match upstream_index {
+            Some(upstream) if first_wired.upstream_output_index == 0 => inferred[upstream].1,
+            _ => None,
+        };
+    }
     let mut used_types = BTreeSet::new();
     for (in_type, out_type) in &inferred {
         used_types.extend(in_type.iter().chain(out_type.iter()).copied());
@@ -143,11 +224,23 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
         toml.push_str("[[rules]]\n");
         let rule_name = process.name.to_lowercase();
         toml.push_str(&format!("name = \"{rule_name}\"\n"));
+        if !rule.depends_on.is_empty() {
+            let deps = rule
+                .depends_on
+                .iter()
+                .map(|dep| format!("\"{dep}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("depends_on = [{deps}]\n"));
+        }
 
-        let threads = process.cpus.unwrap_or(1);
-        toml.push_str(&format!("threads = {threads}\n"));
-
+        // Canonical resource form (W025): `threads`/`memory` belong under
+        // `resources`, never at rule level. A missing `cpus` directive
+        // inherits `[defaults] threads = 1` instead of restating it.
         let mut res_fields = Vec::new();
+        if let Some(cpus) = process.cpus {
+            res_fields.push(format!("threads = {cpus}"));
+        }
         if let Some(mem) = &process.memory {
             let norm_mem = normalize_memory(mem);
             res_fields.push(format!("memory = \"{norm_mem}\""));
@@ -181,7 +274,7 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
             let out_str = rule
                 .outputs
                 .iter()
-                .map(|s| format!("\"{}\"", escape_toml_basic(s)))
+                .map(|out| format!("\"{}\"", escape_toml_basic(&out.pattern)))
                 .collect::<Vec<_>>()
                 .join(", ");
             toml.push_str(&format!("output = [{out_str}]\n"));
@@ -194,7 +287,7 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
         push_types_contract(
             &mut toml,
             in_type.and_then(|t| rule.inputs.first().map(|channel| (channel.as_str(), t))),
-            out_type.and_then(|t| rule.outputs.first().map(|channel| (channel.as_str(), t))),
+            out_type.and_then(|t| rule.outputs.first().map(|out| (out.pattern.as_str(), t))),
         );
         toml.push('\n');
     }
@@ -429,10 +522,11 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
         }
     }
 
+    let input_vars = proc.input_vars();
     proc.script = translate_nextflow_script(
         &script_lines.join("\n"),
         name,
-        &proc.input_vars,
+        &input_vars,
         proc.script_single_quoted,
         &mut proc.script_warnings,
     );
@@ -568,7 +662,7 @@ fn collect_input_decl(line: &str, proc: &mut NextflowProcess) {
             .trim_matches('"')
             .trim_matches('\'')
             .trim();
-        push_input_qualifier(inside, proc);
+        push_input_decl(inside, proc);
     }
     if found {
         return;
@@ -578,13 +672,13 @@ fn collect_input_decl(line: &str, proc: &mut NextflowProcess) {
         if let Some(rest) = line.strip_prefix(prefix) {
             let rest = rest.split(',').next().unwrap_or(rest).trim();
             let value = rest.trim_matches('"').trim_matches('\'').trim();
-            push_input_qualifier(value, proc);
+            push_input_decl(value, proc);
             return;
         }
     }
 }
 
-fn push_input_qualifier(value: &str, proc: &mut NextflowProcess) {
+fn push_input_decl(value: &str, proc: &mut NextflowProcess) {
     if value.is_empty() {
         return;
     }
@@ -596,7 +690,8 @@ fn push_input_qualifier(value: &str, proc: &mut NextflowProcess) {
                 value
             ));
         }
-        proc.inputs.push(conversion.pattern);
+        proc.input_decls
+            .push(NextflowInput::Literal(conversion.pattern));
         return;
     }
     let var = value
@@ -607,8 +702,22 @@ fn push_input_qualifier(value: &str, proc: &mut NextflowProcess) {
     if var.is_empty() {
         return;
     }
-    proc.inputs.push(legacy_input_pattern(var));
-    proc.input_vars.push(var.to_string());
+    proc.input_decls.push(NextflowInput::Var(var.to_string()));
+}
+
+/// Extract the `emit: <name>` label from an `output:` declaration.
+fn parse_output_emit(line: &str) -> Option<String> {
+    static EMIT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bemit:\s*([A-Za-z_]\w*)").expect("valid emit regex"));
+    EMIT_RE.captures(line).map(|caps| caps[1].to_string())
+}
+
+/// Remove the `, emit: <name>` clause so it never leaks into the expression.
+fn strip_output_emit(line: &str) -> String {
+    static EMIT_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\s*,\s*emit:\s*[A-Za-z_]\w*").expect("valid emit-clause regex")
+    });
+    EMIT_CLAUSE_RE.replace(line, "").into_owned()
 }
 
 /// Collect a raw output expression from an `output:` declaration.
@@ -621,15 +730,18 @@ fn collect_output_decl(line: &str, proc: &mut NextflowProcess) {
         return;
     }
 
-    let expr = if let Some((_, after)) = line.split_once("path(") {
+    let emit = parse_output_emit(line);
+    let decl = strip_output_emit(line);
+    let decl = decl.trim();
+    let expr = if let Some((_, after)) = decl.split_once("path(") {
         let Some(end) = after.find(')') else {
             return;
         };
         after[..end].trim()
-    } else if let Some(rest) = line.strip_prefix("path ") {
+    } else if let Some(rest) = decl.strip_prefix("path ") {
         rest.trim()
-    } else if line.starts_with('"') || line.starts_with('\'') {
-        line
+    } else if decl.starts_with('"') || decl.starts_with('\'') {
+        decl
     } else {
         return;
     };
@@ -642,7 +754,10 @@ fn collect_output_decl(line: &str, proc: &mut NextflowProcess) {
         .trim_matches('\'')
         .trim();
     if !expr.is_empty() {
-        proc.output_exprs.push(expr.to_string());
+        proc.outputs.push(NextflowOutput {
+            expr: expr.to_string(),
+            emit,
+        });
     }
 }
 
@@ -691,45 +806,143 @@ fn channel_glob_to_pattern(glob: &str) -> PatternConversion {
     PatternConversion { pattern, warning }
 }
 
-fn render_process(
-    process: &NextflowProcess,
-    channels: &HashMap<String, Vec<String>>,
+/// Render one process, recursively resolving any upstream wiring it consumes.
+///
+/// `cache` memoizes rendered rules, `stack` detects wiring cycles. Errors are
+/// returned (never swallowed): an unresolvable construct aborts the import
+/// instead of emitting an invented path or type.
+fn render_process_at(
+    index: usize,
+    processes: &[NextflowProcess],
+    wiring: &HashMap<String, Vec<Invocation>>,
+    cache: &mut Vec<Option<RenderedProcess>>,
+    stack: &mut Vec<usize>,
+    warnings: &mut Vec<String>,
 ) -> Result<RenderedProcess> {
-    let mut warnings = process.script_warnings.clone();
-    let mut inputs = process.inputs.clone();
+    let process = &processes[index];
+    if let Some(rendered) = &cache[index] {
+        return Ok(rendered.clone());
+    }
+    if stack.contains(&index) {
+        let cycle = stack
+            .iter()
+            .map(|&i| processes[i].name.as_str())
+            .chain(std::iter::once(process.name.as_str()))
+            .collect::<Vec<_>>()
+            .join(" → ");
+        return Err(wiring_error(format!(
+            "process wiring cycle detected: {cycle} — break the cycle or import by hand"
+        )));
+    }
+    stack.push(index);
 
-    let source_channels = channels.get(&process.name);
-    if let Some(channels) = source_channels
-        && channels.len() > 1
+    let mut rule_warnings = process.script_warnings.clone();
+    let mut depends_on: Vec<String> = Vec::new();
+    let mut wired_inputs: Vec<Option<WiredFrom>> = Vec::new();
+    let input_vars = process.input_vars();
+
+    let invocations = wiring.get(&process.name);
+    if let Some(invocations) = invocations
+        && invocations.len() > 1
     {
-        warnings.push(format!(
+        rule_warnings.push(format!(
             "process '{}' is invoked {} times; only the first invocation's channel is mapped",
             process.name,
-            channels.len()
+            invocations.len()
         ));
     }
 
-    if let Some(glob) = source_channels.and_then(|channels| channels.first()) {
-        let conversion = channel_glob_to_pattern(glob);
-        if let Some(warning) = &conversion.warning {
-            warnings.push(format!("process '{}': {warning}", process.name));
+    let inputs: Vec<String> = match invocations.and_then(|list| list.first()) {
+        Some(invocation) => {
+            if process.input_decls.is_empty() {
+                // A value-only process (`input: val x`) takes no path
+                // channel; the argument carries a value, not a file, so
+                // there is nothing to map and nothing to invent.
+                if !invocation.feeds.is_empty() {
+                    rule_warnings.push(format!(
+                        "process '{}' is invoked with {} channel argument(s) but declares no \
+                         path inputs — value-only (`val`/`env`) inputs are not mapped",
+                        process.name,
+                        invocation.feeds.len()
+                    ));
+                }
+                Vec::new()
+            } else if invocation.feeds.len() != process.input_decls.len() {
+                return Err(wiring_error(format!(
+                    "process '{}' declares {} path input(s) but is invoked with {} channel \
+                     argument(s) — cannot map them faithfully. Wire every declared path input \
+                     or import this rule by hand.",
+                    process.name,
+                    process.input_decls.len(),
+                    invocation.feeds.len()
+                )));
+            } else {
+                let mut patterns = Vec::with_capacity(invocation.feeds.len());
+                for feed in &invocation.feeds {
+                    match feed {
+                        ChannelFeed::Source(glob) => {
+                            let conversion = channel_glob_to_pattern(glob);
+                            if let Some(warning) = &conversion.warning {
+                                rule_warnings
+                                    .push(format!("process '{}': {warning}", process.name));
+                            }
+                            patterns.push(conversion.pattern);
+                            wired_inputs.push(None);
+                        }
+                        ChannelFeed::Upstream { process, emit } => {
+                            let (pattern, output_index, upstream_rule) = resolve_upstream_output(
+                                process,
+                                emit.as_deref(),
+                                processes,
+                                wiring,
+                                cache,
+                                stack,
+                                warnings,
+                            )?;
+                            patterns.push(pattern);
+                            wired_inputs.push(Some(WiredFrom {
+                                upstream_rule: upstream_rule.clone(),
+                                upstream_output_index: output_index,
+                            }));
+                            if !depends_on.contains(&upstream_rule) {
+                                depends_on.push(upstream_rule);
+                            }
+                        }
+                        ChannelFeed::Unresolved(expression) => {
+                            return Err(unresolved_wiring_error(&process.name, expression));
+                        }
+                    }
+                }
+                debug_assert_eq!(patterns.len(), invocation.feeds.len());
+                patterns
+            }
         }
-        if inputs.is_empty() {
-            inputs.push(conversion.pattern);
-        } else {
-            inputs[0] = conversion.pattern;
-        }
-    }
+        // A standalone process definition (a Nextflow module file has no
+        // workflow block) keeps the declaration-derived heuristic: there is
+        // no wiring to resolve, only the declared names.
+        None => process
+            .input_decls
+            .iter()
+            .map(|decl| match decl {
+                NextflowInput::Var(var) => legacy_input_pattern(var),
+                NextflowInput::Literal(pattern) => pattern.clone(),
+            })
+            .collect(),
+    };
+    wired_inputs.resize(inputs.len(), None);
 
     let mut outputs = Vec::new();
-    for expr in &process.output_exprs {
-        let expr = expr.trim();
+    for output in &process.outputs {
+        let expr = output.expr.trim();
         if expr.is_empty() || expr == "versions.yml" {
             continue;
         }
-        match map_output_expr(expr, &process.input_vars, &inputs) {
-            Ok(mapped) => outputs.push(mapped),
-            Err(reason) => warnings.push(format!(
+        match map_output_expr(expr, &input_vars, &inputs) {
+            Ok(mapped) => outputs.push(RenderedOutput {
+                pattern: mapped,
+                emit: output.emit.clone(),
+            }),
+            Err(reason) => rule_warnings.push(format!(
                 "process '{}': output '{}' cannot be mapped faithfully ({reason}); output omitted \
                  — declare it by hand",
                 process.name, expr
@@ -748,12 +961,92 @@ fn render_process(
         });
     }
 
-    Ok(RenderedProcess {
+    stack.pop();
+    warnings.extend(rule_warnings.iter().cloned());
+    let rendered = RenderedProcess {
         inputs,
         outputs,
+        depends_on,
+        wired_inputs,
         shell: process.script.clone(),
-        warnings,
-    })
+    };
+    cache[index] = Some(rendered.clone());
+    Ok(rendered)
+}
+
+/// Resolve the output channel selected by a `PROCESS.out` / `PROCESS.out.<emit>`
+/// wiring expression. Returns (pattern, output index, rule name).
+#[allow(clippy::too_many_arguments)]
+fn resolve_upstream_output(
+    upstream_name: &str,
+    emit: Option<&str>,
+    processes: &[NextflowProcess],
+    wiring: &HashMap<String, Vec<Invocation>>,
+    cache: &mut Vec<Option<RenderedProcess>>,
+    stack: &mut Vec<usize>,
+    warnings: &mut Vec<String>,
+) -> Result<(String, usize, String)> {
+    let upstream_index = processes
+        .iter()
+        .position(|process| process.name == upstream_name)
+        .ok_or_else(|| {
+            wiring_error(format!(
+                "wiring expression references upstream process '{upstream_name}', which is not \
+                 defined in this source — resolve the channel explicitly or import by hand"
+            ))
+        })?;
+    let upstream = render_process_at(upstream_index, processes, wiring, cache, stack, warnings)?;
+    let rule_name = processes[upstream_index].name.to_lowercase();
+    let selector = emit.map_or_else(
+        || format!("{upstream_name}.out"),
+        |emit| format!("{upstream_name}.out.{emit}"),
+    );
+    let selected: Vec<(usize, &RenderedOutput)> = match emit {
+        Some(emit) => upstream
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| output.emit.as_deref() == Some(emit))
+            .collect(),
+        None => upstream.outputs.iter().enumerate().collect(),
+    };
+    match selected.as_slice() {
+        [] => {
+            let available = upstream
+                .outputs
+                .iter()
+                .map(|output| match &output.emit {
+                    Some(emit) => format!("{emit} ({})", output.pattern),
+                    None => output.pattern.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(wiring_error(if upstream.outputs.is_empty() {
+                format!(
+                    "'{selector}' selects no output: process '{upstream_name}' has no mappable \
+                     output — declare one in the process's output block or import this rule by hand"
+                )
+            } else {
+                format!(
+                    "'{selector}' selects no output: process '{upstream_name}' offers {available} — \
+                     select one with {upstream_name}.out.<emit> or adjust the source"
+                )
+            }))
+        }
+        [(index, output)] => Ok((output.pattern.clone(), *index, rule_name)),
+        _ => Err(wiring_error(format!(
+            "'{selector}' is ambiguous: process '{upstream_name}' has {} outputs; select one \
+             explicitly with {upstream_name}.out.<emit>",
+            selected.len()
+        ))),
+    }
+}
+
+fn wiring_error(message: String) -> OxoFlowError {
+    OxoFlowError::Parse {
+        path: std::path::PathBuf::from("<nextflow source>"),
+        message,
+    }
 }
 
 /// Map a Nextflow output expression onto an oxo-flow output pattern.
@@ -762,7 +1055,7 @@ fn render_process(
 /// `data/{sample}.txt.count`; a plain glob keeps the legacy heuristic.
 fn map_output_expr(
     expr: &str,
-    input_vars: &[String],
+    input_vars: &[(usize, String)],
     inputs: &[String],
 ) -> std::result::Result<String, String> {
     if !NF_VAR_RE.is_match(expr) {
@@ -780,8 +1073,8 @@ fn map_output_expr(
             if ident == "meta.id" || ident == "prefix" {
                 return "{sample}".to_string();
             }
-            if let Some(pos) = input_vars.iter().position(|var| var == ident)
-                && let Some(pattern) = inputs.get(pos)
+            if let Some((position, _)) = input_vars.iter().find(|(_, var)| var == ident)
+                && let Some(pattern) = inputs.get(*position)
             {
                 return pattern.clone();
             }
@@ -819,7 +1112,7 @@ fn legacy_output_pattern(expr: &str) -> String {
 fn translate_nextflow_script(
     script: &str,
     process_name: &str,
-    input_vars: &[String],
+    input_vars: &[(usize, String)],
     single_quoted: bool,
     warnings: &mut Vec<String>,
 ) -> String {
@@ -878,11 +1171,11 @@ fn translate_nextflow_script(
         l = l.replace("${bam}", "{input[0]}");
         l = l.replace("$bam", "{input[0]}");
 
-        for (idx, var) in input_vars.iter().enumerate() {
-            let placeholder = if idx == 0 {
+        for (position, var) in input_vars {
+            let placeholder = if *position == 0 {
                 "{input}".to_string()
             } else {
-                format!("{{input[{idx}]}}")
+                format!("{{input[{position}]}}")
             };
             l = replace_nextflow_var(&l, var, &placeholder);
         }
@@ -945,7 +1238,7 @@ fn translate_nextflow_script(
     if single_quoted
         && input_vars
             .iter()
-            .any(|var| joined.contains(&format!("${var}")))
+            .any(|(_, var)| joined.contains(&format!("${var}")))
     {
         push_warning(
             warnings,
@@ -976,12 +1269,40 @@ fn push_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
-/// Parse workflow-block invocations, mapping each process name to the
-/// `Channel.fromPath` patterns fed to it.
-fn parse_workflow_channels(
+/// What feeds one process invocation argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChannelFeed {
+    /// `Channel.fromPath("<glob>")`, or a variable bound to one.
+    Source(String),
+    /// `PROCESS.out` / `PROCESS.out.<emit>`.
+    Upstream {
+        process: String,
+        emit: Option<String>,
+    },
+    /// An unrecognized expression. Rejected for path inputs at render time;
+    /// ignored (with a warning) when the process declares no path inputs,
+    /// where the argument is a value, not a file channel.
+    Unresolved(String),
+}
+
+/// One invocation of a process, in workflow order.
+#[derive(Debug, Clone, Default)]
+struct Invocation {
+    feeds: Vec<ChannelFeed>,
+}
+
+/// Parse workflow-block invocations — both the call form
+/// (`COUNT(Channel.fromPath("data/*.txt"))`, `COUNT(reads)`) and the pipe form
+/// (`Channel.fromPath("data/*.txt") | COUNT`, `reads | COUNT`) — into the
+/// channel fed to each process.
+///
+/// Every argument is classified or rejected: an unresolvable wiring
+/// expression aborts the import instead of silently falling back to a
+/// fabricated path.
+fn parse_workflow_wiring(
     source: &str,
     processes: &[NextflowProcess],
-) -> HashMap<String, Vec<String>> {
+) -> Result<HashMap<String, Vec<Invocation>>> {
     let mut channel_vars: HashMap<String, String> = HashMap::new();
     for caps in CHANNEL_VAR_RE.captures_iter(source) {
         channel_vars
@@ -989,35 +1310,284 @@ fn parse_workflow_channels(
             .or_insert_with(|| caps[2].to_string());
     }
 
-    let mut channels: HashMap<String, Vec<String>> = HashMap::new();
-    for process in processes {
-        let invocation = Regex::new(&format!(r"\b{}\s*\(", regex::escape(&process.name)))
-            .expect("valid process-name regex");
-        for hit in invocation.find_iter(source) {
-            let open = hit.start() + hit.as_str().rfind('(').unwrap_or(0);
-            let Some(close) = find_matching_paren(source, open) else {
-                continue;
-            };
-            let args = &source[open + 1..close];
-            let mut patterns: Vec<String> = FROM_PATH_RE
-                .captures_iter(args)
-                .map(|caps| caps[1].to_string())
-                .collect();
-            if patterns.is_empty() {
-                let ident = args.trim();
-                if let Some(pattern) = channel_vars.get(ident) {
-                    patterns.push(pattern.clone());
+    let mut wiring: HashMap<String, Vec<Invocation>> = HashMap::new();
+    for block in extract_workflow_blocks(source) {
+        // Call form: NAME(<channel>, …)
+        for process in processes {
+            let invocation = Regex::new(&format!(r"\b{}\s*\(", regex::escape(&process.name)))
+                .expect("valid process-name regex");
+            for hit in invocation.find_iter(block) {
+                // A commented-out invocation is not wiring.
+                if is_in_line_comment(block, hit.start()) {
+                    continue;
                 }
-            }
-            if !patterns.is_empty() {
-                channels
+                let open = hit.start() + hit.as_str().rfind('(').unwrap_or(0);
+                let Some(close) = find_matching_paren(block, open) else {
+                    continue;
+                };
+                let args = &block[open + 1..close];
+                let feeds = parse_invocation_args(args, &channel_vars);
+                wiring
                     .entry(process.name.clone())
                     .or_default()
-                    .extend(patterns);
+                    .push(Invocation { feeds });
             }
         }
+        // Pipe form: <channel> | NAME
+        for (name, invocation) in parse_pipe_invocations(block, processes, &channel_vars)? {
+            wiring.entry(name).or_default().push(invocation);
+        }
     }
-    channels
+    Ok(wiring)
+}
+
+/// Extract the body of every top-level `workflow [NAME] { … }` block.
+///
+/// Pipe scanning is restricted to these blocks so a `|` inside a process
+/// script (`cmd1 | cmd2`) can never be mistaken for process wiring.
+fn extract_workflow_blocks(source: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut search = 0;
+    while let Some(rel) = source[search..].find("workflow") {
+        let start = search + rel;
+        let after_keyword = start + "workflow".len();
+        // Top-level definition only: the keyword starts a line, and is not a
+        // member of a longer identifier (`workflowFoo`).
+        let line_prefix = &source[source[..start].rfind('\n').map_or(0, |i| i + 1)..start];
+        let prev = source[..start].chars().next_back();
+        if !line_prefix.trim().is_empty() || prev.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            search = after_keyword;
+            continue;
+        }
+        let mut rest = &source[after_keyword..];
+        let mut body_open = after_keyword;
+        if !rest.trim_start().starts_with('{') {
+            // Optional workflow name: `workflow MY_PIPELINE { … }`
+            let name_len = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .count();
+            if name_len == 0 {
+                search = after_keyword;
+                continue;
+            }
+            let after_name = &rest[name_len..];
+            let trimmed = after_name.trim_start();
+            body_open += name_len + (after_name.len() - trimmed.len());
+            rest = trimmed;
+            if !rest.starts_with('{') {
+                search = after_keyword;
+                continue;
+            }
+        } else {
+            let trimmed = rest.trim_start();
+            body_open += rest.len() - trimmed.len();
+        }
+        let body_start = body_open + 1;
+        match find_matching_brace(source, body_start) {
+            Some(end) => {
+                blocks.push(&source[body_start..end]);
+                search = end + 1;
+            }
+            None => break,
+        }
+    }
+    blocks
+}
+
+/// Whether `idx` falls after a `//` on the same line (a commented-out
+/// invocation must not become wiring).
+fn is_in_line_comment(text: &str, idx: usize) -> bool {
+    let line_start = text[..idx].rfind('\n').map_or(0, |position| position + 1);
+    text[line_start..idx].contains("//")
+}
+
+/// Find the `}` matching the `{` just before `body_start`, honoring quoted
+/// strings and escapes (same scanner as the process-body parser).
+fn find_matching_brace(source: &str, body_start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in source[body_start..].char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(body_start + idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split an invocation's argument text at top-level commas.
+fn split_top_level_args(args: &str) -> Vec<&str> {
+    if args.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    let mut start = 0usize;
+    for (idx, ch) in args.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(args[start..].trim());
+    // A trailing comma is legal in Nextflow invocation lists; it must not
+    // become an empty (unresolvable) argument.
+    if parts.len() > 1 && parts.last().is_some_and(|part| part.is_empty()) {
+        parts.pop();
+    }
+    parts
+}
+
+fn parse_invocation_args(args: &str, channel_vars: &HashMap<String, String>) -> Vec<ChannelFeed> {
+    split_top_level_args(args)
+        .into_iter()
+        .map(|arg| parse_channel_feed(arg, channel_vars))
+        .collect()
+}
+
+/// Classify one wiring argument. Unrecognized expressions are carried as
+/// `Unresolved` and rejected only when they feed a declared path input — a
+/// value-only process argument is not a file channel.
+fn parse_channel_feed(arg: &str, channel_vars: &HashMap<String, String>) -> ChannelFeed {
+    let arg = arg.trim();
+    if let Some(caps) = FROM_PATH_RE.captures(arg) {
+        let whole = caps.get(0).expect("capture 0").as_str();
+        if whole == arg {
+            return ChannelFeed::Source(caps[1].to_string());
+        }
+        return ChannelFeed::Unresolved(arg.to_string());
+    }
+    if is_identifier(arg) {
+        if let Some(glob) = channel_vars.get(arg) {
+            return ChannelFeed::Source(glob.clone());
+        }
+        return ChannelFeed::Unresolved(arg.to_string());
+    }
+    if let Some((upstream, emit)) = parse_upstream_ref(arg) {
+        return ChannelFeed::Upstream {
+            process: upstream,
+            emit,
+        };
+    }
+    ChannelFeed::Unresolved(arg.to_string())
+}
+
+/// The loud, actionable rejection for an unresolvable path-channel wiring.
+fn unresolved_wiring_error(process: &str, arg: &str) -> OxoFlowError {
+    wiring_error(format!(
+        "process '{process}' is wired from the unsupported expression `{arg}` — the importer \
+         maps Channel.fromPath(\"glob\"), a channel variable bound to it, and \
+         PROCESS.out[.<emit>] only; resolve this channel explicitly or import by hand"
+    ))
+}
+
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Parse `PROCESS.out` / `PROCESS.out.<emit>` into `(PROCESS, emit)`.
+fn parse_upstream_ref(text: &str) -> Option<(String, Option<String>)> {
+    static UPSTREAM_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^([A-Za-z_]\w*)\.out(?:\.([A-Za-z_]\w*))?$")
+            .expect("valid upstream-wiring regex")
+    });
+    let caps = UPSTREAM_RE.captures(text)?;
+    Some((
+        caps[1].to_string(),
+        caps.get(2).map(|m| m.as_str().to_string()),
+    ))
+}
+
+/// Parse `<channel> | PROCESS` statements inside one workflow block.
+fn parse_pipe_invocations(
+    block: &str,
+    processes: &[NextflowProcess],
+    channel_vars: &HashMap<String, String>,
+) -> Result<Vec<(String, Invocation)>> {
+    let mut invocations = Vec::new();
+    for (idx, ch) in block.char_indices() {
+        if ch != '|' {
+            continue;
+        }
+        // `||` is a logical operator, never a channel pipe; a second `|` of
+        // a chain is handled by its own statement check below.
+        let prev = block[..idx].chars().next_back();
+        let next = block[idx + 1..].chars().next();
+        if prev == Some('|') || next == Some('|') {
+            continue;
+        }
+        if is_in_line_comment(block, idx) {
+            continue;
+        }
+        let rhs = block[idx + 1..].trim_start();
+        let name: String = rhs
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !processes.iter().any(|process| process.name == name) {
+            continue;
+        }
+        // The fed channel is the expression since the start of this
+        // statement (a preceding pipe means a chain we cannot map). Braces
+        // are NOT statement boundaries: a brace-set glob inside the quoted
+        // channel expression would otherwise truncate it.
+        let statement_start = block[..idx].rfind(['\n', ';']).map_or(0, |pos| pos + 1);
+        let lhs = block[statement_start..idx].trim();
+        if lhs.contains('|') {
+            return Err(wiring_error(format!(
+                "process '{name}' is wired from the pipe chain `{lhs} | {name}` — chained channel \
+                 pipes cannot be mapped faithfully; feed the source directly to '{name}' or \
+                 import this rule by hand"
+            )));
+        }
+        let feed = match parse_channel_feed(lhs, channel_vars) {
+            ChannelFeed::Unresolved(arg) => return Err(unresolved_wiring_error(&name, &arg)),
+            feed => feed,
+        };
+        invocations.push((name, Invocation { feeds: vec![feed] }));
+    }
+    Ok(invocations)
 }
 
 /// Find the `)` matching the `(` at `open`, honoring quoted strings.
@@ -1248,6 +1818,338 @@ process OUT {
         assert!(
             !toml.contains("output = ["),
             "unmappable output must be omitted, not fabricated: {toml}"
+        );
+    }
+
+    /// Audit fixture: the canonical Nextflow DSL2 pipe form.
+    const PIPE_FORM_FIXTURE: &str = r#"
+process COUNT {
+    input: path x
+    output: "${x}.count"
+    script: "wc -l < ${x} > ${x}.count"
+}
+workflow { Channel.fromPath("data/*.txt") | COUNT }
+"#;
+
+    const TWO_PROCESS_FIXTURE: &str = r#"
+process TRIM {
+    input: path reads
+    output: "${reads}.trimmed"
+    script: "trim ${reads} > ${reads}.trimmed"
+}
+process ALIGN {
+    input: path reads
+    output: "${reads}.bam"
+    script: "cp ${reads} aligned.bam"
+}
+workflow {
+    TRIM(Channel.fromPath("data/*.fastq.gz"))
+    ALIGN(TRIM.out)
+}
+"#;
+
+    #[test]
+    fn pipe_form_maps_the_same_wildcard_as_the_call_form() {
+        let (toml, warnings) =
+            transpile_nextflow_with_warnings(PIPE_FORM_FIXTURE).expect("pipe form must transpile");
+
+        assert!(
+            warnings.is_empty(),
+            "a resolvable pipe form must not warn: {warnings:?}"
+        );
+        assert!(
+            toml.contains(r#"input = ["data/{sample}.txt"]"#),
+            "pipe form must map Channel.fromPath to the wildcard input, not invent a path: {toml}"
+        );
+        assert!(
+            toml.contains(r#"output = ["data/{sample}.txt.count"]"#),
+            "pipe-form output must follow the input pattern: {toml}"
+        );
+        assert!(
+            toml.contains(r#"sample_pattern = "data/{sample}.txt""#),
+            "the wildcard needs a declared source: {toml}"
+        );
+        assert!(
+            !toml.contains("data/x"),
+            "the input variable name must never be emitted as a path: {toml}"
+        );
+
+        let config = WorkflowConfig::parse(&toml).expect("generated workflow must parse");
+        assert_eq!(config.rules.len(), 1);
+    }
+
+    #[test]
+    fn pipe_form_follows_a_channel_variable() {
+        let nf = r#"
+process COUNT {
+    input: path x
+    output: "${x}.count"
+    script: "wc -l < ${x} > ${x}.count"
+}
+reads = Channel.fromPath("data/*.txt")
+workflow { reads | COUNT }
+"#;
+        let toml = transpile_nextflow(nf).expect("variable pipe");
+        assert!(toml.contains(r#"input = ["data/{sample}.txt"]"#), "{toml}");
+    }
+
+    #[test]
+    fn unresolvable_pipe_source_aborts_loudly() {
+        let nf = r#"
+process COUNT {
+    input: path x
+    output: "${x}.count"
+    script: "wc -l < ${x} > ${x}.count"
+}
+workflow { Channel.fromFilePairs("data/*_{1,2}.fastq.gz") | COUNT }
+"#;
+        let error = transpile_nextflow(nf).expect_err("unresolvable pipe source must abort");
+        let message = error.to_string();
+        assert!(
+            message.contains("Channel.fromFilePairs"),
+            "the error must name the unsupported construct: {message}"
+        );
+        assert!(
+            message.contains("import by hand"),
+            "the error must give an actionable next step: {message}"
+        );
+    }
+
+    #[test]
+    fn chained_pipe_aborts_loudly() {
+        let nf = r#"
+process COUNT {
+    input: path x
+    output: "${x}.count"
+    script: "wc -l < ${x} > ${x}.count"
+}
+process EXTRA {
+    input: path x
+    output: "${x}.extra"
+    script: "cp ${x} ${x}.extra"
+}
+workflow { Channel.fromPath("data/*.txt") | COUNT | EXTRA }
+"#;
+        let error = transpile_nextflow(nf).expect_err("a pipe chain must abort");
+        assert!(
+            error.to_string().contains("pipe chain"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn process_wiring_maps_the_upstream_output_and_adds_the_edge() {
+        let (toml, warnings) =
+            transpile_nextflow_with_warnings(TWO_PROCESS_FIXTURE).expect("wiring must transpile");
+
+        assert!(
+            warnings.is_empty(),
+            "a fully resolvable wiring must not warn: {warnings:?}"
+        );
+        assert!(
+            toml.contains(r#"name = "trim""#)
+                && toml.contains(r#"input = ["data/{sample}.fastq.gz"]"#),
+            "the source process keeps the fromPath wildcard: {toml}"
+        );
+        assert!(
+            toml.contains(r#"input = ["data/{sample}.fastq.gz.trimmed"]"#),
+            "align must consume trim's OUTPUT pattern, not reinvent the source: {toml}"
+        );
+        assert!(
+            toml.contains(r#"depends_on = ["trim"]"#),
+            "the wiring must add a depends_on edge: {toml}"
+        );
+        assert!(
+            !toml.contains("[types.fastq]"),
+            "no fabricated fastq contract may be attached to a derived intermediate: {toml}"
+        );
+
+        let config = WorkflowConfig::parse(&toml).expect("generated workflow must parse");
+        let dag =
+            crate::dag::WorkflowDag::from_rules(&config.rules).expect("wired DAG must construct");
+        assert_eq!(
+            dag.edge_count(),
+            1,
+            "the imported DAG must keep TRIM → ALIGN"
+        );
+    }
+
+    #[test]
+    fn wired_input_inherits_the_upstream_output_type() {
+        let nf = r#"
+process BWA_MEM {
+    input: path reads
+    output: path "${reads}.bam", emit: bam
+    script: "bwa mem ${reads} > ${reads}.bam"
+}
+process MYSTERY {
+    input: path bam
+    output: "${bam}.done"
+    script: "touch ${bam}.done"
+}
+workflow {
+    BWA_MEM(Channel.fromPath("data/*.fastq.gz"))
+    MYSTERY(BWA_MEM.out.bam)
+}
+"#;
+        let toml = transpile_nextflow(nf).expect("wired types");
+        assert!(
+            toml.contains(r#"inputs = { "data/{sample}.fastq.gz.bam" = "bam_coord" }"#),
+            "the wired input must carry the upstream output's type, not a guess: {toml}"
+        );
+    }
+
+    #[test]
+    fn process_wiring_can_select_an_emit() {
+        let nf = r#"
+process TRIM {
+    input: path reads
+    output: path "${reads}.bam", emit: bam
+    script: "cp ${reads} ${reads}.bam"
+}
+process ALIGN {
+    input: path reads
+    output: "${reads}.sorted"
+    script: "cp ${reads} sorted.out"
+}
+workflow {
+    TRIM(Channel.fromPath("data/*.fastq.gz"))
+    ALIGN(TRIM.out.bam)
+}
+"#;
+        let toml = transpile_nextflow(nf).expect("emit selection must transpile");
+        assert!(
+            toml.contains(r#"input = ["data/{sample}.fastq.gz.bam"]"#),
+            "TRIM.out.bam must select the bam output: {toml}"
+        );
+        assert!(toml.contains(r#"depends_on = ["trim"]"#), "{toml}");
+    }
+
+    #[test]
+    fn ambiguous_out_wiring_aborts() {
+        let nf = r#"
+process TRIM {
+    input: path reads
+    output:
+    path "${reads}.bam", emit: bam
+    path "${reads}.log", emit: log
+    script: "cp ${reads} ${reads}.bam"
+}
+process ALIGN {
+    input: path reads
+    output: "${reads}.sorted"
+    script: "cp ${reads} sorted.out"
+}
+workflow {
+    TRIM(Channel.fromPath("data/*.fastq.gz"))
+    ALIGN(TRIM.out)
+}
+"#;
+        let error = transpile_nextflow(nf).expect_err("ambiguous .out must abort");
+        let message = error.to_string();
+        assert!(
+            message.contains("ambiguous") && message.contains("TRIM.out.<emit>"),
+            "the error must name the ambiguity and the fix: {message}"
+        );
+    }
+
+    #[test]
+    fn unknown_upstream_process_aborts() {
+        let nf = r#"
+process ALIGN {
+    input: path reads
+    output: "${reads}.sorted"
+    script: "cp ${reads} sorted.out"
+}
+workflow { ALIGN(NOT_DEFINED.out) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("unknown upstream must abort");
+        assert!(
+            error.to_string().contains("NOT_DEFINED"),
+            "the error must name the unknown upstream: {error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_wiring_expression_aborts() {
+        let nf = r#"
+process ALIGN {
+    input: path reads
+    output: "${reads}.sorted"
+    script: "cp ${reads} sorted.out"
+}
+workflow { ALIGN(params.reads) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("unsupported expression must abort");
+        let message = error.to_string();
+        assert!(
+            message.contains("params.reads") && message.contains("PROCESS.out"),
+            "the error must name the expression and the supported forms: {message}"
+        );
+    }
+
+    #[test]
+    fn imported_rules_do_not_trip_the_deprecation_lint() {
+        let nf = r#"
+process TRIM {
+    cpus 4
+    memory '8 GB'
+    input: path reads
+    output: "${reads}.trimmed"
+    script: "trim ${reads} > ${reads}.trimmed"
+}
+workflow { TRIM(Channel.fromPath("data/*.fastq.gz")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("transpile");
+        assert!(
+            toml.contains("resources = { threads = 4, memory = \"8G\" }"),
+            "threads/memory must be emitted under resources: {toml}"
+        );
+        let config = WorkflowConfig::parse(&toml).expect("parse generated workflow");
+        let diagnostics = crate::format::lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W025"),
+            "the importer must not emit its own deprecated keys: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn value_only_process_invocation_warns_instead_of_aborting() {
+        let nf = r#"
+process REPORT {
+    input: val prefix
+    output: "report.txt"
+    script: "echo ${prefix} > report.txt"
+}
+workflow { REPORT("run") }
+"#;
+        let (toml, warnings) =
+            transpile_nextflow_with_warnings(nf).expect("value-only inputs must not abort");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("no path inputs") && w.contains("value-only")),
+            "the unmapped value input must be reported: {warnings:?}"
+        );
+        assert!(!toml.contains("input = ["), "{toml}");
+    }
+
+    #[test]
+    fn invoked_process_with_unmatched_input_count_aborts() {
+        let nf = r#"
+process PAIR {
+    input: path r1
+    path r2
+    output: "${r1}.merged"
+    script: "cat ${r1} ${r2} > ${r1}.merged"
+}
+workflow { PAIR(Channel.fromPath("data/*_R1.fastq.gz")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("missing channel argument must abort");
+        let message = error.to_string();
+        assert!(
+            message.contains("declares 2 path input(s)") && message.contains("1 channel argument"),
+            "the error must spell out the mismatch: {message}"
         );
     }
 }

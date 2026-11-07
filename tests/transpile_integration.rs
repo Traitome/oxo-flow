@@ -56,7 +56,7 @@ process FASTQC {
         WorkflowConfig::parse(&toml_str).expect("generated toml must parse as valid workflow");
     assert_eq!(config.rules.len(), 1);
     assert_eq!(config.rules[0].name, "fastqc");
-    assert_eq!(config.rules[0].threads, Some(2));
+    assert_eq!(config.rules[0].resources.threads, 2);
 
     let dag = WorkflowDag::from_rules(&config.rules).expect("dag should construct cleanly");
     assert_eq!(dag.node_count(), 1);
@@ -100,7 +100,7 @@ process BWA_MEM {
         WorkflowConfig::parse(&toml_str).expect("generated toml must parse as valid workflow");
     assert_eq!(config.rules.len(), 1);
     assert_eq!(config.rules[0].name, "bwa_mem");
-    assert_eq!(config.rules[0].threads, Some(8));
+    assert_eq!(config.rules[0].resources.threads, 8);
 }
 
 #[test]
@@ -191,7 +191,7 @@ rule bwa_mem:
     assert_eq!(config.rules.len(), 2);
     assert_eq!(config.rules[0].name, "fastqc");
     assert_eq!(config.rules[1].name, "bwa_mem");
-    assert_eq!(config.rules[1].threads, Some(8));
+    assert_eq!(config.rules[1].resources.threads, 8);
 }
 
 #[test]
@@ -303,7 +303,7 @@ process STAR_ALIGN {
     let toml_str = transpile(nf, SourceFormat::Nextflow).expect("transpile should succeed");
     let config = WorkflowConfig::parse(&toml_str).expect("parsed workflow");
     assert_eq!(config.rules.len(), 1);
-    assert_eq!(config.rules[0].threads, Some(12));
+    assert_eq!(config.rules[0].resources.threads, 12);
     assert!(config.rules[0].types.is_some());
 
     let dag = WorkflowDag::from_rules(&config.rules).expect("dag valid");
@@ -347,7 +347,7 @@ process SALMON_QUANT {
     let config = WorkflowConfig::parse(&toml_str).expect("parsed workflow");
     assert_eq!(config.rules.len(), 1);
     assert_eq!(config.rules[0].name, "salmon_quant");
-    assert_eq!(config.rules[0].threads, Some(4));
+    assert_eq!(config.rules[0].resources.threads, 4);
 }
 
 #[test]
