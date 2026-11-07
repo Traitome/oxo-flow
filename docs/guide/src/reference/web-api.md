@@ -1064,7 +1064,6 @@ Successful generations archive `outcome: "Success"`; a run that fails
 archives `outcome: "Failed"` with an `error` reason (the post-mortem
 record). Writes are temp-sibling + atomic rename, so a reader never observes
 a truncated file. Pruning
->>>>>>> origin/main
 only reclaims archives older than ten minutes, so a fresh failure record — or
 the file an operator is inspecting — is never rotated out by concurrent
 writers. Chat-intent replies do not run the agent loop and therefore produce
