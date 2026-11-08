@@ -32,7 +32,7 @@ defaults is reported with the backend the run will bootstrap, not as
 **Output:**
 
 ```
-oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
 https://github.com/Traitome/oxo-flow
 Available environment backends:
   ✓ conda
