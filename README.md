@@ -10,6 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/Traitome/oxo-flow?label=release&style=flat-square)](https://github.com/Traitome/oxo-flow/releases)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core?label=crates.io&style=flat-square)](https://crates.io/crates/oxo-flow-core)
 [![bioconda](https://anaconda.org/bioconda/oxo-flow-cli/badges/version.svg)](https://bioconda.github.io/recipes/oxo-flow-cli/README.html)
+[![docker image](https://img.shields.io/badge/docker%20image-ghcr.io%2Ftraitome%2Foxo--flow-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/Traitome/oxo-flow/pkgs/container/oxo-flow)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98.0-orange?style=flat-square)](rust-toolchain.toml)
 [![Docs](https://img.shields.io/badge/docs-guide-blue?style=flat-square)](https://traitome.github.io/oxo-flow/latest/)
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%7C%20Dual-blue?style=flat-square)](#license)
@@ -18,6 +19,9 @@
 [![GitHub downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total?label=github%20downloads&style=flat-square)](https://github.com/Traitome/oxo-flow/releases)
 [![bioconda downloads](https://anaconda.org/bioconda/oxo-flow-cli/badges/downloads.svg)](https://anaconda.org/bioconda/oxo-flow-cli/files)
 [![cargo installs](https://img.shields.io/crates/d/oxo-flow-cli?label=cargo%20installs&style=flat-square)](https://crates.io/crates/oxo-flow-cli)
+[![open vsx](https://img.shields.io/open-vsx/v/traitome/oxo-flow?label=open%20vsx&style=flat-square)](https://open-vsx.org/extension/traitome/oxo-flow)
+[![open vsx installs](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fopen-vsx.org%2Fapi%2Ftraitome%2Foxo-flow%2Flatest&query=%24.downloadCount&label=open%20vsx%20installs&style=flat-square)](https://open-vsx.org/extension/traitome/oxo-flow)
+[![contributors](https://img.shields.io/github/contributors/Traitome/oxo-flow?style=flat-square)](https://github.com/Traitome/oxo-flow/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/Traitome/oxo-flow?style=flat-square)](https://github.com/Traitome/oxo-flow/stargazers)
 [![Ask DeepWiki](https://img.shields.io/badge/Ask_DeepWiki-AI_docs-6E56CF?style=flat-square)](https://deepwiki.com/Traitome/oxo-flow)
 
