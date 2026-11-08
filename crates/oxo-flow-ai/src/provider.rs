@@ -675,6 +675,29 @@ pub fn classify_http_error_with_retry_after(
             message: body.to_string(),
         };
     }
+    // Gateway/proxy statuses carrying an unreadable body: a reverse proxy (or
+    // its upstream) cut the request — the observed real-world case is a
+    // long-thinking model exceeding the proxy's own request timeout and the
+    // gateway answering 504 with an HTML/truncated body. A bare
+    // "HTTP 504: response parse failed" hides that; name the likely cause and
+    // the knobs. The raw parse noise is omitted when the body is our own
+    // decode-failure description rather than upstream text.
+    if matches!(status, 502 | 503 | 504 | 522 | 524) {
+        let detail = if body_lower.contains("response parse failed") {
+            String::new()
+        } else {
+            format!(" Upstream body: {body}")
+        };
+        return AiError::Provider {
+            provider: provider.into(),
+            message: format!(
+                "HTTP {status} from the AI gateway — the endpoint timed out or cut the \
+                 response before the model finished (common with long-thinking models or a \
+                 proxy request timeout). Try a faster/less-thinking model, a smaller request, \
+                 or raise OXO_FLOW_AI_TIMEOUT_SECS / the proxy's own timeout.{detail}",
+            ),
+        };
+    }
     AiError::Provider {
         provider: provider.into(),
         message: format!("HTTP {status}: {body}"),
@@ -3918,6 +3941,37 @@ mod tests {
             classify_http_error("openai", 500, "server exploded", None),
             AiError::Provider { .. }
         ));
+    }
+
+    #[test]
+    fn gateway_timeouts_name_the_likely_cause_and_knobs() {
+        // Real-world probe (biotree.top GLM): a long-thinking model exceeds
+        // the proxy's request limit, the gateway answers 504 with an
+        // unreadable body, and the old message was
+        // "HTTP 504: response parse failed: error decoding response body".
+        let err = classify_http_error(
+            "openai",
+            504,
+            "response parse failed: error decoding response body",
+            None,
+        );
+        let AiError::Provider { message, .. } = err else {
+            panic!("gateway status must stay a provider error: {err:?}");
+        };
+        assert!(message.contains("gateway"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+        assert!(message.contains("OXO_FLOW_AI_TIMEOUT_SECS"), "{message}");
+        assert!(
+            !message.contains("response parse failed"),
+            "the decode noise must not be appended: {message}"
+        );
+
+        // A real upstream body is still preserved for diagnosis.
+        let err = classify_http_error("openai", 504, "<html>504 Gateway Time-out</html>", None);
+        let AiError::Provider { message, .. } = err else {
+            panic!("gateway status must stay a provider error: {err:?}");
+        };
+        assert!(message.contains("504 Gateway Time-out"), "{message}");
     }
 
     #[test]
