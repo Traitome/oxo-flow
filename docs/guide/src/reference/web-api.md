@@ -1048,16 +1048,13 @@ Transport behavior:
 - The browser-side watchdog is derived from `ready.idle_timeout_secs`; on
   expiry the client aborts the fetch, renders the error with a Retry action,
   and re-enables the send button.
-- `POST /api/chat/send/json` (the non-streaming variant) budgets the WHOLE
-  generation — every tool and validation round — at
-  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s). The route budget fires one
-  second before the provider client's per-request timeout, and a
-  timeout-class provider error is classified into the same answer, so the
-  504 below holds whichever timer expires first. When the budget expires it
-  answers `504 {code: "AI_TIMEOUT"}` with the standard
-  `{code, message, detail, suggestion}` body, and `suggestion` names the knob.
-  The SSE route above is not capped by this total budget; use it for
-  generations expected to run longer.
+- `POST /api/chat/send/json` (the non-streaming variant) is subject to the
+  same whole-generation route budget as `POST /api/ai/translate` (described
+  in the AI section above): every tool and validation round budgeted at
+  `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 s), firing one second before the
+  provider client's per-request timeout, with `504 {code: "AI_TIMEOUT"}`
+  when it expires. The SSE route above is not capped by this total budget;
+  use it for generations expected to run longer.
 
 ### Chat session archives
 

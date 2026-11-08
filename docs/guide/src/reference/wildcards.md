@@ -136,9 +136,14 @@ While they use the same `{}` syntax, built-in placeholders are NOT wildcards; th
 | `{output}` | Space-separated list of all output files |
 | `{output[N]}` | The Nth output file (0-indexed) |
 | `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }` → `{output.name}`); any key works: `output = { bam = "..." }` → `{output.bam}` |
-| `{threads}` | CPU thread count assigned to the task |
-| `{memory}` | Memory allocation assigned to the task |
-| `{config.X}` | Value of variable `X` from the `[config]` section |
+| `{threads}` | Thread count assigned to this rule |
+| `{memory}` | Memory allocation assigned to this rule |
+| `{effective_threads}` | Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use it for flags like `--threads`/`-t` when the declared value is an HPC-scale label (e.g. a rule declaring `threads = 12` renders `4` on a 4-core box). Unset threads render as `1` |
+| `{effective_memory_mb}` | Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget. Use it for JVM flags (`-Xmx{effective_memory_mb}m`, `-Xms…`) so tools size themselves to the box instead of OOM-ing on hardcoded HPC values (`-Xmx29491M` class). Unset memory renders as the machine's full total |
+| `{log}` | Path of the rule's `log` field (every instance wildcard — `{sample}`, `{pair_id}`, `{assembler}` … — and `{config.x}` are expanded per instance; the parent directory is created automatically) |
+| `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
+| `{meta.<column>}` | Sample-group metadata column in `[[sample_groups]]` shell commands — same value as `{wildcard.<column>}` for group metadata (see the [canonical placeholder table](workflow-format.md#grouping-by-metadata-column)) |
+| `{wildcard.*}` | Per-instance binding under the same grammar as `when` conditions — sample-group `metadata` keys (e.g. `{wildcard.umi1_pattern}`) and expansion keys. Unbound keys render as their literal brace token |
 
 ---
 

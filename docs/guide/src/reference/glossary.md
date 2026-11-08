@@ -74,6 +74,25 @@ Besides rule status, a checkpoint stores config snapshots, rule fingerprints, an
 
 ---
 
+### Fingerprint
+
+A hash of a rule's config snapshot, definition, and input manifest recorded
+in the checkpoint. On every run the engine compares the stored fingerprint
+against the current state to decide whether a completed rule can be skipped
+or must re-execute.
+
+---
+
+### Tombstone
+
+A checkpoint record for a rule marked `temporary = true` whose outputs were
+deleted after a successful run (once their dependents completed, and — with
+`[engine]` disk thresholds configured — only when free space was below
+`reclaim_free_disk`). Later runs skip tombstoned rules unless a dependent
+needs the outputs again.
+
+---
+
 ## Environments
 
 ### Environment Backend
@@ -207,17 +226,71 @@ Expands to all output files, space-separated.
 
 ---
 
+### `{output[N]}`
+
+The Nth output file (0-indexed).
+
+**Example**: `{output[0]}` → `aligned/S001.bam`
+
+---
+
+### `{output.name}`
+
+Named output file — `output` given as an inline map (`output = { bam = "..." }`).
+
+**Example**: `{output.bam}` → the value of the `bam` entry in the rule's `output` map
+
+---
+
 ### `{threads}`
 
 The thread count for the current rule.
 
 ---
 
-### `{config.key}`
+### `{memory}`
 
-A configuration variable from the `[config]` section.
+The memory allocation for the current rule.
+
+---
+
+### `{effective_threads}`
+
+Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use for flags like `--threads` when the declared value is an HPC-scale label; unset threads render as `1`.
+
+---
+
+### `{effective_memory_mb}`
+
+Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget (e.g. for JVM `-Xmx` flags). Unset memory renders as the machine's full total.
+
+---
+
+### `{log}`
+
+Path of the rule's `log` field; per-instance wildcards and `{config.x}` values are expanded, and the parent directory is created automatically.
+
+---
+
+### `{config.*}`
+
+A configuration variable from the `[config]` section (plain value, declared default, or CLI override).
 
 **Example**: `{config.reference}` → `/data/ref/hg38.fa`
+
+---
+
+### `{meta.<column>}`
+
+Sample-group metadata column in `[[sample_groups]]` shell commands — same value as `{wildcard.<column>}` for group metadata. See the [canonical placeholder table](workflow-format.md#grouping-by-metadata-column).
+
+---
+
+### `{wildcard.*}`
+
+Per-instance binding of a wildcard key — sample-group `metadata` entries and expansion keys, under the same grammar as `when` conditions. Unbound keys render as their literal brace token.
+
+**Example**: `{wildcard.umi1_pattern}` → the `umi1_pattern` metadata entry of the sample group
 
 ---
 
@@ -253,6 +326,9 @@ A cluster scheduler system. oxo-flow supports:
 | `pbs` | PBS/Torque |
 | `sge` | Sun Grid Engine / Oracle Grid Engine |
 | `lsf` | IBM Spectrum LSF |
+| `kubernetes` / `k8s` | Kubernetes |
+| `aws-batch` | AWS Batch |
+| `gcp-batch` | Google Cloud Batch |
 
 ---
 

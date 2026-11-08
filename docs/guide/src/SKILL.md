@@ -30,7 +30,7 @@ per task; follow the links for details on demand.
 | Workflow JSON Schema | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/schema/oxoflow-v1.schema.json |
 | Community template library | https://oxo-flow-community.github.io/ |
 | Reference workflows | https://github.com/Traitome/oxo-flow/tree/main/examples/gallery |
-| VS Code extension | https://traitome.github.io/oxo-flow/latest/reference/vscode-extension/ (`.oxoflow` editing: completion, diagnostics, one-click run/validate/graph; `code --install-extension traitome.oxo-flow` — published to Open VSX and, from the next release, the VS Code Marketplace; offline VSIX on every GitHub release) |
+| VS Code extension | https://traitome.github.io/oxo-flow/latest/reference/vscode-extension/ (`.oxoflow` editing: completion, diagnostics, one-click run/validate/graph; `code --install-extension traitome.oxo-flow` — published to Open VSX and the VS Code Marketplace; offline VSIX on every GitHub release) |
 
 **GitHub unreachable?** Prefix any GitHub URL with a mirror proxy
 (`https://ghfast.top/<url>` or `https://gh-proxy.com/<url>`), or web-search for
@@ -38,8 +38,8 @@ a current proxy; ecosystem mirrors: see `how-to/china-mirrors`.
 
 ## The Analysis Loop
 
-Seven stages, three approval gates. Every stage ends with a
-**Done when** condition — do not proceed without it.
+Seven stages, four approval gates (stages 0, 1, 2, and 6). Every stage
+ends with a **Done when** condition — do not proceed without it.
 
 ### 0. Data & Task Contract
 
