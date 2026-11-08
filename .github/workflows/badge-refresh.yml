@@ -1,0 +1,61 @@
+# Automated refresh of the GHCR pull-count badge in README.md.
+#
+# GitHub exposes no API for GHCR download counts (badges/shields#5594), so
+# scripts/badge/refresh-ghcr-pulls.py scrapes the public package page
+# (lifetime total + 30-day series) and rewrites the badge line in place.
+# Weekly cadence; a failed scrape is a hard failure so a stale badge is
+# visible rather than silently frozen. No changes -> green run with a
+# notice (same convention as refresh-knowledge.yml).
+name: Badge Refresh
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: badge-refresh
+  cancel-in-progress: false
+
+jobs:
+  ghcr-pulls:
+    name: Refresh GHCR pulls badge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Scrape package page and update README badge
+        id: refresh
+        run: |
+          set -uo pipefail
+          if python3 scripts/badge/refresh-ghcr-pulls.py; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Commit and push badge update
+        if: steps.refresh.outputs.ok == 'true'
+        run: |
+          if git diff --quiet README.md; then
+            echo "No badge change; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore(badge): refresh ghcr pulls badge"
+          # Re-checkout of a schedule run races with pushes between fetch and
+          # commit; push failure on a busy main is retried via rebase once.
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          fi
