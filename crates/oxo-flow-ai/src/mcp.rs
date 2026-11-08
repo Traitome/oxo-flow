@@ -224,6 +224,31 @@ fn resolve_bearer_token(server_name: &str) -> Option<String> {
     pick_bearer_token(&generic, &specific).map(str::to_string)
 }
 
+/// Derive the endpoint identity used for per-server token variables and
+/// bridge names: everything after the scheme (host, port and path), with
+/// every character outside `[A-Za-z0-9_-]` folded to `_`.
+///
+/// Folding — not dropping — is what the operator-facing documentation
+/// promises (`OXO_FLOW_MCP_TOKEN_<SERVER>`, non-alphanumeric → `_`). Dots
+/// matter: an endpoint on a DNS host (`mcp://mcp.example.com/sse`) must map
+/// to `OXO_FLOW_MCP_TOKEN_MCP_EXAMPLE_COM_SSE`, or following the docs leaves
+/// the operator's token silently unattached.
+fn server_name_from_url(url: &str) -> String {
+    url.trim_start_matches("mcp://")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Environment variable name for a server's bearer token: the server name
 /// uppercased with non-alphanumeric characters folded to `_` (pure —
 /// unit-testable without touching process env, which tests may not do).
@@ -470,20 +495,11 @@ impl McpHttpClient {
         pin: Option<(String, std::net::SocketAddr)>,
     ) -> Result<Self, AiError> {
         // Identity used for the per-server token variable and error
-        // messages: the URL minus scheme and trailing slash, with `:` and
-        // `/` folded to `_`. The whole tail — host, port AND path — is
-        // part of the identity (two MCP servers can share a host on
-        // different paths), so `mcp://fs-gdrive:9000/v1` consults
-        // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
-        let server_name = original_url
-            .trim_start_matches("mcp://")
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .replace([':', '/'], "_")
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .collect::<String>();
+        // messages: the URL minus scheme and trailing slash. The whole tail
+        // — host, port AND path — is part of the identity (two MCP servers
+        // can share a host on different paths), so `mcp://fs-gdrive:9000/v1`
+        // consults `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
+        let server_name = server_name_from_url(original_url);
         // Bound every request: a hung MCP server must fail the tool call
         // (fail-safe), never block the AI command indefinitely. Redirects
         // are followed MANUALLY in `rpc` (policy none + re-screen per hop):
@@ -514,6 +530,26 @@ impl McpHttpClient {
     fn reserve_id(&self) -> u64 {
         self.next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether a server-assigned session id is currently held.
+    fn has_session(&self) -> bool {
+        self.session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
+    /// Drop a dead session id and the negotiated version. Called when the
+    /// server answers a session-bearing request with HTTP 404 (transport
+    /// spec: session terminated; the next request MUST be a fresh
+    /// initialize without a session id).
+    fn clear_session(&self) {
+        *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Same-origin credential headers for a POST to an MCP endpoint:
@@ -593,6 +629,7 @@ impl McpHttpClient {
                 None => &self.http,
             };
             let same_origin = origin_of(&current_url) == base_origin;
+            let session_attached = same_origin && self.has_session();
             let mut req = send_client
                 .post(&current_url)
                 .header("Accept", "application/json, text/event-stream")
@@ -628,6 +665,20 @@ impl McpHttpClient {
                 tracing::info!("MCP endpoint {current_url} redirected to {next_url}");
                 current_url = next_url;
                 continue;
+            }
+
+            // Transport spec: a 404 for a request that carried a session id
+            // means the server terminated that session; the client MUST
+            // start a new one with a fresh initialize. Clear the dead id
+            // and let the caller reinitialize (the 404 body is not a
+            // JSON-RPC answer to this request).
+            if response.status() == reqwest::StatusCode::NOT_FOUND && session_attached {
+                tracing::info!(
+                    server = %self.server_name,
+                    "MCP server terminated the session (HTTP 404) — reinitializing"
+                );
+                self.clear_session();
+                return Err(AiError::SessionExpired);
             }
 
             // Response-direction twin of the request-side gate: a session
@@ -669,6 +720,82 @@ impl McpHttpClient {
         Err(AiError::Transport {
             message: format!("MCP endpoint {current_url} exceeded {MAX_REDIRECTS} redirects"),
         })
+    }
+
+    /// Run the MCP handshake: `initialize` → `notifications/initialized`.
+    ///
+    /// Protocol negotiation (#948 P3-7a): propose the newest version we
+    /// speak; the server answers with the one it wants. A version we don't
+    /// understand fails the session closed — silently continuing let two
+    /// sides talk past each other with different framing assumptions (the
+    /// old client hardcoded "2024-11-05" and never looked at the answer).
+    ///
+    /// One helper for the initial handshake and the session-expiry retry:
+    /// after an HTTP 404 the transport spec requires a new initialize with
+    /// no session id, and both paths must store the negotiated version and
+    /// send the initialized notification identically.
+    async fn initialize_session(&self) -> Result<(), AiError> {
+        // An initialize starts a new session; never replay a previous
+        // session id or negotiated version on it.
+        self.clear_session();
+        let init_id = self.reserve_id();
+        let init = self
+            .rpc(
+                init_id,
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
+                }),
+            )
+            .await?;
+        let server_version = init
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !MCP_UNDERSTOOD_VERSIONS.contains(&server_version.as_str()) {
+            return Err(AiError::Protocol {
+                message: format!(
+                    "MCP server '{}' negotiated protocol version {server_version:?}, but this client speaks only {}",
+                    self.server_name,
+                    MCP_UNDERSTOOD_VERSIONS.join(", ")
+                ),
+            });
+        }
+        tracing::debug!(
+            server = %self.server_name,
+            version = %server_version,
+            "MCP protocol version negotiated"
+        );
+        *self
+            .protocol_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(server_version);
+        // Spec: once initialize returns an mcp-session-id, every
+        // subsequent request — the initialized notification included —
+        // must carry it. This is a fire-and-forget notification (no id,
+        // response discarded), but it still rides the same header set as
+        // any other request to this origin: session id, negotiated
+        // protocol version and bearer token. (The version is stored just
+        // above, so it is already available here.)
+        let note_req = self
+            .http
+            .post(&self.base_url)
+            .header("Accept", "application/json, text/event-stream")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            }));
+        // Fire-and-forget by spec (no id, no response), but a transport
+        // failure here is the client-side signal that the session was not
+        // established — downstream errors would otherwise surface as
+        // confusing "unknown session" replies from the server (L-4).
+        if let Err(error) = self.attach_session_headers(note_req).send().await {
+            tracing::debug!("MCP initialized-notification send failed: {error}");
+        }
+        Ok(())
     }
 }
 
@@ -821,70 +948,7 @@ fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, Ai
 impl McpClient for McpHttpClient {
     async fn list_tools(&self) -> Result<Vec<McpToolDef>, AiError> {
         // initialize → notifications/initialized → tools/list
-        //
-        // Protocol negotiation (#948 P3-7a): propose the newest version we
-        // speak; the server answers with the one it wants. A version we
-        // don't understand fails the session closed — silently continuing
-        // let two sides talk past each other with different framing
-        // assumptions (the old client hardcoded "2024-11-05" and never
-        // looked at the answer).
-        let init_id = self.reserve_id();
-        let init = self
-            .rpc(
-                init_id,
-                "initialize",
-                serde_json::json!({
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
-                }),
-            )
-            .await?;
-        let server_version = init
-            .get("protocolVersion")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        if !MCP_UNDERSTOOD_VERSIONS.contains(&server_version.as_str()) {
-            return Err(AiError::Protocol {
-                message: format!(
-                    "MCP server '{}' negotiated protocol version {server_version:?}, but this client speaks only {}",
-                    self.server_name,
-                    MCP_UNDERSTOOD_VERSIONS.join(", ")
-                ),
-            });
-        }
-        tracing::debug!(
-            server = %self.server_name,
-            version = %server_version,
-            "MCP protocol version negotiated"
-        );
-        *self
-            .protocol_version
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(server_version);
-        // Spec: once initialize returns an mcp-session-id, every
-        // subsequent request — the initialized notification included —
-        // must carry it. This is a fire-and-forget notification (no id,
-        // response discarded), but it still rides the same header set as
-        // any other request to this origin: session id, negotiated
-        // protocol version and bearer token. (The version is stored just
-        // above, so it is already available here.)
-        let note_req = self
-            .http
-            .post(&self.base_url)
-            .header("Accept", "application/json, text/event-stream")
-            .json(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-            }));
-        // Fire-and-forget by spec (no id, no response), but a transport
-        // failure here is the client-side signal that the session was not
-        // established — downstream errors would otherwise surface as
-        // confusing "unknown session" replies from the server (L-4).
-        if let Err(error) = self.attach_session_headers(note_req).send().await {
-            tracing::debug!("MCP initialized-notification send failed: {error}");
-        }
+        self.initialize_session().await?;
 
         // tools/list is paginated: the first page carries `nextCursor` when
         // more tools exist. Ignoring it silently exposed only the first page
@@ -893,13 +957,29 @@ impl McpClient for McpHttpClient {
         let mut tools: Vec<McpToolDef> = Vec::new();
         let mut cursor: Option<String> = None;
         let mut pages = 0_usize;
+        // A server may terminate the session between pages (404). The
+        // transport spec requires a fresh initialize; allow exactly one
+        // recovery so a server that keeps expiring sessions fails instead
+        // of looping forever.
+        let mut reinitialized = false;
         loop {
             let request_id = self.reserve_id();
             let params = match &cursor {
                 Some(c) => serde_json::json!({ "cursor": c }),
                 None => serde_json::json!({}),
             };
-            let result = self.rpc(request_id, "tools/list", params).await?;
+            let result = match self.rpc(request_id, "tools/list", params).await {
+                Ok(result) => result,
+                Err(AiError::SessionExpired) if !reinitialized => {
+                    self.initialize_session().await?;
+                    reinitialized = true;
+                    tools.clear();
+                    cursor = None;
+                    pages = 0;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let page: Vec<McpToolDef> = serde_json::from_value(
                 result
                     .get("tools")
@@ -953,14 +1033,19 @@ impl McpClient for McpHttpClient {
         // the tools/list pagination range, so after a paginated discover
         // every call reused an id and the replay guard could not tell a
         // fresh answer from a stale same-id body.
+        let params = serde_json::json!({ "name": name, "arguments": args });
         let request_id = self.reserve_id();
-        let result = self
-            .rpc(
-                request_id,
-                "tools/call",
-                serde_json::json!({ "name": name, "arguments": args }),
-            )
-            .await?;
+        let result = match self.rpc(request_id, "tools/call", params.clone()).await {
+            Ok(result) => result,
+            // The server dropped the session: initialize a new one once
+            // (bounded, no retry loop) and replay the call under a fresh id.
+            Err(AiError::SessionExpired) => {
+                self.initialize_session().await?;
+                let retry_id = self.reserve_id();
+                self.rpc(retry_id, "tools/call", params).await?
+            }
+            Err(error) => return Err(error),
+        };
         tool_result_text(name, &result)
     }
 
@@ -1784,6 +1869,32 @@ mod tests {
             token_env_var("genomics.tools"),
             "OXO_FLOW_MCP_TOKEN_GENOMICS_TOOLS"
         );
+    }
+
+    #[test]
+    fn server_name_folds_every_non_alphanumeric_character() {
+        // custom-skills.md documents `OXO_FLOW_MCP_TOKEN_<SERVER>` as the
+        // endpoint identity with non-alphanumeric characters folded to `_`.
+        // The old filter DROPPED dots, so a DNS-host endpoint answered to
+        // `MCPEXAMPLE.COM` as `MCPEXAMPLECOM` and the documented variable
+        // never attached a token.
+        let name = server_name_from_url("mcp://mcp.example.com:8080/sse");
+        assert_eq!(name, "mcp_example_com_8080_sse");
+        assert_eq!(
+            token_env_var(&name),
+            "OXO_FLOW_MCP_TOKEN_MCP_EXAMPLE_COM_8080_SSE"
+        );
+        // Existing identities keep their documented spelling.
+        assert_eq!(
+            server_name_from_url("mcp://fs-gdrive:9000/v1"),
+            "fs-gdrive_9000_v1"
+        );
+        assert_eq!(
+            server_name_from_url("https://127.0.0.1:9000/"),
+            "127_0_0_1_9000"
+        );
+        // Scheme and trailing slash are not part of the identity.
+        assert_eq!(server_name_from_url("mcp://fs:1/"), "fs_1");
     }
 
     #[test]

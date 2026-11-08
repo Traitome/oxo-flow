@@ -52,6 +52,70 @@ async fn callback_rejects_unissued_state() {
 }
 
 #[tokio::test]
+async fn callback_rejects_a_state_past_the_ten_minute_window() {
+    ensure_db().await;
+    // The state was genuinely issued by this server but is stale: the
+    // consumption-time freshness gate (10 minutes) must reject it even
+    // though the daily cleanup has not pruned it yet.
+    let backend = oxo_flow_web::infra::db::global_backend().expect("storage backend");
+    let stale = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+    backend
+        .store_oauth_state("state-expired", &stale)
+        .await
+        .expect("store stale state");
+
+    let (status, body) = post_json(
+        "/api/auth/oauth/callback",
+        json!({"provider": "attacker", "code": "x", "state": "state-expired"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
+    assert_eq!(body["code"], "OAUTH_INVALID_STATE", "{body:?}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("expired"),
+        "a stale state must be reported as expired: {body:?}"
+    );
+}
+
+#[tokio::test]
+async fn callback_consumes_the_state_before_attempting_the_exchange() {
+    ensure_db().await;
+    oxo_flow_web::domains::auth::service::store_pending_state("state-replayed-over-http")
+        .await
+        .expect("store state");
+
+    // Unknown provider: the exchange fails offline, proving the valid state
+    // reached the exchange step (not the state gate).
+    let (status, body) = post_json(
+        "/api/auth/oauth/callback",
+        json!({"provider": "attacker", "code": "x", "state": "state-replayed-over-http"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
+    assert_eq!(body["code"], "OAUTH_CALLBACK_ERROR", "{body:?}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Unsupported OAuth provider"),
+        "the exchange error must surface: {body:?}"
+    );
+
+    // The same state replayed now fails the gate: it was consumed before
+    // the exchange, so a failed exchange cannot be retried with it.
+    let (status, body) = post_json(
+        "/api/auth/oauth/callback",
+        json!({"provider": "attacker", "code": "x", "state": "state-replayed-over-http"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
+    assert_eq!(body["code"], "OAUTH_INVALID_STATE", "{body:?}");
+}
+
+#[tokio::test]
 async fn issued_state_is_single_use() {
     // Storage/verification helper round-trip: issued states verify once.
     // ensure_db initializes the infra global pool (the oauth_states table

@@ -77,6 +77,29 @@ pub async fn load_settings() -> Option<WebhookSettings> {
     })
 }
 
+/// Pick the event for a terminal run state and apply the configured
+/// subscription exactly.
+///
+/// The stored `events` list is a per-event subscription (same vocabulary and
+/// semantics as the CLI's `[webhook]` table): a `["workflow_completed"]`
+/// subscription must stay silent on a failed run, and vice versa. An empty
+/// list (an explicitly saved `[]`, or the pre-existing row shape) keeps the
+/// historical both-terminal-events behaviour.
+#[must_use]
+pub fn terminal_event(final_state: &str, events: &[String]) -> Option<WebhookEvent> {
+    let event = if final_state == "completed" {
+        WebhookEvent::WorkflowCompleted
+    } else {
+        WebhookEvent::WorkflowFailed
+    };
+    let name = event.to_string();
+    if events.is_empty() || events.iter().any(|configured| configured == &name) {
+        Some(event)
+    } else {
+        None
+    }
+}
+
 /// Fire the configured webhook for a terminal run state. Best-effort —
 /// notification failures must never affect the run record itself.
 pub async fn notify_terminal(run_id: &str, final_state: &str) {
@@ -86,20 +109,8 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
     if !settings.enabled || settings.url.trim().is_empty() {
         return;
     }
-    // Both event spellings are accepted for compatibility with the CLI's
-    // config vocabulary; either terminal state notifies.
-    if !settings.events.is_empty()
-        && !settings
-            .events
-            .iter()
-            .any(|e| e == "workflow_completed" || e == "workflow_failed")
-    {
+    let Some(event) = terminal_event(final_state, &settings.events) else {
         return;
-    }
-    let event = if final_state == "completed" {
-        WebhookEvent::WorkflowCompleted
-    } else {
-        WebhookEvent::WorkflowFailed
     };
 
     let backend = match crate::infra::db::global_backend() {
@@ -187,5 +198,72 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
     let client = WebhookClient::new(config);
     if let Err(e) = client.send(&payload).await {
         tracing::warn!("webhook delivery failed for run {run_id}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn events(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn subscription_is_exact_per_event() {
+        // Regression: the old pre-filter only asked "is either terminal
+        // spelling configured?", so a failed run notified subscribers that
+        // asked for workflow_completed only (and vice versa).
+        assert_eq!(
+            terminal_event("completed", &events(&["workflow_completed"])),
+            Some(WebhookEvent::WorkflowCompleted)
+        );
+        assert_eq!(
+            terminal_event("failed", &events(&["workflow_completed"])),
+            None,
+            "a completed-only subscription must stay silent on failure"
+        );
+        assert_eq!(
+            terminal_event("failed", &events(&["workflow_failed"])),
+            Some(WebhookEvent::WorkflowFailed)
+        );
+        assert_eq!(
+            terminal_event("completed", &events(&["workflow_failed"])),
+            None,
+            "a failed-only subscription must stay silent on success"
+        );
+    }
+
+    #[test]
+    fn subscription_ignores_unrelated_events() {
+        assert_eq!(
+            terminal_event("completed", &events(&["workflow_started"])),
+            None
+        );
+        assert_eq!(
+            terminal_event("failed", &events(&["rule_completed", "rule_failed"])),
+            None
+        );
+    }
+
+    #[test]
+    fn empty_subscription_notifies_both_terminal_states() {
+        // Explicitly-saved `[]` and pre-existing rows keep the historical
+        // both-terminal-events behaviour.
+        assert_eq!(
+            terminal_event("completed", &[]),
+            Some(WebhookEvent::WorkflowCompleted)
+        );
+        assert_eq!(
+            terminal_event("failed", &[]),
+            Some(WebhookEvent::WorkflowFailed)
+        );
+        assert_eq!(
+            terminal_event(
+                "failed",
+                &events(&["workflow_completed", "workflow_failed"])
+            ),
+            Some(WebhookEvent::WorkflowFailed)
+        );
     }
 }

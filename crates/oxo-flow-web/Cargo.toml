@@ -64,3 +64,6 @@ postgres = ["sqlx/postgres"]
 # not built by `cargo build`) keeps `cargo test` able to install it while a
 # real server cannot (issue #1040 B3).
 oxo-flow-ai = { workspace = true, features = ["test-scripted"] }
+# Independent verifier for the documented `X-OxoFlow-Signature` header in
+# the webhook mock-receiver tests (the production signer lives in core).
+hmac = { workspace = true }

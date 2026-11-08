@@ -633,12 +633,12 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
 pub async fn oauth_authorize(
     ApiJson(req): ApiJson<OAuthAuthorizeRequest>,
 ) -> ApiResult<OAuthAuthorizeResponse> {
-    let redirect_uri = req
-        .redirect_uri
-        .as_deref()
-        .unwrap_or("http://localhost:3000/api/auth/oauth/callback");
+    // Same resolution as the callback's token exchange: an explicit request
+    // value, then OXO_FLOW_OAUTH_REDIRECT_URI, then the documented fallback.
+    // The two steps must agree or the provider rejects the code exchange.
+    let redirect_uri = super::service::oauth_redirect_uri(req.redirect_uri.as_deref());
 
-    super::service::initiate_oauth(&req.provider, redirect_uri)
+    super::service::initiate_oauth(&req.provider, &redirect_uri)
         .await
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))
@@ -662,8 +662,7 @@ pub async fn oauth_callback(
     ApiJson(req): ApiJson<OAuthCallbackRequest>,
 ) -> ApiResult<OAuthCallbackResponse> {
     let provider = req.provider.as_deref().unwrap_or("orcid");
-    let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:3000/api/auth/oauth/callback".to_string());
+    let redirect_uri = super::service::oauth_redirect_uri(None);
 
     // Verify CSRF state: the state issued at authorization time was
     // persisted server-side (`store_pending_state`), and here it is
