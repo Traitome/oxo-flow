@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -24,17 +26,37 @@ REPO = "Traitome/oxo-flow"
 PACKAGE_URL = f"https://github.com/{REPO}/pkgs/container/oxo-flow"
 README = Path(__file__).resolve().parents[2] / "README.md"
 
+FETCH_ATTEMPTS = 3
+FETCH_TIMEOUT_SECS = 90
+
 BADGE_MARKER = "label=ghcr%20pulls"
 
 UA_HEADERS = {"User-Agent": "oxo-flow-badge-refresh/1.0"}
 
 
 def fetch_package_page() -> str:
-    req = urllib.request.Request(PACKAGE_URL, headers=UA_HEADERS)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"package page returned HTTP {resp.status}")
-        return resp.read().decode("utf-8", errors="replace")
+    """Fetch the package page with retries; GitHub's pkgs HTML is heavy and
+    occasionally stalls past a single timeout window."""
+    last_error: Exception | None = None
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        req = urllib.request.Request(PACKAGE_URL, headers=UA_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_SECS) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"package page returned HTTP {resp.status}"
+                    )
+                return resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError, RuntimeError) as exc:
+            last_error = exc
+            print(f"Fetch attempt {attempt}/{FETCH_ATTEMPTS} failed: {exc}")
+            if attempt < FETCH_ATTEMPTS:
+                backoff = 10 * attempt
+                print(f"Retrying in {backoff}s...")
+                time.sleep(backoff)
+    raise RuntimeError(
+        f"package page unreachable after {FETCH_ATTEMPTS} attempts"
+    ) from last_error
 
 
 def extract_stats(html: str) -> tuple[int, int]:
