@@ -62,7 +62,7 @@ the command errors and exits with code 1 — scripts can gate on that.
 ## Output
 
 ```
-oxo-flow v0.28.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
 Workflow Configuration:
   Name:    germline-wgs
   Version: 1.0.0
