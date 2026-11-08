@@ -4865,6 +4865,8 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 </tr>
 </tbody>
 </table>
+<p>The general <code>run</code>/<code>dry-run</code> exit-code contract (0 success, 1 failure) is
+documented in <a href="../run/#exit-codes"><code>run</code></a>.</p>
 <hr />
 <h2 id="workflow-discovery">Workflow discovery<a class="headerlink" href="#workflow-discovery" title="Permanent link">#</a></h2>
 <p>When <code>WORKFLOW</code> is omitted, the workflow and checkpoint are discovered in
@@ -4975,16 +4977,11 @@ ScatterPlot) in both top-level sections and subsections.</p>
 </span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># commit the file and diff it in CI to catch undeclared dependency drift</span>
 </span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>versions.yml
 </span></code></pre></div>
-<p>Emits an nf-core-style <code>versions.yml</code> (also rendered as the report's
-<code>software-versions</code> section): for every rule, what the workflow
-<strong>declares</strong> — docker <code>image:tag</code> (registry kept as its own field), module
-<code>(tool, version)</code>, conda/mamba/pixi env files and <code>venv_requirements</code>
-files with sha256 content hashes (a bare <code>venv</code> directory path is
-recorded as declared, without a hash — there is no file to hash). The
-engine never executes anything to produce this data, so
-resolved runtime package versions are <strong>not</strong> recorded — every entry
-carries that caveat. Environment resolution follows the usual precedence
-(env_group &gt; rule.environment &gt; defaults.environment).</p>
+<p>Emits an nf-core-style <code>versions.yml</code> — the same data as the report's
+<a href="#software-versions-software-versions-versions-yml"><code>software-versions</code> section</a>,
+which documents the per-backend fields, the declared-not-executed caveat,
+and the environment precedence (env_group &gt; rule.environment &gt;
+defaults.environment).</p>
 <hr />
 <h2 id="data-sources">Data sources<a class="headerlink" href="#data-sources" title="Permanent link">#</a></h2>
 <p>The report reads three kinds of data, in this order of truth:</p>

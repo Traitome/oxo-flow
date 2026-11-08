@@ -6632,16 +6632,13 @@ loop (tool rounds, validation rounds) as typed events:</p>
 <li>The browser-side watchdog is derived from <code>ready.idle_timeout_secs</code>; on
   expiry the client aborts the fetch, renders the error with a Retry action,
   and re-enables the send button.</li>
-<li><code>POST /api/chat/send/json</code> (the non-streaming variant) budgets the WHOLE
-  generation — every tool and validation round — at
-  <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 s). The route budget fires one
-  second before the provider client's per-request timeout, and a
-  timeout-class provider error is classified into the same answer, so the
-  504 below holds whichever timer expires first. When the budget expires it
-  answers <code>504 {code: "AI_TIMEOUT"}</code> with the standard
-  <code>{code, message, detail, suggestion}</code> body, and <code>suggestion</code> names the knob.
-  The SSE route above is not capped by this total budget; use it for
-  generations expected to run longer.</li>
+<li><code>POST /api/chat/send/json</code> (the non-streaming variant) is subject to the
+  same whole-generation route budget as <code>POST /api/ai/translate</code> (described
+  in the AI section above): every tool and validation round budgeted at
+  <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 s), firing one second before the
+  provider client's per-request timeout, with <code>504 {code: "AI_TIMEOUT"}</code>
+  when it expires. The SSE route above is not capped by this total budget;
+  use it for generations expected to run longer.</li>
 </ul>
 <h3 id="chat-session-archives">Chat session archives<a class="headerlink" href="#chat-session-archives" title="Permanent link">#</a></h3>
 <p>Every agent-loop run — successful or aborted — is persisted under

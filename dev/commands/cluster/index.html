@@ -2248,10 +2248,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#cluster-submission-run-profile" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Cluster submission (run --profile)
       
     </span>
   </a>
@@ -4516,10 +4516,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#cluster-submission-run-profile" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Cluster submission (run --profile)
       
     </span>
   </a>
@@ -4556,8 +4556,8 @@
 <blockquote>
 <p><strong>Everyday path:</strong> <code>run --profile &lt;NAME&gt;</code> submits to a scheduler and
 tracks jobs to completion when the profile carries a <code>[cluster]</code> block —
-see <a href="../run/#cluster-submission">Cluster submission</a>. The commands below
-remain the manual escape hatch: inspect scripts before submitting,
+see <a href="#cluster-submission-run-profile">Cluster submission</a>. The commands
+below remain the manual escape hatch: inspect scripts before submitting,
 or cancel/collect jobs after an interrupted run.</p>
 </blockquote>
 <hr />
@@ -4990,6 +4990,156 @@ the whole array — a pipelining win on straight scatter chains (measured
 ready-batch <code>afterok</code> dependency: fan-in (multiple dependencies), mismatched
 index ranges, scalar↔array mixes, or a non-array upstream. A <code>%throttle</code>
 suffix does not block the match — it bounds concurrency, not the index set.</p>
+<hr />
+<h2 id="cluster-submission-run-profile">Cluster submission (<code>run --profile</code>)<a class="headerlink" href="#cluster-submission-run-profile" title="Permanent link">#</a></h2>
+<p>A profile that also carries a <code>[cluster]</code> block makes <code>run --profile</code> submit
+to a scheduler instead of executing locally:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># profiles/slurm.toml</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="k">[cluster]</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">      </span><span class="c1"># required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">        </span><span class="c1"># a rule's own time_limit wins</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="w">           </span><span class="c1"># jobs in flight at once</span>
+</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span>
+</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim directives</span>
+</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>
+</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a><span class="k">[config]</span>
+</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
+</span></code></pre></div>
+<p>Keys the profile omits fall back to the driver defaults: <code>max_submitted</code>
+50, <code>max_array_size</code> 1001, <code>poll_interval</code> 5s — the authoritative
+<a href="../../reference/execution-backends/#backenddriver"><code>DriverConfig</code> table</a>
+carries the complete knob list. <code>extra_args</code> entries are
+emitted as scheduler directives verbatim and are not validated — a typo
+reaches the scheduler as written.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="c1"># one-off override of the profile's queue cap</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm<span class="w"> </span>--max-submitted<span class="w"> </span><span class="m">100</span>
+</span></code></pre></div>
+<p>Profiles are looked up in the <strong>workflow's own</strong> <code>profiles/</code> directory —
+there is no user- or system-level profile location, so a site profile shared
+across a lab is copied into each workflow (or kept in the workflow
+repository) rather than installed once per machine.</p>
+<p>Both conditions are required: a <code>[cluster]</code> block must be in effect <strong>and</strong>
+a profile must be named. A profile with only <code>[config]</code> keeps the local
+path, and a workflow carrying its own <code>[cluster]</code> block still runs locally
+until you pass <code>--profile</code>, so adding one never changes an existing run.</p>
+<p>Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
+jobs, and dependencies are chained per instance. The run submits at most
+<code>max_submitted</code> jobs at a time, tracks them to completion, and writes the
+checkpoint exactly as a local run does — <code>status</code>, <code>resume</code>, and re-run
+invalidation behave identically, and a second <code>run --profile slurm</code> with
+nothing changed submits nothing.</p>
+<p>The run's scratch directory (<code>[engine] tmp_dir</code> / <code>OXO_FLOW_TMPDIR</code>, issue</p>
+<h1 id="907-travels-onto-the-cluster-too-every-submitted-job-script-exports">907) travels onto the cluster too: every submitted job script exports<a class="headerlink" href="#907-travels-onto-the-cluster-too-every-submitted-job-script-exports" title="Permanent link">#</a></h1>
+<p><code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> to the resolved directory before the rule's command
+runs (issue #1013). Cluster jobs start from the scheduler's clean
+environment, so the exports are baked into each job's rendered command —
+after the workdir <code>cd</code> guard and outside the environment wrapper, so
+wrapped child processes (<code>conda run</code>, <code>pixi run</code>, venv activation) and
+tools honoring <code>TMPDIR</code> all land in the scratch volume. The directory must
+exist on the shared filesystem the nodes see; it is created on the submit
+host at run start (the same fail-fast mkdir the local path performs) and
+the <code>OXO_FLOW_TMPDIR</code> override stays verbatim-absolute there.</p>
+<p>Like <code>localrule = true</code> and <code>checkpoint = true</code>, the <code>scratch = true</code>
+directive is local-executor-only: workflows whose runnable rules declare it
+are <strong>rejected at plan time</strong> on the cluster path (naming every offender)
+instead of silently running those jobs in the shared workdir, where tools
+writing fixed filenames collide across concurrent instances. See
+<a href="../../reference/workflow-format/#scratch-tier-ladder">Scratch tier ladder</a>.</p>
+<h3 id="job-arrays">Job arrays<a class="headerlink" href="#job-arrays" title="Permanent link">#</a></h3>
+<p>Same-template instances that are ready together and agree on every
+scheduler-visible directive (threads, memory, time limit, partition,
+account, GPU spec, environment, workdir) are grouped into <strong>one scheduler
+array</strong> automatically:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="w">                        </span><span class="c1"># scatter groups are chunked into several arrays</span>
+</span></code></pre></div>
+<ul>
+<li>One submission instead of N <code>sbatch</code>/<code>qsub</code> calls — one queue entry that
+  expands internally (SLURM <code>--array=1-N</code>, PBS <code>-J</code>, SGE <code>-t</code>,
+  LSF <code>-J "name[1-N]"</code>).</li>
+<li>Array elements are tracked individually: per-instance job directories
+  stay greppable (<code>jobs/&lt;instance&gt;/job.sh</code> + <code>job.id</code> + <code>status.json</code>),
+  and <code>index.json</code> in the run directory maps each array index back to its
+  instance, so the array never leaks into the human-facing layout.</li>
+<li>Instances that differ on any directive fall out of the group and submit
+  as single jobs — heterogeneity degrades gracefully.</li>
+<li>Arrays are transport-level: the JobRecord set, checkpoint, and resume
+  semantics are identical to per-job submission.</li>
+</ul>
+<p>Element-wise <code>aftercorr</code> chaining is not part of the run-path slice:
+downstream instances submit in ready batches as array elements finish,
+which is correct but not as queue-efficient as true element-wise chaining.
+The <code>--with-dependencies</code> wrapper above <em>does</em> chain straight scatter
+arrays element-wise (see
+<a href="#element-wise-array-chaining-slurm">Element-wise array chaining (SLURM)</a>).</p>
+<h3 id="run-directory-layout">Run directory layout<a class="headerlink" href="#run-directory-layout" title="Permanent link">#</a></h3>
+<p>Each run leaves a directory you can navigate with ordinary tools:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="go">  events.jsonl                        # append-only submit/complete/fail log</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="go">  index.json                          # array index → instance name</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="go">  jobs/&lt;rule&gt;/job.sh                  # the exact script submitted</span>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="go">  jobs/&lt;rule&gt;/job.id                  # scheduler job id</span>
+</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="go">  jobs/&lt;rule&gt;/status.json</span>
+</span></code></pre></div>
+<p>Every <code>events.jsonl</code> line carries an RFC 3339 <code>ts</code>, so the log reconstructs
+a timeline rather than just an ordering:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"SUBMITTED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"COMPLETED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="what-a-finished-job-records">What a finished job records<a class="headerlink" href="#what-a-finished-job-records" title="Permanent link">#</a></h3>
+<p>When a job leaves the queue, oxo-flow reads the scheduler's accounting store
+(<code>sacct</code>, <code>qstat -x -f</code>, <code>qacct</code>, <code>bacct</code>) and writes what it found into
+<code>status.json</code>:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="p">{</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"4812345"</span><span class="p">,</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa mem ref.fa data/S1.fq &gt; aln/S1.bam"</span><span class="p">,</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="w">  </span><span class="nt">"submitted_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">  </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="w">  </span><span class="nt">"queue_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a><span class="w">  </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="w">  </span><span class="nt">"elapsed_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">1894</span><span class="p">,</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="w">  </span><span class="nt">"max_rss_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">24680</span><span class="p">,</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="w">  </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">14203</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>queue_wait_secs</code> is submit-to-finish minus the scheduler's own elapsed
+time — the driver never observes the moment a job starts, so the split
+between waiting and working is only available by subtraction. The same
+<code>elapsed_secs</code> is what <code>benchmarks.wall_time_secs</code> records in the
+checkpoint, which therefore measures runtime rather than runtime plus queue
+wait, and <code>max_rss_mb</code> / <code>cpu_seconds</code> populate the same benchmark fields a
+local run fills from its own sampler.</p>
+<p>How much of this appears depends on the site. Accounting is a deployment
+choice: a SLURM cluster without <code>slurmdbd</code> answers <code>sacct</code> with nothing, and
+LSF's <code>bacct</code> columns vary too much between versions to parse blind, so LSF
+records state only. Fields the store did not report are omitted rather than
+guessed — including <code>exit_code</code>, which stays absent for a failed job whose
+real code could not be read, instead of defaulting to <code>1</code>.</p>
+<p>Outputs, the working directory, and logs are assumed to live on storage
+shared between the submitting host and the compute nodes.</p>
+<p>Interrupting a cluster run cancels its in-flight scheduler jobs: on
+Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
+every job still in the queue or running, records each interrupted rule as
+failed with an <code>interrupted by &lt;SIG...&gt;</code> skip reason, and exits with
+<code>128 + &lt;signal number&gt;</code> — the same shape the local executor reports.
+Signals are watched on the cluster path only; the local executor has its
+own (pre-existing) signal handling.</p>
+<p>What remains out of scope is <em>re-attaching</em>: a driver that died without a
+signal (crash, OOM) cannot adopt the scheduler job ids of a previous
+process. Those jobs keep running under the scheduler, and a subsequent
+<code>resume</code> / <code>--resume-failed</code> re-queues their rules from the checkpoint's
+RUNNING entries rather than reusing the live job ids — completed work on
+shared storage is still honored by the invalidation analysis. Until a
+re-attach path exists, use <code>oxo-flow cluster status</code> (no ids: lists your
+queued jobs) and <code>oxo-flow cluster cancel &lt;JOB_ID&gt;...</code> to inspect or clean
+up jobs orphaned by a crashed driver.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#germline-variant-calling-simple-chain" class="md-skip">
+        <a href="#13-germline-variant-calling-simple-chain" class="md-skip">
           Skip to content
         </a>
       
@@ -1096,6 +1096,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pipeline-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workflow-definition" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1107,10 +1118,71 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
+  <a href="#running-the-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Try It
+        Running the Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#expected-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's Next?
       
     </span>
   </a>
@@ -3875,6 +3947,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pipeline-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workflow-definition" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3886,10 +3969,71 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
+  <a href="#running-the-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Try It
+        Running the Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#expected-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's Next?
       
     </span>
   </a>
@@ -3921,7 +4065,7 @@
   
 
 
-<h1 id="germline-variant-calling-simple-chain">Germline Variant Calling (Simple Chain)<a class="headerlink" href="#germline-variant-calling-simple-chain" title="Permanent link">#</a></h1>
+<h1 id="13-germline-variant-calling-simple-chain">13 — Germline Variant Calling (Simple Chain)<a class="headerlink" href="#13-germline-variant-calling-simple-chain" title="Permanent link">#</a></h1>
 <p>The per-sample GATK germline chain: FastQC + fastp QC, BWA-MEM2 alignment with read groups, MarkDuplicates, BQSR, and HaplotypeCaller GVCF — the simpler sibling of <a href="../wgs-germline/">WGS Germline Variant Calling</a>, which adds joint calling, VQSR, and annotation.</p>
 <h2 id="what-it-demonstrates">What It Demonstrates<a class="headerlink" href="#what-it-demonstrates" title="Permanent link">#</a></h2>
 <ul>
@@ -3929,6 +4073,15 @@
 <li>Each stage declares its own environment (conda for QC tools, singularity for GATK)</li>
 <li>Mix of environment backends per rule is first-class</li>
 </ul>
+<h2 id="pipeline-overview">Pipeline Overview<a class="headerlink" href="#pipeline-overview" title="Permanent link">#</a></h2>
+<pre class="mermaid"><code>graph TD
+    F[fastp] --&gt; A[bwa_align]
+    A --&gt; MD[mark_duplicates]
+    MD --&gt; BR[base_recalibrator]
+    BR --&gt; AB[apply_bqsr]
+    AB --&gt; HC[haplotype_caller]
+    Q[fastqc]</code></pre>
+<p>Three samples (<code>NA12878</code>, <code>NA12891</code>, <code>NA12892</code>) expand every rule into three parallel instances. The backbone is a strict six-stage chain ending in HaplotypeCaller; <code>fastqc</code> is a standalone QC rule with no downstream consumers — it runs independently of the chain.</p>
 <h2 id="workflow-definition">Workflow Definition<a class="headerlink" href="#workflow-definition" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># examples/gallery/13_simple_variant_calling.oxoflow</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># 13 — Germline Variant Calling (Simple Chain)</span>
@@ -4109,19 +4262,103 @@
 </span><span id="__span-0-177"><a id="__codelineno-0-177" name="__codelineno-0-177" href="#__codelineno-0-177"></a>
 </span><span id="__span-0-178"><a id="__codelineno-0-178" name="__codelineno-0-178" href="#__codelineno-0-178"></a><span class="k">[sample_groups.metadata]</span>
 </span></code></pre></div>
-<h2 id="try-it">Try It<a class="headerlink" href="#try-it" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Inspect the expanded plan first — no data needed:</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow
+<h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
+<h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">7</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">6</span><span class="w"> </span>dependencies
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Copy the environment specs next to the workflow, adapt [config]</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># paths to your data, then run:</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>⚠<span class="w"> </span>Warning:<span class="w"> </span>The<span class="w"> </span>following<span class="w"> </span>input<span class="w"> </span>files<span class="w"> </span><span class="k">do</span><span class="w"> </span>not<span class="w"> </span>exist:
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span>-<span class="w"> </span>raw/NA12878_R1.fastq.gz
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span>-<span class="w"> </span>raw/NA12878_R2.fastq.gz
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span>...
 </span></code></pre></div>
+<p>The <code>✓</code> line is what matters — validate exits 0 and the workflow is well-formed. The warnings are expected here: the <code>raw/</code> FASTQs don't exist until you stage real data (see the note at the bottom of this page).</p>
+<h3 id="dry-run">Dry-Run<a class="headerlink" href="#dry-run" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Plan:<span class="w"> </span>would<span class="w"> </span>run:<span class="w"> </span><span class="m">21</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>skip:<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>completed:<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">(</span>DAG<span class="w"> </span>size:<span class="w"> </span><span class="m">21</span><span class="o">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Sample<span class="w"> </span>readiness:<span class="w"> </span><span class="m">0</span>/3<span class="w"> </span>complete,<span class="w"> </span><span class="m">3</span><span class="w"> </span>waiting
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>⏳<span class="w"> </span>NA12878<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/NA12878_R1.fastq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>⏳<span class="w"> </span>NA12891<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/NA12891_R1.fastq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>⏳<span class="w"> </span>NA12892<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/NA12892_R1.fastq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>...
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="m">1</span>.<span class="w"> </span>fastp_samples_NA12878<span class="w">  </span><span class="o">[</span>run:<span class="w"> </span>never<span class="w"> </span>completed<span class="o">]</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">     </span><span class="nv">threads</span><span class="o">=</span><span class="m">8</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">     </span><span class="nv">env</span><span class="o">=</span>conda
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">     </span>...
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="m">7</span>.<span class="w"> </span>bwa_align_samples_NA12878<span class="w">  </span><span class="o">[</span>run:<span class="w"> </span>never<span class="w"> </span>completed<span class="o">]</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">     </span><span class="nv">threads</span><span class="o">=</span><span class="m">16</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">     </span><span class="nv">env</span><span class="o">=</span>conda
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">     </span>...
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="m">10</span>.<span class="w"> </span>mark_duplicates_samples_NA12878<span class="w">  </span><span class="o">[</span>run:<span class="w"> </span>never<span class="w"> </span>completed<span class="o">]</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">     </span><span class="nv">env</span><span class="o">=</span>singularity
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>Summary:<span class="w"> </span><span class="m">21</span><span class="w"> </span>rules,<span class="w"> </span>total<span class="w"> </span><span class="m">126</span><span class="w"> </span>threads<span class="w"> </span>declared,<span class="w"> </span>max<span class="w"> </span><span class="m">16</span><span class="w"> </span>threads/rule
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">         </span><span class="m">21</span><span class="w"> </span>rules<span class="w"> </span>with<span class="w"> </span>memory<span class="w"> </span>requirements
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">         </span><span class="m">1</span><span class="w"> </span>sample<span class="w"> </span>group,<span class="w"> </span><span class="m">0</span><span class="w"> </span>pairs
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>To<span class="w"> </span>execute:<span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">2</span>
+</span></code></pre></div>
+<p>The 7 template rules expand to 21 tasks (7 rules × 3 samples); instance names are suffixed <code>_samples_&lt;sample&gt;</code>. The env mix is visible directly in the dry-run output: the QC and alignment stages report <code>env=conda</code>, while from <code>mark_duplicates</code> onward every GATK stage reports <code>env=singularity</code> (<code>docker://broadinstitute/gatk:4.5.0.0</code>). BQSR is split into two rules — <code>base_recalibrator</code> emits the recalibration table, and <code>apply_bqsr</code> consumes it together with the deduplicated BAM.</p>
+<h3 id="dag-structure">DAG Structure<a class="headerlink" href="#dag-structure" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>graph<span class="w"> </span>examples/gallery/13_simple_variant_calling.oxoflow
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Workflow<span class="w"> </span>DAG:<span class="w"> </span><span class="m">7</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">6</span><span class="w"> </span>dependencies
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>Depth:<span class="w"> </span><span class="m">6</span>,<span class="w"> </span>Width:<span class="w"> </span><span class="m">2</span>,<span class="w"> </span>Critical<span class="w"> </span>path:<span class="w"> </span><span class="m">6</span><span class="w"> </span>steps
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>Critical<span class="w"> </span>path:<span class="w"> </span>fastp<span class="w"> </span>→<span class="w"> </span>bwa_align<span class="w"> </span>→<span class="w"> </span>mark_duplicates<span class="w"> </span>→<span class="w"> </span>base_recalibrator<span class="w"> </span>→<span class="w"> </span>apply_bqsr<span class="w"> </span>→<span class="w"> </span>haplotype_caller
+</span></code></pre></div>
+<p><code>graph</code> shows the template DAG (before expansion — see the <a href="../#quick-start">gallery index</a> note). <code>apply_bqsr</code> depends on both <code>base_recalibrator</code> (the recal table) and <code>mark_duplicates</code> (the dedup BAM).</p>
+<h2 id="expected-outputs">Expected Outputs<a class="headerlink" href="#expected-outputs" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Producer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>qc/{sample}_R1_fastqc.html</code>, <code>qc/{sample}_R2_fastqc.html</code></td>
+<td><code>fastqc</code></td>
+</tr>
+<tr>
+<td><code>trimmed/{sample}_R1.fastq.gz</code>, <code>trimmed/{sample}_R2.fastq.gz</code>, <code>qc/{sample}_fastp.json</code></td>
+<td><code>fastp</code></td>
+</tr>
+<tr>
+<td><code>aligned/{sample}.sorted.bam</code></td>
+<td><code>bwa_align</code></td>
+</tr>
+<tr>
+<td><code>dedup/{sample}.dedup.bam</code>, <code>dedup/{sample}.metrics.txt</code></td>
+<td><code>mark_duplicates</code></td>
+</tr>
+<tr>
+<td><code>recal/{sample}.recal_data.table</code></td>
+<td><code>base_recalibrator</code></td>
+</tr>
+<tr>
+<td><code>recal/{sample}.recal.bam</code></td>
+<td><code>apply_bqsr</code></td>
+</tr>
+<tr>
+<td><code>variants/{sample}.g.vcf.gz</code></td>
+<td><code>haplotype_caller</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="whats-next">What's Next?<a class="headerlink" href="#whats-next" title="Permanent link">#</a></h2>
+<ul>
+<li>The full pipeline: <a href="../wgs-germline/">WGS Germline Variant Calling</a> — adds cohort joint genotyping, VQSR, and VEP annotation on top of this chain.</li>
+<li>Field reference: <a href="../../reference/workflow-format/#rules-rule-definitions">Rules</a> — <code>environment</code> backends and per-rule resources.</li>
+</ul>
 <div class="admonition note">
 <p class="admonition-title">Input data and environments</p>
 <p>Input paths under <code>/data/references/...</code> and <code>raw/</code> are placeholders —
-replace them with your own data. The referenced <code>envs/*.yaml</code> specs ship
-in <a href="https://github.com/Traitome/oxo-flow/tree/main/examples/envs"><code>examples/envs/</code></a>.</p>
+replace them with your own data. The <code>validate</code> warnings about missing
+<code>raw/</code> files are expected until real data is staged. The referenced
+<code>envs/*.yaml</code> specs ship in
+<a href="https://github.com/Traitome/oxo-flow/tree/main/examples/envs"><code>examples/envs/</code></a>.</p>
 </div>
 
 

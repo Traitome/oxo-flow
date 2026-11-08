@@ -1600,6 +1600,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mamba-and-hpc-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mamba and HPC Modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#checking-availability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4386,6 +4397,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mamba-and-hpc-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mamba and HPC Modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#checking-availability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4446,10 +4468,10 @@
 <h1 id="use-environments">Use Environments<a class="headerlink" href="#use-environments" title="Permanent link">#</a></h1>
 <p>This guide provides practical recipes for the environment backends supported
 by oxo-flow. The engine ships eight backends: <code>conda</code>, <code>mamba</code>, <code>pixi</code>,
-<code>docker</code>, <code>singularity</code>, <code>venv</code>, and <code>modules</code> (plus the implicit <code>system</code>
-fallback when a rule declares no environment). Recipes below cover the most
-commonly used ones; <code>mamba</code> uses the same YAML syntax as <code>conda</code>, and
-<code>modules</code> takes a list of HPC module names.</p>
+<code>docker</code>, <code>singularity</code>, <code>venv</code>, <code>modules</code> (HPC environment modules), and
+<code>system</code> (the implicit fallback when a rule declares no environment).
+Recipes below cover the most commonly used ones; <code>mamba</code> uses the same YAML
+syntax as <code>conda</code>, and <code>modules</code> takes a list of HPC module names.</p>
 <hr />
 <h2 id="conda-environments">Conda Environments<a class="headerlink" href="#conda-environments" title="Permanent link">#</a></h2>
 <h3 id="create-an-environment-file">Create an environment file<a class="headerlink" href="#create-an-environment-file" title="Permanent link">#</a></h3>
@@ -4459,8 +4481,8 @@ commonly used ones; <code>mamba</code> uses the same YAML syntax as <code>conda<
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bioconda</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">conda-forge</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">dependencies</span><span class="p">:</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bwa=0.7.17</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">samtools=1.19</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bwa=0.7.19</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">samtools=1.24</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">picard=3.1.1</span>
 </span></code></pre></div>
 <h3 id="reference-it-in-a-rule">Reference it in a rule<a class="headerlink" href="#reference-it-in-a-rule" title="Permanent link">#</a></h3>
@@ -4575,7 +4597,7 @@ field (defaults to <code>requirements.txt</code> in the working directory):</p>
 <h2 id="mixing-backends-in-one-workflow">Mixing Backends in One Workflow<a class="headerlink" href="#mixing-backends-in-one-workflow" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/bwa:0.7.17"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/bwa:0.7.19--h577a1d6_1"</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># ...</span>
 </span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
 </span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="k">[[rules]]</span>
@@ -4593,6 +4615,15 @@ field (defaults to <code>requirements.txt</code> in the working directory):</p>
 </span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">venv</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"venv/"</span><span class="p">,</span><span class="w"> </span><span class="n">venv_requirements</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/requirements.txt"</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="c1"># ...</span>
 </span></code></pre></div>
+<hr />
+<h2 id="mamba-and-hpc-modules">Mamba and HPC Modules<a class="headerlink" href="#mamba-and-hpc-modules" title="Permanent link">#</a></h2>
+<p>The <code>mamba</code> backend uses the exact same YAML format as <code>conda</code> with a faster
+solver (and falls back to conda when only conda is installed); the <code>modules</code>
+backend loads HPC environment modules (<code>Lmod</code>/Environment Modules) before the
+rule's shell command. Both have dedicated walkthroughs in the
+<a href="../../tutorials/environment-management/#mamba">Environment Management tutorial</a>
+— see its <a href="../../tutorials/environment-management/#hpc-modules">HPC Modules</a>
+section for <code>modules = ["gcc/11.2.0", …]</code> recipes.</p>
 <hr />
 <h2 id="checking-availability">Checking Availability<a class="headerlink" href="#checking-availability" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># List all backends available on this system</span>

@@ -1681,17 +1681,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#toml-syntax-error" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TOML syntax error
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#duplicate-rule-names" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4387,17 +4376,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#toml-syntax-error" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TOML syntax error
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#duplicate-rule-names" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4874,7 +4852,8 @@
 <li>Use <code>oxo-flow init my-pipeline</code> to create a new project if none exists</li>
 </ol>
 <h3 id="validate-fails-with-parse-error">"Validate fails with parse error"<a class="headerlink" href="#validate-fails-with-parse-error" title="Permanent link">#</a></h3>
-<p><strong>Symptom</strong>: <code>oxo-flow validate workflow.oxoflow</code> shows TOML syntax errors</p>
+<p><strong>Symptom</strong>: <code>oxo-flow validate workflow.oxoflow</code> shows TOML syntax errors
+(e.g. <code>parse error in workflow.oxoflow: ...</code>)</p>
 <p><strong>Common TOML mistakes</strong>:</p>
 <table>
 <thead>
@@ -4905,20 +4884,17 @@
 <td><code>[[rule]]</code></td>
 <td><code>[[rules]]</code></td>
 </tr>
+<tr>
+<td>Unmatched brackets or braces</td>
+<td><code>input = ["a.fq"</code></td>
+<td><code>input = ["a.fq"]</code></td>
+</tr>
 </tbody>
 </table>
-<p>Use the <a href="../../reference/workflow-format/#toml-primer">TOML primer</a> for syntax basics.</p>
+<p>Use <code>oxo-flow validate workflow.oxoflow</code> to get detailed error messages, and
+the <a href="../../reference/workflow-format/#toml-primer">TOML primer</a> for syntax basics.</p>
 <hr />
 <h2 id="workflow-parsing-errors">Workflow Parsing Errors<a class="headerlink" href="#workflow-parsing-errors" title="Permanent link">#</a></h2>
-<h3 id="toml-syntax-error">TOML syntax error<a class="headerlink" href="#toml-syntax-error" title="Permanent link">#</a></h3>
-<p><strong>Symptom</strong>: <code>parse error in workflow.oxoflow: ...</code></p>
-<p><strong>Solution</strong>: Check your TOML syntax. Common mistakes:</p>
-<ul>
-<li>Missing quotes around string values</li>
-<li>Incorrect array-of-tables syntax (use <code>[[rules]]</code>, not <code>[rules]</code>)</li>
-<li>Unmatched brackets or braces</li>
-</ul>
-<p>Use <code>oxo-flow validate workflow.oxoflow</code> to get detailed error messages.</p>
 <h3 id="duplicate-rule-names">Duplicate rule names<a class="headerlink" href="#duplicate-rule-names" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>duplicate rule name: 'step1'</code></p>
 <p><strong>Solution</strong>: Every rule must have a unique <code>name</code> field. If you're using

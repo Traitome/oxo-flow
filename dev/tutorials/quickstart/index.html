@@ -4341,19 +4341,10 @@ output directly:</p>
 <hr />
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Run a pilot first</strong>: on a workflow that has a sample dimension
-  (<code>sample_pattern</code>, <code>[[sample_groups]]</code>, or <code>[[pairs]]</code>), try
-  <code>oxo-flow run pipeline.oxoflow --samples first:2</code> — the engine runs the
-  full pipeline on two samples, reports a projected full-run time, and skips
-  them automatically when you scale up. The two-rule demo above has no
-  samples, so a sample <em>filter</em> there — e.g. <code>--samples first:2</code> or
-  <code>--samples ready</code> — would exit with
-  <code>--samples matched no samples in this workflow</code> (a bare sample <em>name</em>
-  like <code>--samples S9</code> instead declares it for later use and exits
-  successfully). See
-  <a href="../../commands/run/#pilot-runs-and-scale-up">Pilot runs</a> and
-  <a href="../../gallery/parallel-samples/">Parallel Samples</a> for a sample-driven
-  workflow to try it on.</li>
+<li><strong>Run a pilot first</strong>: on a workflow with a sample dimension, try
+  <code>oxo-flow run pipeline.oxoflow --samples first:2</code> to run the full
+  pipeline on two samples before scaling up — see
+  <a href="../../commands/run/#pilot-runs-and-scale-up">Pilot runs</a>.</li>
 <li><a href="../first-workflow/">Your First Workflow</a> — build a real bioinformatics pipeline with environments</li>
 <li><a href="../variant-calling/">Variant Calling Pipeline</a> — complete NGS analysis tutorial</li>
 <li><a href="../../how-to/create-workflow/">Create a Workflow</a> — reference guide for <code>.oxoflow</code> authoring</li>

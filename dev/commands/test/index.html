@@ -4259,7 +4259,7 @@ catch issues early.</p>
 <td><code>--samples</code></td>
 <td>—</td>
 <td>—</td>
-<td>Sample selection: <code>@path</code> <strong>replaces</strong> the workflow's samples from a samplesheet, <code>+@path</code> <strong>appends</strong> (same-name groups merge, new groups added); names <strong>filter</strong> (or <strong>declare</strong> when the workflow ships no samples), <code>first:N</code> (pilot) and <code>ready</code> (samples whose entry inputs are complete) <strong>filter</strong>. Repeatable, comma-separated</td>
+<td>Same sample-selection semantics as <a href="../run/#options"><code>run</code></a>: <code>@path</code> <strong>replaces</strong> the workflow's samples from a samplesheet, <code>+@path</code> <strong>appends</strong>; names <strong>filter</strong> (or <strong>declare</strong> when the workflow ships no samples), <code>first:N</code> and <code>ready</code> <strong>filter</strong>. Repeatable, comma-separated</td>
 </tr>
 <tr>
 <td><code>--workdir</code></td>
@@ -4427,6 +4427,8 @@ machine-specific and should not gate.</p>
 <li><code>1</code> — validation, lint, or a <code>D001</code> deep-check finding (see above); a
   failed <code>--run</code> step or a missing <code>--output</code> file also exits <code>1</code></li>
 </ul>
+<p>The general <code>run</code> exit-code contract is documented in
+<a href="../run/#exit-codes"><code>run</code></a>.</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../validate/">oxo-flow validate</a> — validate only</li>

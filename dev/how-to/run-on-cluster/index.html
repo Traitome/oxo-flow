@@ -1561,10 +1561,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#web-ui-remote-execution-over-ssh" class="md-nav__link">
+  <a href="#browser-based-cluster-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Web UI: Remote Execution over SSH
+        Browser-Based Cluster Monitoring
       
     </span>
   </a>
@@ -1594,10 +1594,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#scheduling-fairness" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See Also
+        Scheduling Fairness
       
     </span>
   </a>
@@ -1605,10 +1605,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#scheduling-fairness" class="md-nav__link">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Scheduling Fairness
+        See Also
       
     </span>
   </a>
@@ -4274,10 +4274,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#web-ui-remote-execution-over-ssh" class="md-nav__link">
+  <a href="#browser-based-cluster-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Web UI: Remote Execution over SSH
+        Browser-Based Cluster Monitoring
       
     </span>
   </a>
@@ -4307,10 +4307,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#scheduling-fairness" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See Also
+        Scheduling Fairness
       
     </span>
   </a>
@@ -4318,10 +4318,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#scheduling-fairness" class="md-nav__link">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Scheduling Fairness
+        See Also
       
     </span>
   </a>
@@ -4828,33 +4828,20 @@ job.</p>
 <p>Use <code>--cache-dir</code> to persist environment setup state across runs for faster startup.</p>
 </div>
 <hr />
-<h2 id="web-ui-remote-execution-over-ssh">Web UI: Remote Execution over SSH<a class="headerlink" href="#web-ui-remote-execution-over-ssh" title="Permanent link">#</a></h2>
-<p>The web system can execute runs on a cluster login node while the server
-itself lives elsewhere (your laptop, a lab server, a container):</p>
-<ol>
-<li><strong>Register the connection</strong> — Clusters page (or the platform config
-   file's <code>[clusters]</code> section): SSH host, port, user, optional SSH key
-   (a path or the key material itself), scheduler hint, and a
-   <code>remote_dir</code> for staged runs. Probe verifies connectivity and detects
-   the scheduler (slurm/pbs/sge/lsf) from the remote's installed binaries.</li>
-<li><strong>Run with <code>cluster_id</code></strong> — the Run dialog's <em>Execute on cluster</em>
-   selector (or <code>cluster_id</code> in <code>POST /api/runs</code>).</li>
-<li><strong>What happens</strong> — the workdir is staged to
-   <code>{remote_dir}/runs/{run_id}</code> over a tar stream (no rsync needed); a
-   per-run wrapper launches <code>oxo-flow run</code> fully detached (its own
-   session via <code>setsid</code>, with <code>nohup</code> fallback), so the launch SSH call
-   returns immediately while the workflow keeps running; the server polls
-   the remote <code>.exit-code</code> every 5s; on completion the whole workdir
-   (logs, checkpoint, results) is pulled back, so the web logs, files,
-   preview, and report views work exactly as for local runs. Cancel kills
-   the wrapper's recorded process group, so the CLI and every rule
-   subprocess stop instead of being orphaned.</li>
-</ol>
-<p>Requirements on the remote host: the <code>oxo-flow</code> CLI on <code>PATH</code> (any recent
-release), <code>tar</code>, and non-interactive SSH access (key auth, <code>BatchMode</code>).
-Cluster connection management (upsert/delete) is admin-only outside
-personal mode — in team and hpc mode (they hold shared SSH credentials);
-every run remains owned by the acting user.</p>
+<h2 id="browser-based-cluster-monitoring">Browser-Based Cluster Monitoring<a class="headerlink" href="#browser-based-cluster-monitoring" title="Permanent link">#</a></h2>
+<p>The web UI can also drive cluster execution without a terminal: register
+an SSH cluster connection on the <strong>Clusters</strong> page (or the platform config
+file's <code>[[clusters]]</code> section), then pick <em>Execute on cluster</em> in the Run
+dialog. The workdir is staged to the remote host, <code>oxo-flow run</code> is
+launched there detached, and logs/files/report views work exactly as for
+local runs once the results are pulled back. The remote host needs the
+<code>oxo-flow</code> CLI on <code>PATH</code>, <code>tar</code>, and non-interactive SSH access (key
+auth, <code>BatchMode</code>).</p>
+<p>Cluster connection management is admin-only outside personal mode.
+Details: <a href="../../reference/web-api/#cluster-connections-remote-execution">Cluster Connections &amp; Remote
+Execution</a>
+in the REST API reference, and <a href="../deploy-modes/#mode-3-hpc">Deploy modes</a>
+for the HPC serve mode.</p>
 <h2 id="monitoring-jobs">Monitoring Jobs<a class="headerlink" href="#monitoring-jobs" title="Permanent link">#</a></h2>
 <p>After submission, use your cluster's native tools:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># SLURM</span>
@@ -4911,13 +4898,6 @@ flag &gt; <code>$OXO_FLOW_CLUSTER_BACKEND</code> &gt; <code>slurm</code> (see
 <a href="#monitoring-jobs">Monitoring Jobs</a>); the profile block's <code>backend</code> key
 remains required and is validated the same strict way.</p>
 <hr />
-<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
-<ul>
-<li><a href="../../reference/architecture/">Architecture: Cluster backends</a> — internal cluster module design</li>
-<li><a href="../../reference/environment-system/">Environment System</a> — Singularity and Docker on HPC</li>
-<li><a href="../../commands/run/"><code>run</code> command</a> — <code>--max-threads</code>, <code>--max-memory</code>, <code>--skip-env-setup</code>, <code>--cache-dir</code></li>
-<li><a href="../../commands/cluster/"><code>cluster</code> command</a> — cluster submission reference</li>
-</ul>
 <h2 id="scheduling-fairness">Scheduling Fairness<a class="headerlink" href="#scheduling-fairness" title="Permanent link">#</a></h2>
 <p>Cluster submission honors the same fairness contract as local execution:</p>
 <ul>
@@ -4938,6 +4918,13 @@ remains required and is validated the same strict way.</p>
   design — the pool lives on the scheduler, not in the engine.</li>
 </ul>
 <hr />
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
+<ul>
+<li><a href="../../reference/architecture/">Architecture: Cluster backends</a> — internal cluster module design</li>
+<li><a href="../../reference/environment-system/">Environment System</a> — Singularity and Docker on HPC</li>
+<li><a href="../../commands/run/"><code>run</code> command</a> — <code>--max-threads</code>, <code>--max-memory</code>, <code>--skip-env-setup</code>, <code>--cache-dir</code></li>
+<li><a href="../../commands/cluster/"><code>cluster</code> command</a> — cluster submission reference</li>
+</ul>
 
 
 

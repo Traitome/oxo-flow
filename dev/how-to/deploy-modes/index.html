@@ -4463,25 +4463,23 @@ defaults to <code>sqlite://oxo-flow.db</code> in the working directory) stays SQ
   <code>cargo build --features postgres</code> (or the equivalent in your own
   image). On a build without the feature, a <code>postgres://</code> <code>DATABASE_URL</code>
   aborts startup with a clear error instead of silently falling back.</li>
-<li><strong>Run execution</strong>: the <code>StorageBackend</code> trait has PostgreSQL code paths for
-  run-record persistence. CI runs a live-PostgreSQL smoke test (a
-  <code>services: postgres</code> container) that verifies the schema bootstrap and the
-  core <code>StorageBackend</code> CRUD surface — users, runs, run nodes, audit logs,
-  webhook config, chat sessions — against a real server. The storage
-  contract was additionally live-verified against a <code>postgres:16</code> container
-  (2026-11-05): the full <code>postgres_storage_contract</code> round-trip passed and
-  the complete web test suite ran 554 passed / 0 failed with the <code>postgres</code>
-  feature enabled. That evidence does NOT extend to production parity:
-  concurrency, crash recovery, and multi-instance behavior remain
-  unvalidated, so test them before relying on PostgreSQL for execution
-  metadata. The runs gate is backend-agnostic in behavior — any initialized
-  storage backend passes — and answers <code>503 RUNS_REQUIRE_STORAGE_BACKEND</code>
-  only when no backend was initialized at all.</li>
+<li><strong>Run execution</strong>: the <code>StorageBackend</code> trait has PostgreSQL code paths
+  for run-record persistence. CI runs a live-PostgreSQL smoke test (a
+  <code>services: postgres</code> container) that verifies the schema bootstrap and
+  the core <code>StorageBackend</code> CRUD surface — users, runs, run nodes, audit
+  logs, webhook config, chat sessions — against a real server. That does
+  NOT extend to production parity: concurrency, crash recovery, and
+  multi-instance behavior remain unvalidated, so test them before
+  relying on PostgreSQL for execution metadata. The runs gate is
+  backend-agnostic in behavior — any initialized storage backend passes
+  — and answers <code>503 RUNS_REQUIRE_STORAGE_BACKEND</code> only when no backend
+  was initialized at all.</li>
 <li><strong>Tenant safety</strong>: team/HPC authorization is not an OS or container
   execution boundary. A normal workflow can run shell commands under the
-  server account and may access server environment secrets. Do not invite
-  untrusted tenants until the isolation gate in
-  <code>docs/superpowers/audits/industrial-scientific-audit-ledger.md</code> passes.</li>
+  server account and may access server environment secrets. Do not
+  invite untrusted tenants until the workspace isolation described in
+  <a href="#multi-tenancy">Multi-Tenancy</a> is supplemented with your own
+  OS-level isolation (dedicated service user, container, or similar).</li>
 </ul>
 <h2 id="startup-verification">Startup Verification<a class="headerlink" href="#startup-verification" title="Permanent link">#</a></h2>
 <p>On startup, oxo-flow prints the version banner, the serve mode and address, and tracing log lines:</p>
@@ -4605,8 +4603,9 @@ prototype-grade:</p>
   cross-instance lease: two servers pointed at the same database can both
   adopt the same run after a restart.</li>
 </ul>
-<p>Do not present these controls as crash-consistent or compliance-grade. The
-release blockers and required tests are tracked in the audit ledger.</p>
+<p>Do not present these controls as crash-consistent or compliance-grade;
+treat run records written under crash/restart races as provisional until
+verified against the workspace files.</p>
 <h2 id="production-deployment">Production Deployment<a class="headerlink" href="#production-deployment" title="Permanent link">#</a></h2>
 <p>Two pieces complete a production serve: a supervised service and — when
 users reach the server over a network — a reverse proxy in front of it.</p>

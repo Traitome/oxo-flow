@@ -4150,13 +4150,43 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow<span class="w"> </span>init<span class="w"> </span>variant-calling
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>variant-calling
 </span></code></pre></div>
+<p>The pipeline also expects paired tumor-normal FASTQ files that you provide
+yourself — place them under <code>raw/</code> (e.g. <code>raw/TUMOR_01_R1.fastq.gz</code>) with
+sample names matching the <code>[[pairs]]</code> entries below.</p>
 <hr />
 <h2 id="prepare-the-reference">Prepare the reference<a class="headerlink" href="#prepare-the-reference" title="Permanent link">#</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Reference data is not provided by this tutorial</p>
+<p>The paths in the workflow below (<code>/data/references/hg38/…</code>) are
+placeholders for <strong>user-supplied</strong> inputs — nothing ships with this
+tutorial. Point each <code>[config]</code> entry at your own copies and download
+them once:</p>
+<ul>
+<li><strong>Reference FASTA</strong> (<code>hg38.fa</code>): GRCh38/hg38 primary assembly from
+  <a href="https://hgdownload.soe.ucsc.edu/downloads.html">UCSC</a>,
+  <a href="https://www.gencodegenes.org/">GENCODE</a>, or
+  <a href="https://www.ebi.ac.uk/ena">ENA</a>. Generate the GATK-required indexes
+  next to it (<code>.fai</code> and <code>.dict</code>) — see below.</li>
+<li><strong>dbSNP VCF</strong> (<code>dbsnp_146.hg38.vcf.gz</code>): download from
+  <a href="https://www.ncbi.nlm.nih.gov/snp/">NCBI dbSNP</a> (build 146 for hg38).</li>
+<li><strong>Mills indel VCF</strong> (<code>Mills_and_1000G_gold_standard.indels.hg38.vcf.gz</code>):
+  available from the <a href="https://gatk.broadinstitute.org/hc/en-us/articles/360035890811">GATK resource bundle</a> or
+  the <a href="https://ftp.1000genomes.ebi.ac.uk/">1000 Genomes FTP</a>.</li>
+<li><strong>Germline resource / panel of normals</strong> (<code>af-only-gnomad.hg38.vcf.gz</code>,
+  <code>1000g_pon.hg38.vcf.gz</code>): gnomAD allele-frequency resource and a PoN
+  built from your own cohort of normals (the 1000G PoN is a common
+  starting point). The PoN is optional — drop the
+  <code>--panel-of-normals</code> flag and the <code>panel_of_normals</code> config entry if
+  you don't have one.</li>
+</ul>
+<p>Substitute these paths throughout with wherever your data actually
+lives — the tutorial only assumes the files exist and are indexed.</p>
+</div>
 <p>GATK tools require an <strong>indexed reference</strong>: a <code>.fai</code> FASTA index and a sequence dictionary <code>.dict</code> sitting next to the FASTA. <code>bwa</code> runs happily without them, but the first GATK rule fails with:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>A USER ERROR has occurred: Fasta dict file file:///data/references/hg38/hg38.dict does not exist.
 </span></code></pre></div>
 <p>Prepare both once, next to the FASTA that <code>{config.reference}</code> points at:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>/data/references/hg38
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>/data/references/hg38<span class="w">   </span><span class="c1"># ← wherever your reference FASTA lives</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>samtools<span class="w"> </span>faidx<span class="w"> </span>hg38.fa
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>samtools<span class="w"> </span>dict<span class="w"> </span>hg38.fa<span class="w"> </span>&gt;<span class="w"> </span>hg38.dict<span class="w">          </span><span class="c1"># or: gatk CreateSequenceDictionary -R hg38.fa -O hg38.dict</span>
 </span></code></pre></div>

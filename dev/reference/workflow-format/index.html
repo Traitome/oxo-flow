@@ -7971,7 +7971,7 @@ section can render inline SVG charts from declared metrics).</p>
 <td><code>log</code></td>
 <td>String</td>
 <td>No</td>
-<td>Log file path for rule execution output. The engine creates its parent directory and expands <code>{config.x}</code>/wildcards in the path, but <strong>populating the file is the rule's job</strong> — typically via <code>2&gt; {log}</code> in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's <code>rule_runs</code> regardless, and a succeeded rule whose declared log <em>and</em> both captured tails are all empty earns one Info hint that the tool likely self-logs</td>
+<td>Log file path for the rule's log. The engine creates its parent directory, expands <code>{config.x}</code>/wildcards in the path, and wires the <code>{log}</code> placeholder in the shell (rendered workdir-relative; absolute under <code>scratch = true</code>) — but <strong>populating the file is the rule's job</strong>, typically via <code>2&gt; {log}</code> in the shell, so it carries content only when the tool writes to stderr (the captured stdout/stderr tails live in the checkpoint's <code>rule_runs</code> regardless). A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost, and a succeeded rule whose declared log <em>and</em> both captured tails are all empty earns one Info hint that the tool likely self-logs</td>
 </tr>
 <tr>
 <td><code>group</code></td>
@@ -9027,7 +9027,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>log</code></td>
 <td>String</td>
-<td>File path for capturing rule stdout/stderr</td>
+<td>File path for the rule's log. The engine only expands the <code>{log}</code> placeholder in the shell (rendered workdir-relative; absolute under <code>scratch = true</code>) and creates the file's parent directory — populating the file is the rule's job, typically <code>2&gt; {log}</code> (stderr) in the shell</td>
 </tr>
 <tr>
 <td><code>benchmark</code></td>
@@ -9040,6 +9040,7 @@ executing a doomed shell command on missing files.</p>
 </span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a><span class="n">log</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"logs/align_{sample}.log"</span>
 </span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a><span class="n">benchmark</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"benchmarks/align_{sample}.json"</span><span class="w">  </span><span class="c1"># per-instance JSON, written by the engine</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5" href="#__codelineno-48-5"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ... 2&gt; {log}"</span>
 </span></code></pre></div>
 <h3 id="job-grouping-and-caching">Job Grouping and Caching<a class="headerlink" href="#job-grouping-and-caching" title="Permanent link">#</a></h3>
 <table>
@@ -9267,35 +9268,53 @@ aggregation rule that reuses a table name for its <em>literal</em> meaning
 scatter whose instances usually share one output path and race — the
 repair is a distinct variable name for the aggregation reading, or keying
 the outputs by the table's wildcard for a genuine per-entry rule:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="k">[[values]]</span>
-</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
-</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span>
-</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>
-</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a><span class="k">[config]</span>
-</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="n">chrom_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span><span class="w">   </span><span class="c1"># the aggregation binding's source</span>
-</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a>
-</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a><span class="c1"># WRONG: 'chr' is the [[values]] table — the rule fans into 3 instances</span>
-</span><span id="__span-55-9"><a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a><span class="c1"># per pair, every one writing the SAME vcf.raw/{pair_id}.vcf.gz and racing</span>
-</span><span id="__span-55-10"><a id="__codelineno-55-10" name="__codelineno-55-10" href="#__codelineno-55-10"></a><span class="k">[[rules]]</span>
-</span><span id="__span-55-11"><a id="__codelineno-55-11" name="__codelineno-55-11" href="#__codelineno-55-11"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"merge_chr_vcfs_bad"</span>
-</span><span id="__span-55-12"><a id="__codelineno-55-12" name="__codelineno-55-12" href="#__codelineno-55-12"></a><span class="n">expand_inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"vcf.call/{chr}/{pair_id}.vcf.gz"</span><span class="w"> </span><span class="p">}]</span>
-</span><span id="__span-55-13"><a id="__codelineno-55-13" name="__codelineno-55-13" href="#__codelineno-55-13"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.raw/{pair_id}.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-55-14"><a id="__codelineno-55-14" name="__codelineno-55-14" href="#__codelineno-55-14"></a>
-</span><span id="__span-55-15"><a id="__codelineno-55-15" name="__codelineno-55-15" href="#__codelineno-55-15"></a><span class="c1"># RIGHT (aggregation): bind the dimension through `variables` instead —</span>
-</span><span id="__span-55-16"><a id="__codelineno-55-16" name="__codelineno-55-16" href="#__codelineno-55-16"></a><span class="c1"># the pattern expands to ALL entries inside ONE instance ({input} is the</span>
-</span><span id="__span-55-17"><a id="__codelineno-55-17" name="__codelineno-55-17" href="#__codelineno-55-17"></a><span class="c1"># space-joined list), so the merge happens once</span>
-</span><span id="__span-55-18"><a id="__codelineno-55-18" name="__codelineno-55-18" href="#__codelineno-55-18"></a><span class="k">[[rules]]</span>
-</span><span id="__span-55-19"><a id="__codelineno-55-19" name="__codelineno-55-19" href="#__codelineno-55-19"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"merge_chr_vcfs"</span>
-</span><span id="__span-55-20"><a id="__codelineno-55-20" name="__codelineno-55-20" href="#__codelineno-55-20"></a><span class="n">expand_inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-55-21"><a id="__codelineno-55-21" name="__codelineno-55-21" href="#__codelineno-55-21"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"vcf.call/{chrom}/{pair_id}.vcf.gz"</span><span class="p">,</span>
-</span><span id="__span-55-22"><a id="__codelineno-55-22" name="__codelineno-55-22" href="#__codelineno-55-22"></a><span class="w">    </span><span class="n">variables</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">chrom</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"config.chrom_list"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-55-23"><a id="__codelineno-55-23" name="__codelineno-55-23" href="#__codelineno-55-23"></a><span class="p">]</span>
-</span><span id="__span-55-24"><a id="__codelineno-55-24" name="__codelineno-55-24" href="#__codelineno-55-24"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.raw/{pair_id}.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-55-25"><a id="__codelineno-55-25" name="__codelineno-55-25" href="#__codelineno-55-25"></a>
-</span><span id="__span-55-26"><a id="__codelineno-55-26" name="__codelineno-55-26" href="#__codelineno-55-26"></a><span class="c1"># RIGHT (scatter): keep the bare table wildcard, but key the outputs by it</span>
-</span><span id="__span-55-27"><a id="__codelineno-55-27" name="__codelineno-55-27" href="#__codelineno-55-27"></a><span class="k">[[rules]]</span>
-</span><span id="__span-55-28"><a id="__codelineno-55-28" name="__codelineno-55-28" href="#__codelineno-55-28"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_chr"</span>
-</span><span id="__span-55-29"><a id="__codelineno-55-29" name="__codelineno-55-29" href="#__codelineno-55-29"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.call/{chr}/{pair_id}.vcf.gz"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="c1"># Full example — namespace-collision with [[values]] tables (copy-paste runnable)</span>
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="k">[workflow]</span>
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr-collision-demo"</span>
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"1.0.0"</span>
+</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a>
+</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="k">[config]</span>
+</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a><span class="n">chrom_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span><span class="w">   </span><span class="c1"># the aggregation binding's source</span>
+</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a>
+</span><span id="__span-55-9"><a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a><span class="k">[[values]]</span>
+</span><span id="__span-55-10"><a id="__codelineno-55-10" name="__codelineno-55-10" href="#__codelineno-55-10"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
+</span><span id="__span-55-11"><a id="__codelineno-55-11" name="__codelineno-55-11" href="#__codelineno-55-11"></a><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span>
+</span><span id="__span-55-12"><a id="__codelineno-55-12" name="__codelineno-55-12" href="#__codelineno-55-12"></a>
+</span><span id="__span-55-13"><a id="__codelineno-55-13" name="__codelineno-55-13" href="#__codelineno-55-13"></a><span class="c1"># WRONG: 'chr' is the [[values]] table — the rule fans into 3 instances</span>
+</span><span id="__span-55-14"><a id="__codelineno-55-14" name="__codelineno-55-14" href="#__codelineno-55-14"></a><span class="c1"># per pair, every one writing the SAME vcf.raw/{pair_id}.vcf.gz and racing</span>
+</span><span id="__span-55-15"><a id="__codelineno-55-15" name="__codelineno-55-15" href="#__codelineno-55-15"></a><span class="k">[[rules]]</span>
+</span><span id="__span-55-16"><a id="__codelineno-55-16" name="__codelineno-55-16" href="#__codelineno-55-16"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"merge_chr_vcfs_bad"</span>
+</span><span id="__span-55-17"><a id="__codelineno-55-17" name="__codelineno-55-17" href="#__codelineno-55-17"></a><span class="n">expand_inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"vcf.call/{chr}/{pair_id}.vcf.gz"</span><span class="w"> </span><span class="p">}]</span>
+</span><span id="__span-55-18"><a id="__codelineno-55-18" name="__codelineno-55-18" href="#__codelineno-55-18"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.raw/{pair_id}.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-55-19"><a id="__codelineno-55-19" name="__codelineno-55-19" href="#__codelineno-55-19"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bcftools concat {input} &gt; {output[0]}"</span>
+</span><span id="__span-55-20"><a id="__codelineno-55-20" name="__codelineno-55-20" href="#__codelineno-55-20"></a>
+</span><span id="__span-55-21"><a id="__codelineno-55-21" name="__codelineno-55-21" href="#__codelineno-55-21"></a><span class="c1"># RIGHT (aggregation): bind the dimension through `variables` instead —</span>
+</span><span id="__span-55-22"><a id="__codelineno-55-22" name="__codelineno-55-22" href="#__codelineno-55-22"></a><span class="c1"># the pattern expands to ALL entries inside ONE instance ({input} is the</span>
+</span><span id="__span-55-23"><a id="__codelineno-55-23" name="__codelineno-55-23" href="#__codelineno-55-23"></a><span class="c1"># space-joined list), so the merge happens once</span>
+</span><span id="__span-55-24"><a id="__codelineno-55-24" name="__codelineno-55-24" href="#__codelineno-55-24"></a><span class="k">[[rules]]</span>
+</span><span id="__span-55-25"><a id="__codelineno-55-25" name="__codelineno-55-25" href="#__codelineno-55-25"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"merge_chr_vcfs"</span>
+</span><span id="__span-55-26"><a id="__codelineno-55-26" name="__codelineno-55-26" href="#__codelineno-55-26"></a><span class="n">expand_inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-55-27"><a id="__codelineno-55-27" name="__codelineno-55-27" href="#__codelineno-55-27"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"vcf.call/{chrom}/{pair_id}.vcf.gz"</span><span class="p">,</span>
+</span><span id="__span-55-28"><a id="__codelineno-55-28" name="__codelineno-55-28" href="#__codelineno-55-28"></a><span class="w">    </span><span class="n">variables</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">chrom</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"config.chrom_list"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-55-29"><a id="__codelineno-55-29" name="__codelineno-55-29" href="#__codelineno-55-29"></a><span class="p">]</span>
+</span><span id="__span-55-30"><a id="__codelineno-55-30" name="__codelineno-55-30" href="#__codelineno-55-30"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.raw/{pair_id}.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-55-31"><a id="__codelineno-55-31" name="__codelineno-55-31" href="#__codelineno-55-31"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bcftools concat {input} &gt; {output[0]}"</span>
+</span><span id="__span-55-32"><a id="__codelineno-55-32" name="__codelineno-55-32" href="#__codelineno-55-32"></a>
+</span><span id="__span-55-33"><a id="__codelineno-55-33" name="__codelineno-55-33" href="#__codelineno-55-33"></a><span class="c1"># RIGHT (scatter): keep the bare table wildcard, but key the outputs by it</span>
+</span><span id="__span-55-34"><a id="__codelineno-55-34" name="__codelineno-55-34" href="#__codelineno-55-34"></a><span class="k">[[rules]]</span>
+</span><span id="__span-55-35"><a id="__codelineno-55-35" name="__codelineno-55-35" href="#__codelineno-55-35"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_chr"</span>
+</span><span id="__span-55-36"><a id="__codelineno-55-36" name="__codelineno-55-36" href="#__codelineno-55-36"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"vcf.call/{chr}/{pair_id}.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-55-37"><a id="__codelineno-55-37" name="__codelineno-55-37" href="#__codelineno-55-37"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bcftools call -v -o {output[0]}"</span>
+</span><span id="__span-55-38"><a id="__codelineno-55-38" name="__codelineno-55-38" href="#__codelineno-55-38"></a>
+</span><span id="__span-55-39"><a id="__codelineno-55-39" name="__codelineno-55-39" href="#__codelineno-55-39"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-55-40"><a id="__codelineno-55-40" name="__codelineno-55-40" href="#__codelineno-55-40"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P1"</span>
+</span><span id="__span-55-41"><a id="__codelineno-55-41" name="__codelineno-55-41" href="#__codelineno-55-41"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P1_T"</span>
+</span><span id="__span-55-42"><a id="__codelineno-55-42" name="__codelineno-55-42" href="#__codelineno-55-42"></a><span class="n">control</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P1_N"</span>
+</span><span id="__span-55-43"><a id="__codelineno-55-43" name="__codelineno-55-43" href="#__codelineno-55-43"></a>
+</span><span id="__span-55-44"><a id="__codelineno-55-44" name="__codelineno-55-44" href="#__codelineno-55-44"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-55-45"><a id="__codelineno-55-45" name="__codelineno-55-45" href="#__codelineno-55-45"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P2"</span>
+</span><span id="__span-55-46"><a id="__codelineno-55-46" name="__codelineno-55-46" href="#__codelineno-55-46"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P2_T"</span>
+</span><span id="__span-55-47"><a id="__codelineno-55-47" name="__codelineno-55-47" href="#__codelineno-55-47"></a><span class="n">control</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P2_N"</span>
 </span></code></pre></div>
 <p>The two "RIGHT" forms differ in cardinality: the <code>variables</code>-bound
 aggregation yields one instance whose <code>{input}</code> lists every chromosome;
@@ -9372,6 +9391,10 @@ any expansion or execution.</p>
 <tr>
 <td><code>{config.*}</code></td>
 <td>Value from the <code>[config]</code> section (plain value, declared default, or CLI override)</td>
+</tr>
+<tr>
+<td><code>{meta.&lt;column&gt;}</code></td>
+<td>Per-sample metadata column bound when an instance set is grouped by <code>metadata_file</code> / <code>[metadata]</code> columns (see <a href="#sample-metadata-metadata_file">Sample Metadata</a> and <a href="#grouping-by-metadata-column">Grouping by metadata column</a>) — addressed in any rule's <code>input</code>, <code>output</code>, <code>shell</code>, or <code>when</code></td>
 </tr>
 <tr>
 <td><code>{wildcard.*}</code></td>
@@ -10713,6 +10736,7 @@ literal. <code>n = "3"</code> alone does neither.</p>
 </div>
 <hr />
 <h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">#</a></h2>
+<p>A minimal three-rule skeleton — the smallest full-pipeline shape to copy and adapt:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-106-1"><a id="__codelineno-106-1" name="__codelineno-106-1" href="#__codelineno-106-1"></a><span class="k">[workflow]</span>
 </span><span id="__span-106-2"><a id="__codelineno-106-2" name="__codelineno-106-2" href="#__codelineno-106-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ngs-pipeline"</span>
 </span><span id="__span-106-3"><a id="__codelineno-106-3" name="__codelineno-106-3" href="#__codelineno-106-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2.0.0"</span>
@@ -11166,8 +11190,8 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   the process working directory — unlike the config value, which anchors
   to the workflow file's directory.</li>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
-  per-instance values) fires only with full instance attribution
-  (full instance attribution): the recorded instance combos from
+  per-instance values) fires only with full instance attribution:
+  the recorded instance combos from
   <code>checkpoint.output_pattern_domains</code> are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any

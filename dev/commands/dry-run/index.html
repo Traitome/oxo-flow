@@ -4292,7 +4292,7 @@ are up to date is predicted as skipped, exactly as <code>run</code> would skip i
 <tr>
 <td><code>--samples &lt;LIST&gt;</code></td>
 <td>—</td>
-<td>Sample selection: <code>@path</code> <strong>replaces</strong> the workflow's samples from a samplesheet, <code>+@path</code> <strong>appends</strong> (same-name groups merge, new groups added); names <strong>filter</strong> (or <strong>declare</strong> when the workflow ships no samples), <code>first:N</code> (pilot) and <code>ready</code> (samples whose entry inputs are complete) <strong>filter</strong>. Repeatable, comma-separated</td>
+<td>Same semantics as <a href="../run/#options"><code>run</code></a>: <code>@path</code> <strong>replaces</strong> the workflow's samples from a samplesheet, <code>+@path</code> <strong>appends</strong> (same-name groups merge, new groups added); names <strong>filter</strong> (or <strong>declare</strong> when the workflow ships no samples), <code>first:N</code> (pilot) and <code>ready</code> (samples whose entry inputs are complete) <strong>filter</strong>. Repeatable, comma-separated</td>
 </tr>
 <tr>
 <td><code>--workdir &lt;DIR&gt;</code></td>
@@ -4342,7 +4342,7 @@ are up to date is predicted as skipped, exactly as <code>run</code> would skip i
 <tr>
 <td><code>--ai-max-retries &lt;N&gt;</code></td>
 <td>—</td>
-<td>Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried)</td>
+<td>Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried). This bounds <strong>analysis</strong> attempts on this command — the generation-side <code>--ai-max-retries</code> on <a href="../template/#options"><code>template</code></a> (default 10, bounding orchestrator rounds) is a separate knob (see <a href="../run/#options"><code>run</code></a> for the full dual-contract note)</td>
 </tr>
 <tr>
 <td><code>--verbose</code></td>
@@ -4352,7 +4352,7 @@ are up to date is predicted as skipped, exactly as <code>run</code> would skip i
 <tr>
 <td><code>--quiet</code></td>
 <td>—</td>
-<td>Global log-level flag: suppresses <code>info</code>-level log lines and the banner. The preview and its summary are printed regardless</td>
+<td>Suppress informational output — the version banner is omitted; the plan preview and its summary are printed regardless (verified: output is byte-identical with <code>--quiet</code>)</td>
 </tr>
 <tr>
 <td><code>--no-color</code></td>

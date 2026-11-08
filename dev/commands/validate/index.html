@@ -4243,7 +4243,7 @@
 <tr>
 <td><code>--quiet</code></td>
 <td>—</td>
-<td>Suppress informational output, including the version banner (global)</td>
+<td>Suppress informational output — the version banner is omitted; the <code>✓</code> verdict, warnings, errors, and <code>--json</code> output are unaffected (verified: output is byte-identical with <code>--quiet</code>) (global)</td>
 </tr>
 <tr>
 <td><code>--no-color</code></td>
@@ -4331,7 +4331,8 @@ so a green validate no longer hides a workflow that cannot run:</p>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  warning [W024]: wildcard '{sample}' has no declared source — it will stay literal at run time and files may be written literally named after the placeholder (rule: step1)
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    hint: declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder
 </span></code></pre></div>
-<p>Warnings keep exit code <code>0</code> — only errors fail. <code>validate</code> scopes itself
+<p>Warnings keep exit code <code>0</code> — only errors fail (the shared CLI exit-code
+contract is documented on <a href="../run/#exit-codes"><code>run</code></a>). <code>validate</code> scopes itself
 to <code>W024</code> and <code>SCI-AGG-RACE</code> (runnability); the full best-practice sweep
 remains <a href="../lint/"><code>lint</code></a>'s job, and the <code>warnings</code> array is empty when
 nothing blocks runnability. At run time the corresponding

@@ -4227,6 +4227,10 @@
 <p>The <code>bioconda</code> channel is a community-maintained repository for bioinformatics software. It provides thousands of pre-compiled binaries for tools like <code>bwa</code>, <code>samtools</code>, and <code>GATK</code>, which can otherwise be difficult to install from source.</p>
 </div>
 <p>oxo-flow activates the conda environment before running the rule's shell command and deactivates it afterward.</p>
+<div class="admonition tip">
+<p class="admonition-title">How activation works</p>
+<p>The command runs via <code>conda run --no-capture-output -n &lt;env-name&gt;</code>, where <code>&lt;env-name&gt;</code> is the <code>name:</code> from your YAML plus a short content-hash suffix for file specs — identical YAML content reuses the same environment, even across workflows. Task-oriented recipes (pull policy, image retries) live in <a href="../../how-to/use-environments/">Use Environments</a>.</p>
+</div>
 <hr />
 <h2 id="mamba">Mamba<a class="headerlink" href="#mamba" title="Permanent link">#</a></h2>
 <p>Mamba (or micromamba) uses the same YAML format as conda with a faster solver. oxo-flow auto-detects which binary is available:</p>

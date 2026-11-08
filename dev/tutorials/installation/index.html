@@ -499,6 +499,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 1 — Install with Cargo (recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-install-the-rust-toolchain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1 — Install the Rust toolchain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-install-oxo-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2 — Install oxo-flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3983,6 +4011,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 1 — Install with Cargo (recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-install-the-rust-toolchain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1 — Install the Rust toolchain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-install-oxo-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2 — Install oxo-flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4137,24 +4193,18 @@
 </div>
 <hr />
 <h2 id="option-1-install-with-cargo-recommended">Option 1 — Install with Cargo (recommended)<a class="headerlink" href="#option-1-install-with-cargo-recommended" title="Permanent link">#</a></h2>
-<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Install Rust Toolchain First</label><label for="__tabbed_1_2">Install oxo-flow</label></div>
-<div class="tabbed-content">
-<div class="tabbed-block">
+<h3 id="step-1-install-the-rust-toolchain">Step 1 — Install the Rust toolchain<a class="headerlink" href="#step-1-install-the-rust-toolchain" title="Permanent link">#</a></h3>
 <p>If you don't have Rust installed, use the official installer:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>--proto<span class="w"> </span><span class="s1">'=https'</span><span class="w"> </span>--tlsv1.2<span class="w"> </span>-sSf<span class="w"> </span>https://sh.rustup.rs<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.cargo/env"</span>
 </span></code></pre></div>
-</div>
-<div class="tabbed-block">
+<h3 id="step-2-install-oxo-flow">Step 2 — Install oxo-flow<a class="headerlink" href="#step-2-install-oxo-flow" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>oxo-flow-cli
 </span></code></pre></div>
 <p>This builds the latest published release and places the <code>oxo-flow</code> binary in <code>~/.cargo/bin/</code>.</p>
 <p><strong>Verify PATH</strong>: Ensure <code>~/.cargo/bin/</code> is in your <code>$PATH</code>. You can check with:
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$PATH</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-q<span class="w"> </span><span class="s2">".cargo/bin"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s1">'Add to PATH: export PATH="$HOME/.cargo/bin:$PATH"'</span>
 </span></code></pre></div></p>
-</div>
-</div>
-</div>
 <p>Verify the installation:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>--version
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># oxo-flow 0.29.0</span>
@@ -4187,7 +4237,7 @@
 <hr />
 <h2 id="option-3-download-pre-built-binary">Option 3 — Download Pre-built Binary<a class="headerlink" href="#option-3-download-pre-built-binary" title="Permanent link">#</a></h2>
 <p>Pre-built binaries are available from the <a href="https://github.com/Traitome/oxo-flow/releases">GitHub Releases</a> page.</p>
-<div class="tabbed-set tabbed-alternate" data-tabs="2:2"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Linux (x86_64)</label><label for="__tabbed_2_2">macOS (Apple Silicon)</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Linux (x86_64)</label><label for="__tabbed_1_2">macOS (Apple Silicon)</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.29.0/oxo-flow-v0.29.0-x86_64-unknown-linux-gnu.tar.gz
@@ -4219,7 +4269,7 @@ Desktop users may prefer the <code>.deb</code> / <code>.rpm</code> / <code>.AppI
 <p>Images are published to GitHub Container Registry automatically on every release and every push to <code>main</code>.
 Release images are multi-arch (<code>linux/amd64</code> + <code>linux/arm64</code>) and are assembled from the
 SHA256-verified release binaries. <code>:latest</code> moves only after the release image passes a health
-smoke test, <code>:&lt;major.minor&gt;</code> (e.g. <code>:0.17</code>) tracks the newest patch of a minor line, and <code>:main</code>
+smoke test, <code>:&lt;major.minor&gt;</code> (e.g. <code>:0.29</code>) tracks the newest patch of a minor line, and <code>:main</code>
 is a multi-arch dev build compiled from source:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Web UI at http://localhost:3000</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>oxo-flow<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>:3000<span class="w"> </span>ghcr.io/traitome/oxo-flow:latest
@@ -4233,6 +4283,10 @@ is a multi-arch dev build compiled from source:</p>
 </span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>my-pipeline.oxoflow
 </span></code></pre></div>
 <div class="admonition note">
+<p class="admonition-title">Port 3000 vs 8080</p>
+<p>The Docker image (and the standalone <code>oxo-flow-web</code> binary it runs) serves the Web UI on <strong>3000</strong> by default, while the native <code>oxo-flow serve</code> command defaults to <strong>8080</strong>. Both honor the <code>OXO_FLOW_PORT</code> environment variable and a <code>--port</code> flag, so you can align them if you run both.</p>
+</div>
+<div class="admonition note">
 <p class="admonition-title">Data persistence</p>
 <p>The server stores its database in <code>/app/data</code> inside the container. Mount a
 volume to keep it across restarts: <code>-v oxo-flow-data:/app/data</code>. The image
@@ -4243,7 +4297,7 @@ user.</p>
 <h2 id="optional-dependencies">Optional Dependencies<a class="headerlink" href="#optional-dependencies" title="Permanent link">#</a></h2>
 <h3 id="graphviz-for-visualization">Graphviz (for Visualization)<a class="headerlink" href="#graphviz-for-visualization" title="Permanent link">#</a></h3>
 <p>The <code>oxo-flow graph</code> command outputs workflows in <a href="https://graphviz.org/doc/info/lang.html">DOT format</a>. To render these graphs as images (PNG, SVG, etc.), you need to install <strong>Graphviz</strong>.</p>
-<div class="tabbed-set tabbed-alternate" data-tabs="3:4"><input checked="checked" id="__tabbed_3_1" name="__tabbed_3" type="radio" /><input id="__tabbed_3_2" name="__tabbed_3" type="radio" /><input id="__tabbed_3_3" name="__tabbed_3" type="radio" /><input id="__tabbed_3_4" name="__tabbed_3" type="radio" /><div class="tabbed-labels"><label for="__tabbed_3_1">macOS</label><label for="__tabbed_3_2">Linux (Ubuntu/Debian)</label><label for="__tabbed_3_3">Linux (RHEL/Fedora/CentOS)</label><label for="__tabbed_3_4">Conda</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:4"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><input id="__tabbed_2_3" name="__tabbed_2" type="radio" /><input id="__tabbed_2_4" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">macOS</label><label for="__tabbed_2_2">Linux (Ubuntu/Debian)</label><label for="__tabbed_2_3">Linux (RHEL/Fedora/CentOS)</label><label for="__tabbed_2_4">Conda</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>brew<span class="w"> </span>install<span class="w"> </span>graphviz
@@ -4266,7 +4320,7 @@ user.</p>
 <hr />
 <h2 id="shell-completions">Shell Completions<a class="headerlink" href="#shell-completions" title="Permanent link">#</a></h2>
 <p>oxo-flow can generate shell completions for Bash, Zsh, Fish, Elvish, and PowerShell:</p>
-<div class="tabbed-set tabbed-alternate" data-tabs="4:3"><input checked="checked" id="__tabbed_4_1" name="__tabbed_4" type="radio" /><input id="__tabbed_4_2" name="__tabbed_4" type="radio" /><input id="__tabbed_4_3" name="__tabbed_4" type="radio" /><div class="tabbed-labels"><label for="__tabbed_4_1">Bash</label><label for="__tabbed_4_2">Zsh</label><label for="__tabbed_4_3">Fish</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="3:3"><input checked="checked" id="__tabbed_3_1" name="__tabbed_3" type="radio" /><input id="__tabbed_3_2" name="__tabbed_3" type="radio" /><input id="__tabbed_3_3" name="__tabbed_3" type="radio" /><div class="tabbed-labels"><label for="__tabbed_3_1">Bash</label><label for="__tabbed_3_2">Zsh</label><label for="__tabbed_3_3">Fish</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>completions<span class="w"> </span>bash<span class="w"> </span>&gt;<span class="w"> </span>~/.local/share/bash-completion/completions/oxo-flow

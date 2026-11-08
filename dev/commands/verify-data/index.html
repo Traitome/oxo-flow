@@ -4127,7 +4127,7 @@ not list (extras).</p>
 </tr>
 <tr>
 <td><code>--quiet</code></td>
-<td>Suppress non-essential output (errors only)</td>
+<td>Suppress informational output — the version banner is omitted; the verification report, errors, and warnings are unaffected (verified: output is byte-identical with <code>--quiet</code>)</td>
 </tr>
 <tr>
 <td><code>--no-color</code></td>
@@ -4139,7 +4139,9 @@ not list (extras).</p>
 <p><code>0</code> when every listed file matches and nothing is missing or extra; <code>1</code> when
 any listed file mismatches, is missing, or is unlisted — so the command drops
 straight into scripts and post-recovery gates. (An empty sidecar — zero
-listed files — reports a note and exits <code>0</code> without scanning for extras.)</p>
+listed files — reports a note and exits <code>0</code> without scanning for extras.)
+The shared CLI exit-code contract (what <code>0</code>/<code>1</code>/<code>2</code> mean across commands)
+is documented on <a href="../run/#exit-codes"><code>run</code></a>.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Audit a delivery against its sidecar</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>oxo-flow<span class="w"> </span>verify-data<span class="w"> </span>raw/<span class="w"> </span>--from<span class="w"> </span>raw/md5.txt

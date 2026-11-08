@@ -4465,15 +4465,35 @@
 </tr>
 <tr>
 <td><code>{threads}</code></td>
-<td>CPU thread count assigned to the task</td>
+<td>Thread count assigned to this rule</td>
 </tr>
 <tr>
 <td><code>{memory}</code></td>
-<td>Memory allocation assigned to the task</td>
+<td>Memory allocation assigned to this rule</td>
 </tr>
 <tr>
-<td><code>{config.X}</code></td>
-<td>Value of variable <code>X</code> from the <code>[config]</code> section</td>
+<td><code>{effective_threads}</code></td>
+<td>Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use it for flags like <code>--threads</code>/<code>-t</code> when the declared value is an HPC-scale label (e.g. a rule declaring <code>threads = 12</code> renders <code>4</code> on a 4-core box). Unset threads render as <code>1</code></td>
+</tr>
+<tr>
+<td><code>{effective_memory_mb}</code></td>
+<td>Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget. Use it for JVM flags (<code>-Xmx{effective_memory_mb}m</code>, <code>-Xms…</code>) so tools size themselves to the box instead of OOM-ing on hardcoded HPC values (<code>-Xmx29491M</code> class). Unset memory renders as the machine's full total</td>
+</tr>
+<tr>
+<td><code>{log}</code></td>
+<td>Path of the rule's <code>log</code> field (every instance wildcard — <code>{sample}</code>, <code>{pair_id}</code>, <code>{assembler}</code> … — and <code>{config.x}</code> are expanded per instance; the parent directory is created automatically)</td>
+</tr>
+<tr>
+<td><code>{config.*}</code></td>
+<td>Value from the <code>[config]</code> section (plain value, declared default, or CLI override)</td>
+</tr>
+<tr>
+<td><code>{meta.&lt;column&gt;}</code></td>
+<td>Sample-group metadata column in <code>[[sample_groups]]</code> shell commands — same value as <code>{wildcard.&lt;column&gt;}</code> for group metadata (see the <a href="../workflow-format/#grouping-by-metadata-column">canonical placeholder table</a>)</td>
+</tr>
+<tr>
+<td><code>{wildcard.*}</code></td>
+<td>Per-instance binding under the same grammar as <code>when</code> conditions — sample-group <code>metadata</code> keys (e.g. <code>{wildcard.umi1_pattern}</code>) and expansion keys. Unbound keys render as their literal brace token</td>
 </tr>
 </tbody>
 </table>

@@ -4033,7 +4033,7 @@ definitions referenced by <code>conda = "envs/..."</code> in templates 04-15.</p
 </tr>
 <tr>
 <td><code>--ai-max-retries &lt;N&gt;</code></td>
-<td>Maximum AI correction rounds (overrides config)</td>
+<td>Maximum AI correction rounds for the generation orchestrator — knowledge lookups and correction passes share this budget (default: 10, overridable via <code>[ai] max_retries</code> in the config). This bounds <strong>generation</strong> rounds; the recovery-side <code>--ai-max-retries</code> on <a href="../run/#options"><code>run</code></a>/<a href="../dry-run/#options"><code>dry-run</code></a>/<a href="../resume/#options"><code>resume</code></a> (default 1, failed-call recovery attempts) is a separate knob</td>
 </tr>
 <tr>
 <td><code>--ai-team-profile &lt;PROFILE&gt;</code></td>

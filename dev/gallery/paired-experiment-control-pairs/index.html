@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#paired-experiment-control-multiple-pairs" class="md-skip">
+        <a href="#15-paired-experiment-control-multiple-pairs" class="md-skip">
           Skip to content
         </a>
       
@@ -1152,6 +1152,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pipeline-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workflow-definition" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1163,10 +1174,71 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
+  <a href="#running-the-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Try It
+        Running the Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#expected-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's Next?
       
     </span>
   </a>
@@ -3875,6 +3947,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pipeline-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workflow-definition" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3886,10 +3969,71 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
+  <a href="#running-the-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Try It
+        Running the Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#expected-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's Next?
       
     </span>
   </a>
@@ -3921,7 +4065,7 @@
   
 
 
-<h1 id="paired-experiment-control-multiple-pairs">Paired Experiment-Control (Multiple Pairs)<a class="headerlink" href="#paired-experiment-control-multiple-pairs" title="Permanent link">#</a></h1>
+<h1 id="15-paired-experiment-control-multiple-pairs">15 — Paired Experiment-Control (Multiple Pairs)<a class="headerlink" href="#15-paired-experiment-control-multiple-pairs" title="Permanent link">#</a></h1>
 <p>The scalable version of <a href="../paired-experiment-control/">Paired Experiment-Control (Single Pair)</a>: the same somatic pipeline driven by <code>[[pairs]]</code> with <code>{experiment}</code> / <code>{control}</code> / <code>{pair_id}</code> wildcards, fanning out one branch per pair.</p>
 <h2 id="what-it-demonstrates">What It Demonstrates<a class="headerlink" href="#what-it-demonstrates" title="Permanent link">#</a></h2>
 <ul>
@@ -3929,6 +4073,16 @@
 <li><code>--germline-resource</code> / <code>--panel-of-normals</code> are noted in-rule for production hardening</li>
 <li>Read-group SM tags per branch make <code>Mutect2 -normal {control}</code> resolve correctly</li>
 </ul>
+<h2 id="pipeline-overview">Pipeline Overview<a class="headerlink" href="#pipeline-overview" title="Permanent link">#</a></h2>
+<pre class="mermaid"><code>graph TD
+    FP[fastp_experiment / fastp_control] --&gt; BW[bwa_mem2_experiment / bwa_mem2_control]
+    BW --&gt; MD[markdup_experiment / markdup_control]
+    MD --&gt; BQ[bqsr_experiment / bqsr_control]
+    BQ --&gt; MU[mutect2]
+    MU --&gt; FM[filter_mutect_calls]
+    FM --&gt; AN[annotate_somatic]
+    AN --&gt; CR[clinical_report]</code></pre>
+<p>Each rule row in the diagram above is a template that fans out per pair: with the two <code>[[pairs]]</code> entries (CASE_001, CASE_002), every paired rule produces two instances (<code>fastp_control_CASE_001</code>, <code>fastp_control_CASE_002</code>, …) and <code>mutect2</code> consumes that pair's recalibrated experiment and control BAMs. The pair-scoped chain ends in a per-pair clinical report.</p>
 <h2 id="workflow-definition">Workflow Definition<a class="headerlink" href="#workflow-definition" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># examples/gallery/15_paired_experiment_control_pairs.oxoflow</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># 15 — Paired Experiment-Control (Multiple Pairs)</span>
@@ -4163,19 +4317,105 @@
 </span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231" href="#__codelineno-0-231"></a>
 </span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232" href="#__codelineno-0-232"></a><span class="k">[pairs.metadata]</span>
 </span></code></pre></div>
-<h2 id="try-it">Try It<a class="headerlink" href="#try-it" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Inspect the expanded plan first — no data needed:</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow
+<h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
+<h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">12</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">17</span><span class="w"> </span>dependencies
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Copy the environment specs next to the workflow, adapt [config]</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># paths to your data, then run:</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>⚠<span class="w"> </span>Warning:<span class="w"> </span>The<span class="w"> </span>following<span class="w"> </span>input<span class="w"> </span>files<span class="w"> </span><span class="k">do</span><span class="w"> </span>not<span class="w"> </span>exist:
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span>-<span class="w"> </span>raw/EXP_01_R1.fq.gz
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span>-<span class="w"> </span>raw/EXP_01_R2.fq.gz
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span>-<span class="w"> </span>raw/CTRL_01_R1.fq.gz
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span>-<span class="w"> </span>raw/CTRL_01_R2.fq.gz
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span>-<span class="w"> </span>raw/EXP_02_R1.fq.gz
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span>...
 </span></code></pre></div>
+<p>The <code>✓</code> line is what matters — validate exits 0 and the workflow is well-formed. The warnings are expected here: the <code>raw/</code> FASTQs don't exist until you stage real data (see the note at the bottom of this page).</p>
+<h3 id="dry-run">Dry-Run<a class="headerlink" href="#dry-run" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Plan:<span class="w"> </span>would<span class="w"> </span>run:<span class="w"> </span><span class="m">24</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>skip:<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>completed:<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">(</span>DAG<span class="w"> </span>size:<span class="w"> </span><span class="m">24</span><span class="o">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Sample<span class="w"> </span>readiness:<span class="w"> </span><span class="m">0</span>/4<span class="w"> </span>complete,<span class="w"> </span><span class="m">4</span><span class="w"> </span>waiting
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>⏳<span class="w"> </span>EXP_01<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/EXP_01_R1.fq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>⏳<span class="w"> </span>CTRL_01<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/CTRL_01_R1.fq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>⏳<span class="w"> </span>EXP_02<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/EXP_02_R1.fq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>⏳<span class="w"> </span>CTRL_02<span class="w"> </span><span class="o">(</span>missing:<span class="w"> </span>raw/CTRL_02_R1.fq.gz<span class="w"> </span>+1<span class="w"> </span>more<span class="o">)</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>...
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="m">17</span>.<span class="w"> </span>mutect2_CASE_001<span class="w">  </span><span class="o">[</span>run:<span class="w"> </span>never<span class="w"> </span>completed<span class="o">]</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">     </span>outputs:<span class="w"> </span><span class="o">[</span><span class="s2">"variants/CASE_001.mutect2.vcf.gz"</span><span class="o">]</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">     </span>command:<span class="w"> </span><span class="c1"># Production runs should also pass --germline-resource and --panel-of-normals</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>gatk<span class="w"> </span>Mutect2<span class="w"> </span>...<span class="w"> </span>-I<span class="w"> </span>recal/EXP_01.recal.bam<span class="w"> </span>-I<span class="w"> </span>recal/CTRL_01.recal.bam<span class="w"> </span>-normal<span class="w"> </span>CTRL_01<span class="w"> </span>-O<span class="w"> </span>variants/CASE_001.mutect2.vcf.gz
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>Summary:<span class="w"> </span><span class="m">24</span><span class="w"> </span>rules,<span class="w"> </span>total<span class="w"> </span><span class="m">152</span><span class="w"> </span>threads<span class="w"> </span>declared,<span class="w"> </span>max<span class="w"> </span><span class="m">16</span><span class="w"> </span>threads/rule
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">         </span><span class="m">24</span><span class="w"> </span>rules<span class="w"> </span>with<span class="w"> </span>memory<span class="w"> </span>requirements
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>To<span class="w"> </span>execute:<span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">2</span>
+</span></code></pre></div>
+<p>The 12 template rules expand to 24 tasks — each pair-scoped rule runs once per <code>[[pairs]]</code> entry, with instance names keyed by <code>pair_id</code> (<code>fastp_control_CASE_001</code>, <code>mutect2_CASE_001</code>, <code>clinical_report_CASE_001</code>, …). Compare the <code>mutect2</code> command with workflow 14: <code>-I recal/EXP_01.recal.bam</code> and <code>-normal CTRL_01</code> are literal there, while here <code>{experiment}</code> and <code>{control}</code> resolve them per pair. The in-rule comment about <code>--germline-resource</code> and <code>--panel-of-normals</code> is carried verbatim into the command — production runs should uncomment those flags with real resource paths.</p>
+<h3 id="dag-structure">DAG Structure<a class="headerlink" href="#dag-structure" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>graph<span class="w"> </span>examples/gallery/15_paired_experiment_control_pairs.oxoflow
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Workflow<span class="w"> </span>DAG:<span class="w"> </span><span class="m">12</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">17</span><span class="w"> </span>dependencies
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>Depth:<span class="w"> </span><span class="m">8</span>,<span class="w"> </span>Width:<span class="w"> </span><span class="m">2</span>,<span class="w"> </span>Critical<span class="w"> </span>path:<span class="w"> </span><span class="m">8</span><span class="w"> </span>steps
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>Critical<span class="w"> </span>path:<span class="w"> </span>fastp_control<span class="w"> </span>→<span class="w"> </span>bwa_mem2_control<span class="w"> </span>→<span class="w"> </span>markdup_control<span class="w"> </span>→<span class="w"> </span>bqsr_control<span class="w"> </span>→<span class="w"> </span>mutect2<span class="w"> </span>→<span class="w"> </span>filter_mutect_calls<span class="w"> </span>→<span class="w"> </span>annotate_somatic<span class="w"> </span>→<span class="w"> </span>clinical_report
+</span></code></pre></div>
+<p><code>graph</code> shows the template DAG (before expansion — see the <a href="../#quick-start">gallery index</a> note). Unlike the single-pair workflow 14, the paired rules show <strong>cross-branch dependencies at every level</strong> — <code>bwa_mem2_control [depends: fastp_control, fastp_experiment]</code> and <code>markdup_control [depends: bwa_mem2_control, bwa_mem2_experiment]</code> — because each branch's files must be uniquely named per pair, so every stage waits on both the experiment and control upstream instances before writing its own pair-scoped outputs.</p>
+<h2 id="expected-outputs">Expected Outputs<a class="headerlink" href="#expected-outputs" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Producer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trimmed/{experiment}_R1.fq.gz</code>, <code>trimmed/{control}_R1.fq.gz</code>, …</td>
+<td><code>fastp_experiment</code> / <code>fastp_control</code></td>
+</tr>
+<tr>
+<td><code>aligned/{experiment}.sorted.bam</code>, <code>aligned/{control}.sorted.bam</code></td>
+<td><code>bwa_mem2_experiment</code> / <code>bwa_mem2_control</code></td>
+</tr>
+<tr>
+<td><code>dedup/{experiment}.dedup.bam</code>, <code>dedup/{control}.dedup.bam</code></td>
+<td><code>markdup_experiment</code> / <code>markdup_control</code></td>
+</tr>
+<tr>
+<td><code>recal/{experiment}.recal.bam</code>, <code>recal/{control}.recal.bam</code></td>
+<td><code>bqsr_experiment</code> / <code>bqsr_control</code></td>
+</tr>
+<tr>
+<td><code>variants/{pair_id}.mutect2.vcf.gz</code></td>
+<td><code>mutect2</code></td>
+</tr>
+<tr>
+<td><code>variants/{pair_id}.mutect2.filtered.vcf.gz</code></td>
+<td><code>filter_mutect_calls</code></td>
+</tr>
+<tr>
+<td><code>annotated/{pair_id}.annotated.vcf.gz</code></td>
+<td><code>annotate_somatic</code></td>
+</tr>
+<tr>
+<td><code>reports/{pair_id}_clinical_report.html</code></td>
+<td><code>clinical_report</code></td>
+</tr>
+</tbody>
+</table>
+<p>With the shipped <code>[[pairs]]</code> table, <code>{pair_id}</code> resolves to <code>CASE_001</code> (lung adenocarcinoma) and <code>CASE_002</code> (colorectal).</p>
+<h2 id="whats-next">What's Next?<a class="headerlink" href="#whats-next" title="Permanent link">#</a></h2>
+<ul>
+<li>The single-pair version: <a href="../paired-experiment-control/">Paired Experiment-Control (Single Pair)</a> — the hardcoded, readable variant of this pipeline.</li>
+<li>Field reference: <a href="../../reference/workflow-format/#pairs-experiment-control-pairing-wc-01"><code>pairs</code> — Experiment-Control Pairing (WC-01)</a>.</li>
+</ul>
 <div class="admonition note">
 <p class="admonition-title">Input data and environments</p>
 <p>Input paths under <code>/data/references/...</code> and <code>raw/</code> are placeholders —
-replace them with your own data. The referenced <code>envs/*.yaml</code> specs ship
-in <a href="https://github.com/Traitome/oxo-flow/tree/main/examples/envs"><code>examples/envs/</code></a>.</p>
+replace them with your own data. The <code>validate</code> warnings about missing
+<code>raw/</code> files are expected until real data is staged. The referenced
+<code>envs/*.yaml</code> specs ship in
+<a href="https://github.com/Traitome/oxo-flow/tree/main/examples/envs"><code>examples/envs/</code></a>.</p>
 </div>
 
 
