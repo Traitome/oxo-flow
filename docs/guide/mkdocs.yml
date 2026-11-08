@@ -68,7 +68,7 @@ extra_css:
 # Visit statistics (busuanzi) rendered in the footer copyright slot. The
 # loader script re-injects the counter on Material's instant-navigation
 # events so each page view is counted (see javascripts/busuanzi-stats.js).
-copyright: '<span id="busuanzi_container_site_pv">本站总访问量 <span id="busuanzi_value_site_pv"></span> 次</span>'
+copyright: 'Site visits: <span id="busuanzi_value_site_pv"></span>'
 extra_javascript:
   - javascripts/busuanzi-stats.js
 
