@@ -4290,7 +4290,10 @@ answers with; a server answering with a version this client does not
 understand (<code>2025-06-18</code>, <code>2025-03-26</code>, <code>2024-11-05</code>) fails the session
 closed instead of proceeding against an unvetted dialect. The negotiated
 version is sent back as <code>MCP-Protocol-Version</code> on every subsequent
-request.</p>
+request. If the server terminates the session (HTTP 404 on a request that
+carried <code>Mcp-Session-Id</code>), the client starts a new session with a fresh
+<code>initialize</code> and retries the request once; a server that keeps expiring
+sessions fails the call instead of looping.</p>
 <p>MCP servers requiring bearer authentication read the token from the
 environment — never from a skill manifest, which is attacker-influenced
 text:</p>

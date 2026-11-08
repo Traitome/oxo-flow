@@ -6734,6 +6734,11 @@ signature scheme is configurable:</p>
 <code>400 INVALID_SIGNATURE_SCHEME</code> rather than being silently coerced. The PUT
 response and subsequent GET report the scheme actually stored. The settings
 UI exposes the choice and labels the legacy scheme as compatibility-only.</p>
+<p><code>events</code> is an exact subscription: a terminal run posts only the event it
+actually reached, so <code>["workflow_completed"]</code> stays silent on a failed run
+and <code>["workflow_failed"]</code> stays silent on a successful one. An empty list
+(a saved <code>[]</code>, or a row predating per-event filtering) subscribes to both
+terminal events.</p>
 <p>Validation on <code>PUT</code>: <code>url</code> must parse as an absolute
 <code>http://</code> or <code>https://</code> URL with a host (<code>400 INVALID_URL</code> otherwise — a
 bare <code>https://</code> prefix no longer passes). Enabling delivery requires a
