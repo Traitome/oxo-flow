@@ -221,7 +221,7 @@ oxo-flow env list
 ```
 
 ```
-oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.29.1 — Rust-native bioinformatics pipeline engine
 https://github.com/Traitome/oxo-flow
 Available environment backends:
   ✓ system
@@ -240,7 +240,7 @@ oxo-flow env check my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.29.1 — Rust-native bioinformatics pipeline engine
 https://github.com/Traitome/oxo-flow
   ✓ align (docker)
   ✓ call_variants (conda)

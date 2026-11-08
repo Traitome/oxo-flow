@@ -79,7 +79,7 @@ oxo-flow init my-pipeline --force
 ## Output
 
 ```
-oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.29.1 — Rust-native bioinformatics pipeline engine
 ✓ Created new project at my-pipeline
   my-pipeline/my-pipeline.oxoflow
   my-pipeline/envs/example.yaml

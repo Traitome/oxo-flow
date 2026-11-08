@@ -2588,7 +2588,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "oxo-flow-ai"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-core"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2639,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-desktop"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "anyhow",
  "fs2",
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-web"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
