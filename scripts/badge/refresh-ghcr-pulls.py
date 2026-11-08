@@ -5,7 +5,7 @@ GitHub has no public API for GHCR download counts (the Packages REST API
 requires auth and exposes no download fields; GraphQL has no Package
 statistics either — see badges/shields#5594), but the package page HTML
 embeds both the lifetime total and a 30-day daily series. This script
-scrapes those two numbers and rewrites README.md's badge line in place.
+scrapes those two numbers and rewrites README.md's badge link in place.
 
 Stdlib-only, idempotent: the file is only touched when the rendered label
 actually changes (same value -> no-op), mirroring scripts/refresh-knowledge.
@@ -28,8 +28,6 @@ README = Path(__file__).resolve().parents[2] / "README.md"
 
 FETCH_ATTEMPTS = 3
 FETCH_TIMEOUT_SECS = 90
-
-BADGE_MARKER = "label=ghcr%20pulls"
 
 UA_HEADERS = {"User-Agent": "oxo-flow-badge-refresh/1.0"}
 
@@ -100,26 +98,31 @@ def build_badge(total: int, last_30_days: int) -> str:
 
 
 def replace_badge(readme: str, badge: str) -> tuple[str, bool]:
-    """Replace the existing ghcr pulls badge line, or insert after the
-    docker image badge when absent. Returns (new_readme, changed)."""
-    pattern = re.compile(r"^\[!\[ghcr pulls\]\(.*?\)\]\(.*?\)\n", re.M)
+    """Replace the existing ghcr pulls badge link (badge rows live inside a
+    markdown table, so match the link anywhere in a line, not at line
+    start), or insert it into the Adoption row (falling back to right
+    after the docker image badge) when absent. Returns (new_readme, changed)."""
+    pattern = re.compile(r"\[!\[ghcr pulls\]\([^)]*\)\]\([^)]*\)")
     if pattern.search(readme):
-        new_readme = pattern.sub(badge + "\n", readme, count=1)
+        new_readme = pattern.sub(badge, readme, count=1)
         return new_readme, new_readme != readme
 
+    adoption = re.search(r"\| \*\*Adoption\*\* \|", readme)
+    if adoption:
+        pos = adoption.end()
+        return readme[:pos] + " " + badge + readme[pos:], True
+
     docker_pattern = re.compile(
-        r"^(\[!\[docker image\]\(.*?ghcr\.io.*?\)\]\(.*?\)\n)", re.M
+        r"(\[!\[docker image\]\([^)]*ghcr\.io[^)]*\)\]\([^)]*\))"
     )
     match = docker_pattern.search(readme)
     if not match:
         raise RuntimeError(
-            "docker image badge line not found in README.md; "
-            f"cannot place {BADGE_MARKER_NAME}"
+            "neither the ghcr pulls badge, an Adoption table row, nor a "
+            "docker image badge was found in README.md; cannot place "
+            "ghcr pulls badge"
         )
-    return readme[: match.end(1)] + badge + "\n" + readme[match.end(1) :], True
-
-
-BADGE_MARKER_NAME = "ghcr pulls badge"
+    return readme[: match.end(1)] + " " + badge + readme[match.end(1) :], True
 
 
 def main() -> int:
