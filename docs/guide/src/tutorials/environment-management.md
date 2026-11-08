@@ -62,6 +62,9 @@ dependencies:
 
 oxo-flow activates the conda environment before running the rule's shell command and deactivates it afterward.
 
+!!! tip "How activation works"
+    The command runs via `conda run --no-capture-output -n <env-name>`, where `<env-name>` is the `name:` from your YAML plus a short content-hash suffix for file specs — identical YAML content reuses the same environment, even across workflows. Task-oriented recipes (pull policy, image retries) live in [Use Environments](../how-to/use-environments.md).
+
 ---
 
 ## Mamba

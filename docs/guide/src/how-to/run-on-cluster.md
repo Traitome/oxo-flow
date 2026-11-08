@@ -396,34 +396,22 @@ On clusters, the scheduler enforces resources based on the generated directives.
 
 ---
 
-## Web UI: Remote Execution over SSH
+## Browser-Based Cluster Monitoring
 
-The web system can execute runs on a cluster login node while the server
-itself lives elsewhere (your laptop, a lab server, a container):
+The web UI can also drive cluster execution without a terminal: register
+an SSH cluster connection on the **Clusters** page (or the platform config
+file's `[[clusters]]` section), then pick *Execute on cluster* in the Run
+dialog. The workdir is staged to the remote host, `oxo-flow run` is
+launched there detached, and logs/files/report views work exactly as for
+local runs once the results are pulled back. The remote host needs the
+`oxo-flow` CLI on `PATH`, `tar`, and non-interactive SSH access (key
+auth, `BatchMode`).
 
-1. **Register the connection** — Clusters page (or the platform config
-   file's `[clusters]` section): SSH host, port, user, optional SSH key
-   (a path or the key material itself), scheduler hint, and a
-   `remote_dir` for staged runs. Probe verifies connectivity and detects
-   the scheduler (slurm/pbs/sge/lsf) from the remote's installed binaries.
-2. **Run with `cluster_id`** — the Run dialog's *Execute on cluster*
-   selector (or `cluster_id` in `POST /api/runs`).
-3. **What happens** — the workdir is staged to
-   `{remote_dir}/runs/{run_id}` over a tar stream (no rsync needed); a
-   per-run wrapper launches `oxo-flow run` fully detached (its own
-   session via `setsid`, with `nohup` fallback), so the launch SSH call
-   returns immediately while the workflow keeps running; the server polls
-   the remote `.exit-code` every 5s; on completion the whole workdir
-   (logs, checkpoint, results) is pulled back, so the web logs, files,
-   preview, and report views work exactly as for local runs. Cancel kills
-   the wrapper's recorded process group, so the CLI and every rule
-   subprocess stop instead of being orphaned.
-
-Requirements on the remote host: the `oxo-flow` CLI on `PATH` (any recent
-release), `tar`, and non-interactive SSH access (key auth, `BatchMode`).
-Cluster connection management (upsert/delete) is admin-only outside
-personal mode — in team and hpc mode (they hold shared SSH credentials);
-every run remains owned by the acting user.
+Cluster connection management is admin-only outside personal mode.
+Details: [Cluster Connections & Remote
+Execution](../reference/web-api.md#cluster-connections-remote-execution)
+in the REST API reference, and [Deploy modes](deploy-modes.md#mode-3-hpc)
+for the HPC serve mode.
 
 ## Monitoring Jobs
 
@@ -500,13 +488,6 @@ remains required and is validated the same strict way.
 
 ---
 
-## See Also
-
-- [Architecture: Cluster backends](../reference/architecture.md) — internal cluster module design
-- [Environment System](../reference/environment-system.md) — Singularity and Docker on HPC
-- [`run` command](../commands/run.md) — `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir`
-- [`cluster` command](../commands/cluster.md) — cluster submission reference
-
 ## Scheduling Fairness
 
 Cluster submission honors the same fairness contract as local execution:
@@ -528,3 +509,10 @@ Cluster submission honors the same fairness contract as local execution:
   design — the pool lives on the scheduler, not in the engine.
 
 ---
+
+## See Also
+
+- [Architecture: Cluster backends](../reference/architecture.md) — internal cluster module design
+- [Environment System](../reference/environment-system.md) — Singularity and Docker on HPC
+- [`run` command](../commands/run.md) — `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir`
+- [`cluster` command](../commands/cluster.md) — cluster submission reference

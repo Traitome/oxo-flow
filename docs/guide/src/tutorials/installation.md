@@ -18,27 +18,27 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 
 ## Option 1 — Install with Cargo (recommended)
 
-=== "Install Rust Toolchain First"
+### Step 1 — Install the Rust toolchain
 
-    If you don't have Rust installed, use the official installer:
+If you don't have Rust installed, use the official installer:
 
-    ```bash
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    source "$HOME/.cargo/env"
-    ```
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
 
-=== "Install oxo-flow"
+### Step 2 — Install oxo-flow
 
-    ```bash
-    cargo install oxo-flow-cli
-    ```
+```bash
+cargo install oxo-flow-cli
+```
 
-    This builds the latest published release and places the `oxo-flow` binary in `~/.cargo/bin/`.
+This builds the latest published release and places the `oxo-flow` binary in `~/.cargo/bin/`.
 
-    **Verify PATH**: Ensure `~/.cargo/bin/` is in your `$PATH`. You can check with:
-    ```bash
-    echo $PATH | grep -q ".cargo/bin" || echo 'Add to PATH: export PATH="$HOME/.cargo/bin:$PATH"'
-    ```
+**Verify PATH**: Ensure `~/.cargo/bin/` is in your `$PATH`. You can check with:
+```bash
+echo $PATH | grep -q ".cargo/bin" || echo 'Add to PATH: export PATH="$HOME/.cargo/bin:$PATH"'
+```
 
 Verify the installation:
 
@@ -126,7 +126,7 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 Images are published to GitHub Container Registry automatically on every release and every push to `main`.
 Release images are multi-arch (`linux/amd64` + `linux/arm64`) and are assembled from the
 SHA256-verified release binaries. `:latest` moves only after the release image passes a health
-smoke test, `:<major.minor>` (e.g. `:0.17`) tracks the newest patch of a minor line, and `:main`
+smoke test, `:<major.minor>` (e.g. `:0.29`) tracks the newest patch of a minor line, and `:main`
 is a multi-arch dev build compiled from source:
 
 ```bash
@@ -141,6 +141,9 @@ docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.29
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
   oxo-flow run my-pipeline.oxoflow
 ```
+
+!!! note "Port 3000 vs 8080"
+    The Docker image (and the standalone `oxo-flow-web` binary it runs) serves the Web UI on **3000** by default, while the native `oxo-flow serve` command defaults to **8080**. Both honor the `OXO_FLOW_PORT` environment variable and a `--port` flag, so you can align them if you run both.
 
 !!! note "Data persistence"
     The server stores its database in `/app/data` inside the container. Mount a

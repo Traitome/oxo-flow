@@ -39,6 +39,7 @@ If your workflow isn't running as expected, check these common items first:
 ### "Validate fails with parse error"
 
 **Symptom**: `oxo-flow validate workflow.oxoflow` shows TOML syntax errors
+(e.g. `parse error in workflow.oxoflow: ...`)
 
 **Common TOML mistakes**:
 
@@ -48,24 +49,14 @@ If your workflow isn't running as expected, check these common items first:
 | Wrong array syntax | `[rules]` | `[[rules]]` |
 | Unclosed string | `shell = "echo` | `shell = "echo hello"` |
 | Invalid table header | `[[rule]]` | `[[rules]]` |
+| Unmatched brackets or braces | `input = ["a.fq"` | `input = ["a.fq"]` |
 
-Use the [TOML primer](../reference/workflow-format.md#toml-primer) for syntax basics.
+Use `oxo-flow validate workflow.oxoflow` to get detailed error messages, and
+the [TOML primer](../reference/workflow-format.md#toml-primer) for syntax basics.
 
 ---
 
 ## Workflow Parsing Errors
-
-### TOML syntax error
-
-**Symptom**: `parse error in workflow.oxoflow: ...`
-
-**Solution**: Check your TOML syntax. Common mistakes:
-
-- Missing quotes around string values
-- Incorrect array-of-tables syntax (use `[[rules]]`, not `[rules]`)
-- Unmatched brackets or braces
-
-Use `oxo-flow validate workflow.oxoflow` to get detailed error messages.
 
 ### Duplicate rule names
 

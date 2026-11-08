@@ -2,10 +2,10 @@
 
 This guide provides practical recipes for the environment backends supported
 by oxo-flow. The engine ships eight backends: `conda`, `mamba`, `pixi`,
-`docker`, `singularity`, `venv`, and `modules` (plus the implicit `system`
-fallback when a rule declares no environment). Recipes below cover the most
-commonly used ones; `mamba` uses the same YAML syntax as `conda`, and
-`modules` takes a list of HPC module names.
+`docker`, `singularity`, `venv`, `modules` (HPC environment modules), and
+`system` (the implicit fallback when a rule declares no environment).
+Recipes below cover the most commonly used ones; `mamba` uses the same YAML
+syntax as `conda`, and `modules` takes a list of HPC module names.
 
 ---
 
@@ -20,8 +20,8 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - bwa=0.7.17
-  - samtools=1.19
+  - bwa=0.7.19
+  - samtools=1.24
   - picard=3.1.1
 ```
 
@@ -185,7 +185,7 @@ shell = "python scripts/plot.py --input results.csv --output plot.png"
 ```toml
 [[rules]]
 name = "align"
-environment = { docker = "biocontainers/bwa:0.7.17" }
+environment = { docker = "biocontainers/bwa:0.7.19--h577a1d6_1" }
 # ...
 
 [[rules]]
@@ -203,6 +203,18 @@ name = "report"
 environment = { venv = "venv/", venv_requirements = "envs/requirements.txt" }
 # ...
 ```
+
+---
+
+## Mamba and HPC Modules
+
+The `mamba` backend uses the exact same YAML format as `conda` with a faster
+solver (and falls back to conda when only conda is installed); the `modules`
+backend loads HPC environment modules (`Lmod`/Environment Modules) before the
+rule's shell command. Both have dedicated walkthroughs in the
+[Environment Management tutorial](../tutorials/environment-management.md#mamba)
+— see its [HPC Modules](../tutorials/environment-management.md#hpc-modules)
+section for `modules = ["gcc/11.2.0", …]` recipes.
 
 ---
 
