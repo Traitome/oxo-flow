@@ -61,6 +61,9 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | `1` | Rendering/usage error (e.g. unsupported format, multiple `[report].format` entries under `--strict`, `--diff` without both checkpoints) |
 | `2` | Data source unavailable — under `--strict` when the checkpoint is missing or the configured template fails to render |
 
+The general `run`/`dry-run` exit-code contract (0 success, 1 failure) is
+documented in [`run`](run.md#exit-codes).
+
 ---
 
 ## Workflow discovery
@@ -227,16 +230,11 @@ oxo-flow report pipeline.oxoflow --versions-yml -
 oxo-flow report pipeline.oxoflow --versions-yml versions.yml
 ```
 
-Emits an nf-core-style `versions.yml` (also rendered as the report's
-`software-versions` section): for every rule, what the workflow
-**declares** — docker `image:tag` (registry kept as its own field), module
-`(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
-files with sha256 content hashes (a bare `venv` directory path is
-recorded as declared, without a hash — there is no file to hash). The
-engine never executes anything to produce this data, so
-resolved runtime package versions are **not** recorded — every entry
-carries that caveat. Environment resolution follows the usual precedence
-(env_group > rule.environment > defaults.environment).
+Emits an nf-core-style `versions.yml` — the same data as the report's
+[`software-versions` section](#software-versions-software-versions-versions-yml),
+which documents the per-backend fields, the declared-not-executed caveat,
+and the environment precedence (env_group > rule.environment >
+defaults.environment).
 
 ---
 

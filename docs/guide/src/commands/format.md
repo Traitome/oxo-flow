@@ -27,11 +27,11 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 | `--output` | `-o` | in place | Write formatted output to this path instead of rewriting the input file |
 | `--check` | — | — | Check if the file is already formatted (exit non-zero if not) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
-| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--quiet` | — | — | Suppress informational output — the version banner is omitted; the `Formatted workflow written to …` confirmation, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | — | — | Disable colored output |
 
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify`.
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify` (see [`init`](init.md#options) for the canonical note).
 
 ---
 

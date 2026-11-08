@@ -29,9 +29,11 @@ oxo-flow export [OPTIONS] <WORKFLOW>
 | `--output` | `-o` | stdout | Output file path |
 
 In addition, all global flags apply: `--verbose` / `-v` (debug-level
-logging), `--quiet` (suppress informational output), and `--no-color`
-(disable colored output; also respects the `NO_COLOR` environment
-variable).
+logging), `--quiet` (suppress informational output — the version banner is
+omitted; the emitted Docker/Singularity packaging files and the report,
+errors, and warnings are unaffected; verified: output is byte-identical
+with `--quiet`), and `--no-color` (disable colored output; also respects
+the `NO_COLOR` environment variable).
 
 ---
 

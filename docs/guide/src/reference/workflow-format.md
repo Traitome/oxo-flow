@@ -706,7 +706,7 @@ memory = "32G"
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
 | `optional` | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
 | `benchmark` | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
-| `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs |
+| `log` | String | No | Log file path for the rule's log. The engine creates its parent directory, expands `{config.x}`/wildcards in the path, and wires the `{log}` placeholder in the shell (rendered workdir-relative; absolute under `scratch = true`) — but **populating the file is the rule's job**, typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr (the captured stdout/stderr tails live in the checkpoint's `rule_runs` regardless). A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs |
 | `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run |
 | `input_function` | String | No | Declared function name for dynamic input resolution — **not yet called**: the engine performs no dynamic input resolution, so the input list stays exactly as declared, and `lint` flags every use with `W036`. Declare inputs statically (`input`, glob inputs, `expand_inputs`) instead |
@@ -1519,7 +1519,7 @@ executing a doomed shell command on missing files.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `log` | String | File path for capturing rule stdout/stderr |
+| `log` | String | File path for the rule's log. The engine only expands the `{log}` placeholder in the shell (rendered workdir-relative; absolute under `scratch = true`) and creates the file's parent directory — populating the file is the rule's job, typically `2> {log}` (stderr) in the shell |
 | `benchmark` | String | Per-instance benchmark file — the engine writes its sampled metrics as JSON here after the rule completes |
 
 ```toml
@@ -1527,6 +1527,7 @@ executing a doomed shell command on missing files.
 name = "align"
 log = "logs/align_{sample}.log"
 benchmark = "benchmarks/align_{sample}.json"  # per-instance JSON, written by the engine
+shell = "bwa mem ... 2> {log}"
 ```
 
 ### Job Grouping and Caching
@@ -1684,12 +1685,17 @@ repair is a distinct variable name for the aggregation reading, or keying
 the outputs by the table's wildcard for a genuine per-entry rule:
 
 ```toml
-[[values]]
-name = "chr"
-values = ["chr1", "chr2", "chr3"]
+# Full example — namespace-collision with [[values]] tables (copy-paste runnable)
+[workflow]
+name = "chr-collision-demo"
+version = "1.0.0"
 
 [config]
 chrom_list = ["chr1", "chr2", "chr3"]   # the aggregation binding's source
+
+[[values]]
+name = "chr"
+values = ["chr1", "chr2", "chr3"]
 
 # WRONG: 'chr' is the [[values]] table — the rule fans into 3 instances
 # per pair, every one writing the SAME vcf.raw/{pair_id}.vcf.gz and racing
@@ -1697,6 +1703,7 @@ chrom_list = ["chr1", "chr2", "chr3"]   # the aggregation binding's source
 name = "merge_chr_vcfs_bad"
 expand_inputs = [{ pattern = "vcf.call/{chr}/{pair_id}.vcf.gz" }]
 output = ["vcf.raw/{pair_id}.vcf.gz"]
+shell = "bcftools concat {input} > {output[0]}"
 
 # RIGHT (aggregation): bind the dimension through `variables` instead —
 # the pattern expands to ALL entries inside ONE instance ({input} is the
@@ -1708,11 +1715,23 @@ expand_inputs = [
     variables = { chrom = "config.chrom_list" } }
 ]
 output = ["vcf.raw/{pair_id}.vcf.gz"]
+shell = "bcftools concat {input} > {output[0]}"
 
 # RIGHT (scatter): keep the bare table wildcard, but key the outputs by it
 [[rules]]
 name = "call_chr"
 output = ["vcf.call/{chr}/{pair_id}.vcf.gz"]
+shell = "bcftools call -v -o {output[0]}"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "P1_T"
+control = "P1_N"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "P2_T"
+control = "P2_N"
 ```
 
 The two "RIGHT" forms differ in cardinality: the `variables`-bound
@@ -1759,6 +1778,7 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{effective_memory_mb}` | Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget. Use it for JVM flags (`-Xmx{effective_memory_mb}m`, `-Xms…`) so tools size themselves to the box instead of OOM-ing on hardcoded HPC values (`-Xmx29491M` class). Unset memory renders as the machine's full total |
 | `{log}` | Path of the rule's `log` field (every instance wildcard — `{sample}`, `{pair_id}`, `{assembler}` … — and `{config.x}` are expanded per instance; the parent directory is created automatically) |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
+| `{meta.<column>}` | Per-sample metadata column bound when an instance set is grouped by `metadata_file` / `[metadata]` columns (see [Sample Metadata](#sample-metadata-metadata_file) and [Grouping by metadata column](#grouping-by-metadata-column)) — addressed in any rule's `input`, `output`, `shell`, or `when` |
 | `{wildcard.*}` | Per-instance binding under the same grammar as `when` conditions — sample-group `metadata` keys (e.g. `{wildcard.umi1_pattern}`) and expansion keys. Unbound keys render as their literal brace token |
 
 **Why the effective pair exists** — `{threads}`/`{memory}` render the
@@ -3059,6 +3079,8 @@ bwa mem -t {threads} ref.fa {input} | \
 
 ## Complete Example
 
+A minimal three-rule skeleton — the smallest full-pipeline shape to copy and adapt:
+
 ```toml
 [workflow]
 name = "ngs-pipeline"
@@ -3428,8 +3450,8 @@ Notes:
   the process working directory — unlike the config value, which anchors
   to the workflow file's directory.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
-  per-instance values) fires only with full instance attribution
-  (full instance attribution): the recorded instance combos from
+  per-instance values) fires only with full instance attribution:
+  the recorded instance combos from
   `checkpoint.output_pattern_domains` are expanded to concrete paths, and
   every combo must resolve and every consumer (detected structurally —
   pattern producers register no DAG edges) must be completed before any

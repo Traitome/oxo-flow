@@ -4,8 +4,8 @@ Manage cluster job submission and monitoring.
 
 > **Everyday path:** `run --profile <NAME>` submits to a scheduler and
 > tracks jobs to completion when the profile carries a `[cluster]` block —
-> see [Cluster submission](run.md#cluster-submission). The commands below
-> remain the manual escape hatch: inspect scripts before submitting,
+> see [Cluster submission](#cluster-submission-run-profile). The commands
+> below remain the manual escape hatch: inspect scripts before submitting,
 > or cancel/collect jobs after an interrupted run.
 
 ---
@@ -418,6 +418,189 @@ the whole array — a pipelining win on straight scatter chains (measured
 ready-batch `afterok` dependency: fan-in (multiple dependencies), mismatched
 index ranges, scalar↔array mixes, or a non-array upstream. A `%throttle`
 suffix does not block the match — it bounds concurrency, not the index set.
+
+---
+
+## Cluster submission (`run --profile`)
+
+A profile that also carries a `[cluster]` block makes `run --profile` submit
+to a scheduler instead of executing locally:
+
+```toml
+# profiles/slurm.toml
+[cluster]
+backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch
+partition     = "compute"
+account       = "lab01"
+walltime      = "24h"        # a rule's own time_limit wins
+max_submitted = 50           # jobs in flight at once
+poll_interval = "30s"
+extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim directives
+
+[config]
+reference = "/data/ref/hg38.fa"
+```
+
+Keys the profile omits fall back to the driver defaults: `max_submitted`
+50, `max_array_size` 1001, `poll_interval` 5s — the authoritative
+[`DriverConfig` table](../reference/execution-backends.md#backenddriver)
+carries the complete knob list. `extra_args` entries are
+emitted as scheduler directives verbatim and are not validated — a typo
+reaches the scheduler as written.
+
+```bash
+oxo-flow run pipeline.oxoflow --profile slurm
+
+# one-off override of the profile's queue cap
+oxo-flow run pipeline.oxoflow --profile slurm --max-submitted 100
+```
+
+Profiles are looked up in the **workflow's own** `profiles/` directory —
+there is no user- or system-level profile location, so a site profile shared
+across a lab is copied into each workflow (or kept in the workflow
+repository) rather than installed once per machine.
+
+Both conditions are required: a `[cluster]` block must be in effect **and**
+a profile must be named. A profile with only `[config]` keeps the local
+path, and a workflow carrying its own `[cluster]` block still runs locally
+until you pass `--profile`, so adding one never changes an existing run.
+
+Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
+jobs, and dependencies are chained per instance. The run submits at most
+`max_submitted` jobs at a time, tracks them to completion, and writes the
+checkpoint exactly as a local run does — `status`, `resume`, and re-run
+invalidation behave identically, and a second `run --profile slurm` with
+nothing changed submits nothing.
+
+The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
+#907) travels onto the cluster too: every submitted job script exports
+`TMPDIR`/`TMP`/`TEMP` to the resolved directory before the rule's command
+runs (issue #1013). Cluster jobs start from the scheduler's clean
+environment, so the exports are baked into each job's rendered command —
+after the workdir `cd` guard and outside the environment wrapper, so
+wrapped child processes (`conda run`, `pixi run`, venv activation) and
+tools honoring `TMPDIR` all land in the scratch volume. The directory must
+exist on the shared filesystem the nodes see; it is created on the submit
+host at run start (the same fail-fast mkdir the local path performs) and
+the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
+
+Like `localrule = true` and `checkpoint = true`, the `scratch = true`
+directive is local-executor-only: workflows whose runnable rules declare it
+are **rejected at plan time** on the cluster path (naming every offender)
+instead of silently running those jobs in the shared workdir, where tools
+writing fixed filenames collide across concurrent instances. See
+[Scratch tier ladder](../reference/workflow-format.md#scratch-tier-ladder).
+
+### Job arrays
+
+Same-template instances that are ready together and agree on every
+scheduler-visible directive (threads, memory, time limit, partition,
+account, GPU spec, environment, workdir) are grouped into **one scheduler
+array** automatically:
+
+```toml
+[cluster]
+backend        = "slurm"
+max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
+                        # scatter groups are chunked into several arrays
+```
+
+- One submission instead of N `sbatch`/`qsub` calls — one queue entry that
+  expands internally (SLURM `--array=1-N`, PBS `-J`, SGE `-t`,
+  LSF `-J "name[1-N]"`).
+- Array elements are tracked individually: per-instance job directories
+  stay greppable (`jobs/<instance>/job.sh` + `job.id` + `status.json`),
+  and `index.json` in the run directory maps each array index back to its
+  instance, so the array never leaks into the human-facing layout.
+- Instances that differ on any directive fall out of the group and submit
+  as single jobs — heterogeneity degrades gracefully.
+- Arrays are transport-level: the JobRecord set, checkpoint, and resume
+  semantics are identical to per-job submission.
+
+Element-wise `aftercorr` chaining is not part of the run-path slice:
+downstream instances submit in ready batches as array elements finish,
+which is correct but not as queue-efficient as true element-wise chaining.
+The `--with-dependencies` wrapper above *does* chain straight scatter
+arrays element-wise (see
+[Element-wise array chaining (SLURM)](#element-wise-array-chaining-slurm)).
+
+### Run directory layout
+
+Each run leaves a directory you can navigate with ordinary tools:
+
+```console
+.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest
+  events.jsonl                        # append-only submit/complete/fail log
+  index.json                          # array index → instance name
+  jobs/<rule>/job.sh                  # the exact script submitted
+  jobs/<rule>/job.id                  # scheduler job id
+  jobs/<rule>/status.json
+```
+
+Every `events.jsonl` line carries an RFC 3339 `ts`, so the log reconstructs
+a timeline rather than just an ordering:
+
+```json
+{"ts":"2026-08-17T14:30:05.114Z","t":"SUBMITTED","rule":"align_S1","job":"4812345"}
+{"ts":"2026-08-17T15:02:44.907Z","t":"COMPLETED","rule":"align_S1","job":"4812345"}
+```
+
+### What a finished job records
+
+When a job leaves the queue, oxo-flow reads the scheduler's accounting store
+(`sacct`, `qstat -x -f`, `qacct`, `bacct`) and writes what it found into
+`status.json`:
+
+```json
+{
+  "state": "COMPLETED",
+  "job_id": "4812345",
+  "command": "bwa mem ref.fa data/S1.fq > aln/S1.bam",
+  "submitted_at": "2026-08-17T14:30:05.114Z",
+  "finished_at": "2026-08-17T15:02:44.907Z",
+  "queue_wait_secs": 65,
+  "exit_code": 0,
+  "elapsed_secs": 1894,
+  "max_rss_mb": 24680,
+  "cpu_seconds": 14203
+}
+```
+
+`queue_wait_secs` is submit-to-finish minus the scheduler's own elapsed
+time — the driver never observes the moment a job starts, so the split
+between waiting and working is only available by subtraction. The same
+`elapsed_secs` is what `benchmarks.wall_time_secs` records in the
+checkpoint, which therefore measures runtime rather than runtime plus queue
+wait, and `max_rss_mb` / `cpu_seconds` populate the same benchmark fields a
+local run fills from its own sampler.
+
+How much of this appears depends on the site. Accounting is a deployment
+choice: a SLURM cluster without `slurmdbd` answers `sacct` with nothing, and
+LSF's `bacct` columns vary too much between versions to parse blind, so LSF
+records state only. Fields the store did not report are omitted rather than
+guessed — including `exit_code`, which stays absent for a failed job whose
+real code could not be read, instead of defaulting to `1`.
+
+Outputs, the working directory, and logs are assumed to live on storage
+shared between the submitting host and the compute nodes.
+
+Interrupting a cluster run cancels its in-flight scheduler jobs: on
+Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
+every job still in the queue or running, records each interrupted rule as
+failed with an `interrupted by <SIG...>` skip reason, and exits with
+`128 + <signal number>` — the same shape the local executor reports.
+Signals are watched on the cluster path only; the local executor has its
+own (pre-existing) signal handling.
+
+What remains out of scope is *re-attaching*: a driver that died without a
+signal (crash, OOM) cannot adopt the scheduler job ids of a previous
+process. Those jobs keep running under the scheduler, and a subsequent
+`resume` / `--resume-failed` re-queues their rules from the checkpoint's
+RUNNING entries rather than reusing the live job ids — completed work on
+shared storage is still honored by the invalidation analysis. Until a
+re-attach path exists, use `oxo-flow cluster status` (no ids: lists your
+queued jobs) and `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean
+up jobs orphaned by a crashed driver.
 
 ---
 

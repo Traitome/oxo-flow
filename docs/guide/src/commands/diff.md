@@ -24,9 +24,10 @@ oxo-flow diff <WORKFLOW_A> <WORKFLOW_B>
 ## Global Options
 
 Like all oxo-flow commands, `diff` accepts the global flags `--verbose` /
-`-v` (debug-level logging), `--quiet` (suppress informational output), and
-`--no-color` (disable colored output; also respects the `NO_COLOR`
-environment variable).
+`-v` (debug-level logging), `--quiet` (suppress informational output — the
+version banner is omitted; the `Diff:` report and the exit code are
+unaffected), and `--no-color` (disable colored output; also respects the
+`NO_COLOR` environment variable).
 
 ---
 

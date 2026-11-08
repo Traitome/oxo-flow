@@ -132,7 +132,10 @@ loop. The steps:
   correction-round budget (default from `[ai]` config, 10 when unset —
   knowledge lookups and the correction pass share the budget, exploration-
   heavy models spend 7–10 rounds before drafting, and the loop stops as
-  soon as a draft validates). When the first half of that budget burns on
+  soon as a draft validates). This is the **generation-side** budget; the
+  recovery-side flag of the same name on `run`/`dry-run`/`resume` defaults
+  to 1 and bounds failed-call recovery attempts instead (see
+  [`run`](run.md#options)). When the first half of that budget burns on
   consecutive rounds whose assistant turns were pure tool calls (zero
   prose), the orchestrator nudges once: a warning rides the next tool
   result telling the model to consolidate what it has found and start

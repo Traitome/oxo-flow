@@ -28,7 +28,7 @@ oxo-flow init [OPTIONS] <NAME>
 | `--force` | — | off | Overwrite an existing workflow file (its current contents are lost) |
 | `--agent` | — | off | Also scaffold agent docs: `AGENTS.md`, `CLAUDE.md`, and the full `SKILL.md` manual ([agent-docs](./agent-docs.md)) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
-| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--quiet` | — | — | Suppress informational output (the version banner and scaffold listings are omitted; errors and warnings are unaffected) |
 | `--no-color` | — | — | Disable colored output |
 
 

@@ -59,7 +59,7 @@ not list (extras).
 | `--from <MD5_FILE>` | md5 sidecar to verify against, in `md5sum` text format |
 | `--json` | Emit a machine-readable JSON document on stdout; the human report stays on stderr |
 | `-v, --verbose` | Enable verbose (debug-level) logging |
-| `--quiet` | Suppress non-essential output (errors only) |
+| `--quiet` | Suppress informational output — the version banner is omitted; the verification report, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | Disable colored output (also respects `NO_COLOR`) |
 
 ## Exit Code
@@ -68,6 +68,8 @@ not list (extras).
 any listed file mismatches, is missing, or is unlisted — so the command drops
 straight into scripts and post-recovery gates. (An empty sidecar — zero
 listed files — reports a note and exits `0` without scanning for extras.)
+The shared CLI exit-code contract (what `0`/`1`/`2` mean across commands)
+is documented on [`run`](run.md#exit-codes).
 
 ## Examples
 

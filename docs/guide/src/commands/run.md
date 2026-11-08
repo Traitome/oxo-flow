@@ -17,7 +17,21 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
-| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE` and `--KEY=VALUE` work for any key; the `--KEY VALUE` space form also works for any key present in `[config]` (plain `key = "value"` entries included) — a key absent from `[config]` is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd `--key=val` after the workflow still sets a config var, so prefer the `=` forms for undeclared keys). An override key that differs from a declared key only by hyphens vs underscores is canonicalized onto the declared spelling — `--api-token=x` sets the declared key `api_token` (and inherits its `sensitive` masking); keys matching nothing declared keep the literal spelling |
+| `[KEY=VALUE]...` | Direct config overrides (see [Config overrides](#config-overrides)) |
+
+### Config overrides
+
+`KEY=VALUE` and `--KEY=VALUE` work for any key; the `--KEY VALUE` space form
+also works for any key present in `[config]` (plain `key = "value"` entries
+included) — a key absent from `[config]` is a hard error (an unknown flag
+would otherwise be indistinguishable from a mistyped option; a typo'd
+`--key=val` after the workflow still sets a config var, so prefer the `=`
+forms for undeclared keys).
+
+An override key that differs from a declared key only by hyphens vs
+underscores is canonicalized onto the declared spelling — `--api-token=x`
+sets the declared key `api_token` (and inherits its `sensitive` masking);
+keys matching nothing declared keep the literal spelling.
 
 ---
 
@@ -27,7 +41,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 |---|---|---|---|
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
-| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (`command`, `status`, `results` counts, `resources`). The document is emitted on **every** exit path — completed, failed, and aborted (preflight failures, budget breaches, cluster runs, plain-failure aborts) — so `--json` consumers never get zero bytes. `status` is `"completed"` only when the run finished with zero required failures; every other exit is `"failed"`. Human progress and result output on stderr is **not** suppressed — this flag appends the summary, it does not switch the run to machine-only mode. `resources` lists every benchmarked rule (`rule`, `status`, `wall_time_secs`, `peak_rss_mb`, `cpu_seconds`, `retries`) — the same data as the report's Benchmarks table; it is empty on aborted paths and on cluster runs (use the report's sacct-based Resource Accounting section there) |
+| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (see [JSON summary](#json-summary)) |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
@@ -48,7 +62,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
-| `--ai-max-retries` | — | — | Maximum AI attempts for recovery when a call fails (default: 1; only a failed call is retried) |
+| `--ai-max-retries` | — | `1` | Maximum AI recovery attempts when a `--ai-recover` call fails (only a failed call is retried). This bounds **recovery** attempts; the generation-side `--ai-max-retries` on [`template`](template.md) (default 10, bounding orchestrator rounds) is a separate knob |
 | `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
@@ -56,8 +70,125 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
 | `--strict-envs` | — | — | Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see [Stale pixi.lock fallback](#stale-pixilock-fallback)) — for GxP-style deployments that must never run on a re-solved environment |
 | `--verbose` | `-v` | — | Enable debug-level logging |
-| `--quiet` | — | — | Global log-level flag: suppresses `info`-level log lines and the banner. Run progress and the summary are printed regardless |
+| `--quiet` | — | — | Suppress informational output — progress rendering, DAG listings, and per-rule completion lines are omitted; errors, warnings, and machine-readable output (`--json`) are unaffected |
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
+
+### JSON summary (`--json`)
+
+The document carries `command`, `status`, `results` counts, and `resources`.
+It is emitted on **every** exit path — completed, failed, and aborted
+(preflight failures, budget breaches, cluster runs, plain-failure aborts) —
+so `--json` consumers never get zero bytes. `status` is `"completed"` only
+when the run finished with zero required failures; every other exit is
+`"failed"`.
+
+Human progress and result output on stderr is **not** suppressed — this flag
+appends the summary, it does not switch the run to machine-only mode.
+
+`resources` lists every benchmarked rule (`rule`, `status`,
+`wall_time_secs`, `peak_rss_mb`, `cpu_seconds`, `retries`) — the same data
+as the report's Benchmarks table; it is empty on aborted paths and on
+cluster runs (use the report's sacct-based Resource Accounting section
+there).
+
+### Quick reference
+
+Common flags at a glance — every flag is documented in the
+[Options](#options) table above and the sections below.
+
+| Goal | Flags |
+|---|---|
+| Dry-run first / inspect the plan | [`dry-run`](dry-run.md) before `run` |
+| Parallelism and failure handling | `--jobs`, `--keep-going`, `--retry`, `--timeout` |
+| Run part of the workflow | `--target` / `-t`, `--from-rule`, `--module` |
+| Resume after failure | `--resume-failed`, or the [`resume`](resume.md) command |
+| Select samples | `--samples` (see [Incremental data arrival](#incremental-data-arrival-samples-ready)) |
+| Force re-execution | `--rerun` |
+| Config values from the command line | `[KEY=VALUE]...` positionals, `--arg KEY=VALUE` (see [Config overrides](#config-overrides)) |
+| Execution profile / cluster | `--profile`, `--max-submitted` (see [Cluster submission](#cluster-submission)) |
+| Resource budgets | `--max-threads`, `--max-memory` |
+| Machine-readable output | `--json` (see [JSON summary](#json-summary)) |
+| Output checksums | `--provenance` |
+| Run detached | `--background` |
+| Quieter output | `--quiet`, `--verbose`, `--no-color` |
+
+---
+
+## Output
+
+```
+oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
+DAG: 5 rules in dependency order
+  1. fastqc
+  2. trim_reads
+  3. bwa_align
+  4. sort_bam
+  5. call_variants
+⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
+  ✓ fastqc (2.1s)
+  ✓ trim_reads (15.0s)
+  ✓ bwa_align (42.3s)
+  ✓ sort_bam (10.2s)
+  ✓ call_variants (8.4s)
+
+Done: 5 succeeded, 0 skipped, 0 failed
+✓ 5 output files verified (118.3MB total)
+```
+
+A progress bar shows execution progress with:
+
+- Elapsed time
+- Current position / total rules
+- Estimated time remaining (ETA), plus the rule currently executing
+- The final summary line reports succeeded / skipped / failed counts
+
+### Module-grouped output
+
+Workflows composed from `[[include]]` modules group the plan listing and the
+`--keep-going` failure summary under module headers, so a composed pipeline
+reads as module → rule instead of one long flat list:
+
+```
+DAG: 6 rules in dependency order
+  Preprocessing — 2 rules
+    1. fastqc
+    2. trim_reads
+  Alignment — 3 rules
+    3. bwa_align
+    4. sort_bam
+    5. markdup
+  Main workflow — 1 rule
+    6. report_summary
+```
+
+- Rules from a module file (`[[include]]`) collect under their module's
+  display title; rules declared in the main file land under `Main workflow`
+- Attribution is the same logic the metro graph export uses: a
+  `module::rule` namespace prefix wins, then member matching; host rules
+  that merely extend a member's name may land in that module's group (a
+  display-only quirk — edges and execution are unaffected)
+- Group order follows first appearance in the execution order, and the
+  per-rule numbers stay a single global sequence so plan position remains
+  greppable
+- Workflows without modules keep the flat listing above byte-for-byte —
+  grouping is opt-in by structure, not a flag
+
+The failure summary groups the same way:
+
+```
+Failed rules:
+  Germline (1):
+    ✗ haplotype_caller — exit code 1
+
+Blocked rules (did not run):
+  Germline (1):
+    ⊘ joint_genotyper — depends on 'haplotype_caller'
+  Main workflow (1):
+    ⊘ qc_report — depends on 'joint_genotyper'
+```
+
+Per-line shapes (`✗ name — reason`, `⊘ name — depends on 'dep'`) are
+unchanged, so tooling that parses run logs keeps working.
 
 ---
 
@@ -507,102 +638,23 @@ profile file exists but its TOML fails to parse or merge.
 #### Cluster submission
 
 A profile that also carries a `[cluster]` block makes `run --profile` submit
-to a scheduler instead of executing locally:
+to a scheduler instead of executing locally: the run expands rules into
+per-instance jobs, submits at most `max_submitted` at a time (grouped into
+scheduler arrays where possible), tracks them to completion, and writes the
+checkpoint exactly as a local run does. Both conditions are required — a
+`[cluster]` block in effect **and** a profile named; adding either one alone
+never changes an existing local run.
 
-```toml
-# profiles/slurm.toml
-[cluster]
-backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch
-partition     = "compute"
-account       = "lab01"
-walltime      = "24h"        # a rule's own time_limit wins
-max_submitted = 50           # jobs in flight at once
-poll_interval = "30s"
-extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim directives
+The full story — the `[cluster]` TOML reference and driver-default fallbacks,
+profile lookup rules, `TMPDIR` exports on job scripts, the `scratch = true`
+plan-time rejection, job arrays, the run directory layout, what `status.json`
+records, and interrupt/re-attach semantics — lives in
+[Cluster submission](cluster.md#cluster-submission-run-profile) on the
+[`cluster`](cluster.md) page.
 
-[config]
-reference = "/data/ref/hg38.fa"
-```
-
-Keys the profile omits fall back to the driver defaults: `max_submitted`
-50, `max_array_size` 1001, `poll_interval` 5s — the authoritative
-[`DriverConfig` table](../reference/execution-backends.md#backenddriver)
-carries the complete knob list. `extra_args` entries are
-emitted as scheduler directives verbatim and are not validated — a typo
-reaches the scheduler as written.
-
-```bash
-oxo-flow run pipeline.oxoflow --profile slurm
-
-# one-off override of the profile's queue cap
-oxo-flow run pipeline.oxoflow --profile slurm --max-submitted 100
-```
-
-Profiles are looked up in the **workflow's own** `profiles/` directory —
-there is no user- or system-level profile location, so a site profile shared
-across a lab is copied into each workflow (or kept in the workflow
-repository) rather than installed once per machine.
-
-Both conditions are required: a `[cluster]` block must be in effect **and**
-a profile must be named. A profile with only `[config]` keeps the local
-path, and a workflow carrying its own `[cluster]` block still runs locally
-until you pass `--profile`, so adding one never changes an existing run.
-
-Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
-jobs, and dependencies are chained per instance. The run submits at most
-`max_submitted` jobs at a time, tracks them to completion, and writes the
-checkpoint exactly as a local run does — `status`, `resume`, and re-run
-invalidation behave identically, and a second `run --profile slurm` with
-nothing changed submits nothing.
-
-The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
-#907) travels onto the cluster too: every submitted job script exports
-`TMPDIR`/`TMP`/`TEMP` to the resolved directory before the rule's command
-runs (issue #1013). Cluster jobs start from the scheduler's clean
-environment, so the exports are baked into each job's rendered command —
-after the workdir `cd` guard and outside the environment wrapper, so
-wrapped child processes (`conda run`, `pixi run`, venv activation) and
-tools honoring `TMPDIR` all land in the scratch volume. The directory must
-exist on the shared filesystem the nodes see; it is created on the submit
-host at run start (the same fail-fast mkdir the local path performs) and
-the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
-
-Like `localrule = true` and `checkpoint = true`, the `scratch = true`
-directive is local-executor-only: workflows whose runnable rules declare it
-are **rejected at plan time** on the cluster path (naming every offender)
-instead of silently running those jobs in the shared workdir, where tools
-writing fixed filenames collide across concurrent instances. See
-[Scratch tier ladder](../reference/workflow-format.md#scratch-tier-ladder).
-
-### Job arrays
-
-Same-template instances that are ready together and agree on every
-scheduler-visible directive (threads, memory, time limit, partition,
-account, GPU spec, environment, workdir) are grouped into **one scheduler
-array** automatically:
-
-```toml
-[cluster]
-backend        = "slurm"
-max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
-                        # scatter groups are chunked into several arrays
-```
-
-- One submission instead of N `sbatch`/`qsub` calls — one queue entry that
-  expands internally (SLURM `--array=1-N`, PBS `-J`, SGE `-t`,
-  LSF `-J "name[1-N]"`).
-- Array elements are tracked individually: per-instance job directories
-  stay greppable (`jobs/<instance>/job.sh` + `job.id` + `status.json`),
-  and `index.json` in the run directory maps each array index back to its
-  instance, so the array never leaks into the human-facing layout.
-- Instances that differ on any directive fall out of the group and submit
-  as single jobs — heterogeneity degrades gracefully.
-- Arrays are transport-level: the JobRecord set, checkpoint, and resume
-  semantics are identical to per-job submission.
-
-Element-wise `aftercorr` chaining is not part of this slice: downstream
-instances submit in ready batches as array elements finish, which is
-correct but not as queue-efficient as true element-wise chaining.
+Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
+GCP Batch) is configured
+separately — see the [`cluster`](cluster.md) command.
 
 ### Partial module runs (`--module`)
 
@@ -641,85 +693,19 @@ dead source of the selected closure.
 
 ### Run directory layout
 
-Each run leaves a directory you can navigate with ordinary tools:
-
-```console
-.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest
-  events.jsonl                        # append-only submit/complete/fail log
-  index.json                          # array index → instance name
-  jobs/<rule>/job.sh                  # the exact script submitted
-  jobs/<rule>/job.id                  # scheduler job id
-  jobs/<rule>/status.json
-```
-
-Every `events.jsonl` line carries an RFC 3339 `ts`, so the log reconstructs
-a timeline rather than just an ordering:
-
-```json
-{"ts":"2026-08-17T14:30:05.114Z","t":"SUBMITTED","rule":"align_S1","job":"4812345"}
-{"ts":"2026-08-17T15:02:44.907Z","t":"COMPLETED","rule":"align_S1","job":"4812345"}
-```
+Cluster runs leave their job scripts, scheduler ids, and per-job status
+under `.oxo-flow/runs/<timestamp>/` — see
+[Run directory layout](cluster.md#run-directory-layout) on the
+[`cluster`](cluster.md) page.
 
 ### What a finished job records
 
-When a job leaves the queue, oxo-flow reads the scheduler's accounting store
-(`sacct`, `qstat -x -f`, `qacct`, `bacct`) and writes what it found into
-`status.json`:
-
-```json
-{
-  "state": "COMPLETED",
-  "job_id": "4812345",
-  "command": "bwa mem ref.fa data/S1.fq > aln/S1.bam",
-  "submitted_at": "2026-08-17T14:30:05.114Z",
-  "finished_at": "2026-08-17T15:02:44.907Z",
-  "queue_wait_secs": 65,
-  "exit_code": 0,
-  "elapsed_secs": 1894,
-  "max_rss_mb": 24680,
-  "cpu_seconds": 14203
-}
-```
-
-`queue_wait_secs` is submit-to-finish minus the scheduler's own elapsed
-time — the driver never observes the moment a job starts, so the split
-between waiting and working is only available by subtraction. The same
-`elapsed_secs` is what `benchmarks.wall_time_secs` records in the
-checkpoint, which therefore measures runtime rather than runtime plus queue
-wait, and `max_rss_mb` / `cpu_seconds` populate the same benchmark fields a
-local run fills from its own sampler.
-
-How much of this appears depends on the site. Accounting is a deployment
-choice: a SLURM cluster without `slurmdbd` answers `sacct` with nothing, and
-LSF's `bacct` columns vary too much between versions to parse blind, so LSF
-records state only. Fields the store did not report are omitted rather than
-guessed — including `exit_code`, which stays absent for a failed job whose
-real code could not be read, instead of defaulting to `1`.
-
-Outputs, the working directory, and logs are assumed to live on storage
-shared between the submitting host and the compute nodes.
-
-Interrupting a cluster run cancels its in-flight scheduler jobs: on
-Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
-every job still in the queue or running, records each interrupted rule as
-failed with an `interrupted by <SIG...>` skip reason, and exits with
-`128 + <signal number>` — the same shape the local executor reports.
-Signals are watched on the cluster path only; the local executor has its
-own (pre-existing) signal handling.
-
-What remains out of scope is *re-attaching*: a driver that died without a
-signal (crash, OOM) cannot adopt the scheduler job ids of a previous
-process. Those jobs keep running under the scheduler, and a subsequent
-`resume` / `--resume-failed` re-queues their rules from the checkpoint's
-RUNNING entries rather than reusing the live job ids — completed work on
-shared storage is still honored by the invalidation analysis. Until a
-re-attach path exists, use `oxo-flow cluster status` (no ids: lists your
-queued jobs) and `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean
-up jobs orphaned by a crashed driver.
-
-Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
-GCP Batch) is configured
-separately — see the [`cluster`](cluster.md) command.
+Cluster jobs record the scheduler's accounting data (queue wait, exit code,
+wall time, peak RSS, CPU seconds) into per-job `status.json` files; fields
+the site's accounting store does not report are omitted rather than guessed.
+See [What a finished job records](cluster.md#what-a-finished-job-records)
+for the record format, the accounting-variance caveats, and the
+interrupt/re-attach semantics.
 
 ### Execute a published bundle
 
@@ -1465,8 +1451,6 @@ To bypass checkpoints and re-execute rules that have already completed, use
 before running, or `--rerun` to re-execute this run's rules while keeping
 checkpoint records for rules outside the run.
 
----
-
 ### Checkpoint re-entry (`checkpoint = true`)
 
 A checkpoint rule discovers new values at runtime: after it completes, the
@@ -1478,81 +1462,20 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 [Workflow Format](../reference/workflow-format.md#checkpoint-re-entry) for
 the config surface.
 
-## Output
+## Exit codes
 
-```
-oxo-flow v0.29.0 — Rust-native bioinformatics pipeline engine
-DAG: 5 rules in dependency order
-  1. fastqc
-  2. trim_reads
-  3. bwa_align
-  4. sort_bam
-  5. call_variants
-⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
-  ✓ fastqc (2.1s)
-  ✓ trim_reads (15.0s)
-  ✓ bwa_align (42.3s)
-  ✓ sort_bam (10.2s)
-  ✓ call_variants (8.4s)
+| Code | Meaning |
+|---|---|
+| `0` | Success — the run finished with zero required-rule failures |
+| `1` | Validation or parse failure — the workflow file could not be read, parsed, or validated |
+| `1` | Run failure — a `required` rule failed (a plain `--keep-going` failure summary still exits non-zero; only `required = false` failures leave the exit code at 0) |
 
-Done: 5 succeeded, 0 skipped, 0 failed
-✓ 5 output files verified (118.3MB total)
-```
-
-A progress bar shows execution progress with:
-
-- Elapsed time
-- Current position / total rules
-- Estimated time remaining (ETA), plus the rule currently executing
-- The final summary line reports succeeded / skipped / failed counts
-
-### Module-grouped output
-
-Workflows composed from `[[include]]` modules group the plan listing and the
-`--keep-going` failure summary under module headers, so a composed pipeline
-reads as module → rule instead of one long flat list:
-
-```
-DAG: 6 rules in dependency order
-  Preprocessing — 2 rules
-    1. fastqc
-    2. trim_reads
-  Alignment — 3 rules
-    3. bwa_align
-    4. sort_bam
-    5. markdup
-  Main workflow — 1 rule
-    6. report_summary
-```
-
-- Rules from a module file (`[[include]]`) collect under their module's
-  display title; rules declared in the main file land under `Main workflow`
-- Attribution is the same logic the metro graph export uses: a
-  `module::rule` namespace prefix wins, then member matching; host rules
-  that merely extend a member's name may land in that module's group (a
-  display-only quirk — edges and execution are unaffected)
-- Group order follows first appearance in the execution order, and the
-  per-rule numbers stay a single global sequence so plan position remains
-  greppable
-- Workflows without modules keep the flat listing above byte-for-byte —
-  grouping is opt-in by structure, not a flag
-
-The failure summary groups the same way:
-
-```
-Failed rules:
-  Germline (1):
-    ✗ haplotype_caller — exit code 1
-
-Blocked rules (did not run):
-  Germline (1):
-    ⊘ joint_genotyper — depends on 'haplotype_caller'
-  Main workflow (1):
-    ⊘ qc_report — depends on 'joint_genotyper'
-```
-
-Per-line shapes (`✗ name — reason`, `⊘ name — depends on 'dep'`) are
-unchanged, so tooling that parses run logs keeps working.
+Validation and run failures both exit `1`; the distinction is in the stderr
+diagnostics (a parse error names the workflow file, a run failure lists the
+failed rules). Machine consumers that need to separate the two should use
+[`--json`](#json-summary) and read `status`. Failure-specific exit codes on
+other commands are documented per page — see [`report`](report.md#exit-codes)
+and [`test`](test.md#exit-codes).
 
 ---
 

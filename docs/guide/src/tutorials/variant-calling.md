@@ -30,9 +30,40 @@ oxo-flow init variant-calling
 cd variant-calling
 ```
 
+The pipeline also expects paired tumor-normal FASTQ files that you provide
+yourself — place them under `raw/` (e.g. `raw/TUMOR_01_R1.fastq.gz`) with
+sample names matching the `[[pairs]]` entries below.
+
 ---
 
 ## Prepare the reference
+
+!!! warning "Reference data is not provided by this tutorial"
+
+    The paths in the workflow below (`/data/references/hg38/…`) are
+    placeholders for **user-supplied** inputs — nothing ships with this
+    tutorial. Point each `[config]` entry at your own copies and download
+    them once:
+
+    - **Reference FASTA** (`hg38.fa`): GRCh38/hg38 primary assembly from
+      [UCSC](https://hgdownload.soe.ucsc.edu/downloads.html),
+      [GENCODE](https://www.gencodegenes.org/), or
+      [ENA](https://www.ebi.ac.uk/ena). Generate the GATK-required indexes
+      next to it (`.fai` and `.dict`) — see below.
+    - **dbSNP VCF** (`dbsnp_146.hg38.vcf.gz`): download from
+      [NCBI dbSNP](https://www.ncbi.nlm.nih.gov/snp/) (build 146 for hg38).
+    - **Mills indel VCF** (`Mills_and_1000G_gold_standard.indels.hg38.vcf.gz`):
+      available from the [GATK resource bundle](https://gatk.broadinstitute.org/hc/en-us/articles/360035890811) or
+      the [1000 Genomes FTP](https://ftp.1000genomes.ebi.ac.uk/).
+    - **Germline resource / panel of normals** (`af-only-gnomad.hg38.vcf.gz`,
+      `1000g_pon.hg38.vcf.gz`): gnomAD allele-frequency resource and a PoN
+      built from your own cohort of normals (the 1000G PoN is a common
+      starting point). The PoN is optional — drop the
+      `--panel-of-normals` flag and the `panel_of_normals` config entry if
+      you don't have one.
+
+    Substitute these paths throughout with wherever your data actually
+    lives — the tutorial only assumes the files exist and are indexed.
 
 GATK tools require an **indexed reference**: a `.fai` FASTA index and a sequence dictionary `.dict` sitting next to the FASTA. `bwa` runs happily without them, but the first GATK rule fails with:
 
@@ -43,7 +74,7 @@ A USER ERROR has occurred: Fasta dict file file:///data/references/hg38/hg38.dic
 Prepare both once, next to the FASTA that `{config.reference}` points at:
 
 ```bash
-cd /data/references/hg38
+cd /data/references/hg38   # ← wherever your reference FASTA lives
 samtools faidx hg38.fa
 samtools dict hg38.fa > hg38.dict          # or: gatk CreateSequenceDictionary -R hg38.fa -O hg38.dict
 ```

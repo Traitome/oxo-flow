@@ -34,7 +34,7 @@ definitions referenced by `conda = "envs/..."` in templates 04-15.
 | `--ai` | Generate the workflow with AI from a natural language description |
 | `--from-url <URL>` | URL(s) to use as reference material for AI generation (repeatable) |
 | `--from-file <PATH>` | File(s) to use as reference material for AI generation (repeatable) |
-| `--ai-max-retries <N>` | Maximum AI correction rounds (overrides config) |
+| `--ai-max-retries <N>` | Maximum AI correction rounds for the generation orchestrator — knowledge lookups and correction passes share this budget (default: 10, overridable via `[ai] max_retries` in the config). This bounds **generation** rounds; the recovery-side `--ai-max-retries` on [`run`](run.md#options)/[`dry-run`](dry-run.md#options)/[`resume`](resume.md#options) (default 1, failed-call recovery attempts) is a separate knob |
 | `--ai-team-profile <PROFILE>` | Generation team profile: `compact` (one agent + engine gates, default) or `full` (adds the task contract, the deterministic Curator brief, and an independent review pass with a bounded fix). Overrides `[ai] team_profile` in the config |
 | `--ai-attempts <N>` | Fresh-draw attempts for the whole generation (best-of-N: up to N independent tries; the first one passing the deterministic gates wins, so later attempts are only paid when earlier ones fail) [default: 1] |
 

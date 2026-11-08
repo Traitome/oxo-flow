@@ -29,11 +29,11 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
 | `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations — one stop per analysis step), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
 | `--verbose` | `-v` | Enable debug-level logging |
-| `--quiet` | | Suppress non-essential output (errors only) |
+| `--quiet` | | Accepted; has no effect on graph output (the DAG is printed regardless) |
 | `--no-color` | | Disable colored output |
 
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify`.
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify` (see [`init`](init.md#options) for the canonical note).
 
 ---
 

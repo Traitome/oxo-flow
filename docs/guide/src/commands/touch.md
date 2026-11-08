@@ -29,7 +29,7 @@ oxo-flow touch [OPTIONS] <WORKFLOW> [OVERRIDES]...
 | `--workdir <DIR>` | `-d` | Working directory the outputs live in (default: the workflow file's directory) |
 | `--arg <KEY=VALUE>` | | Config override (`KEY=VALUE` or `--KEY VALUE`); touch validates output paths against the overridden values — the same machinery as the `[OVERRIDES]...` positionals |
 | `--verbose` | `-v` | Enable debug-level logging (global) |
-| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--quiet` | — | Suppress informational output — the version banner is omitted; the per-file `✓` confirmations, the `Done:` summary, errors, and warnings are unaffected (verified: touch prints them under `--quiet`) (global) |
 | `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---

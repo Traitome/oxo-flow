@@ -134,12 +134,14 @@ input = [
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
 ]
-threads = 1  # override [defaults] threads = 4 — aggregation is I/O-light
 environment = { conda = "envs/qc.yaml" }
 shell = """
 mkdir -p {config.results_dir}/multiqc
 multiqc {config.results_dir} -o {config.results_dir}/multiqc --force
 """
+
+[rules.resources]
+threads = 2  # override [defaults] threads = 4 — aggregation is I/O-light
 ```
 
 ---
@@ -276,14 +278,14 @@ fastp --in1 raw_data/sample1_R1.fastq.gz --in2 raw_data/sample1_R2.fastq.gz --ou
      outputs: ["results/fastqc_trimmed/sample2_R1_fastqc.html", ...]
 
   7. multiqc
-     threads=1
+     threads=2
      env=conda
      memory=8G
      outputs: ["results/multiqc/multiqc_report.html"]
      command: mkdir -p results/multiqc
 multiqc results -o results/multiqc --force
 
-Summary: 7 rules, total 25 threads declared, max 4 threads/rule
+Summary: 7 rules, total 26 threads declared, max 4 threads/rule
          7 rules with memory requirements
          1 sample group, 0 pairs
 
@@ -302,10 +304,21 @@ The dry-run has expanded the `{sample}` wildcard into per-sample tasks: the thre
     line. Read them: `run` is what fails — it exits non-zero when a rule's
     input is absent or its wildcards cannot be bound.
 
-!!! warning "Aggregation rules are expanded per sample too — and the duplicates race"
-    `multiqc` became two tasks, but both aggregate the same `results` directory and write the same `results/multiqc/` outputs. Because they sit at the same DAG level they run **concurrently**, and two MultiQC processes wiping/writing `results/multiqc/multiqc_data` at the same time fail with `FileExistsError`/`FileNotFoundError` — the tutorial workflow as written above fails on rerun. Never leave a `{sample}` in an aggregation rule's inputs when its outputs contain no per-sample path.
+!!! warning "Aggregation rules must not expand per sample"
 
-    The fix is to key the aggregation to one sample's output and let MultiQC itself re-scan the whole `results/` tree (it picks up every sample's reports):
+    Earlier versions of this tutorial keyed `multiqc`'s inputs to a `{sample}`
+    wildcard. That made the aggregation expand to one task per sample — and
+    because every task aggregated the same `results` directory and wrote the
+    same `results/multiqc/` outputs, the per-sample tasks ran **concurrently**
+    and two MultiQC processes wiping/writing `results/multiqc/multiqc_data` at
+    the same time failed with `FileExistsError`/`FileNotFoundError`. Such a
+    workflow fails on rerun; the listing above already uses the corrected
+    form. Never leave a `{sample}` in an aggregation rule's inputs when its
+    outputs contain no per-sample path.
+
+    The corrected form keys the aggregation to one sample's output and lets
+    MultiQC itself re-scan the whole `results/` tree (it picks up every
+    sample's reports):
 
     ```toml
     [[rules]]
@@ -317,7 +330,12 @@ The dry-run has expanded the `{sample}` wildcard into per-sample tasks: the thre
     output = [ "{config.results_dir}/multiqc/multiqc_report.html" ]
     ```
 
-    The rule no longer contains `{sample}`, so it becomes a single task that waits for `fastqc_raw`/`fastqc_trimmed` through file matching, and the finished report covers all samples. (The tutorial workflow above has been updated to this form; when multiple tasks would write the same output path, the engine now flags it at plan time with a `SCI-AGG-RACE` preflight warning suggesting `expand_inputs`. `oxo-flow validate` reports the same warning before a dry-run or run is needed.)
+    The rule no longer contains `{sample}`, so it becomes a single task that
+    waits for `fastqc_raw`/`fastqc_trimmed` through file matching, and the
+    finished report covers all samples. When multiple tasks would write the
+    same output path, the engine flags it at plan time with a
+    `SCI-AGG-RACE` preflight warning suggesting `expand_inputs`; `oxo-flow
+    validate` reports the same warning before a dry-run or run is needed.
 
 The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 / 4 → 2, rounded down) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
 
@@ -358,7 +376,7 @@ The `-j 2` flag allows up to 2 jobs to run concurrently — matching the suggest
 | **Workflow metadata** | `[workflow]` section with name, version, description |
 | **Configuration variables** | `[config]` section referenced as `{config.samples_dir}` |
 | **Defaults** | `[defaults]` section applied to all rules |
-| **Per-rule overrides** | `multiqc` rule overrides `threads = 1`, superseding `[defaults] threads = 4` |
+| **Per-rule overrides** | `multiqc` rule sets `threads = 2` under `[rules.resources]`, superseding `[defaults] threads = 4` |
 | **Environment specs** | `environment = { conda = "envs/qc.yaml" }` |
 | **Wildcard patterns** | `{sample}` in file paths |
 | **Sample auto-discovery** | `sample_pattern = "raw_data/{sample}_R1.fastq.gz"` in `[workflow]` |

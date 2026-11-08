@@ -31,7 +31,7 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 | `--limit <LIMIT>` | `-n` | Maximum number of rules in the `--timing` view (default: 10; requires `--timing`) |
 | `--json` | | Output machine-readable JSON to stdout |
 | `--verbose` | `-v` | Enable debug-level logging (global) |
-| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--quiet` | — | Suppress informational output — the version banner and tracing log lines are omitted; the checkpoint listing, warnings, and `--json` output are unaffected (global) |
 | `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---

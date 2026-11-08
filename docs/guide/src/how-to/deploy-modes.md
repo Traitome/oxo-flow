@@ -165,25 +165,23 @@ Two constraints apply:
   `cargo build --features postgres` (or the equivalent in your own
   image). On a build without the feature, a `postgres://` `DATABASE_URL`
   aborts startup with a clear error instead of silently falling back.
-- **Run execution**: the `StorageBackend` trait has PostgreSQL code paths for
-  run-record persistence. CI runs a live-PostgreSQL smoke test (a
-  `services: postgres` container) that verifies the schema bootstrap and the
-  core `StorageBackend` CRUD surface — users, runs, run nodes, audit logs,
-  webhook config, chat sessions — against a real server. The storage
-  contract was additionally live-verified against a `postgres:16` container
-  (2026-11-05): the full `postgres_storage_contract` round-trip passed and
-  the complete web test suite ran 554 passed / 0 failed with the `postgres`
-  feature enabled. That evidence does NOT extend to production parity:
-  concurrency, crash recovery, and multi-instance behavior remain
-  unvalidated, so test them before relying on PostgreSQL for execution
-  metadata. The runs gate is backend-agnostic in behavior — any initialized
-  storage backend passes — and answers `503 RUNS_REQUIRE_STORAGE_BACKEND`
-  only when no backend was initialized at all.
+- **Run execution**: the `StorageBackend` trait has PostgreSQL code paths
+  for run-record persistence. CI runs a live-PostgreSQL smoke test (a
+  `services: postgres` container) that verifies the schema bootstrap and
+  the core `StorageBackend` CRUD surface — users, runs, run nodes, audit
+  logs, webhook config, chat sessions — against a real server. That does
+  NOT extend to production parity: concurrency, crash recovery, and
+  multi-instance behavior remain unvalidated, so test them before
+  relying on PostgreSQL for execution metadata. The runs gate is
+  backend-agnostic in behavior — any initialized storage backend passes
+  — and answers `503 RUNS_REQUIRE_STORAGE_BACKEND` only when no backend
+  was initialized at all.
 - **Tenant safety**: team/HPC authorization is not an OS or container
   execution boundary. A normal workflow can run shell commands under the
-  server account and may access server environment secrets. Do not invite
-  untrusted tenants until the isolation gate in
-  `docs/superpowers/audits/industrial-scientific-audit-ledger.md` passes.
+  server account and may access server environment secrets. Do not
+  invite untrusted tenants until the workspace isolation described in
+  [Multi-Tenancy](#multi-tenancy) is supplemented with your own
+  OS-level isolation (dedicated service user, container, or similar).
 
 ## Startup Verification
 
@@ -325,8 +323,9 @@ prototype-grade:
   cross-instance lease: two servers pointed at the same database can both
   adopt the same run after a restart.
 
-Do not present these controls as crash-consistent or compliance-grade. The
-release blockers and required tests are tracked in the audit ledger.
+Do not present these controls as crash-consistent or compliance-grade;
+treat run records written under crash/restart races as provisional until
+verified against the workspace files.
 
 ## Production Deployment
 

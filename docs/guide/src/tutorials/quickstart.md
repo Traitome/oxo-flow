@@ -272,19 +272,10 @@ See [Deployment Modes](../how-to/deploy-modes.md) for detailed configuration.
 
 ## Next Steps
 
-- **Run a pilot first**: on a workflow that has a sample dimension
-  (`sample_pattern`, `[[sample_groups]]`, or `[[pairs]]`), try
-  `oxo-flow run pipeline.oxoflow --samples first:2` — the engine runs the
-  full pipeline on two samples, reports a projected full-run time, and skips
-  them automatically when you scale up. The two-rule demo above has no
-  samples, so a sample *filter* there — e.g. `--samples first:2` or
-  `--samples ready` — would exit with
-  `--samples matched no samples in this workflow` (a bare sample *name*
-  like `--samples S9` instead declares it for later use and exits
-  successfully). See
-  [Pilot runs](../commands/run.md#pilot-runs-and-scale-up) and
-  [Parallel Samples](../gallery/parallel-samples.md) for a sample-driven
-  workflow to try it on.
+- **Run a pilot first**: on a workflow with a sample dimension, try
+  `oxo-flow run pipeline.oxoflow --samples first:2` to run the full
+  pipeline on two samples before scaling up — see
+  [Pilot runs](../commands/run.md#pilot-runs-and-scale-up).
 - [Your First Workflow](./first-workflow.md) — build a real bioinformatics pipeline with environments
 - [Variant Calling Pipeline](./variant-calling.md) — complete NGS analysis tutorial
 - [Create a Workflow](../how-to/create-workflow.md) — reference guide for `.oxoflow` authoring
