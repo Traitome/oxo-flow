@@ -45,6 +45,27 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 🗄️ **Checkpoint resume** — JSON-persisted execution state; resume interrupted workflows from the last checkpointed rule, with reuse governed by recorded freshness and provenance checks.
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2 (ORCID/GitHub), or HPC cluster submit panel — all from the exact same binary.
 
+## Built for people and agents
+
+The same engine serves both audiences — an agent calls the same gates a person does and gets the same evidence back. There is no shadow API and no "AI-only" execution path.
+
+**For people**
+
+- One binary, four first-party surfaces: CLI, React 19 Web Studio (interactive DAG canvas + TOML editor), VS Code extension, and a native desktop shell.
+- Guided static gates — `validate` → `dry-run` → `lint` — with stable `E`/`W` diagnostic codes and remediation suggestions, before any compute.
+- Readable execution: checkpoint resume, provenance receipts (`--provenance`, `provenance verify`), and HTML/JSON/Markdown/PDF reports generated from checkpoint data.
+- Physically grounded runtime: 8 environment backends, disk-pressure guard (`min_free_disk` / `reclaim_free_disk`), scratch isolation (`tmp_dir`), and content-addressed invalidation.
+
+**For agents**
+
+- `oxo-flow agent-docs` scaffolds `AGENTS.md`, `CLAUDE.md`, and the full `SKILL.md` operating manual into a project — the manual ships inside the binary, so it works offline from the same single file you run.
+- Deterministic contract: every gate supports `--json` with stable diagnostic codes and exit codes; errors use the structured `{code, message, detail, suggestion}` shape.
+- AI is compiler-validated, not trust-me: `template --ai` and the web copilot run the same `PipelineGenAgent` through an orchestrator whose output must pass the engine's own schema/validate gates.
+- Safety by construction: the skill's data-safety contract (inputs read-only, scratch confined to the project, append-only operation journal), `[engine] protected_data_trees` drift detection, and an explicit `OXO_FLOW_AI_PROVIDER=disabled` pin that no persisted tier can override.
+- Self-contained knowledge: Bioconda, bio.tools, nf-core module, and pipeline-graph indexes are embedded in the binary; no network round-trip is required to validate a workflow.
+
+See [AGENTS.md](AGENTS.md) for the contributor/agent context and [`docs/guide/src/SKILL.md`](docs/guide/src/SKILL.md) for the canonical operating manual.
+
 ## Why oxo-flow?
 
 | Feature | **oxo-flow** | Snakemake | Nextflow |
