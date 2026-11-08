@@ -29,7 +29,7 @@ oxo-flow debug [OPTIONS] <WORKFLOW>
 | `--rule <RULE_NAME>` | `-r` | Show the expanded command for this rule only |
 | `--ai` | — | Enable AI-powered command explanation |
 | `--verbose` | `-v` | Enable debug-level logging (global) |
-| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--quiet` | — | Suppress informational output — the version banner and per-rule debug listings are omitted; errors and warnings are unaffected (global) |
 | `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---

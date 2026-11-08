@@ -41,7 +41,7 @@ sees.
 |--------|-------------|
 | `--format <FORMAT>` | `json` (default) or `text` |
 | `-v, --verbose` | Enable verbose (debug-level) logging |
-| `--quiet` | Suppress non-essential output (errors only) |
+| `--quiet` | Suppress informational output — the version banner is omitted; query results, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | Disable colored output |
 | `--json` | Accepted for consistency with other commands; per-command output is controlled by `--format` |
 

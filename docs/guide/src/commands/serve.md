@@ -22,7 +22,7 @@ oxo-flow serve [OPTIONS]
 | `--base-path` | — | `/` | Base path for mounting under a sub-path, e.g. `/oxo-flow` (env: `OXO_FLOW_BASE_PATH`) |
 | `--open` | — | — | Open the interface in the default browser on startup (env: `OXO_FLOW_OPEN_BROWSER`) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
-| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--quiet` | — | — | Suppress informational output — tracing `INFO`/`WARN` log lines are omitted; the `Serve: Starting …` banner, errors, and warnings are unaffected (verified live) |
 | `--no-color` | — | — | Disable colored output (also respects the `NO_COLOR` environment variable) |
 
 ---

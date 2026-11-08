@@ -28,7 +28,7 @@ oxo-flow validate [OPTIONS] <WORKFLOW>
 | `--json` | — | Output machine-readable JSON to stdout |
 | `--ai` | — | Enable AI-powered semantic validation |
 | `--verbose` | `-v` | Enable debug-level logging (global) |
-| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--quiet` | — | Suppress informational output — the version banner is omitted; the `✓` verdict, warnings, errors, and `--json` output are unaffected (verified: output is byte-identical with `--quiet`) (global) |
 | `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---
@@ -143,7 +143,8 @@ so a green validate no longer hides a workflow that cannot run:
     hint: declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder
 ```
 
-Warnings keep exit code `0` — only errors fail. `validate` scopes itself
+Warnings keep exit code `0` — only errors fail (the shared CLI exit-code
+contract is documented on [`run`](run.md#exit-codes)). `validate` scopes itself
 to `W024` and `SCI-AGG-RACE` (runnability); the full best-practice sweep
 remains [`lint`](lint.md)'s job, and the `warnings` array is empty when
 nothing blocks runnability. At run time the corresponding

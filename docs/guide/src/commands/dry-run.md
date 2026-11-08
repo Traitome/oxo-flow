@@ -40,7 +40,7 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
 | `--module` | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem |
-| `--samples <LIST>` | — | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
+| `--samples <LIST>` | — | Same semantics as [`run`](run.md#options): `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--workdir <DIR>` | `-d` | Resolve relative paths against this directory (default: the workflow file's directory) |
 | `--profile <NAME>` | — | Execution profile loaded from `profiles/<NAME>.toml` — the SAME merge semantics as `run` |
 | `--arg <KEY=VALUE>` | — | Set a workflow config value (overrides `[config]` defaults). Repeatable |
@@ -50,9 +50,9 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |
 | `--cache-dir <PATH>` | — | Directory for caching environment setup state — accepted for 1:1 run→dry-run transcription (the preview reads no env cache, so it is ignored). A misordered `--cache-dir` after overrides gets the same ordering hint as under `run` |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
-| `--ai-max-retries <N>` | — | Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried) |
+| `--ai-max-retries <N>` | — | Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried). This bounds **analysis** attempts on this command — the generation-side `--ai-max-retries` on [`template`](template.md#options) (default 10, bounding orchestrator rounds) is a separate knob (see [`run`](run.md#options) for the full dual-contract note) |
 | `--verbose` | `-v` | Enable debug-level logging |
-| `--quiet` | — | Global log-level flag: suppresses `info`-level log lines and the banner. The preview and its summary are printed regardless |
+| `--quiet` | — | Suppress informational output — the version banner is omitted; the plan preview and its summary are printed regardless (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
 ---

@@ -24,7 +24,7 @@ runs the same scaffold while creating a project.
 | `--dir` | `-d` | `.` | Target directory |
 | `--force` | — | off | Overwrite existing agent docs (user edits are lost) |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
-| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--quiet` | — | — | Suppress informational output (per-file scaffold lines are omitted; errors and warnings are unaffected) |
 
 ---
 

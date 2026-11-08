@@ -151,3 +151,6 @@ The `results` entries share the executed-mode shape — `exit_code` and
   the output and in `--json-output`'s `results` array. `--stop-on-error`
   (`-x`) additionally aborts the batch on the FIRST failed item instead of
   running the rest.
+
+The shared CLI exit-code contract (what `0`/`1`/`2` mean across commands)
+is documented on [`run`](run.md#exit-codes).

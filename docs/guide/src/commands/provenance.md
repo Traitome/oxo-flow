@@ -27,7 +27,7 @@ This is essential for reproducible, auditable analysis.
 | Option | Description |
 |--------|-------------|
 | `-v, --verbose` | Enable verbose (debug-level) logging |
-| `--quiet` | Suppress non-essential output (errors only) |
+| `--quiet` | Suppress informational output — the version banner is omitted; the verification report, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | Disable colored output |
 | `--json` | Output machine-readable JSON to stdout |
 

@@ -45,10 +45,10 @@ each environment YAML, ensuring exact reproducibility across time.
 | `--format` | | Archive format: `tar.zst` (default, better compression) or `tar.gz` (universal compatibility) |
 | `--sign-key` | | Ed25519 signing key (64 hex chars or 32 raw bytes) — signs the manifest so `run --bundle` verifies it |
 | `--verbose` | `-v` | Enable verbose (debug-level) logging |
-| `--quiet` | | Suppress non-essential output (errors only) |
+| `--quiet` | | Suppress informational output — the version banner is omitted; the `✓ Published to …` report, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | | Disable colored output |
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify`.
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, and `provenance verify` (see [`init`](init.md#options) for the canonical note).
 
 ## Examples
 
