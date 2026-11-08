@@ -1174,6 +1174,12 @@ An unknown or non-string `signature_scheme` returns
 response and subsequent GET report the scheme actually stored. The settings
 UI exposes the choice and labels the legacy scheme as compatibility-only.
 
+`events` is an exact subscription: a terminal run posts only the event it
+actually reached, so `["workflow_completed"]` stays silent on a failed run
+and `["workflow_failed"]` stays silent on a successful one. An empty list
+(a saved `[]`, or a row predating per-event filtering) subscribes to both
+terminal events.
+
 Validation on `PUT`: `url` must parse as an absolute
 `http://` or `https://` URL with a host (`400 INVALID_URL` otherwise — a
 bare `https://` prefix no longer passes). Enabling delivery requires a

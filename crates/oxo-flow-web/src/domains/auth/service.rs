@@ -179,6 +179,38 @@ pub fn login_response_for(username: String, role: String) -> LoginResponse {
 // OAuth2 service functions
 // ---------------------------------------------------------------------------
 
+/// Fixed redirect-URI fallback documented for the OAuth flow.
+pub const DEFAULT_OAUTH_REDIRECT_URI: &str = "http://localhost:3000/api/auth/oauth/callback";
+
+/// Resolve the redirect URI used by BOTH OAuth steps: an explicit request
+/// value wins, then `OXO_FLOW_OAUTH_REDIRECT_URI`, then the documented
+/// fallback.
+///
+/// The authorize URL and the token exchange MUST carry the same redirect
+/// URI — providers reject the code with `redirect_uri` mismatch otherwise.
+/// The authorize handler previously defaulted to the fixed fallback while
+/// the callback read the env var, so a deployment configured through
+/// `OXO_FLOW_OAUTH_REDIRECT_URI` produced an authorize link that could
+/// never exchange its code.
+#[must_use]
+pub fn oauth_redirect_uri(explicit: Option<&str>) -> String {
+    resolve_oauth_redirect_uri(
+        explicit,
+        std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI").ok().as_deref(),
+    )
+}
+
+/// Pure core of [`oauth_redirect_uri`]: blank values (including an empty
+/// advertised env var) count as unset, exactly like an omitted parameter.
+fn resolve_oauth_redirect_uri(explicit: Option<&str>, env_value: Option<&str>) -> String {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value.map(str::trim).filter(|value| !value.is_empty()))
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_OAUTH_REDIRECT_URI.to_string())
+}
+
 /// Build an OAuthConfig from environment variables.
 ///
 /// Reads `ORCID_CLIENT_ID`/`ORCID_CLIENT_SECRET` or
@@ -511,6 +543,42 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(rows, 2, "both identities have a persisted row");
+    }
+
+    #[test]
+    fn oauth_redirect_uri_precedence_and_blank_handling() {
+        // Both OAuth steps must resolve the SAME URI: request value, then
+        // OXO_FLOW_OAUTH_REDIRECT_URI, then the documented fallback.
+        assert_eq!(
+            resolve_oauth_redirect_uri(
+                Some("https://flows.example.com/cb"),
+                Some("https://env.example.com/cb")
+            ),
+            "https://flows.example.com/cb"
+        );
+        assert_eq!(
+            resolve_oauth_redirect_uri(None, Some("https://env.example.com/cb")),
+            "https://env.example.com/cb"
+        );
+        // Blank values count as unset (an empty env var must not produce an
+        // authorize URL with `redirect_uri=`).
+        assert_eq!(
+            resolve_oauth_redirect_uri(Some("  "), Some("https://env.example.com/cb")),
+            "https://env.example.com/cb"
+        );
+        assert_eq!(
+            resolve_oauth_redirect_uri(None, Some("")),
+            DEFAULT_OAUTH_REDIRECT_URI
+        );
+        assert_eq!(
+            resolve_oauth_redirect_uri(None, None),
+            DEFAULT_OAUTH_REDIRECT_URI
+        );
+        // Surrounding whitespace is trimmed from the winner.
+        assert_eq!(
+            resolve_oauth_redirect_uri(None, Some("  https://env.example.com/cb  ")),
+            "https://env.example.com/cb"
+        );
     }
 
     #[tokio::test]

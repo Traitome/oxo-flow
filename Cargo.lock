@@ -3052,6 +3052,7 @@ dependencies = [
  "dashmap",
  "futures",
  "hex",
+ "hmac",
  "md-5",
  "nix",
  "num_cpus",

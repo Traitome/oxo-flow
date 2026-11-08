@@ -53,6 +53,14 @@ pub enum AiError {
     #[error("MCP protocol error: {message}")]
     Protocol { message: String },
 
+    /// The server terminated the MCP session (HTTP 404 while a
+    /// `Mcp-Session-Id` was attached). The transport spec requires the
+    /// client to start a new session with a fresh `initialize`; the client
+    /// does this internally, so callers only see this error when the
+    /// re-initialized session also fails.
+    #[error("MCP session expired (HTTP 404); reinitialize required")]
+    SessionExpired,
+
     #[error("Network error: {message}")]
     Network { message: String },
 
