@@ -1127,6 +1127,18 @@
       margin-bottom: 1.15rem;
     }
 
+    .bento-card ul {
+      color: var(--fg-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin: 0 0 1.15rem 1.1rem;
+      padding: 0;
+    }
+
+    .bento-card ul li {
+      margin-bottom: 0.45rem;
+    }
+
     .bento-mini-code {
       background: var(--bg-code);
       border: 1px solid rgba(240, 246, 252, 0.1);
@@ -2609,6 +2621,77 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
                 <a class="bento-link" href="latest/reference/vscode-extension/">VS Code Extension Docs →</a>
                 <a class="bento-link" href="latest/how-to/web-editor/">Web Canvas Guide →</a>
                 <a class="bento-link" href="latest/how-to/desktop-app/">Desktop App Guide →</a>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── SECTION 1B: BUILT FOR PEOPLE AND AGENTS ────────────────────────── -->
+  <section class="rail-section reveal" id="dual-surface">
+    <div class="container">
+      <div class="rail-layout">
+        <div class="rail-track">
+          <div class="rail-node copper" title="One Engine, Two Audiences">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <div class="rail-line"></div>
+        </div>
+
+        <div>
+          <div class="eyebrow">
+            <span>01B · ONE ENGINE, TWO AUDIENCES</span>
+          </div>
+          <h2 class="section-title">
+            <span class="lang-en">Built for <span class="highlight-emerald">people</span> and <span class="highlight-emerald">agents</span> — same engine, same guarantees.</span>
+            <span class="lang-zh">为<span class="highlight-emerald">人类</span>与 <span class="highlight-emerald">Agent</span> 而生——同一引擎，同一套保证。</span>
+          </h2>
+          <p class="section-lead">
+            <span class="lang-en">
+              An agent calls the exact commands a person runs and gets the same evidence back. There is no shadow API and no AI-only execution path: every generation, repair, and run passes the engine's own validate → dry-run → run → provenance gates.
+            </span>
+            <span class="lang-zh">
+              Agent 调用与人类完全相同的命令，拿回同样可核对的结果。没有影子 API，也没有只给 AI 的执行路径：每次生成、修复与运行都必须通过引擎自身的 validate → dry-run → run → provenance 门禁。
+            </span>
+          </p>
+
+          <div class="bento-grid reveal">
+            <article class="bento-card span-6">
+              <div>
+                <div class="bento-tag">🧑‍🔬 For people</div>
+                <h3>
+                  <span class="lang-en">Readable gates, resumable runs, review-grade evidence</span>
+                  <span class="lang-zh">可读的门禁、可恢复的运行、可用于评审的证据</span>
+                </h3>
+                <ul>
+                  <li><span class="lang-en">One binary, four first-party surfaces: CLI, Web Studio, VS Code extension, native desktop.</span><span class="lang-zh">单一二进制，四种官方界面：CLI、Web 工作台、VS Code 插件、原生桌面端。</span></li>
+                  <li><span class="lang-en">Static gates before compute, with stable <code>E</code>/<code>W</code> codes and remediation suggestions.</span><span class="lang-zh">计算前先过静态门禁，诊断带稳定 <code>E</code>/<code>W</code> 编码与修复建议。</span></li>
+                  <li><span class="lang-en">Checkpoint resume, SHA-256 provenance receipts, and HTML/JSON/Markdown/PDF reports from execution truth.</span><span class="lang-zh">断点续跑、SHA-256 溯源凭据，以及基于真实执行数据的 HTML/JSON/Markdown/PDF 报告。</span></li>
+                  <li><span class="lang-en">Disk-pressure guard, scratch isolation, 8 isolated environment backends.</span><span class="lang-zh">磁盘压力守护、临时目录隔离、8 种环境后端隔离。</span></li>
+                </ul>
+              </div>
+            </article>
+
+            <article class="bento-card span-6">
+              <div>
+                <div class="bento-tag cyan">🤖 For agents</div>
+                <h3>
+                  <span class="lang-en">A machine contract the engine itself enforces</span>
+                  <span class="lang-zh">由引擎自身强制的机器契约</span>
+                </h3>
+                <ul>
+                  <li><span class="lang-en"><code>oxo-flow agent-docs</code> scaffolds <code>AGENTS.md</code>, <code>CLAUDE.md</code>, and the full <code>SKILL.md</code> manual — embedded in the binary, offline-capable.</span><span class="lang-zh"><code>oxo-flow agent-docs</code> 生成 <code>AGENTS.md</code>、<code>CLAUDE.md</code> 与完整 <code>SKILL.md</code> 手册——内嵌于二进制，离线可用。</span></li>
+                  <li><span class="lang-en">Every gate has <code>--json</code> with stable codes and exit codes; errors use <code>{code, message, detail, suggestion}</code>.</span><span class="lang-zh">每个门禁都支持 <code>--json</code>（稳定编码与退出码）；错误统一为 <code>{code, message, detail, suggestion}</code>。</span></li>
+                  <li><span class="lang-en">AI output is compiler-validated: generated TOML must pass the engine's schema and static gates.</span><span class="lang-zh">AI 产出需经编译器校验：生成的 TOML 必须通过引擎 schema 与静态门禁。</span></li>
+                  <li><span class="lang-en">Data-safety contract in the skill, <code>protected_data_trees</code> drift detection, and a hard <code>OXO_FLOW_AI_PROVIDER=disabled</code> pin.</span><span class="lang-zh">技能内置数据安全契约、<code>protected_data_trees</code> 漂移检测，以及不可被持久配置覆盖的 <code>OXO_FLOW_AI_PROVIDER=disabled</code> 硬开关。</span></li>
+                </ul>
+              </div>
+              <div class="bento-links">
+                <a class="bento-link" href="latest/SKILL/">AI Agent SKILL.md →</a>
+                <a class="bento-link" href="latest/commands/agent-docs/">agent-docs Command →</a>
+                <a class="bento-link" href="latest/how-to/agent-safety/">Agent Safety Contract →</a>
               </div>
             </article>
           </div>
