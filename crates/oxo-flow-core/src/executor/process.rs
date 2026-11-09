@@ -4882,6 +4882,28 @@ pub fn evaluate_condition_with_wildcards_and_base_dir(
     .into_bool()
 }
 
+/// Plan-time **decided-false** probe (issue #1070): returns `true` only
+/// when the condition evaluates to `ConditionVerdict::No` — a decided
+/// false. Every other verdict (`Yes`, `Deferred`) returns `false`.
+/// Callers use this to distinguish "the gate is off, execution will
+/// never happen" from "the gate cannot be decided yet"; a bool wrapper
+/// collapsing `Deferred` would misread an undecided gate as live.
+pub fn evaluate_condition_decided_false(
+    condition: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+    base_dir: Option<&std::path::Path>,
+) -> bool {
+    evaluate_condition_inner(
+        condition.trim(),
+        config_values,
+        wildcard_values,
+        base_dir,
+        None,
+        None,
+    ) == ConditionVerdict::No
+}
+
 /// Plan-time evaluation with the run's **pending outputs** (issue #282
 /// review): `pending_outputs` holds the output paths/patterns of every
 /// rule in the workflow. A runtime file-function atom that references one

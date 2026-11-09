@@ -1515,6 +1515,28 @@ impl WorkflowConfig {
         rule: &mut Rule,
         live_producer_outputs: &std::collections::HashSet<String>,
     ) -> Result<()> {
+        // Issue #1070: a consumer whose own `when` is already DECIDED-false
+        // at plan time never executes — its dropped expand_inputs entries
+        // are dead because the consumer is dead, not because planning
+        // failed. Probe with an empty wildcard map: only a config-only
+        // `when` can be decided here (a wildcard term reads "false" with
+        // absent keys without being decided), mirroring the term gate the
+        // fanned branches use before recording when-skips.
+        let config_values: HashMap<String, toml::Value> = self
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let consumer_gate_off = rule.when.as_deref().is_some_and(|when| {
+            !when.contains("wildcard.")
+                && !when.contains("{meta.")
+                && crate::executor::process::evaluate_condition_decided_false(
+                    when,
+                    &config_values,
+                    &HashMap::new(),
+                    self.base_dir.as_deref(),
+                )
+        });
         for exp in &rule.expand_inputs {
             // `{meta.<column>}` inside an expand_inputs pattern is never
             // resolved: per-instance metadata substitution has already run
@@ -1596,7 +1618,10 @@ impl WorkflowConfig {
                     true
                 }
             });
-            if !dropped.is_empty() {
+            // Warn only when the consumer itself is live (issue #1070):
+            // a decided-false consumer drops its entries because it is
+            // dead — warning about that would be noise.
+            if !dropped.is_empty() && !consumer_gate_off {
                 tracing::warn!(
                     rule = %rule.name,
                     dropped = %dropped.join(", "),
@@ -1608,8 +1633,14 @@ impl WorkflowConfig {
         }
         // Issue #931 Expected #3: a consumer that declared expand_inputs
         // but kept NOTHING after the live-producer drop filter would
-        // execute with empty args — fail planning instead.
-        if !rule.expand_inputs.is_empty() && rule.input.to_vec().is_empty() {
+        // execute with empty args — fail planning instead. Issue #1070:
+        // unless the consumer's own `when` is decided-false at plan time
+        // — it never executes, so planning must succeed with the inputs
+        // wired as-is (execution-time gating handles the rest).
+        if !consumer_gate_off
+            && !rule.expand_inputs.is_empty()
+            && rule.input.to_vec().is_empty()
+        {
             return Err(OxoFlowError::Validation {
                 message: format!(
                     "rule '{}' declares expand_inputs but has zero concrete inputs — every expanded entry was dropped or never expanded because no live producer instance declares the paths",
@@ -3457,6 +3488,199 @@ shell = "cat {input} > {output}"
     let msg = err.to_string();
     assert!(
         msg.contains("cohort") && msg.contains("zero concrete inputs"),
+        "error must name the rule and the zero-input condition: {msg}"
+    );
+}
+
+#[test]
+fn expand_inputs_zero_guard_skipped_when_consumer_when_false() {
+    // Issue #1070: the consumer's own `when` is DECIDED-false at plan time
+    // (config-only `when`, config decides it off) — the rule never
+    // executes, so dropping its expand_inputs entries (vetoed producer)
+    // must NOT fail planning. 0.24.0 semantics keep the consumer in the
+    // plan; execution-time gating removes it later.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[config]
+tumor_only = "true"
+pairs_list = ["GC01", "GC02"]
+
+[[pairs]]
+pair_id = "GC01"
+experiment = "T1"
+
+[[pairs]]
+pair_id = "GC02"
+experiment = "T2"
+
+[[rules]]
+name = "ascat_paired"
+input = ["raw/{pair_id}/{experiment}.bam"]
+output = ["ascat/{pair_id}/purity_ploidy.tsv"]
+when = "wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "ascat_cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity_ploidy.tsv", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["ascat/cohort.tsv"]
+when = "config.tumor_only != 'true'"
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    // Precondition: the producer instance is vetoed and recorded — the
+    // shape that previously drove the zero-input guard to a false error.
+    config.expand_wildcards().unwrap();
+    assert!(
+        config
+            .when_skipped_outputs
+            .contains("ascat/GC01/purity_ploidy.tsv"),
+        "vetoed producer must record its outputs: {:?}",
+        config.when_skipped_outputs
+    );
+    // The consumer stays in the plan (composition) with its inputs wired
+    // as-is — the dead entries are dead because the consumer is dead.
+    let consumer = config
+        .rules
+        .iter()
+        .find(|r| r.name == "ascat_cohort")
+        .expect("ascat_cohort rule must stay in the final rule set");
+    assert!(
+        !config.rules.iter().any(|r| r.name.starts_with("ascat_paired")),
+        "every producer instance is vetoed (no control) — nothing live declares the paths: {:?}",
+        config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+    assert!(
+        !consumer.input.to_vec().contains(&"ascat/GC01/purity_ploidy.tsv".to_string()),
+        "dead entry must be dropped from input (consumer is off): {:?}",
+        consumer.input.to_vec()
+    );
+    assert!(
+        consumer
+            .expand_inputs_baked
+            .contains("ascat/GC01/purity_ploidy.tsv"),
+        "provenance keeps everything it ever baked (#757)"
+    );
+}
+
+#[test]
+fn expand_inputs_zero_guard_still_fires_when_consumer_when_true() {
+    // Issue #1070 complement: the consumer's when is decided-TRUE here —
+    // it WILL execute, so zero surviving inputs must still fail planning
+    // (its twin producer is vetoed and nothing declares the paths).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[config]
+tumor_only = "false"
+pairs_list = ["GC01", "GC02"]
+
+[[pairs]]
+pair_id = "GC01"
+experiment = "T1"
+
+[[pairs]]
+pair_id = "GC02"
+experiment = "T2"
+
+[[rules]]
+name = "ascat_paired"
+input = ["raw/{pair_id}/{experiment}.bam"]
+output = ["ascat/{pair_id}/purity_ploidy.tsv"]
+when = "wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "ascat_cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity_ploidy.tsv", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["ascat/cohort.tsv"]
+when = "config.tumor_only != 'true'"
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config
+        .expand_wildcards()
+        .expect_err("live consumer with zero inputs must fail planning");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ascat_cohort") && msg.contains("zero concrete inputs"),
+        "error must name the rule and the zero-input condition: {msg}"
+    );
+}
+
+#[test]
+fn expand_inputs_zero_guard_not_skipped_for_wildcard_when() {
+    // Issue #1070 term gate: a wildcard `when` reads false with absent
+    // keys but is NOT decided (per-instance fan-out decides it later) —
+    // the zero-input guard must still fire, guarding the skip path
+    // against widening from config-only to wildcard-term whens. The key
+    // is a NON-fanout wildcard (`lane`): a pair wildcard here would fan
+    // the consumer out per combo and veto its instances before this pass.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[config]
+pairs_list = ["GC01", "GC02"]
+
+[[pairs]]
+pair_id = "GC01"
+experiment = "T1"
+
+[[rules]]
+name = "ascat_paired"
+input = ["raw/{pair_id}/{experiment}.bam"]
+output = ["ascat/{pair_id}/purity_ploidy.tsv"]
+when = "wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "ascat_cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity_ploidy.tsv", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["ascat/cohort.tsv"]
+when = "wildcard.lane != ''"
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config
+        .expand_wildcards()
+        .expect_err("wildcard-when consumer is undecided, guard must fire");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ascat_cohort") && msg.contains("zero concrete inputs"),
         "error must name the rule and the zero-input condition: {msg}"
     );
 }
