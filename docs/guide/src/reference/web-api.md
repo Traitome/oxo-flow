@@ -92,7 +92,7 @@ In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler
   "status": "ok",
   "components": {
     "engine": {
-      "version": "0.29.1",
+      "version": "0.30.0",
       "path": "/usr/local/bin/oxo-flow",
       "version_mismatch": false
     }
