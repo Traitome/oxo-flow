@@ -1,5 +1,17 @@
 [advisories]
-# No advisory ignores remain (#876): the AWS legacy TLS stack
+# RUSTSEC-2026-0459 (libsqlite3-sys 0.30.1, CVE-2026-119375) ignored
+# 2026-11-09 with justification: the advisory covers bundled SQLite
+# < 3.54.0 returning uninitialized page-cache memory when a DB whose
+# sibling -wal file has a different page size is opened — a LOCAL
+# attack vector (the victim must open an attacker-supplied file pair;
+# oxo-flow only opens the sqlite database file it creates itself).
+# The patched libsqlite3-sys 0.39.x is outside sqlx-sqlite 0.9.0's
+# declared range (<0.38.0), and the upstream bound raise
+# (launchbadge/sqlx#4502) merged 2026-11-08 but has no release yet.
+# REMOVE this entry and bump sqlx as soon as a sqlx release carries
+# the fix — do not let the ignore accrete.
+#
+# No other advisory ignores remain (#876): the AWS legacy TLS stack
 # (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101 / h2 0.3) was removed
 # from the s3-storage feature graph by declaring aws-sdk-s3 with
 # default-features = false minus the `rustls` feature — see crates/
@@ -11,7 +23,9 @@
 # crypto-bigint 0.7.10 (single version in Cargo.lock). If cargo audit
 # flags a new advisory, fix or justify it here instead of assuming it is
 # known.
-ignore = []
+ignore = [
+    "RUSTSEC-2026-0459",
+]
 
 # Report unmaintained crate warnings as informational (not errors)
 informational_warnings = ["unmaintained"]
