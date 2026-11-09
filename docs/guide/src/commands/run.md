@@ -73,7 +73,7 @@ keys matching nothing declared keep the literal spelling.
 | `--quiet` | — | — | Suppress informational output — progress rendering, DAG listings, and per-rule completion lines are omitted; errors, warnings, and machine-readable output (`--json`) are unaffected |
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
-### JSON output (`--json`)
+### JSON output
 
 The document carries `command`, `status`, `results` counts, and `resources`.
 It is emitted on **every** exit path — completed, failed, and aborted

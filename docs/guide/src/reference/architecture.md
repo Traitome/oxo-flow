@@ -234,10 +234,11 @@ flowchart TB
 
 ## Workflow Lifecycle
 
-The workflow configuration is a plain struct carrying a status enum — the
-engine's run path never executes an unvalidated workflow, but there is no
-compile-time type-state enforcing the transitions. The lifecycle stages are
-tracked at run time as status values:
+The workflow configuration is a plain struct — the engine's run path never
+executes an unvalidated workflow, but there is no compile-time type-state
+enforcing the transitions, and the struct itself carries no status field.
+The lifecycle stages are tracked at run time as status values (for
+individual rules, the executor's `JobStatus` enum):
 
 ```mermaid
 stateDiagram-v2
