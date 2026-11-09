@@ -3551,6 +3551,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#azure-blob-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob Storage
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Azure Blob Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#credential-setup_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-workflow_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#storage-backend-api" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4087,6 +4126,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#azure-blob-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob Storage
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Azure Blob Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#credential-setup_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-workflow_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#storage-backend-api" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4157,8 +4235,8 @@
 
 <h1 id="cloud-storage">Cloud Storage<a class="headerlink" href="#cloud-storage" title="Permanent link">#</a></h1>
 <p>oxo-flow supports reading and writing workflow inputs and outputs from
-cloud object storage, transparently resolving <code>s3://</code> and <code>gs://</code> URIs
-through its pluggable storage backend system.</p>
+cloud object storage, transparently resolving <code>s3://</code>, <code>gs://</code>, and
+<code>az://</code> URIs through its pluggable storage backend system.</p>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">#</a></h2>
 <p>Workflows can reference remote files using standard URI schemes:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[[rules]]</span>
@@ -4167,7 +4245,7 @@ through its pluggable storage backend system.</p>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"local/{sample}.fastq.gz"</span><span class="p">]</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cp {input[0]} {output[0]}"</span>
 </span></code></pre></div>
-<p>When the pipeline engine encounters an <code>s3://</code> or <code>gs://</code> URI, it
+<p>When the pipeline engine encounters an <code>s3://</code>, <code>gs://</code>, or <code>az://</code> URI, it
 detects the remote scheme and stages the file into the workdir before
 the rule runs, then uploads rule outputs with remote URIs back to the
 bucket after the rule succeeds (see
@@ -4176,11 +4254,11 @@ as a library API: callers can resolve URIs and read, write, stage, or
 upload objects programmatically through the
 <a href="#storage-backend-api"><code>StorageBackend</code></a> trait.</p>
 <h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">#</a></h3>
-<p>Both backends are feature-gated and are <strong>not</strong> included by default.
+<p>All cloud backends are feature-gated and are <strong>not</strong> included by default.
 Enable them at build time — the features live on the <code>oxo-flow-cli</code> crate
 (the workspace root package defines none, so <code>--features</code> must be combined
 with <code>-p oxo-flow-cli</code>):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>-p<span class="w"> </span>oxo-flow-cli<span class="w"> </span>--features<span class="w"> </span><span class="s2">"s3-storage,gcs-storage"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>-p<span class="w"> </span>oxo-flow-cli<span class="w"> </span>--features<span class="w"> </span><span class="s2">"s3-storage,gcs-storage,azure-storage"</span>
 </span></code></pre></div>
 <h2 id="aws-s3">AWS S3<a class="headerlink" href="#aws-s3" title="Permanent link">#</a></h2>
 <p>The S3 backend uses the official <code>aws-sdk-s3</code> Rust SDK. Credentials are
@@ -4255,6 +4333,39 @@ HMAC keys can be created in the GCP Console under
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="k">[rules.resources]</span>
 </span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
 </span></code></pre></div>
+<h2 id="azure-blob-storage">Azure Blob Storage<a class="headerlink" href="#azure-blob-storage" title="Permanent link">#</a></h2>
+<p>The Azure backend speaks the Azure Blob Storage REST API directly through
+<code>reqwest</code> with HMAC-SHA256 request signing — no Azure SDK dependency
+(issue #1020). All credentials are resolved <strong>from environment variables
+only</strong>.</p>
+<h3 id="credential-setup_1">Credential Setup<a class="headerlink" href="#credential-setup_1" title="Permanent link">#</a></h3>
+<p>Three mutually exclusive options, tried in this order:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Option 1: SharedKey — account name + access key</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AZURE_STORAGE_ACCOUNT_NAME</span><span class="o">=</span><span class="s2">"myaccount"</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AZURE_STORAGE_ACCOUNT_KEY</span><span class="o">=</span><span class="s2">"base64-account-key=="</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Option 2: SAS — account name + shared access signature token</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># (scoped and time-limited; good for least-privilege access)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AZURE_STORAGE_ACCOUNT_NAME</span><span class="o">=</span><span class="s2">"myaccount"</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AZURE_STORAGE_SAS_TOKEN</span><span class="o">=</span><span class="s2">"?sv=2022-11-02&amp;ss=b&amp;srt=o&amp;sp=rwdlaciytf..."</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Option 3: Connection string (parsed into account + key)</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AZURE_STORAGE_CONNECTION_STRING</span><span class="o">=</span><span class="s2">"DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=...;EndpointSuffix=core.windows.net"</span>
+</span></code></pre></div>
+<h3 id="example-workflow_2">Example Workflow<a class="headerlink" href="#example-workflow_2" title="Permanent link">#</a></h3>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"azure-example"</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"1.0.0"</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">[[rules]]</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc"</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"az://my-container/raw/{sample}.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"az://my-container/qc/{sample}_report.html"</span><span class="p">]</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input[0]} -o {output[0]}"</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+</span></code></pre></div>
 <h2 id="storage-backend-api">Storage Backend API<a class="headerlink" href="#storage-backend-api" title="Permanent link">#</a></h2>
 <p>The <code>StorageBackend</code> trait in <code>oxo_flow_core::storage</code> defines the
 interface that all backends implement:</p>
@@ -4288,7 +4399,7 @@ interface that all backends implement:</p>
 </tr>
 <tr>
 <td><code>head</code></td>
-<td>Object metadata for invalidation: size + content identity (S3 ETag / GCS <code>md5Hash</code>)</td>
+<td>Object metadata for invalidation: size + content identity (S3 ETag / GCS <code>md5Hash</code> / Azure <code>content-md5</code>)</td>
 </tr>
 <tr>
 <td><code>name</code></td>
@@ -4298,16 +4409,16 @@ interface that all backends implement:</p>
 </table>
 <p>The <code>StorageResolver</code> maintains a registry of backends keyed by URI
 scheme.  Custom backends can be registered at runtime:</p>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">storage</span><span class="p">::{</span><span class="n">StorageResolver</span><span class="p">,</span><span class="w"> </span><span class="n">StorageScheme</span><span class="p">};</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">resolver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">StorageResolver</span><span class="p">::</span><span class="n">with_local</span><span class="p">();</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">resolver</span><span class="p">.</span><span class="n">add_backend</span><span class="p">(</span><span class="n">StorageScheme</span><span class="p">::</span><span class="n">S3</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">s3_backend</span><span class="p">));</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">storage</span><span class="p">::{</span><span class="n">StorageResolver</span><span class="p">,</span><span class="w"> </span><span class="n">StorageScheme</span><span class="p">};</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">resolver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">StorageResolver</span><span class="p">::</span><span class="n">with_local</span><span class="p">();</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">resolver</span><span class="p">.</span><span class="n">add_backend</span><span class="p">(</span><span class="n">StorageScheme</span><span class="p">::</span><span class="n">S3</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">s3_backend</span><span class="p">));</span>
 </span></code></pre></div>
 <h2 id="content-addressed-invalidation">Content-addressed invalidation<a class="headerlink" href="#content-addressed-invalidation" title="Permanent link">#</a></h2>
-<p>Input manifests now record remote inputs alongside local ones. When a rule's
-inputs include <code>s3://</code> / <code>gs://</code> URIs and a backend is registered for that
-scheme, the checkpoint's input manifest stores a remote entry —
+<p>Input manifests record remote inputs alongside local ones. When a rule's
+inputs include <code>s3://</code> / <code>gs://</code> / <code>az://</code> URIs and a backend is registered
+for that scheme, the checkpoint's input manifest stores a remote entry —
 <code>(scheme, key, size, etag)</code> — and <code>manifests_match</code> compares them:</p>
 <ul>
 <li>S3: the raw <code>ETag</code> from <code>HeadObject</code>. Composite <code>"hash-N"</code> ETags from
@@ -4317,6 +4428,8 @@ scheme, the checkpoint's input manifest stores a remote entry —
   invalidation).</li>
 <li>GCS: <code>md5Hash</code> (base64) from the <code>x-goog-hash</code> header — GCS has no native
   ETag; the md5 hash is the stronger pure content hash.</li>
+<li>Azure: <code>Content-MD5</code> (base64) from the response header — surfaced as the
+  etag-equivalent identity, the same role GCS's md5 hash plays.</li>
 </ul>
 <p>A same-size remote rewrite with a changed etag invalidates the rule exactly
 as a local content change does; unchanged etag → skipped. When neither side
@@ -4364,12 +4477,13 @@ inputs before running a rule and uploads remote outputs after it succeeds:</p>
 re-execute) instead of using the cache.</p>
 <h2 id="current-limitations">Current Limitations<a class="headerlink" href="#current-limitations" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Feature-gated</strong> — Both backends are opt-in at compile time: enable
-  <code>oxo-flow-cli</code>'s <code>s3-storage</code> / <code>gcs-storage</code> features to register them
-  in the shared run/dry-run storage resolver. The default build includes
-  only the local filesystem backend. The <code>s3-storage</code> feature compiles and
-  is tested (unit fixtures + a live S3-compatible E2E suite, see
-  <code>crates/oxo-flow-cli/tests/remote_staging.rs</code>; verified against RustFS).
+<li><strong>Feature-gated</strong> — All cloud backends are opt-in at compile time: enable
+  <code>oxo-flow-cli</code>'s <code>s3-storage</code> / <code>gcs-storage</code> / <code>azure-storage</code> features
+  to register them in the shared run/dry-run storage resolver. The default
+  build includes only the local filesystem backend. The <code>s3-storage</code> feature
+  compiles and is tested (unit fixtures + a live S3-compatible E2E suite,
+  see <code>crates/oxo-flow-cli/tests/remote_staging.rs</code>; verified against
+  RustFS).
   The <code>aws-sdk-s3</code> dependency is declared with
   <code>default-features = false</code> (minus the <code>rustls</code> feature), so the legacy
   hyper-0.14 / rustls-0.21 / h2-0.3 TLS stack never enters the graph — TLS
@@ -4383,16 +4497,6 @@ re-execute) instead of using the cache.</p>
   <code>OXO_S3_FORCE_PATH_STYLE=1</code> (path-style addressing).</li>
 <li><strong>UTF-8 only</strong> — <code>read_to_string</code> requires the content to be valid
   UTF-8.  Binary files should use <code>stage</code> instead.</li>
-<li><strong>Azure Blob Storage — implemented but not enabled</strong> — Azure Blob
-  Storage support is fully implemented in the engine
-  (<code>crates/oxo-flow-core/src/storage/azure.rs</code>: Azure Blob REST API via
-  <code>reqwest</code>, no Azure SDK dependency, issue #1020), but it is <strong>NOT
-  registered with the storage resolver</strong> — the CLI registers only Local,
-  S3, and GCS, so every <code>az://container/blob</code> URI fails at run time with
-  an unsupported-scheme error. This is tracked in GitHub issue
-  <a href="https://github.com/Traitome/oxo-flow/issues/1069">#1069</a>; do not
-  configure Azure storage credentials or reference <code>az://</code> URIs in
-  workflows until registration lands.</li>
 </ul>
 
 
