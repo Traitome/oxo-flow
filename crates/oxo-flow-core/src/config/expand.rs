@@ -1637,10 +1637,7 @@ impl WorkflowConfig {
         // unless the consumer's own `when` is decided-false at plan time
         // — it never executes, so planning must succeed with the inputs
         // wired as-is (execution-time gating handles the rest).
-        if !consumer_gate_off
-            && !rule.expand_inputs.is_empty()
-            && rule.input.to_vec().is_empty()
-        {
+        if !consumer_gate_off && !rule.expand_inputs.is_empty() && rule.input.to_vec().is_empty() {
             return Err(OxoFlowError::Validation {
                 message: format!(
                     "rule '{}' declares expand_inputs but has zero concrete inputs — every expanded entry was dropped or never expanded because no live producer instance declares the paths",
@@ -3558,12 +3555,18 @@ shell = "cat {input} > {output}"
         .find(|r| r.name == "ascat_cohort")
         .expect("ascat_cohort rule must stay in the final rule set");
     assert!(
-        !config.rules.iter().any(|r| r.name.starts_with("ascat_paired")),
+        !config
+            .rules
+            .iter()
+            .any(|r| r.name.starts_with("ascat_paired")),
         "every producer instance is vetoed (no control) — nothing live declares the paths: {:?}",
         config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
     );
     assert!(
-        !consumer.input.to_vec().contains(&"ascat/GC01/purity_ploidy.tsv".to_string()),
+        !consumer
+            .input
+            .to_vec()
+            .contains(&"ascat/GC01/purity_ploidy.tsv".to_string()),
         "dead entry must be dropped from input (consumer is off): {:?}",
         consumer.input.to_vec()
     );
