@@ -1029,7 +1029,7 @@ This allows intentional oversubscription for testing or when user knows better.
 oxo-flow automatically cleans up temporary outputs:
 
 | Scenario | Cleanup |
-|---|---|---|
+|---|---|
 | Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors) |

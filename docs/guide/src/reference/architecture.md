@@ -234,9 +234,11 @@ flowchart TB
 
 ## Workflow Lifecycle
 
-The configuration moves through a type-state machine — the compiler
-refuses to execute an unvalidated workflow, because `WorkflowState<S>`
-wraps the config and only exposes the transitions you have earned:
+The workflow configuration is a plain struct — the engine's run path never
+executes an unvalidated workflow, but there is no compile-time type-state
+enforcing the transitions, and the struct itself carries no status field.
+The lifecycle stages are tracked at run time as status values (for
+individual rules, the executor's `JobStatus` enum):
 
 ```mermaid
 stateDiagram-v2
@@ -249,7 +251,7 @@ stateDiagram-v2
     Executed --> [*]: report + checkpoint
 ```
 
-Two properties follow from this encoding:
+Two properties follow from this design:
 
 - **Validation is not optional.** A `Ready` workflow has already passed
   every static check; the run loop never re-validates.

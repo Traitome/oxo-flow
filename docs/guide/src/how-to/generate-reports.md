@@ -228,9 +228,9 @@ oxo-flow report pipeline.oxoflow -f pdf -o report.pdf
 ```
 
 If `wkhtmltopdf` is not installed, the command degrades gracefully: it
-writes a printable HTML file (`report.html`) and warns, instead of
-failing. Note the wkhtmltopdf project upstream has been archived — HTML
-output is the portable, supported-by-default format.
+writes a printable HTML file (`<workflow.name>_report.html`) and warns,
+instead of failing. Note the wkhtmltopdf project upstream has been archived —
+HTML output is the portable, supported-by-default format.
 
 You can also output the raw `wkhtmltopdf` command for scripting or custom
 processing:

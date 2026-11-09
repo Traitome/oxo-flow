@@ -70,8 +70,10 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// knowledge, schema, verify-data, license, and ai; every other command
-    /// rejects the flag instead of silently ignoring it.
+    /// knowledge, schema, verify-data, license, provenance verify, and ai;
+    /// every other command rejects the flag instead of silently ignoring it.
+    /// For info and knowledge, an explicit `--format text` takes precedence
+    /// over `--json`.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -198,7 +200,7 @@ pub enum Commands {
             long = "samples",
             value_name = "LIST",
             help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
-            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries override or narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Re-execute every rule selected for this run even if outputs are
@@ -329,7 +331,7 @@ pub enum Commands {
             long = "samples",
             value_name = "LIST",
             help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
-            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries override or narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         #[arg(
@@ -930,7 +932,7 @@ pub enum Commands {
             long = "samples",
             value_name = "LIST",
             help = "Sample selection: '@path' samplesheet, '+@path' append, names / first:N / ready (repeatable, comma-separated)",
-            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries narrow earlier ones."
+            long_help = "Sample selection filter. Each entry is one of: '@path' — replace the workflow's samples with a samplesheet; '+@path' — append a samplesheet (same-name groups merge); 'ready' — keep only samples whose inputs are complete; 'first:N' — take the first N samples as a pilot; or an explicit sample name. Entries may be repeated and/or comma-separated; later entries override or narrow earlier ones."
         )]
         samples_filter: Vec<String>,
         /// Run deep health checks (script files, environment definition files,

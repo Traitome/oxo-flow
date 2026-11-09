@@ -123,10 +123,16 @@ shell = "process_large_data.sh"
 [rules.resource_hint]
 input_size = "large"     # ~100GB input
 memory_scale = 2.5       # Need 2.5× input size = 250GB
-runtime = "slow"         # >1 hour expected
+runtime = "slow"         # reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037
 ```
 
 Estimated memory: 100GB × 2.5 = 250GB
+
+The `runtime` hint is a reserved scheduler knob — like `io_bound`, it is
+parsed but not consumed today, and `lint` flags every use with `W037`.
+Only `input_size` and `memory_scale` affect planning; for enforced limits
+declare `resources.time_limit` / `resources.memory` / `resources.threads`
+instead.
 
 ## Resource Budgets
 

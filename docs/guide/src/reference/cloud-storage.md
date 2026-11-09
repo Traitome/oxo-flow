@@ -236,15 +236,13 @@ re-execute) instead of using the cache.
   `OXO_S3_FORCE_PATH_STYLE=1` (path-style addressing).
 - **UTF-8 only** — `read_to_string` requires the content to be valid
   UTF-8.  Binary files should use `stage` instead.
-- **Azure Blob Storage** — Supported via the `azure-storage` feature flag.
-  Uses the Azure Blob REST API directly via `reqwest` (no Azure SDK
-  dependency, issue #1020). Credentials come from the environment:
-
-  | Variable | Purpose |
-  |---|---|
-  | `AZURE_STORAGE_ACCOUNT_NAME` | Storage account name |
-  | `AZURE_STORAGE_ACCOUNT_KEY` | Base64-encoded account key (SharedKey) |
-  | `AZURE_STORAGE_SAS_TOKEN` | Pre-signed SAS token (alternative to SharedKey) |
-  | `AZURE_STORAGE_CONNECTION_STRING` | Fallback: parsed into account+key or account+SAS |
-
-  Use `az://container/blob` URIs in workflow inputs/outputs.
+- **Azure Blob Storage — implemented but not enabled** — Azure Blob
+  Storage support is fully implemented in the engine
+  (`crates/oxo-flow-core/src/storage/azure.rs`: Azure Blob REST API via
+  `reqwest`, no Azure SDK dependency, issue #1020), but it is **NOT
+  registered with the storage resolver** — the CLI registers only Local,
+  S3, and GCS, so every `az://container/blob` URI fails at run time with
+  an unsupported-scheme error. This is tracked in GitHub issue
+  [#1069](https://github.com/Traitome/oxo-flow/issues/1069); do not
+  configure Azure storage credentials or reference `az://` URIs in
+  workflows until registration lands.

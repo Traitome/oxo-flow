@@ -41,7 +41,7 @@ keys matching nothing declared keep the literal spelling.
 |---|---|---|---|
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
-| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (see [JSON summary](#json-summary)) |
+| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (see [JSON output](#json-output)) |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
@@ -73,7 +73,7 @@ keys matching nothing declared keep the literal spelling.
 | `--quiet` | — | — | Suppress informational output — progress rendering, DAG listings, and per-rule completion lines are omitted; errors, warnings, and machine-readable output (`--json`) are unaffected |
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
-### JSON summary (`--json`)
+### JSON output
 
 The document carries `command`, `status`, `results` counts, and `resources`.
 It is emitted on **every** exit path — completed, failed, and aborted
@@ -107,7 +107,7 @@ Common flags at a glance — every flag is documented in the
 | Config values from the command line | `[KEY=VALUE]...` positionals, `--arg KEY=VALUE` (see [Config overrides](#config-overrides)) |
 | Execution profile / cluster | `--profile`, `--max-submitted` (see [Cluster submission](#cluster-submission)) |
 | Resource budgets | `--max-threads`, `--max-memory` |
-| Machine-readable output | `--json` (see [JSON summary](#json-summary)) |
+| Machine-readable output | `--json` (see [JSON output](#json-output)) |
 | Output checksums | `--provenance` |
 | Run detached | `--background` |
 | Quieter output | `--quiet`, `--verbose`, `--no-color` |
@@ -1473,7 +1473,7 @@ the config surface.
 Validation and run failures both exit `1`; the distinction is in the stderr
 diagnostics (a parse error names the workflow file, a run failure lists the
 failed rules). Machine consumers that need to separate the two should use
-[`--json`](#json-summary) and read `status`. Failure-specific exit codes on
+[`--json`](#json-output) and read `status`. Failure-specific exit codes on
 other commands are documented per page — see [`report`](report.md#exit-codes)
 and [`test`](test.md#exit-codes).
 

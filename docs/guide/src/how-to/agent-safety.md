@@ -6,11 +6,13 @@ someone else's data. This page is the operating contract — the same rules ship
 in the [AI Agent Skill](../SKILL.md) so canonical agents load them
 automatically.
 
-**The engine's own gates protect rule shells, not your terminal.** `E011`
-blocks recursive deletions outside the run workdir at run time;
-`[engine] protected_data_trees` detects drift of declared data trees before
-the next run. Neither one prevents an agent's own `rm`, `mv`, or truncating
-redirect. These rules do.
+**The engine's own gates protect rule shells, not your terminal.** The lint
+flags dangerous shell patterns early (`E011`), and the run-time
+shell-command guard blocks recursive deletions outside the run workdir
+with a `Validation` error; `[engine] protected_data_trees` detects drift of
+declared data trees before the next run. None of these gates prevent an
+agent's own `rm`, `mv`, or truncating redirect — they apply only to rule
+shells the engine executes. These rules do.
 
 ## The seven rules
 
