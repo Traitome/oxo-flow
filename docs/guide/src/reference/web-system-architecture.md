@@ -186,8 +186,8 @@ Server process environment:
 | **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
 | **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations; migrated metadata surfaces and the startup PostgreSQL capability matrix |
 | **infra/license** | `infra/license.rs` | License notice text, banner, X-OxoFlow-License header middleware (the web UI footer label lives in the SPA, `frontend/src/components/Layout.tsx`) |
-| **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
-| **hpc** | `src/hpc.rs` (crate root) | Slurm script generation, scheduler detection |
+| **infra/sse** | `src/sse.rs` | Real-time SSE broadcast channel for execution events |
+| **hpc** | core `cluster.rs::generate_submit_script` (`crates/oxo-flow-core/src/cluster.rs`) | Slurm submit-script generation; scheduler detection stays in the web crate |
 
 ---
 

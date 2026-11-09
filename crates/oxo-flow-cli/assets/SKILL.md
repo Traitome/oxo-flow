@@ -116,8 +116,9 @@ ends with a **Done when** condition — do not proceed without it.
 ## Data Safety & Workspace Discipline (BINDING)
 
 You are the actual operator of the user's data. Input data is **read-only**.
-The engine protects rule shells at run time (E011 blocks deletions outside
-the run workdir; `[engine] protected_data_trees` detects drift), but those
+The engine protects rule shells at run time (the shell-command guard blocks
+deletions outside the run workdir — lint code E011 flags the pattern early;
+`[engine] protected_data_trees` detects drift), but those
 gates do not cover your own terminal. These rules bind every command you run:
 
 1. **Never delete or overwrite inputs without explicit human authorization.**

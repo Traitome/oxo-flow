@@ -66,7 +66,7 @@ covers:
 
 - top-level tables and their properties (`[workflow]`, `[ai]`,
   `[wildcard_constraints]`, `[cluster]`, …)
-- all 51 `[[rules]]` properties, with hover documentation for each
+- all 53 `[[rules]]` properties, with hover documentation for each
 - enum values where the schema constrains them (rule `checksum`, cluster
   `backend`, config `type`, …)
 - `depends_on` / `extends` complete **rule names defined in the current

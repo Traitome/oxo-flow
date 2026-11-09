@@ -269,8 +269,11 @@ Three details worth knowing:
   filesystem is appended to the Docker mount list automatically
   (`-v /data/ref:/data/ref:ro`), so the rule can read it from inside the
   container. The Singularity/Apptainer backend does not add these mounts —
-  bind paths yourself with `[cluster.container]` bind options if your site
-  needs them.
+  if your site needs them, keep inputs inside the workdir or wrap the
+  command yourself. (There is no `[cluster.container]` sub-table: the
+  `[cluster]` profile block accepts exactly eight keys — `account`,
+  `backend`, `extra_args`, `max_array_size`, `max_submitted`, `partition`,
+  `poll_interval`, `walltime`.)
 - **`apptainer` wins when both it and `singularity` are installed**, so
   clusters that renamed the binary keep working without configuration.
 

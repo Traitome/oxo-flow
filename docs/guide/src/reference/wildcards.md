@@ -74,7 +74,7 @@ The most important concept when writing multi-sample workflows: **where you put 
 
 ### Rule-level fan-out: `{sample}` clones the rule
 
-If `{sample}` (or `{group}`, or a pair wildcard such as `{experiment}`) appears anywhere in a rule's `input`, `output`, or `shell`, oxo-flow **clones the entire rule once per value**; inside each clone, the value also substitutes into `log`, `script`, and the hook fields (`pre_exec` / `on_success` / `on_failure`):
+If `{sample}` (or `{group}`, or a pair wildcard such as `{experiment}`) appears anywhere in a rule's `input`, `output`, `shell`, `when`, or `output_pattern`, oxo-flow **clones the entire rule once per value**; inside each clone, the value also substitutes into `log`, `script`, and the hook fields (`pre_exec` / `on_success` / `on_failure`):
 
 ```toml
 [[rules]]
@@ -118,7 +118,7 @@ output = ["variants/cohort.g.vcf.gz"]
 
 | Mechanism | Where | Effect | Use for |
 |---|---|---|---|
-| `{sample}` / `{group}` / pair wildcards | in `input`, `output`, or `shell` | clones the rule per value (fan-out); per-clone values substitute into `log`, `script`, and hooks | per-sample steps |
+| `{sample}` / `{group}` / pair wildcards | in `input`, `output`, `shell`, `when`, or `output_pattern` | clones the rule per value (fan-out); per-clone values substitute into `log`, `script`, and hooks | per-sample steps |
 | `expand_inputs` | rule field | appends expanded paths to `input` (fan-in) | gather / combine steps |
 | `{config.x}` | any path or shell | single-value text substitution | reusing config values |
 
