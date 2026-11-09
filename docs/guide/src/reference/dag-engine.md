@@ -430,7 +430,8 @@ flags these with warning [W019](./glossary.md#diagnostic-codes)).
   mixed file state.
 - Uploaded remote outputs are **verified against the local file** before
   the rule is recorded as complete (size always; md5 when the store
-  exposes a comparable digest — S3 single-part ETag or GCS `md5Hash`).
+  exposes a comparable digest — S3 single-part ETag, GCS `md5Hash`, or
+  Azure `Content-MD5`).
 - Rules with `cache_key` participate in **content-addressed reuse**: a
   cache entry whose key-plus-inputs-plus-command identity matches a
   previous run is restored instead of executing the shell (see

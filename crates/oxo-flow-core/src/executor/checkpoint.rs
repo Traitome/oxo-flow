@@ -77,9 +77,9 @@ pub struct InputManifestEntry {
     /// policy) and for legacy checkpoints written before hashing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
-    /// Remote-object identity for `s3://` / `gs://` inputs (issue #78 P2).
-    /// `None` for local files and legacy checkpoints — those keep the
-    /// size+mtime+sha256 policy.
+    /// Remote-object identity for `s3://` / `gs://` / `az://` inputs
+    /// (issue #78 P2). `None` for local files and legacy checkpoints —
+    /// those keep the size+mtime+sha256 policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteManifestEntry>,
     /// Whether the path resolved through a symlink at snapshot time
@@ -99,15 +99,16 @@ pub struct InputManifestEntry {
 /// Content identity of a remote input object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteManifestEntry {
-    /// URI scheme: `"s3"` or `"gs"`.
+    /// URI scheme: `"s3"`, `"gs"`, or `"az"`.
     pub scheme: String,
     /// The full URI as declared in the workflow.
     pub key: String,
     /// Object size in bytes at snapshot time.
     pub size: u64,
-    /// Content identity as reported by the store: S3 ETag (raw, possibly a
-    /// composite multipart hash) or GCS `md5Hash` (base64). `None` when the
-    /// store cannot provide one — matching then degrades to size-only.
+    /// Content identity as reported by the store: S3 ETag (raw hex,
+    /// possibly a composite multipart hash), GCS `md5Hash` (base64), or
+    /// Azure `Content-MD5` (base64). `None` when the store cannot provide
+    /// one — matching then degrades to size-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
 }
