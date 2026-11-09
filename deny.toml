@@ -58,13 +58,24 @@ license-files = []
 [advisories]
 version = 2
 yanked = "deny"
-# No advisory ignores remain (#876): the AWS legacy TLS stack
+# RUSTSEC-2026-0459 (libsqlite3-sys 0.30.1, CVE-2026-119375) ignored
+# 2026-11-09: bundled SQLite < 3.54.0 can return uninitialized memory when
+# a DB with a mismatched-page-size sibling -wal file is opened — LOCAL
+# attack vector only, and oxo-flow only opens the sqlite DB it creates
+# itself. The patched libsqlite3-sys 0.39.x is outside sqlx-sqlite 0.9.0's
+# declared range (<0.38.0); the upstream bound raise (launchbadge/sqlx#4502)
+# merged 2026-11-08 but has no release yet. Remove as soon as a sqlx
+# release carries the fix (dependabot's monthly cargo group will surface
+# it). Details in .cargo/audit.toml.
+#
+# No other advisory ignores remain (#876): the AWS legacy TLS stack
 # (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101 / h2 0.3) was removed
 # from the s3-storage feature graph — see .cargo/audit.toml and
 # crates/oxo-flow-core/Cargo.toml. This supersedes the #658 ignore list
 # (the six entries it carried all matched the legacy stack only). Keep
-# this list empty; new advisories must be fixed or justified explicitly.
-ignore = []
+# this list otherwise empty; new advisories must be fixed or justified
+# explicitly.
+ignore = ["RUSTSEC-2026-0459"]
 
 [bans]
 # Duplicates warn only: a full dedupe would chase transitive bumps in
