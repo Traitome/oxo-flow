@@ -5423,8 +5423,10 @@ the engine merges them, re-expands the rule templates, and executes the new
 instances in the same run. Every round is still a static plan; the checkpoint
 records the rounds so resumes replay (and revoke) them deterministically.</p>
 <h3 id="remote-manifest-entry">Remote manifest entry<a class="headerlink" href="#remote-manifest-entry" title="Permanent link">#</a></h3>
-<p>The content identity of an <code>s3://</code> / <code>gs://</code> input recorded in a rule's
-input manifest: <code>(scheme, key, size, etag)</code> — S3 ETag or GCS <code>md5Hash</code>.
+<p>The content identity of an <code>s3://</code> / <code>gs://</code> / <code>az://</code> input recorded in a
+rule's input manifest: <code>(scheme, key, size, etag)</code> — S3 ETag (raw hex,
+possibly a composite multipart hash), GCS <code>md5Hash</code>, or Azure
+<code>Content-MD5</code> (base64 for both GCS and Azure).
 Same-size remote rewrites invalidate the rule exactly as local content
 changes do (<a href="../cloud-storage/#content-addressed-invalidation">Cloud Storage</a>).</p>
 <hr />

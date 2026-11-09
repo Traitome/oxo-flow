@@ -5163,7 +5163,8 @@ flags these with warning <a href="../glossary/#diagnostic-codes">W019</a>).</p>
   mixed file state.</li>
 <li>Uploaded remote outputs are <strong>verified against the local file</strong> before
   the rule is recorded as complete (size always; md5 when the store
-  exposes a comparable digest — S3 single-part ETag or GCS <code>md5Hash</code>).</li>
+  exposes a comparable digest — S3 single-part ETag, GCS <code>md5Hash</code>, or
+  Azure <code>Content-MD5</code>).</li>
 <li>Rules with <code>cache_key</code> participate in <strong>content-addressed reuse</strong>: a
   cache entry whose key-plus-inputs-plus-command identity matches a
   previous run is restored instead of executing the shell (see
