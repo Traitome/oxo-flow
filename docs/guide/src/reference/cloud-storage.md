@@ -1,8 +1,8 @@
 # Cloud Storage
 
 oxo-flow supports reading and writing workflow inputs and outputs from
-cloud object storage, transparently resolving `s3://` and `gs://` URIs
-through its pluggable storage backend system.
+cloud object storage, transparently resolving `s3://`, `gs://`, and
+`az://` URIs through its pluggable storage backend system.
 
 ## Overview
 
@@ -16,7 +16,7 @@ output = ["local/{sample}.fastq.gz"]
 shell = "cp {input[0]} {output[0]}"
 ```
 
-When the pipeline engine encounters an `s3://` or `gs://` URI, it
+When the pipeline engine encounters an `s3://`, `gs://`, or `az://` URI, it
 detects the remote scheme and stages the file into the workdir before
 the rule runs, then uploads rule outputs with remote URIs back to the
 bucket after the rule succeeds (see
@@ -27,13 +27,13 @@ upload objects programmatically through the
 
 ### Prerequisites
 
-Both backends are feature-gated and are **not** included by default.
+All cloud backends are feature-gated and are **not** included by default.
 Enable them at build time — the features live on the `oxo-flow-cli` crate
 (the workspace root package defines none, so `--features` must be combined
 with `-p oxo-flow-cli`):
 
 ```bash
-cargo build --release -p oxo-flow-cli --features "s3-storage,gcs-storage"
+cargo build --release -p oxo-flow-cli --features "s3-storage,gcs-storage,azure-storage"
 ```
 
 ## AWS S3
@@ -127,6 +127,48 @@ shell = "fastqc {input[0]} -o {output[0]}"
 threads = 2
 ```
 
+## Azure Blob Storage
+
+The Azure backend speaks the Azure Blob Storage REST API directly through
+`reqwest` with HMAC-SHA256 request signing — no Azure SDK dependency
+(issue #1020). All credentials are resolved **from environment variables
+only**.
+
+### Credential Setup
+
+Three mutually exclusive options, tried in this order:
+
+```bash
+# Option 1: SharedKey — account name + access key
+export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
+export AZURE_STORAGE_ACCOUNT_KEY="base64-account-key=="
+
+# Option 2: SAS — account name + shared access signature token
+# (scoped and time-limited; good for least-privilege access)
+export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
+export AZURE_STORAGE_SAS_TOKEN="?sv=2022-11-02&ss=b&srt=o&sp=rwdlaciytf..."
+
+# Option 3: Connection string (parsed into account + key)
+export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=...;EndpointSuffix=core.windows.net"
+```
+
+### Example Workflow
+
+```toml
+[workflow]
+name = "azure-example"
+version = "1.0.0"
+
+[[rules]]
+name = "qc"
+input = ["az://my-container/raw/{sample}.fastq.gz"]
+output = ["az://my-container/qc/{sample}_report.html"]
+shell = "fastqc {input[0]} -o {output[0]}"
+
+[rules.resources]
+threads = 2
+```
+
 ## Storage Backend API
 
 The `StorageBackend` trait in `oxo_flow_core::storage` defines the
@@ -139,7 +181,7 @@ interface that all backends implement:
 | `write` | Write bytes to a remote location |
 | `stage` | Download a remote file to a local directory |
 | `upload` | Upload a local file to a remote location |
-| `head` | Object metadata for invalidation: size + content identity (S3 ETag / GCS `md5Hash`) |
+| `head` | Object metadata for invalidation: size + content identity (S3 ETag / GCS `md5Hash` / Azure `content-md5`) |
 | `name` | Human-readable backend name for diagnostics |
 
 The `StorageResolver` maintains a registry of backends keyed by URI
@@ -155,9 +197,9 @@ resolver.add_backend(StorageScheme::S3, Arc::new(s3_backend));
 
 ## Content-addressed invalidation
 
-Input manifests now record remote inputs alongside local ones. When a rule's
-inputs include `s3://` / `gs://` URIs and a backend is registered for that
-scheme, the checkpoint's input manifest stores a remote entry —
+Input manifests record remote inputs alongside local ones. When a rule's
+inputs include `s3://` / `gs://` / `az://` URIs and a backend is registered
+for that scheme, the checkpoint's input manifest stores a remote entry —
 `(scheme, key, size, etag)` — and `manifests_match` compares them:
 
 - S3: the raw `ETag` from `HeadObject`. Composite `"hash-N"` ETags from
@@ -167,6 +209,8 @@ scheme, the checkpoint's input manifest stores a remote entry —
   invalidation).
 - GCS: `md5Hash` (base64) from the `x-goog-hash` header — GCS has no native
   ETag; the md5 hash is the stronger pure content hash.
+- Azure: `Content-MD5` (base64) from the response header — surfaced as the
+  etag-equivalent identity, the same role GCS's md5 hash plays.
 
 A same-size remote rewrite with a changed etag invalidates the rule exactly
 as a local content change does; unchanged etag → skipped. When neither side
@@ -217,12 +261,13 @@ re-execute) instead of using the cache.
 
 ## Current Limitations
 
-- **Feature-gated** — Both backends are opt-in at compile time: enable
-  `oxo-flow-cli`'s `s3-storage` / `gcs-storage` features to register them
-  in the shared run/dry-run storage resolver. The default build includes
-  only the local filesystem backend. The `s3-storage` feature compiles and
-  is tested (unit fixtures + a live S3-compatible E2E suite, see
-  `crates/oxo-flow-cli/tests/remote_staging.rs`; verified against RustFS).
+- **Feature-gated** — All cloud backends are opt-in at compile time: enable
+  `oxo-flow-cli`'s `s3-storage` / `gcs-storage` / `azure-storage` features
+  to register them in the shared run/dry-run storage resolver. The default
+  build includes only the local filesystem backend. The `s3-storage` feature
+  compiles and is tested (unit fixtures + a live S3-compatible E2E suite,
+  see `crates/oxo-flow-cli/tests/remote_staging.rs`; verified against
+  RustFS).
   The `aws-sdk-s3` dependency is declared with
   `default-features = false` (minus the `rustls` feature), so the legacy
   hyper-0.14 / rustls-0.21 / h2-0.3 TLS stack never enters the graph — TLS
@@ -236,13 +281,3 @@ re-execute) instead of using the cache.
   `OXO_S3_FORCE_PATH_STYLE=1` (path-style addressing).
 - **UTF-8 only** — `read_to_string` requires the content to be valid
   UTF-8.  Binary files should use `stage` instead.
-- **Azure Blob Storage — implemented but not enabled** — Azure Blob
-  Storage support is fully implemented in the engine
-  (`crates/oxo-flow-core/src/storage/azure.rs`: Azure Blob REST API via
-  `reqwest`, no Azure SDK dependency, issue #1020), but it is **NOT
-  registered with the storage resolver** — the CLI registers only Local,
-  S3, and GCS, so every `az://container/blob` URI fails at run time with
-  an unsupported-scheme error. This is tracked in GitHub issue
-  [#1069](https://github.com/Traitome/oxo-flow/issues/1069); do not
-  configure Azure storage credentials or reference `az://` URIs in
-  workflows until registration lands.

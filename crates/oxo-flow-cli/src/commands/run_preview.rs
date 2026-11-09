@@ -208,6 +208,11 @@ pub fn storage_resolver() -> oxo_flow_core::storage::StorageResolver {
         oxo_flow_core::storage::StorageScheme::Gcs,
         std::sync::Arc::new(oxo_flow_core::storage::gcs::GcsStorage),
     );
+    #[cfg(feature = "azure-storage")]
+    resolver.add_backend(
+        oxo_flow_core::storage::StorageScheme::Azure,
+        std::sync::Arc::new(oxo_flow_core::storage::azure::AzureBlobStorage),
+    );
     resolver
 }
 
@@ -2258,5 +2263,20 @@ shell = "cp {{input[0]}} {{output[0]}}"
         // The in-memory state still carries it — a subsequent real run
         // adopts and persists on its own schedule.
         assert!(ck.protected_tree_baselines.contains_key("raw"));
+    }
+
+    #[cfg(feature = "azure-storage")]
+    #[test]
+    fn resolver_with_azure_feature_registers_az_scheme() {
+        // `az://` URIs parse to the Azure scheme…
+        let path = oxo_flow_core::storage::StoragePath::parse("az://container/blob");
+        assert_eq!(path.scheme, oxo_flow_core::storage::StorageScheme::Azure);
+
+        // …and the azure-storage feature registers a backend for it.
+        let resolver = storage_resolver();
+        let backend = resolver
+            .get_backend(&path.scheme)
+            .expect("az:// must resolve when the azure-storage feature is enabled");
+        assert_eq!(backend.name(), "azure");
     }
 }

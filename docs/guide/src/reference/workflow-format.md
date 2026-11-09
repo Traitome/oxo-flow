@@ -2636,7 +2636,8 @@ The engine closes that gap in two layers:
 - **Baked inputs** — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
   paths (`expand_inputs entries dropped: no live producer instance
-  declares these paths`). The comparison expands `{config.*}` tokens on both
+  declares these paths`; suppressed when the consumer's own config-only
+  `when` is decided-false at plan time — see below). The comparison expands `{config.*}` tokens on both
   sides (recorded producer outputs keep them raw), so patterns written as
   `ref_{config.genome}.fai` drop correctly too. The full list stays in
   `expand_inputs_baked` provenance (config-expanded, matching how the
@@ -2664,7 +2665,11 @@ stays in `expand_inputs_baked` as provenance for snapshot invalidation.
 If EVERY expanded entry is dropped, the consumer would execute with empty
 `{input}` args — planning fails instead with a validation error naming the
 rule. Fix the producer's `when`-condition/config so a live
-instance covers the paths, or give the consumer a fallback input.
+instance covers the paths, or give the consumer a fallback input. One
+exception: when the consumer's own `when` is a config-only condition (no
+`wildcard.`/`{meta.` terms) that already evaluates to false at plan time,
+the consumer can never execute — the zero-input error is skipped and the
+drop warning suppressed for that rule (#1070).
 
 Avoid `expand_inputs` over an output path that two rules both declare
 unless the twins are complementary when-gates (the duplicate-owner shape

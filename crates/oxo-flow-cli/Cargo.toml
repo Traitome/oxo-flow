@@ -19,6 +19,7 @@ path = "src/main.rs"
 # in the shared run/dry-run storage resolver (`run_preview::storage_resolver`).
 s3-storage = ["oxo-flow-core/s3-storage"]
 gcs-storage = ["oxo-flow-core/gcs-storage"]
+azure-storage = ["oxo-flow-core/azure-storage"]
 
 [dependencies]
 oxo-flow-core = { workspace = true }
