@@ -60,7 +60,7 @@ pub struct Cli {
     #[arg(global = true, short = 'v', long)]
     verbose: bool,
 
-    /// Suppress non-essential output (errors only).
+    /// Suppress non-essential output (version banner; run-time narration).
     #[arg(global = true, long)]
     quiet: bool,
 
