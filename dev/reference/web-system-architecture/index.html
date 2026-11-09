@@ -4540,13 +4540,13 @@
 </tr>
 <tr>
 <td><strong>infra/sse</strong></td>
-<td><code>infra/sse.rs</code></td>
+<td><code>src/sse.rs</code></td>
 <td>Real-time SSE broadcast channel for execution events</td>
 </tr>
 <tr>
 <td><strong>hpc</strong></td>
-<td><code>src/hpc.rs</code> (crate root)</td>
-<td>Slurm script generation, scheduler detection</td>
+<td>core <code>cluster.rs::generate_submit_script</code> (<code>crates/oxo-flow-core/src/cluster.rs</code>)</td>
+<td>Slurm submit-script generation; scheduler detection stays in the web crate</td>
 </tr>
 </tbody>
 </table>

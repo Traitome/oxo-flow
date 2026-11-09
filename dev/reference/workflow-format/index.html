@@ -8415,13 +8415,36 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <p>This allows intentional oversubscription for testing or when user knows better.</p>
 <h3 id="cleanup-behavior">Cleanup Behavior<a class="headerlink" href="#cleanup-behavior" title="Permanent link">#</a></h3>
 <p>oxo-flow automatically cleans up temporary outputs:</p>
-<p>| Scenario | Cleanup |
-|---|---|---|
-| Success + <code>temp_output</code> | Kept — no success-path cleanup runs; mark <code>temporary = true</code> instead if you want outputs deleted after the run |
-| Failure + <code>temp_output</code> | Cleaned to prevent stale partial files |
-| Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors) |
-| Transform with <code>cleanup=true</code> | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With <code>[engine]</code> thresholds configured, this post-run deletion only fires when free space is below <code>reclaim_free_disk</code> at run end — with disk comfortable the outputs are kept so later runs skip the producer (see the [engine] notes). For <code>output_pattern</code> rules, deletion is per recorded instance (only the concrete paths that ran and completed); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Cleanup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Success + <code>temp_output</code></td>
+<td>Kept — no success-path cleanup runs; mark <code>temporary = true</code> instead if you want outputs deleted after the run</td>
+</tr>
+<tr>
+<td>Failure + <code>temp_output</code></td>
+<td>Cleaned to prevent stale partial files</td>
+</tr>
+<tr>
+<td>Failure + declared <code>output</code></td>
+<td>Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors)</td>
+</tr>
+<tr>
+<td>Transform with <code>cleanup=true</code></td>
+<td>Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules)</td>
+</tr>
+<tr>
+<td>Success + <code>temporary = true</code></td>
+<td>Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With <code>[engine]</code> thresholds configured, this post-run deletion only fires when free space is below <code>reclaim_free_disk</code> at run end — with disk comfortable the outputs are kept so later runs skip the producer (see the [engine] notes). For <code>output_pattern</code> rules, deletion is per recorded instance (only the concrete paths that ran and completed); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish</td>
+</tr>
+</tbody>
+</table>
 <p><code>temporary</code> is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
 so a plain re-run skips the rule and does NOT regenerate the file — it comes

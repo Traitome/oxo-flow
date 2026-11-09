@@ -4610,9 +4610,14 @@
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">[rules.resource_hint]</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">input_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"large"</span><span class="w">     </span><span class="c1"># ~100GB input</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">memory_scale</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.5</span><span class="w">       </span><span class="c1"># Need 2.5× input size = 250GB</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">         </span><span class="c1"># &gt;1 hour expected</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">         </span><span class="c1"># reserved: parsed, but not consumed by the scheduler — `lint` flags it with W037</span>
 </span></code></pre></div>
 <p>Estimated memory: 100GB × 2.5 = 250GB</p>
+<p>The <code>runtime</code> hint is a reserved scheduler knob — like <code>io_bound</code>, it is
+parsed but not consumed today, and <code>lint</code> flags every use with <code>W037</code>.
+Only <code>input_size</code> and <code>memory_scale</code> affect planning; for enforced limits
+declare <code>resources.time_limit</code> / <code>resources.memory</code> / <code>resources.threads</code>
+instead.</p>
 <h2 id="resource-budgets">Resource Budgets<a class="headerlink" href="#resource-budgets" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[resource_budget]</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">max_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="w">        </span><span class="c1"># Reject any rule that declares more than 64 threads</span>

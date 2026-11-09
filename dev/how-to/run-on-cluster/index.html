@@ -4719,8 +4719,11 @@ wrapping forms — other pages link here instead of restating them:</p>
   filesystem is appended to the Docker mount list automatically
   (<code>-v /data/ref:/data/ref:ro</code>), so the rule can read it from inside the
   container. The Singularity/Apptainer backend does not add these mounts —
-  bind paths yourself with <code>[cluster.container]</code> bind options if your site
-  needs them.</li>
+  if your site needs them, keep inputs inside the workdir or wrap the
+  command yourself. (There is no <code>[cluster.container]</code> sub-table: the
+  <code>[cluster]</code> profile block accepts exactly eight keys — <code>account</code>,
+  <code>backend</code>, <code>extra_args</code>, <code>max_array_size</code>, <code>max_submitted</code>, <code>partition</code>,
+  <code>poll_interval</code>, <code>walltime</code>.)</li>
 <li><strong><code>apptainer</code> wins when both it and <code>singularity</code> are installed</strong>, so
   clusters that renamed the binary keep working without configuration.</li>
 </ul>

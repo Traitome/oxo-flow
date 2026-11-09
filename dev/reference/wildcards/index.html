@@ -4371,7 +4371,7 @@
 <h2 id="fan-out-vs-fan-in">Fan-out vs Fan-in<a class="headerlink" href="#fan-out-vs-fan-in" title="Permanent link">#</a></h2>
 <p>The most important concept when writing multi-sample workflows: <strong>where you put a wildcard decides whether the engine clones the rule or only fills its input list.</strong></p>
 <h3 id="rule-level-fan-out-sample-clones-the-rule">Rule-level fan-out: <code>{sample}</code> clones the rule<a class="headerlink" href="#rule-level-fan-out-sample-clones-the-rule" title="Permanent link">#</a></h3>
-<p>If <code>{sample}</code> (or <code>{group}</code>, or a pair wildcard such as <code>{experiment}</code>) appears anywhere in a rule's <code>input</code>, <code>output</code>, or <code>shell</code>, oxo-flow <strong>clones the entire rule once per value</strong>; inside each clone, the value also substitutes into <code>log</code>, <code>script</code>, and the hook fields (<code>pre_exec</code> / <code>on_success</code> / <code>on_failure</code>):</p>
+<p>If <code>{sample}</code> (or <code>{group}</code>, or a pair wildcard such as <code>{experiment}</code>) appears anywhere in a rule's <code>input</code>, <code>output</code>, <code>shell</code>, <code>when</code>, or <code>output_pattern</code>, oxo-flow <strong>clones the entire rule once per value</strong>; inside each clone, the value also substitutes into <code>log</code>, <code>script</code>, and the hook fields (<code>pre_exec</code> / <code>on_success</code> / <code>on_failure</code>):</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}.fastq.gz"</span><span class="p">]</span>
@@ -4410,7 +4410,7 @@
 <tbody>
 <tr>
 <td><code>{sample}</code> / <code>{group}</code> / pair wildcards</td>
-<td>in <code>input</code>, <code>output</code>, or <code>shell</code></td>
+<td>in <code>input</code>, <code>output</code>, <code>shell</code>, <code>when</code>, or <code>output_pattern</code></td>
 <td>clones the rule per value (fan-out); per-clone values substitute into <code>log</code>, <code>script</code>, and hooks</td>
 <td>per-sample steps</td>
 </tr>

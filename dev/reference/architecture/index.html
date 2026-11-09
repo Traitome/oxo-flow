@@ -4858,9 +4858,11 @@ the execution layer knows the planning layer's outputs, never the reverse.</p>
 </table>
 <hr />
 <h2 id="workflow-lifecycle">Workflow Lifecycle<a class="headerlink" href="#workflow-lifecycle" title="Permanent link">#</a></h2>
-<p>The configuration moves through a type-state machine — the compiler
-refuses to execute an unvalidated workflow, because <code>WorkflowState&lt;S&gt;</code>
-wraps the config and only exposes the transitions you have earned:</p>
+<p>The workflow configuration is a plain struct — the engine's run path never
+executes an unvalidated workflow, but there is no compile-time type-state
+enforcing the transitions, and the struct itself carries no status field.
+The lifecycle stages are tracked at run time as status values (for
+individual rules, the executor's <code>JobStatus</code> enum):</p>
 <pre class="mermaid"><code>stateDiagram-v2
     [*] --&gt; Parsed: parse the .oxoflow TOML
     Parsed --&gt; Validated: validate — schema, unknown keys, rule references, cycles
@@ -4869,7 +4871,7 @@ wraps the config and only exposes the transitions you have earned:</p>
     Expanded --&gt; Executed: run loop — scheduler + executor
     Expanded --&gt; Expanded: runtime output_pattern fan-out
     Executed --&gt; [*]: report + checkpoint</code></pre>
-<p>Two properties follow from this encoding:</p>
+<p>Two properties follow from this design:</p>
 <ul>
 <li><strong>Validation is not optional.</strong> A <code>Ready</code> workflow has already passed
   every static check; the run loop never re-validates.</li>

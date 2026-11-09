@@ -2550,10 +2550,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#json-summary-json" class="md-nav__link">
+  <a href="#json-output" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON summary (--json)
+        JSON output
       
     </span>
   </a>
@@ -4462,10 +4462,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#json-summary-json" class="md-nav__link">
+  <a href="#json-output" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON summary (--json)
+        JSON output
       
     </span>
   </a>
@@ -5080,7 +5080,7 @@ keys matching nothing declared keep the literal spelling.</p>
 <td><code>--json</code></td>
 <td>—</td>
 <td>—</td>
-<td>Emit a machine-readable JSON summary on stdout after the run (see <a href="#json-summary">JSON summary</a>)</td>
+<td>Emit a machine-readable JSON summary on stdout after the run (see <a href="#json-output">JSON output</a>)</td>
 </tr>
 <tr>
 <td><code>--workdir</code></td>
@@ -5264,7 +5264,7 @@ keys matching nothing declared keep the literal spelling.</p>
 </tr>
 </tbody>
 </table>
-<h3 id="json-summary-json">JSON summary (<code>--json</code>)<a class="headerlink" href="#json-summary-json" title="Permanent link">#</a></h3>
+<h3 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h3>
 <p>The document carries <code>command</code>, <code>status</code>, <code>results</code> counts, and <code>resources</code>.
 It is emitted on <strong>every</strong> exit path — completed, failed, and aborted
 (preflight failures, budget breaches, cluster runs, plain-failure aborts) —
@@ -5327,7 +5327,7 @@ there).</p>
 </tr>
 <tr>
 <td>Machine-readable output</td>
-<td><code>--json</code> (see <a href="#json-summary">JSON summary</a>)</td>
+<td><code>--json</code> (see <a href="#json-output">JSON output</a>)</td>
 </tr>
 <tr>
 <td>Output checksums</td>
@@ -6528,7 +6528,7 @@ the config surface.</p>
 <p>Validation and run failures both exit <code>1</code>; the distinction is in the stderr
 diagnostics (a parse error names the workflow file, a run failure lists the
 failed rules). Machine consumers that need to separate the two should use
-<a href="#json-summary"><code>--json</code></a> and read <code>status</code>. Failure-specific exit codes on
+<a href="#json-output"><code>--json</code></a> and read <code>status</code>. Failure-specific exit codes on
 other commands are documented per page — see <a href="../report/#exit-codes"><code>report</code></a>
 and <a href="../test/#exit-codes"><code>test</code></a>.</p>
 <hr />

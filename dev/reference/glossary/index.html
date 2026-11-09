@@ -5676,6 +5676,10 @@ below list every code the engine currently emits.</p>
 <td>A <code>resource_hint</code> sets <code>runtime</code> or <code>io_bound</code> — both are parsed but consumed by nothing; the scheduler only uses <code>input_size</code> and <code>memory_scale</code> today</td>
 </tr>
 <tr>
+<td><code>W038</code></td>
+<td>A rule sets <code>format_hint</code> — parsed but consumed by nothing; the engine performs no format-specific I/O today. <code>pipe</code> is NOT flagged (since #997 it selects <code>staging_mode = "stream_fifo"</code>)</td>
+</tr>
+<tr>
 <td><code>W039</code></td>
 <td>A dotted <code>{namespace.key}</code> placeholder uses an unrecognized namespace (e.g. <code>{metadata.batch}</code> instead of <code>{meta.batch}</code>) — the token is never substituted and the tool receives literal brace text</td>
 </tr>

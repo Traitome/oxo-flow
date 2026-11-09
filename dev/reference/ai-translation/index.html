@@ -4155,7 +4155,10 @@ explanation.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>caller's own provider → configured provider → env-discovered Claude →
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>env-discovered OpenAI → Ollama (only when OLLAMA_HOST is set)
 </span></code></pre></div>
-<p><strong>Fallback chain</strong>: DeepSeek is the default provider. Candidates only enter
+<p><strong>Fallback chain</strong>: there is no shipped default provider. With no explicit
+configuration, the provider resolves through environment credentials →
+config file → auto-detect, and <code>disabled</code> is the outcome when nothing
+resolves. Candidates only enter
 the chain when they are actually usable — the caller's provider if usable,
 the runtime-configured provider if configured, Claude/OpenAI only when
 discoverable from the environment, and Ollama only when the operator opted

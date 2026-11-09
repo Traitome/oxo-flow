@@ -4037,11 +4037,13 @@ workflows, run them, and repair failures. That makes the agent the operator of
 someone else's data. This page is the operating contract — the same rules ship
 in the <a href="../../SKILL/">AI Agent Skill</a> so canonical agents load them
 automatically.</p>
-<p><strong>The engine's own gates protect rule shells, not your terminal.</strong> <code>E011</code>
-blocks recursive deletions outside the run workdir at run time;
-<code>[engine] protected_data_trees</code> detects drift of declared data trees before
-the next run. Neither one prevents an agent's own <code>rm</code>, <code>mv</code>, or truncating
-redirect. These rules do.</p>
+<p><strong>The engine's own gates protect rule shells, not your terminal.</strong> The lint
+flags dangerous shell patterns early (<code>E011</code>), and the run-time
+shell-command guard blocks recursive deletions outside the run workdir
+with a <code>Validation</code> error; <code>[engine] protected_data_trees</code> detects drift of
+declared data trees before the next run. None of these gates prevent an
+agent's own <code>rm</code>, <code>mv</code>, or truncating redirect — they apply only to rule
+shells the engine executes. These rules do.</p>
 <h2 id="the-seven-rules">The seven rules<a class="headerlink" href="#the-seven-rules" title="Permanent link">#</a></h2>
 <ol>
 <li><strong>Inputs are read-only.</strong> Never delete, move, or overwrite an input without

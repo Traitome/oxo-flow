@@ -4428,9 +4428,9 @@ reports are safe to open and share. They can be opened in any browser:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf<span class="w"> </span>-o<span class="w"> </span>report.pdf
 </span></code></pre></div>
 <p>If <code>wkhtmltopdf</code> is not installed, the command degrades gracefully: it
-writes a printable HTML file (<code>report.html</code>) and warns, instead of
-failing. Note the wkhtmltopdf project upstream has been archived — HTML
-output is the portable, supported-by-default format.</p>
+writes a printable HTML file (<code>&lt;workflow.name&gt;_report.html</code>) and warns,
+instead of failing. Note the wkhtmltopdf project upstream has been archived —
+HTML output is the portable, supported-by-default format.</p>
 <p>You can also output the raw <code>wkhtmltopdf</code> command for scripting or custom
 processing:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf-command
