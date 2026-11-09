@@ -372,8 +372,10 @@ records the rounds so resumes replay (and revoke) them deterministically.
 
 ### Remote manifest entry
 
-The content identity of an `s3://` / `gs://` input recorded in a rule's
-input manifest: `(scheme, key, size, etag)` — S3 ETag or GCS `md5Hash`.
+The content identity of an `s3://` / `gs://` / `az://` input recorded in a
+rule's input manifest: `(scheme, key, size, etag)` — S3 ETag (raw hex,
+possibly a composite multipart hash), GCS `md5Hash`, or Azure
+`Content-MD5` (base64 for both GCS and Azure).
 Same-size remote rewrites invalidate the rule exactly as local content
 changes do ([Cloud Storage](./cloud-storage.md#content-addressed-invalidation)).
 
