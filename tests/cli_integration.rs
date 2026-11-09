@@ -738,6 +738,20 @@ fn cli_subcommand_help_has_no_banner() {
         .stdout(predicate::str::contains("███╗").not());
 }
 
+#[test]
+fn cli_quiet_help_matches_actual_behavior() {
+    // Issue #1066: the global --quiet doc-comment claimed "errors only",
+    // but 33 of 34 subcommands produce identical output with and without
+    // it. The wording must stay truthful: it suppresses the version
+    // banner and run-time narration, not errors.
+    oxo_flow_cmd()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("errors only").not())
+        .stdout(predicate::str::contains("version banner"));
+}
+
 // ─── Non-UTF-8 arguments ────────────────────────────────────────────────────
 
 /// The banner pre-scan in main() walks argv with args_os, so arguments
