@@ -445,13 +445,19 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.0",
     "@types/vscode": "1.90.0",
-    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^2.4.1",
-    "@vscode/vsce": "^3.2.0",
+    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.25.0",
     "ovsx": "^0.10.0",
     "typescript": "^5.7.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
+  },
+  "overrides": {
+    "mocha": "^12.0.3",
+    "minimatch": "^11.0.5",
+    "glob": "^14.0.4",
+    "serialize-javascript": "^7.1.4"
   }
 }
