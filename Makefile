@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -61,9 +61,22 @@ issue-id-tripwire:
 	  echo "issue-id-tripwire: user-facing pages clean of internal issue IDs"; \
 	fi
 
+## Lockfile registry tripwire: package-lock.json resolved URLs must point at
+## registry.npmjs.org. Lockfiles are generated on dev machines whose npm
+## registry may point at a mirror (e.g. registry.npmmirror.com); `npm ci`
+## uses the lockfile's resolved URLs verbatim (replace-registry-host only
+## rewrites npmjs URLs at fetch time, never foreign ones), so a mirror
+## outage then takes down CI's npm installs — this happened twice
+## (v0.30.0 tag run + main run 42745452182, 2026-11-10).
+npmmirror-tripwire:
+	@if grep -n 'registry\.npmmirror\.com' editors/vscode/package-lock.json frontend/package-lock.json; then \
+	  echo "npmmirror-tripwire: mirror URLs leaked into a package-lock.json — re-canonicalize the resolved URLs against registry.npmjs.org (npm install with --registry does NOT rewrite untouched entries)"; \
+	  exit 1; \
+	else \
+	  echo "npmmirror-tripwire: lockfile resolved URLs all point at registry.npmjs.org"; \
+	fi
+
 ## Secret-scanning gate over the git history and working tree (config in
-## .gitleaks.toml, #557). Run from the repo root: gitleaks auto-discovers
-## the config there but not above a --source directory.
 secrets:
 	gitleaks detect
 
