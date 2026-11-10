@@ -370,11 +370,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo (registry + all-target artifacts)
+      - name: Cache cargo (registry + build artifacts)
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          cache-all-targets: true
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -1012,6 +1011,9 @@ jobs:
           printf ' AI-assisted generation, cluster execution. The desktop build\n' >> deb-root/DEBIAN/control
           printf ' starts the local web interface (oxo-flow serve --open).\n' >> deb-root/DEBIAN/control
           mkdir -p artifacts/dist
+          # dpkg-deb warns on a non-root owner (the runner user is 1001);
+          # installed files must belong to root like any distro package.
+          sudo chown -R root:root deb-root
           dpkg-deb --build deb-root "artifacts/dist/oxo-flow-${RELEASE_TAG}-desktop-amd64.deb"
 
       - name: Package Red Hat bundle (.rpm)
@@ -1087,6 +1089,27 @@ jobs:
             'Categories=Science;Development;' \
             > "${APPDIR}/oxo-flow.desktop"
           cp assets/oxo-flow.png "${APPDIR}/oxo-flow.png"
+          # AppStream upstream metadata: silences appimagetool's warning and
+          # makes the AppImage eligible for AppImageHub / directory listings.
+          mkdir -p "${APPDIR}/usr/share/metainfo"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<component type="desktop-application">' \
+            '  <id>dev.oxoflow.OxoFlow</id>' \
+            '  <metadata_license>CC0-1.0</metadata_license>' \
+            '  <project_license>Apache-2.0</project_license>' \
+            '  <name>oxo-flow</name>' \
+            '  <summary>Bioinformatics workflow engine with web interface</summary>' \
+            '  <description>' \
+            '    <p>Rust-native pipeline engine: DAG workflows, graphical editor,' \
+            '    AI-assisted generation, cluster execution. The desktop build' \
+            '    starts the local web interface (oxo-flow serve --open).</p>' \
+            '  </description>' \
+            '  <launchable type="desktop-id">oxo-flow.desktop</launchable>' \
+            '  <url type="homepage">https://github.com/Traitome/oxo-flow</url>' \
+            '  <content_rating type="oars-1.1" />' \
+            '</component>' \
+            > "${APPDIR}/usr/share/metainfo/oxo-flow.appdata.xml"
           # M-14: `continuous` is a mutable tag with no upstream checksum
           # file, so the exact verified build is pinned by sha256 here
           # (observed 2026-11-07). An upstream rebuild of the tag now fails
