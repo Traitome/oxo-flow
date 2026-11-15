@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "7930ccfbccb36faebfbd65730c18d17797336d14ca91acf612a5553a8e60095c",
+  "schemaSha256": "cade35c5ba55d6deace1ad397441aff6445928ea5b7f266cf1cf9d7ad3f202d6",
   "contexts": {
     "root": {
       "keys": [
@@ -276,12 +276,12 @@
         },
         {
           "key": "max_memory",
-          "description": "Reject any rule that declares more memory, e.g. \"256G\" (cluster submissions).",
+          "description": "Reject any rule that declares more memory, e.g. \"256G\" (local runs and cluster submissions).",
           "type": "string"
         },
         {
           "key": "max_threads",
-          "description": "Reject any rule that declares more threads (cluster submissions).",
+          "description": "Reject any rule that declares more threads (local runs and cluster submissions).",
           "type": "integer"
         }
       ]

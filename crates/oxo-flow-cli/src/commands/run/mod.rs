@@ -1022,6 +1022,62 @@ async fn run_command_inner(
         return Ok(());
     }
 
+    // ── [resource_budget] local caps (issue #1080 R2) ────────────────────
+    // The workflow's budget is a versioned cap for LOCAL runs too: the
+    // cluster path already enforces it at submission, but shards launched
+    // with `oxo-flow run` inside an allocation must honor the same file.
+    // A larger CLI request is clamped (the budget is a hard cap), a
+    // tighter CLI request still wins, and a silent CLI inherits the budget.
+    let budget = config.resource_budget.as_ref();
+    // A workflow without a budget resolves the CLI values unchanged; the
+    // shared resolver keeps that case identical to "budget present, no
+    // caps" (one code path, no hand-copied precedence).
+    let no_budget = oxo_flow_core::config::ResourceBudget::default();
+    let budget_limits = budget
+        .unwrap_or(&no_budget)
+        .effective_caps(None, None)
+        .context("invalid [resource_budget]")?;
+    let cli_threads = (max_threads > 0).then_some(max_threads);
+    let cli_memory_mb = (max_memory > 0).then_some(max_memory);
+    let budget_caps = budget
+        .unwrap_or(&no_budget)
+        .effective_caps(cli_threads, cli_memory_mb)
+        .context("invalid [resource_budget]")?;
+    if let Some(cap) = budget.and_then(|b| b.max_threads) {
+        match (max_threads > 0).then_some(max_threads) {
+            Some(cli) if cli > cap => eprintln!(
+                "  {} [resource_budget] max_threads = {} caps the requested --max-threads {} — this local run uses at most {} threads",
+                "Warning:".bold().yellow(),
+                cap,
+                cli,
+                cap
+            ),
+            None => eprintln!(
+                "  [resource_budget] max_threads = {} caps this local run's thread pool",
+                cap
+            ),
+            Some(_) => {}
+        }
+    }
+    if let Some(raw) = budget.and_then(|b| b.max_memory.as_deref()) {
+        let cap_mb = budget_caps.max_memory_mb.unwrap_or(0);
+        match (max_memory > 0).then_some(max_memory) {
+            Some(cli) if cli > cap_mb => eprintln!(
+                "  {} [resource_budget] max_memory = {} ({} MB) caps the requested --max-memory {} MB — this local run uses at most {} MB",
+                "Warning:".bold().yellow(),
+                raw,
+                cap_mb,
+                cli,
+                cap_mb
+            ),
+            None => eprintln!(
+                "  [resource_budget] max_memory = {} ({} MB) caps this local run's memory pool",
+                raw, cap_mb
+            ),
+            Some(_) => {}
+        }
+    }
+
     let exec_config = ExecutorConfig {
         max_jobs: jobs,
         dry_run: false,
@@ -1042,16 +1098,14 @@ async fn run_command_inner(
         } else {
             None
         },
-        max_threads: if max_threads > 0 {
-            Some(max_threads)
-        } else {
-            None
-        },
-        max_memory_mb: if max_memory > 0 {
-            Some(max_memory)
-        } else {
-            None
-        },
+        // Raw CLI ceilings stay explicit (the operator's escape hatch);
+        // the workflow budget is a separate cap the executor applies with
+        // min(), so a cluster-sized budget can never raise a local run's
+        // ceiling above the machine (issue #1080).
+        max_threads: cli_threads,
+        max_memory_mb: cli_memory_mb,
+        thread_cap: budget_limits.max_threads,
+        memory_cap_mb: budget_limits.max_memory_mb,
         force_rerun: rerun,
         // Rules invalidated by config-change analysis bypass the executor's
         // mtime freshness gate so their stale outputs are actually rebuilt.
@@ -1134,14 +1188,59 @@ async fn run_command_inner(
         .iter()
         .filter_map(|name| config.get_rule(name))
         .collect();
+    // The effective caps (CLI and workflow budget, tighter wins), not the
+    // raw CLI fields: a workflow budget alone can make a rule infeasible.
     if let Err(e) = validate_resource_budget(
         &scheduled,
-        exec_config.max_threads,
-        exec_config.max_memory_mb,
+        budget_caps.max_threads,
+        budget_caps.max_memory_mb,
     ) {
         progress.finish_and_clear();
         json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(e);
+    }
+
+    // ── CPU-oversubscription guard (issue #1080 R1) ──────────────────────
+    // The memory path warns when a cgroup cap bites; CPU had no equivalent
+    // signal, so `-j 8` with 8-thread rules silently occupied a 64-core
+    // node (thermal/noise complaint from operations). Warn when the
+    // worst-case plan demand of any scheduled parallel wave reaches 80%
+    // of the detected CPUs. Demand is computed on the SCHEDULED subgraph
+    // (targets/`when` filtering included) and clamped by the pool ceiling
+    // the executor will build, so a budget that leaves headroom silences
+    // the warning while a cap above the host still reports saturation.
+    {
+        let detected_cpus = oxo_flow_core::executor::process::detect_system_threads();
+        let pool_threads = cli_threads
+            .unwrap_or(detected_cpus)
+            .min(budget_limits.max_threads.unwrap_or(u32::MAX))
+            .max(1);
+        let waves = scheduled_waves(&dag, &scheduled);
+        if let Some(demand) = oxo_flow_core::scheduler::analyze_cpu_demand_waves(
+            &waves,
+            jobs,
+            detected_cpus,
+            pool_threads,
+        ) {
+            tracing::warn!(
+                concurrent_jobs = demand.concurrent_jobs,
+                max_rule_threads = demand.max_rule_threads,
+                planned_thread_demand = demand.demand,
+                detected_cpus = demand.detected_cpus,
+                percent = demand.percent,
+                "planned thread demand {} = up to {} concurrent jobs × {} threads/rule, vs {} detected CPUs ({}%) — the run will occupy {}; pass --max-threads N or lower -j to leave headroom for the OS and co-tenants",
+                demand.demand,
+                demand.concurrent_jobs,
+                demand.max_rule_threads,
+                demand.detected_cpus,
+                demand.percent,
+                if demand.percent >= 100 {
+                    "all cores"
+                } else {
+                    "most cores"
+                }
+            );
+        }
     }
 
     // Disk pre-flight (issue #75) and runtime disk-pressure monitor pre-flight (#843).
@@ -1323,6 +1422,33 @@ async fn run_command_inner(
         json_summary: &mut json_summary,
     })
     .await
+}
+
+/// The scheduled rules grouped into the DAG's parallel waves (issue #1080
+/// R1). Filtering the structural groups to the execution set keeps a
+/// targeted run (`-t`) from borrowing unrelated parallelism for its
+/// oversubscription estimate.
+fn scheduled_waves<'a>(dag: &WorkflowDag, scheduled: &[&'a Rule]) -> Vec<Vec<&'a Rule>> {
+    let by_name: std::collections::HashMap<&str, &'a Rule> = scheduled
+        .iter()
+        .map(|rule| (rule.name.as_str(), *rule))
+        .collect();
+    let mut waves: Vec<Vec<&'a Rule>> = dag
+        .parallel_groups()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|group| {
+            let members: Vec<&'a Rule> = group
+                .iter()
+                .filter_map(|name| by_name.get(name.as_str()).copied())
+                .collect();
+            (!members.is_empty()).then_some(members)
+        })
+        .collect();
+    if waves.is_empty() {
+        waves.push(scheduled.to_vec());
+    }
+    waves
 }
 
 #[cfg(test)]

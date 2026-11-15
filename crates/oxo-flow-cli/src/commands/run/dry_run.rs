@@ -145,6 +145,32 @@ async fn dry_run_command_inner(
         crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
     }
 
+    // ── [resource_budget] local caps (issue #1080 R2) ────────────────────
+    // Preview the same ceilings `run` applies: the workflow budget caps
+    // local execution, so the suggested -j and the summary must honor it.
+    // Resolved after the profile merge because a profile may fill it in.
+    let no_budget = oxo_flow_core::config::ResourceBudget::default();
+    let budget_caps = config
+        .resource_budget
+        .as_ref()
+        .unwrap_or(&no_budget)
+        .effective_caps(None, None)
+        .context("invalid [resource_budget]")?;
+    // Preview the effective ceilings a local run would build: the host
+    // detection bounded by the workflow budget (issue #1080). The command
+    // rendering and the suggested -j both use these, so preview and
+    // execution cannot disagree on `{effective_threads}`.
+    let detected_threads = oxo_flow_core::executor::process::detect_system_threads();
+    let base_limits = oxo_flow_core::scheduler::detect_system_limits();
+    let preview_limits = oxo_flow_core::scheduler::ResourceLimits {
+        threads: budget_caps
+            .max_threads
+            .map_or(detected_threads, |cap| detected_threads.min(cap)),
+        memory_mb: budget_caps
+            .max_memory_mb
+            .map_or(base_limits.memory_mb, |cap| base_limits.memory_mb.min(cap)),
+    };
+
     // ── Scientific preflight (deterministic, evidence-backed) ────────────
     // Printed for every dry-run; with --ai the findings are also passed to
     // the model for a plain-language explanation.
@@ -232,6 +258,19 @@ async fn dry_run_command_inner(
     } else {
         execution_order_skipping_with_notes(&dag, &target, &when_false_rules, base_dir, None, true)?
     };
+
+    // ── [resource_budget] feasibility (issue #1080 R2) ───────────────────
+    // A preview must not recommend executing a plan that `run` rejects
+    // before spawning anything: apply the same fast-fail gate here.
+    let scheduled: Vec<&oxo_flow_core::rule::Rule> = order
+        .iter()
+        .filter_map(|name| config.get_rule(name))
+        .collect();
+    super::preflight::validate_resource_budget(
+        &scheduled,
+        budget_caps.max_threads,
+        budget_caps.max_memory_mb,
+    )?;
 
     // All config values (including CLI --arg overrides) become {config.key} in templates.
     let wildcard_values = config_placeholder_values(&config.config);
@@ -480,7 +519,7 @@ async fn dry_run_command_inner(
                 cmd,
                 rule,
                 &wildcard_values,
-                oxo_flow_core::scheduler::detect_system_limits(),
+                preview_limits,
             );
             // Mask sensitive values (issue #99 B1): the plan print is a log
             // surface like any other.
@@ -600,6 +639,21 @@ async fn dry_run_command_inner(
             oxo_flow_core::plural(memory_values.len(), "rule", "rules")
         );
     }
+    if config
+        .resource_budget
+        .as_ref()
+        .is_some_and(|budget| budget.max_threads.is_some() || budget.max_memory.is_some())
+    {
+        eprintln!(
+            "         local caps from [resource_budget]: max_threads = {}, max_memory = {}",
+            budget_caps
+                .max_threads
+                .map_or_else(|| "auto".to_string(), |n| n.to_string()),
+            budget_caps
+                .max_memory_mb
+                .map_or_else(|| "auto".to_string(), |mb| format!("{mb} MB")),
+        );
+    }
     if !config.sample_groups.is_empty() {
         eprintln!(
             "         {}, {}",
@@ -613,9 +667,10 @@ async fn dry_run_command_inner(
     // by an unrelated heavy wave elsewhere in the DAG. The engine's
     // resource pool enforces declared threads, so this is a performance
     // hint, not an oversubscription gate.
-    let system_threads = std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(4);
+    // The same effective ceiling the preview renders (host detection
+    // bounded by the workflow budget), so the suggested -j never proposes
+    // more threads than a local run is allowed to use (issue #1080).
+    let system_threads = preview_limits.threads;
     let groups = dag.parallel_groups().unwrap_or_default();
     let suggested_jobs = suggest_jobs(&config, &groups, system_threads).to_string();
     eprintln!(
@@ -741,7 +796,7 @@ async fn dry_run_command_inner(
                         cmd,
                         rule,
                         &wildcard_values,
-                        oxo_flow_core::scheduler::detect_system_limits(),
+                        preview_limits,
                     )
                 });
                 // Declared patterns stay raw in inputs/outputs (the stable

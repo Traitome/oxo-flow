@@ -799,6 +799,69 @@ pub struct ResourceBudget {
     pub max_jobs: Option<usize>,
 }
 
+/// Effective local-execution ceilings after combining explicit CLI limits
+/// with `[resource_budget]` (issue #1080 R2). `None` means auto-detect.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EffectiveResourceCaps {
+    pub max_threads: Option<u32>,
+    pub max_memory_mb: Option<u64>,
+}
+
+impl ResourceBudget {
+    /// Resolve the ceilings a LOCAL run must honor (issue #1080 R2).
+    ///
+    /// `[resource_budget]` is a hard, versioned cap: a larger CLI request
+    /// is clamped, a tighter CLI request still wins, and a silent CLI
+    /// inherits the budget. A zero or unreadable cap is an error — it
+    /// could never run a rule, and the cluster path already refuses to
+    /// treat an unreadable cap as "no cap".
+    pub fn effective_caps(
+        &self,
+        cli_threads: Option<u32>,
+        cli_memory_mb: Option<u64>,
+    ) -> Result<EffectiveResourceCaps> {
+        if self.max_threads == Some(0) {
+            return Err(OxoFlowError::Config {
+                message: "[resource_budget] max_threads = 0 can never run a rule — use a positive cap or remove it".to_string(),
+            });
+        }
+        let budget_memory_mb = match self.max_memory.as_deref() {
+            Some(raw) => {
+                let mb = crate::scheduler::parse_memory_mb(raw).ok_or_else(|| {
+                    OxoFlowError::Config {
+                        message: format!(
+                            "[resource_budget] max_memory = '{raw}' is not a memory figure — use e.g. 64G"
+                        ),
+                    }
+                })?;
+                if mb == 0 {
+                    return Err(OxoFlowError::Config {
+                        message: "[resource_budget] max_memory = 0 can never run a rule — use a positive cap or remove it".to_string(),
+                    });
+                }
+                Some(mb)
+            }
+            None => None,
+        };
+        let max_threads = match (cli_threads, self.max_threads) {
+            (Some(cli), Some(cap)) => Some(cli.min(cap)),
+            (Some(cli), None) => Some(cli),
+            (None, Some(cap)) => Some(cap),
+            (None, None) => None,
+        };
+        let max_memory_mb = match (cli_memory_mb, budget_memory_mb) {
+            (Some(cli), Some(cap)) => Some(cli.min(cap)),
+            (Some(cli), None) => Some(cli),
+            (None, Some(cap)) => Some(cap),
+            (None, None) => None,
+        };
+        Ok(EffectiveResourceCaps {
+            max_threads,
+            max_memory_mb,
+        })
+    }
+}
+
 /// Runtime disk-pressure monitoring thresholds (issue #843).
 ///
 /// The engine watches free space on the working directory's filesystem at

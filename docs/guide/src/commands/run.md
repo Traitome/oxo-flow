@@ -50,8 +50,8 @@ keys matching nothing declared keep the literal spelling.
 | `--module` | — | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem (see [Partial module runs](#partial-module-runs-module)) |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds, or a duration like `1h`/`30m` |
-| `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
-| `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest `memory.max` — see [Notes](#notes)); set it explicitly (e.g. `--max-memory 430000 --retry 2`) when the clamp misreads a deliberately generous slice |
+| `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution. A workflow `[resource_budget] max_threads` caps the effective value (see [Resource budgets](../how-to/resource-tuning.md#resource-budgets)) |
+| `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest `memory.max` — see [Notes](#notes)); a workflow `[resource_budget] max_memory` also caps the effective value. Set it explicitly (e.g. `--max-memory 430000 --retry 2`) when the clamp misreads a deliberately generous slice |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state (a small readiness manifest that rebuilds itself on demand). The retired post-run `cache_max_age_days` aging sweep warns and points at `oxo-flow env gc`, which reclaims the shared env store (`OXO_FLOW_ENV_STORE`) — not this directory |
@@ -107,7 +107,7 @@ Common flags at a glance — every flag is documented in the
 | Force re-execution | `--rerun` |
 | Config values from the command line | `[KEY=VALUE]...` positionals, `--arg KEY=VALUE` (see [Config overrides](#config-overrides)) |
 | Execution profile / cluster | `--profile`, `--max-submitted` (see [Cluster submission](#cluster-submission)) |
-| Resource budgets | `--max-threads`, `--max-memory` |
+| Resource budgets | `--max-threads`, `--max-memory`, `[resource_budget]` (see [Resource budgets](../how-to/resource-tuning.md#resource-budgets)) |
 | Machine-readable output | `--json` (see [JSON output](#json-output)) |
 | Output checksums | `--provenance` |
 | Run detached / wait for it | `--background` / `--detach`, then [`oxo-flow wait`](wait.md) |
@@ -379,6 +379,15 @@ oxo-flow run pipeline.oxoflow --timeout 1h
 ```bash
 # Use only 16 threads and 32GB memory
 oxo-flow run pipeline.oxoflow --max-threads 16 --max-memory 32768
+```
+
+A workflow can carry the same caps in `[resource_budget]` so every run of the
+file is bounded without an external wrapper (issue #1080):
+
+```toml
+[resource_budget]
+max_threads = 16
+max_memory = "32G"
 ```
 
 ### Cache environment setup
@@ -1602,9 +1611,10 @@ and [`test`](test.md#exit-codes).
 - The `--retry` flag re-runs failed jobs up to N times before marking them as failed
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
-- **Pre-flight budget check:** When `--max-threads` or `--max-memory` is explicitly set, the engine checks all rules *before* execution starts. Any rule whose requirements exceed the budget is reported immediately (fast-fail), preventing mid-pipeline failures. An explicit budget is a hard limit.
+- **Pre-flight budget check:** When `--max-threads`/`--max-memory` is explicitly set — or the workflow declares `[resource_budget] max_threads`/`max_memory` (issue #1080) — the engine checks all rules *before* execution starts. Any rule whose requirements exceed the effective cap is reported immediately (fast-fail), preventing mid-pipeline failures. The workflow budget is a hard, versioned cap: it clamps a larger CLI request, a tighter CLI request still wins, and a silent CLI inherits it.
 - **Backend preflight:** before any rule executes, every unique environment spec of the pending rules is validated once — a missing backend (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `modules`) aborts the run with one collapsed entry per root cause and "no rules were run" (see [Backend preflight](#backend-preflight-fail-fast-on-a-missing-environment-backend)).
 - **Auto-detected capacity is soft:** Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.
+- **CPU-oversubscription warning:** the engine compares each scheduled parallel wave's worst-case demand (`min(-j, wave width) × heaviest rule threads`, both clamped to the effective pool ceiling) with the detected CPUs and warns at ≥ 80 % — the analogue of the memory clamp warning. The estimate covers only the rules the run will execute (`-t`/`--module` filtering included). A ceiling that leaves headroom silences it; a cap at or above the host still warns. See [CPU Oversubscription Warning](../how-to/resource-tuning.md#cpu-oversubscription-warning).
 - **Deadlock detection:** If pending rules remain while nothing is running and none can become ready (typically an upstream failure), the engine reports `Deadlock detected: N rules stuck` with the stuck rule names. Resource waits cannot deadlock: over-capacity requests are clamped, and explicit budget violations fail fast before any rule runs.
 - **Target-aware execution:** The `-t` flag supports prefix matching — `-t al` matches all rules whose names start with "al". Use this to run a subset of the workflow, similar to `make <target>`. Only the named targets and their transitive upstream dependencies are executed; downstream rules are excluded.
 - **Default targets:** rules marked `target = true` are what `run`/`dry-run` build when neither `-t` nor `--module` selects anything — the marked rules and their transitive producers. With no marked rule the full DAG runs (backward compatible); an explicit `-t`/`--module` always wins.
@@ -1623,6 +1633,11 @@ and [`test`](test.md#exit-codes).
   `{effective_memory_mb}` placeholder and to container `--memory` ceilings.
   For long cohort runs that park at the cap for hours, pair this with
   `--retry` so a transient OOM does not kill the whole run.
+  The CPU side is cgroup-aware too: the detector (`num_cpus`) honours
+  affinity/cpuset **and** cgroup v1/v2 CPU quotas (`container --cpus`,
+  systemd `CPUQuota=`, `cpu.max`), so the auto-detected thread ceiling,
+  `{effective_threads}`, and the oversubscription warning already reflect a
+  quota (issue #1080).
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup
 - Use `--cache-dir` to persist environment setup state across runs for faster startup (reclaim stale entries with `oxo-flow env gc` — the old post-run aging sweep was retired)

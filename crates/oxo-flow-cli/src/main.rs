@@ -153,13 +153,13 @@ pub enum Commands {
         #[arg(
             long,
             default_value = "0",
-            help = "Maximum CPU threads available for execution (0 = auto-detect)"
+            help = "Maximum CPU threads available for execution (0 = auto-detect; [resource_budget] max_threads caps it)"
         )]
         max_threads: u32,
         #[arg(
             long,
             default_value = "0",
-            help = "Maximum memory in MB available for execution (0 = auto-detect)"
+            help = "Maximum memory in MB available for execution (0 = auto-detect; [resource_budget] max_memory caps it)"
         )]
         max_memory: u64,
         #[arg(long, help = "Skip environment setup (assume environments are ready)")]
