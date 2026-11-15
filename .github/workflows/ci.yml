@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      resume_existing_tag:
+        description: 'The tag already exists and its release was only partially published (e.g. the GitHub Release job failed): re-run the publish jobs without bumping, committing, tagging, or re-publishing crates.io. Use after fixing a packaging step.'
+        type: boolean
+        required: false
+        default: false
 
 # Cancel in-progress runs for the same branch/PR; preserve tag releases.
 # A dispatch-driven release (tag input set) runs in its own concurrency
@@ -77,7 +82,7 @@ jobs:
           echo "Release tag format OK: ${TAG}"
 
       - name: Ensure release tag does not already exist
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.publish_images_only != true
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.publish_images_only != true && inputs.resume_existing_tag != true
         shell: bash
         run: |
           set -euo pipefail
@@ -231,7 +236,7 @@ jobs:
       # created locally first so git-cliff labels the top section with this
       # version instead of "[Unreleased]".
       - name: Generate and commit CHANGELOG.md
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.resume_existing_tag != true
         shell: bash
         run: |
           set -euo pipefail
@@ -258,7 +263,7 @@ jobs:
       # pushes it. The interrupted state "main bumped, no tag" is therefore
       # recoverable by re-dispatching the same version.
       - name: Create and push release tag
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.resume_existing_tag != true
         shell: bash
         run: |
           set -euo pipefail
@@ -1086,11 +1091,21 @@ jobs:
             'Exec=AppRun' \
             'Icon=oxo-flow' \
             'Terminal=false' \
-            'Categories=Science;Development;' \
+            'Categories=Science;' \
             > "${APPDIR}/oxo-flow.desktop"
+          # AppStream's validator looks for the launchable desktop file under
+          # usr/share/applications; the AppDir-root copy stays for AppImage
+          # conventions. Its absence is a validation WARNING, and appimagetool
+          # fails on warnings as of the 2026-11 continuous build.
+          mkdir -p "${APPDIR}/usr/share/applications"
+          cp "${APPDIR}/oxo-flow.desktop" "${APPDIR}/usr/share/applications/oxo-flow.desktop"
           cp assets/oxo-flow.png "${APPDIR}/oxo-flow.png"
           # AppStream upstream metadata: silences appimagetool's warning and
           # makes the AppImage eligible for AppImageHub / directory listings.
+          # The FILENAME must match the component id (appstreamcli warns
+          # otherwise, and appimagetool treats warnings as fatal), so use the
+          # canonical <id>.metainfo.xml spelling rather than the legacy
+          # oxo-flow.appdata.xml.
           mkdir -p "${APPDIR}/usr/share/metainfo"
           printf '%s\n' \
             '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -1105,11 +1120,14 @@ jobs:
             '    AI-assisted generation, cluster execution. The desktop build' \
             '    starts the local web interface (oxo-flow serve --open).</p>' \
             '  </description>' \
+            '  <developer id="dev.oxoflow">' \
+            '    <name>Traitome</name>' \
+            '  </developer>' \
             '  <launchable type="desktop-id">oxo-flow.desktop</launchable>' \
             '  <url type="homepage">https://github.com/Traitome/oxo-flow</url>' \
             '  <content_rating type="oars-1.1" />' \
             '</component>' \
-            > "${APPDIR}/usr/share/metainfo/oxo-flow.appdata.xml"
+            > "${APPDIR}/usr/share/metainfo/dev.oxoflow.OxoFlow.metainfo.xml"
           # M-14: `continuous` is a mutable tag with no upstream checksum
           # file, so the exact verified build is pinned by sha256 here
           # (observed 2026-11-07). An upstream rebuild of the tag now fails
@@ -1205,6 +1223,7 @@ jobs:
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
       inputs.publish_images_only != true &&
+      inputs.resume_existing_tag != true &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:
