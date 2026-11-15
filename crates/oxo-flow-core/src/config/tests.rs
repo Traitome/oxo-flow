@@ -10342,3 +10342,71 @@ shell = "echo hi > {output}"
         "hostile rule name must be rejected: {err}"
     );
 }
+
+#[test]
+fn resource_budget_caps_are_a_hard_local_ceiling() {
+    // Issue #1080 R2: `[resource_budget] max_threads`/`max_memory` are
+    // versioned caps for local runs too. A larger CLI request cannot
+    // escape them; a tighter CLI request still wins.
+    let budget = crate::config::ResourceBudget {
+        max_threads: Some(16),
+        max_memory: Some("64G".to_string()),
+        max_jobs: None,
+    };
+    let caps = budget.effective_caps(Some(32), Some(131072)).unwrap();
+    assert_eq!(caps.max_threads, Some(16));
+    assert_eq!(caps.max_memory_mb, Some(65536));
+
+    let caps = budget.effective_caps(Some(8), Some(32768)).unwrap();
+    assert_eq!(caps.max_threads, Some(8));
+    assert_eq!(caps.max_memory_mb, Some(32768));
+
+    let caps = budget.effective_caps(None, None).unwrap();
+    assert_eq!(caps.max_threads, Some(16));
+    assert_eq!(caps.max_memory_mb, Some(65536));
+}
+
+#[test]
+fn resource_budget_without_caps_is_a_noop() {
+    let budget = crate::config::ResourceBudget::default();
+    assert_eq!(
+        budget.effective_caps(None, None).unwrap(),
+        crate::config::EffectiveResourceCaps::default()
+    );
+    assert_eq!(
+        budget.effective_caps(Some(4), None).unwrap().max_threads,
+        Some(4)
+    );
+}
+
+#[test]
+fn resource_budget_rejects_unreadable_or_zero_caps() {
+    let bad = crate::config::ResourceBudget {
+        max_threads: None,
+        max_memory: Some("lots".to_string()),
+        max_jobs: None,
+    };
+    let err = bad.effective_caps(None, None).unwrap_err().to_string();
+    assert!(
+        err.contains("max_memory = 'lots'") && err.contains("not a memory figure"),
+        "{err}"
+    );
+
+    let zero_threads = crate::config::ResourceBudget {
+        max_threads: Some(0),
+        ..Default::default()
+    };
+    assert!(
+        zero_threads.effective_caps(None, None).is_err(),
+        "a zero thread cap can never run anything"
+    );
+
+    let zero_memory = crate::config::ResourceBudget {
+        max_memory: Some("0M".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        zero_memory.effective_caps(None, None).is_err(),
+        "a zero memory cap can never run anything"
+    );
+}

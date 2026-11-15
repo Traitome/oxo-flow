@@ -116,6 +116,14 @@ impl WorkflowConfig {
             }
         }
 
+        // `[resource_budget]` must be executable (issue #1080 R2): an
+        // unreadable or zero cap would fail every local run, so reject it
+        // at load time for validate/run/dry-run/web alike. CLI caps are
+        // validated by the same resolver on the run path.
+        if let Some(budget) = &self.resource_budget {
+            budget.effective_caps(None, None)?;
+        }
+
         // Check for duplicate rule names
         let mut seen = std::collections::HashSet::new();
         for rule in &self.rules {

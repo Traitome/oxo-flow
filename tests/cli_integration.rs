@@ -574,10 +574,15 @@ fn cli_ai_status_lists_discovered_skills() {
     // exits non-zero) whenever the endpoint is unreachable.
     let out = oxo_flow_cmd_without_ai_env()
         .arg("ai")
+        .env("HOME", dir.path())
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert!(
+        out.status.success(),
+        "ai status must succeed without a provider: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("qc-expert"),
@@ -12027,4 +12032,451 @@ shell = "cat {root}/branch_a.txt {root}/branch_b.txt {root}/branch_c.txt > {root
             "BEGIN/END interleaved — max_jobs = 1 did not serialize the run: {markers:?}"
         );
     }
+}
+
+/// Issue #1080 R1: when the plan's worst-case thread demand reaches the
+/// detected CPUs, the run warns before executing; an explicit
+/// `--max-threads` is the operator's own ceiling and silences the warning.
+#[test]
+fn cli_run_warns_when_the_plan_saturates_detected_cpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("hot.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "hot"
+
+[[rules]]
+name = "hot"
+threads = 1024
+output = ["hot.txt"]
+shell = "echo hot > hot.txt"
+"#,
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        let mut cmd = oxo_flow_cmd_without_rust_log();
+        cmd.args(["run", workflow.to_str().unwrap(), "-j", "1", "--rerun"])
+            .args(extra)
+            .current_dir(dir.path());
+        cmd.output().unwrap()
+    };
+
+    let out = run(&[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("planned thread demand") && stderr.contains("detected CPUs"),
+        "expected the CPU-oversubscription warning, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--max-threads N or lower -j"),
+        "the warning must carry the remedy: {stderr}"
+    );
+
+    // A ceiling that leaves headroom silences the warning. The pool-aware
+    // math compares the effective pool (here 1 thread) with the detected
+    // CPUs, so this assertion needs a host with more than one CPU.
+    if oxo_flow_core::executor::process::detect_system_threads() >= 2 {
+        let cold = dir.path().join("cold.oxoflow");
+        fs::write(
+            &cold,
+            r#"
+[workflow]
+name = "cold"
+
+[[rules]]
+name = "cold"
+threads = 1
+output = ["cold.txt"]
+shell = "echo cold > cold.txt"
+"#,
+        )
+        .unwrap();
+        let out = oxo_flow_cmd_without_rust_log()
+            .args([
+                "run",
+                cold.to_str().unwrap(),
+                "-j",
+                "1",
+                "--max-threads",
+                "1",
+                "--rerun",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(
+            !stderr.contains("planned thread demand"),
+            "a ceiling that leaves headroom must silence the warning: {stderr}"
+        );
+    }
+}
+
+/// Issue #1080 review finding: a budget written for a bigger cluster node
+/// must cap, never raise, the local ceiling. A `max_threads = 100000` /
+/// `max_memory = 1000G` workflow on a small host previously made the pool
+/// (and `{effective_*}`) match the budget.
+#[test]
+fn a_cluster_sized_budget_does_not_raise_the_local_ceiling() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("big.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "big-budget"
+
+[resource_budget]
+max_threads = 100000
+max_memory = "1000G"
+
+[[rules]]
+name = "r"
+threads = 100000
+memory = "1000G"
+output = ["eff.txt"]
+shell = "echo {effective_threads} {effective_memory_mb} > eff.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", workflow.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = fs::read_to_string(dir.path().join("eff.txt")).unwrap();
+    let mut parts = text.split_whitespace();
+    let threads: u32 = parts.next().unwrap().parse().unwrap();
+    let memory_mb: u64 = parts.next().unwrap().parse().unwrap();
+    assert_eq!(
+        threads,
+        oxo_flow_core::executor::process::detect_system_threads(),
+        "the budget must not raise the thread ceiling above the host"
+    );
+    assert!(
+        memory_mb < 1000 * 1024,
+        "the budget must not replace host memory detection: {memory_mb} MB"
+    );
+    assert!(memory_mb > 0);
+}
+
+/// Issue #1080 R2: `[resource_budget] max_threads` caps local runs — the
+/// budget travels with the workflow instead of an external wrapper.
+#[test]
+fn cli_run_resource_budget_caps_local_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let ok_workflow = dir.path().join("ok.oxoflow");
+    fs::write(
+        &ok_workflow,
+        r#"
+[workflow]
+name = "budget-ok"
+
+[resource_budget]
+max_threads = 8
+
+[[rules]]
+name = "r"
+threads = 4
+output = ["ok.txt"]
+shell = "echo ok > ok.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", ok_workflow.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("[resource_budget] max_threads = 8 caps this local run"),
+        "expected the local-cap notice, got: {stderr}"
+    );
+
+    let capped = dir.path().join("capped.oxoflow");
+    fs::write(
+        &capped,
+        r#"
+[workflow]
+name = "budget-capped"
+
+[resource_budget]
+max_threads = 2
+
+[[rules]]
+name = "r"
+threads = 4
+output = ["capped.txt"]
+shell = "echo capped > capped.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", capped.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a rule above the budget must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("thread cap is 2") && stderr.contains("[resource_budget] max_threads"),
+        "the fast-fail must name the workflow budget: {stderr}"
+    );
+    assert!(
+        !dir.path().join("capped.txt").exists(),
+        "no rule may run before the budget fast-fail"
+    );
+}
+
+/// Issue #1080 R2: the budget's memory cap applies locally, and an
+/// unreadable cap is an error rather than "no cap".
+#[test]
+fn cli_run_resource_budget_caps_local_memory_and_rejects_bad_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let over = dir.path().join("over.oxoflow");
+    fs::write(
+        &over,
+        r#"
+[workflow]
+name = "budget-mem"
+
+[resource_budget]
+max_memory = "16M"
+
+[[rules]]
+name = "r"
+memory = "1G"
+output = ["over.txt"]
+shell = "echo over > over.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", over.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a 1G rule under a 16M cap must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("memory cap is 16MB") && stderr.contains("[resource_budget] max_memory"),
+        "the fast-fail must name the workflow budget: {stderr}"
+    );
+
+    let bad = dir.path().join("bad.oxoflow");
+    fs::write(
+        &bad,
+        r#"
+[workflow]
+name = "budget-bad"
+
+[resource_budget]
+max_memory = "lots"
+
+[[rules]]
+name = "r"
+output = ["bad.txt"]
+shell = "echo bad > bad.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", bad.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "an unreadable cap must be an error");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("[resource_budget] max_memory = 'lots'")
+            && stderr.contains("not a memory figure"),
+        "expected the parse error, got: {stderr}"
+    );
+}
+
+/// Issue #1080 R2: dry-run surfaces the local caps and uses them for its
+/// `-j` suggestion.
+#[test]
+fn cli_dry_run_shows_local_resource_budget_caps() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("budget.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "budget-preview"
+
+[resource_budget]
+max_threads = 8
+
+[[rules]]
+name = "r"
+threads = 4
+output = ["preview.txt"]
+shell = "echo preview > preview.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["dry-run", workflow.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("local caps from [resource_budget]: max_threads = 8"),
+        "expected the dry-run budget line, got: {stderr}"
+    );
+}
+
+/// Issue #1080 review finding: the oversubscription estimate must use the
+/// SCHEDULED subgraph's waves, not the whole DAG's widest wave × global
+/// heaviest rule. A targeted chain of 2-thread rules next to a wide set of
+/// unrelated 1-thread rules must not be reported as saturating.
+#[test]
+fn targeted_runs_do_not_borrow_parallelism_from_unrelated_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("shape.oxoflow");
+    let mut toml = String::from("[workflow]\nname = \"shape\"\n\n");
+    for i in 0..4 {
+        let dep = if i == 0 {
+            String::new()
+        } else {
+            format!("depends_on = [\"c{}\"]\n", i - 1)
+        };
+        toml.push_str(&format!(
+            "[[rules]]\nname = \"c{i}\"\n{dep}threads = 2\noutput = [\"c{i}.txt\"]\n\
+             shell = \"echo c{i} > c{i}.txt\"\n\n"
+        ));
+    }
+    for i in 0..20 {
+        toml.push_str(&format!(
+            "[[rules]]\nname = \"q{i}\"\nthreads = 1\noutput = [\"q{i}.txt\"]\n\
+             shell = \"echo q{i} > q{i}.txt\"\n\n"
+        ));
+    }
+    fs::write(&workflow, toml).unwrap();
+
+    let out = oxo_flow_cmd_without_rust_log()
+        .args([
+            "run",
+            workflow.to_str().unwrap(),
+            "-t",
+            "c3",
+            "-j",
+            "8",
+            "--rerun",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if oxo_flow_core::executor::process::detect_system_threads() >= 4 {
+        assert!(
+            !stderr.contains("planned thread demand"),
+            "a sequential targeted chain must not inherit the wide unrelated wave: {stderr}"
+        );
+    }
+}
+
+/// Issue #1080 review findings: `dry-run` must reject an infeasible budget
+/// like `run`, and `validate` must reject an unexecutable (zero) cap.
+#[test]
+fn dry_run_and_validate_reject_unexecutable_budgets() {
+    let dir = tempfile::tempdir().unwrap();
+    let infeasible = dir.path().join("infeasible.oxoflow");
+    fs::write(
+        &infeasible,
+        r#"
+[workflow]
+name = "infeasible"
+
+[resource_budget]
+max_threads = 2
+
+[[rules]]
+name = "r"
+threads = 4
+output = ["r.txt"]
+shell = "echo r > r.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["dry-run", infeasible.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "dry-run must not recommend a plan run rejects"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("thread cap is 2"),
+        "dry-run must fast-fail with the budget breach: {stderr}"
+    );
+
+    let zero = dir.path().join("zero.oxoflow");
+    fs::write(
+        &zero,
+        r#"
+[workflow]
+name = "zero"
+
+[resource_budget]
+max_threads = 0
+
+[[rules]]
+name = "r"
+output = ["z.txt"]
+shell = "echo z > z.txt"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["validate", zero.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "validate must reject a zero cap");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("max_threads = 0"),
+        "validate must name the unexecutable cap: {stderr}"
+    );
 }

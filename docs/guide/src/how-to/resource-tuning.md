@@ -138,31 +138,49 @@ instead.
 
 ```toml
 [resource_budget]
-max_threads = 64        # Reject any rule that declares more than 64 threads
-max_memory = "256G"     # Reject any rule that declares more than 256GB
+max_threads = 64        # Cap any rule at 64 threads; also caps the local pool
+max_memory = "256G"     # Cap any rule at 256GB; also caps the local pool
 max_jobs = 10           # Cap concurrently running jobs (clamp; see below)
 ```
 
-!!! warning "`max_memory`/`max_threads` are enforced only on the cluster path"
-    The per-rule breach check runs where jobs leave for a scheduler —
-    `oxo-flow run --profile <name>` with a `[cluster]` profile present. A
-    rule whose declared `memory`/`threads` exceeds the cap aborts the run
-    **before anything is submitted**, naming every offender:
+`max_threads`/`max_memory` are **hard per-rule caps on both paths**, and the
+budget is versioned with the workflow — a shard launched locally with
+`oxo-flow run` inside an allocation honors the same `.oxoflow` file as a
+cluster submission (issue #1080).
 
-    ```
-    Error: [resource_budget] exceeded by 1 rule — nothing was submitted:
-      rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
-    ```
+- **Local** (`oxo-flow run`): a rule whose declared `threads`/`memory`
+  exceeds the cap aborts the run **before any rule executes**, naming the
+  offender. The cap also bounds the local pool ceiling: at most
+  `max_threads` run concurrently and at most `max_memory` is committed.
+  A budget is a ceiling, never a capacity claim — a `max_threads = 64`
+  written for a cluster node does not raise a 10-CPU laptop's pool; the
+  effective value is `min(detected, cap)`.
+  A larger `--max-threads`/`--max-memory` CLI value is clamped by the
+  budget (the budget is a cap); a tighter CLI value wins; a silent CLI
+  inherits the budget, and the run prints a one-line notice naming the
+  active cap.
+- **Cluster** (`oxo-flow run --profile <name>`): a rule whose declared
+  `memory`/`threads` exceeds the cap aborts the run **before anything is
+  submitted**, naming every offender:
 
-    Two consequences worth knowing:
+  ```
+  Error: [resource_budget] exceeded by 1 rule — nothing was submitted:
+    rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
+  ```
 
-    - A plain local `oxo-flow run` **does not read** the per-rule
-      `max_memory`/`max_threads` limits — a 64G rule runs under a 32G cap.
-      To cap a local run, use the CLI flags instead: `--max-threads <N>`
-      and `--max-memory <MB>` (integer megabytes, e.g. `--max-memory
-      32768`; they fail fast the same way before any rule executes).
-    - `oxo-flow cluster submit` currently generates scripts without the
-      budget check — only the `run --profile` cluster path enforces it.
+- `oxo-flow cluster submit` generates scripts without the budget check —
+  only the `run --profile` cluster path enforces it there.
+- An unreadable or zero cap is an error, never "no cap": `max_memory =
+  "lots"` and `max_threads = 0` abort with a message. `dry-run` resolves
+  the same caps, prints them in the summary, and uses the thread cap for
+  its `-j` suggestion.
+
+Local fast-fail example:
+
+```
+Error: resource budget too small for 1 rule; no rules were run:
+  - rule 'big_mem' requires 1024MB memory but the run's memory cap is 16MB (--max-memory / [resource_budget] max_memory)
+```
 
 `max_jobs` is a run-wide concurrency cap and **is enforced on both paths**:
 
@@ -177,6 +195,41 @@ max_jobs = 10           # Cap concurrently running jobs (clamp; see below)
 The per-rule sentence above applies only to `max_threads`/`max_memory`: a
 cap on jobs is a total, so there is no "single rule exceeds it" condition —
 the budget throttles how much runs at once instead.
+
+## CPU Oversubscription Warning
+
+Thread auto-detection is intentionally generous: the scheduling pool can
+use every detected CPU. That is a performance good and an operational
+problem — on a shared 64-core node, `-j 8` with 8-thread rules occupies all
+64 cores for hours, heats the package, and starves co-tenants. The engine
+therefore warns **before execution** when the plan's worst-case thread
+demand reaches 80 % of the detected CPUs (issue #1080).
+
+The estimate is per scheduled parallel wave:
+`min(-j, wave width) × heaviest rule threads in that wave`, with both
+factors clamped by the effective pool ceiling. A strictly sequential
+workflow (one rule per wave) is never reported as saturating even with a
+large `-j`; a single 64-thread rule on a 64-core box is.
+
+```
+WARN planned thread demand 64 = up to 8 concurrent jobs × 8 threads/rule,
+     vs 64 detected CPUs (100%) — the run will occupy all cores; pass
+     --max-threads N or lower -j to leave headroom for the OS and co-tenants
+```
+
+The detected CPU count is cgroup-aware: `num_cpus` honours affinity/cpuset
+and cgroup v1/v2 CPU quotas (`container --cpus`, systemd `CPUQuota=`,
+`cpu.max`), so a 4-core host under a `CPUQuota=200%` scope is reported as
+2 CPUs. The warning is computed against the **effective pool ceiling** a
+local run will build (`min(detected, [resource_budget] max_threads)`, or an
+explicit `--max-threads`), so a cap that leaves headroom silences it; a cap
+at or above the host still reports saturation. The estimate is per
+scheduled parallel wave, restricted to the rules the run will actually
+execute (`-t`/`--module` filtering included).
+
+`dry-run` uses the same detected count (and the workflow budget) for its
+suggested `-j`, so a preview shows a safe starting point before the run
+does.
 
 ## HPC vs Local Best Practices
 

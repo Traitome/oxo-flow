@@ -321,6 +321,15 @@ pub struct ExecutorConfig {
     pub timeout: Option<std::time::Duration>,
     pub max_threads: Option<u32>,
     pub max_memory_mb: Option<u64>,
+    /// Workflow `[resource_budget] max_threads` cap (issue #1080 R2).
+    /// Unlike `max_threads` (an explicit CLI ceiling that may deliberately
+    /// exceed the host), a budget cap can only LOWER the effective thread
+    /// ceiling — a budget larger than the machine never raises it.
+    pub thread_cap: Option<u32>,
+    /// Workflow `[resource_budget] max_memory` cap in MB, same semantics as
+    /// [`Self::thread_cap`]: the effective memory ceiling is
+    /// `min(explicit_or_detected, cap)`.
+    pub memory_cap_mb: Option<u64>,
     pub resource_groups: HashMap<String, u32>,
     /// Force re-execution of every rule selected for this run, even when
     /// outputs are up to date (CLI `--rerun`). Checkpoint records for
@@ -409,6 +418,8 @@ impl Default for ExecutorConfig {
             timeout: None,
             max_threads: None,
             max_memory_mb: None,
+            thread_cap: None,
+            memory_cap_mb: None,
             resource_groups: HashMap::new(),
             force_rerun: false,
             force_rules: std::collections::HashSet::new(),
@@ -603,6 +614,20 @@ pub(crate) fn detect_cgroup_memory_limit_mb() -> Option<u64> {
     None
 }
 
+/// Detected usable CPUs for the scheduling pool and the CPU-oversubscription
+/// warning (issue #1080).
+///
+/// `num_cpus::get()` is already cgroup-quota aware: it honours affinity /
+/// cpuset **and** cgroup v1/v2 CPU quotas (`cpu.max`, systemd `CPUQuota=`,
+/// container `--cpus`), verified live under a `CPUQuota=200%` scope where
+/// `nproc` reported 4 but the engine detected 2. Reusing that detector
+/// avoids a second, divergent cgroup parser. An explicit `--max-threads`
+/// bypasses this helper and remains the operator's escape hatch.
+#[must_use]
+pub fn detect_system_threads() -> u32 {
+    num_cpus::get().max(1) as u32
+}
+
 /// Parse a `memory.max` body: a byte count, or the literal `max` meaning
 /// no limit. Zero and garbage parse as no limit — the sibling walkers
 /// treat them as unlimited, which matches kernel semantics for reads of
@@ -742,10 +767,14 @@ impl LocalExecutor {
     }
 
     fn detect_system_resources(config: &ExecutorConfig) -> (u32, u64) {
-        let max_threads = config.max_threads.unwrap_or_else(|| {
-            // Respect cgroup CPU limits on Linux via num_cpus
-            num_cpus::get() as u32
-        });
+        // Effective thread ceiling: an explicit CLI value (or auto-detect)
+        // bounded by the workflow budget cap. The cap can only lower the
+        // value, so a budget written for a bigger cluster node never raises
+        // a small local machine's ceiling (issue #1080).
+        let max_threads = config
+            .max_threads
+            .unwrap_or_else(detect_system_threads)
+            .min(config.thread_cap.unwrap_or(u32::MAX));
 
         // Cross-platform memory detection with Linux /proc/meminfo fallback.
         // The ceiling is RAM + swap: swap is backable memory the kernel
@@ -765,18 +794,21 @@ impl LocalExecutor {
         // for the detected branch: the kernel OOMs on a memory.max breach
         // even when memory.swap.max would back the excess, so clamping
         // the whole sum to memory.max is the conservative choice.
-        let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
-            let detected = detect_total_memory_mb() + detect_swap_mb();
-            let detected = if detected > 0 {
-                detected
-            } else {
-                tracing::warn!(
-                    "Could not detect system memory; defaulting to 8192MB. Set --max-memory to override."
-                );
-                8192
-            };
-            clamp_to_cgroup_limit(detected, false)
-        });
+        let max_memory_mb = config
+            .max_memory_mb
+            .unwrap_or_else(|| {
+                let detected = detect_total_memory_mb() + detect_swap_mb();
+                let detected = if detected > 0 {
+                    detected
+                } else {
+                    tracing::warn!(
+                        "Could not detect system memory; defaulting to 8192MB. Set --max-memory to override."
+                    );
+                    8192
+                };
+                clamp_to_cgroup_limit(detected, false)
+            })
+            .min(config.memory_cap_mb.unwrap_or(u64::MAX));
 
         (max_threads, max_memory_mb)
     }
@@ -1700,7 +1732,8 @@ impl LocalExecutor {
         let container_ceiling_mb = self
             .config
             .max_memory_mb
-            .unwrap_or_else(|| clamp_to_cgroup_limit(detect_total_memory_mb(), true));
+            .unwrap_or_else(|| clamp_to_cgroup_limit(detect_total_memory_mb(), true))
+            .min(self.config.memory_cap_mb.unwrap_or(u64::MAX));
         if let Some(declared) = resources
             .memory
             .as_deref()
@@ -1961,8 +1994,8 @@ impl LocalExecutor {
     /// external release can never phantom-credit free capacity. Wakes pool
     /// waiters afterwards: released capacity may satisfy multiple rules.
     pub async fn release_resources(&self, rule: &Rule) {
-        let max_threads = self.config.max_threads.unwrap_or(self.system_threads);
-        let max_memory_mb = self.config.max_memory_mb.unwrap_or(self.system_memory_mb);
+        let max_threads = self.system_threads;
+        let max_memory_mb = self.system_memory_mb;
         let mut pool = self.resource_pool.lock().await;
         pool.release(
             rule,

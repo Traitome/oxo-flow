@@ -790,7 +790,7 @@ pub fn check_budget_feasibility(
                 .unwrap_or(0);
             if required > cap {
                 breaches.push(format!(
-                    "rule '{}' requires {}MB memory but --max-memory caps the run at {}MB",
+                    "rule '{}' requires {}MB memory but the run's memory cap is {}MB (--max-memory / [resource_budget] max_memory)",
                     rule.name, required, cap
                 ));
             }
@@ -799,7 +799,7 @@ pub fn check_budget_feasibility(
             let required = rule.effective_threads();
             if required > cap {
                 breaches.push(format!(
-                    "rule '{}' requires {} threads but --max-threads caps the run at {}",
+                    "rule '{}' requires {} threads but the run's thread cap is {} (--max-threads / [resource_budget] max_threads)",
                     rule.name, required, cap
                 ));
             }
@@ -1290,20 +1290,112 @@ pub struct ResourceLimits {
     pub memory_mb: u64,
 }
 
+/// Planned thread demand at or above this share of the detected CPUs is
+/// treated as full-host saturation (issue #1080 R1).
+pub const CPU_SATURATION_WARN_PERCENT: u32 = 80;
+
+/// Worst-case planned thread demand of a run (issue #1080 R1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuDemand {
+    /// Concurrent jobs the plan can actually reach (requested `-j` capped
+    /// by the widest parallel wave and the rule count).
+    pub concurrent_jobs: usize,
+    /// Heaviest thread request among the rules in that wave, clamped to
+    /// what the scheduling pool can hand out.
+    pub max_rule_threads: u32,
+    /// `concurrent_jobs × max_rule_threads`.
+    pub demand: u64,
+    /// Detected CPUs (cgroup CPU quota / affinity aware).
+    pub detected_cpus: u32,
+    /// Demand as a percentage of the detected CPUs (may exceed 100).
+    pub percent: u32,
+}
+
+/// One wave's worst-case demand, or `None` when the wave is empty or the
+/// detected CPU count is unknown. `pool_threads` is the effective ceiling
+/// the executor will build (explicit CLI / detected, capped by the
+/// workflow budget), so a rule declaring more threads than the pool can
+/// grant does not inflate the estimate.
+fn cpu_demand_of_wave(
+    rules: &[&Rule],
+    requested_jobs: usize,
+    detected_cpus: u32,
+    pool_threads: u32,
+) -> Option<CpuDemand> {
+    if detected_cpus == 0 || rules.is_empty() {
+        return None;
+    }
+    let declared = rules
+        .iter()
+        .map(|rule| rule.effective_threads().max(1))
+        .max()?;
+    let max_rule_threads = declared.min(pool_threads.max(1));
+    let concurrent_jobs = requested_jobs.max(1).min(rules.len());
+    let demand = (concurrent_jobs as u64).saturating_mul(u64::from(max_rule_threads));
+    let percent =
+        (demand.saturating_mul(100) / u64::from(detected_cpus)).min(u64::from(u32::MAX)) as u32;
+    Some(CpuDemand {
+        concurrent_jobs,
+        max_rule_threads,
+        demand,
+        detected_cpus,
+        percent,
+    })
+}
+
+/// Compare one wave's worst-case thread demand with the detected CPUs,
+/// returning `Some` when it reaches [`CPU_SATURATION_WARN_PERCENT`].
+///
+/// `max_concurrent_jobs` is the wave width: a run that asks for `-j 8` on
+/// a strictly sequential workflow never has eight rules in flight, so it
+/// must not be reported as saturating the host.
+#[must_use]
+pub fn analyze_cpu_demand(
+    rules: &[&Rule],
+    requested_jobs: usize,
+    max_concurrent_jobs: usize,
+    detected_cpus: u32,
+    pool_threads: u32,
+) -> Option<CpuDemand> {
+    let width = max_concurrent_jobs.max(1).min(rules.len().max(1));
+    let capped_jobs = requested_jobs.max(1).min(width);
+    cpu_demand_of_wave(rules, capped_jobs, detected_cpus, pool_threads)
+        .filter(|demand| demand.percent >= CPU_SATURATION_WARN_PERCENT)
+}
+
+/// Evaluate every scheduled parallel wave separately and report the peak
+/// demand (issue #1080 R1). A wide light wave next to an isolated serial
+/// heavy wave must not multiply the two, and a targeted run must not
+/// borrow parallelism from rules it will never execute.
+#[must_use]
+pub fn analyze_cpu_demand_waves(
+    waves: &[Vec<&Rule>],
+    requested_jobs: usize,
+    detected_cpus: u32,
+    pool_threads: u32,
+) -> Option<CpuDemand> {
+    waves
+        .iter()
+        .filter_map(|wave| cpu_demand_of_wave(wave, requested_jobs, detected_cpus, pool_threads))
+        .max_by_key(|demand| demand.demand)
+        .filter(|demand| demand.percent >= CPU_SATURATION_WARN_PERCENT)
+}
+
 /// Tool-facing effective resources for a rule: the declared request clamped
 /// to the machine. Unlike the pool reservation (which treats unset values as
 /// 0 so the rule never blocks scheduling), tool-facing placeholders need a
 /// usable number: unset threads default to 1 and unset memory defaults to the
 /// whole machine — the tool may use everything the box has.
 /// Detect machine-level limits once per process (threads via
-/// `available_parallelism` — cgroup-aware on Linux — and total memory via
-/// sysinfo with a `/proc/meminfo` fallback).
+/// affinity/cpuset tightened by any cgroup v2 CPU quota, and total memory
+/// via sysinfo with a `/proc/meminfo` fallback).
 pub fn detect_system_limits() -> ResourceLimits {
     static SYSTEM_LIMITS: std::sync::OnceLock<ResourceLimits> = std::sync::OnceLock::new();
     *SYSTEM_LIMITS.get_or_init(|| {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(1);
+        // Affinity/cpuset plus any cgroup v2 CPU quota (issue #1080), so
+        // `{effective_threads}` never advertises threads the quota will
+        // not admit.
+        let threads = crate::executor::process::detect_system_threads();
         // Tool-facing: RAM only, clamped to any cgroup memory.max
         // (issue #855). The scheduling ceiling (pool + container
         // clamps) counts swap separately — but tools that size themselves
@@ -2469,5 +2561,120 @@ mod reentry_tests {
             sched.running_rules(),
             vec!["a".to_string(), "c".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod cpu_demand_tests {
+    use super::*;
+    use crate::rule::{Resources, Rule};
+
+    fn rule(threads: u32) -> Rule {
+        Rule {
+            name: format!("r{threads}"),
+            resources: Resources {
+                threads,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn warns_when_the_plan_consumes_every_detected_cpu() {
+        // Issue #1080's incident: -j 8 × 8-thread rules on 64 CPUs.
+        let rules: Vec<Rule> = (0..8).map(|_| rule(8)).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        let analysis = analyze_cpu_demand(&refs, 8, 100, 64, 64).expect("saturation warning");
+        assert_eq!(analysis.concurrent_jobs, 8);
+        assert_eq!(analysis.max_rule_threads, 8);
+        assert_eq!(analysis.demand, 64);
+        assert_eq!(analysis.percent, 100);
+    }
+
+    #[test]
+    fn fires_at_the_eighty_percent_boundary() {
+        let rules: Vec<Rule> = (0..5).map(|_| rule(8)).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        assert!(
+            analyze_cpu_demand(&refs, 5, 100, 50, 50).is_some(),
+            "40/50 = 80%"
+        );
+        let four: Vec<Rule> = (0..4).map(|_| rule(8)).collect();
+        let four_refs: Vec<&Rule> = four.iter().collect();
+        assert!(
+            analyze_cpu_demand(&four_refs, 4, 100, 50, 50).is_none(),
+            "32/50 = 64%"
+        );
+    }
+
+    #[test]
+    fn sequential_waves_do_not_count_a_large_jobs_flag_as_saturation() {
+        // Two dependent rules never run together; -j 8 cannot create
+        // 8 concurrent instances of the heavy rule.
+        let rules = [rule(8), rule(8)];
+        let refs: Vec<&Rule> = rules.iter().collect();
+        assert!(analyze_cpu_demand(&refs, 8, 1, 64, 64).is_none());
+    }
+
+    #[test]
+    fn unknown_capacity_or_an_empty_plan_is_silent() {
+        let rules = [rule(8)];
+        let refs: Vec<&Rule> = rules.iter().collect();
+        assert!(analyze_cpu_demand(&refs, 8, 100, 0, 64).is_none());
+        let empty: Vec<&Rule> = Vec::new();
+        assert!(analyze_cpu_demand(&empty, 8, 100, 64, 64).is_none());
+    }
+
+    #[test]
+    fn the_pool_ceiling_caps_a_huge_declared_request() {
+        // A rule may declare more threads than the pool can grant; the
+        // demand must use the effective (pool-clamped) figure.
+        let rules: Vec<Rule> = (0..4).map(|_| rule(1024)).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        assert!(
+            analyze_cpu_demand(&refs, 1, 100, 10, 2).is_none(),
+            "one 2-thread pool on 10 CPUs is not saturating"
+        );
+        let demand = analyze_cpu_demand(&refs, 1, 100, 10, 10).expect("10/10 = 100%");
+        assert_eq!(demand.max_rule_threads, 10);
+        assert_eq!(demand.demand, 10);
+    }
+
+    #[test]
+    fn per_wave_analysis_ignores_unrelated_parallelism() {
+        // A wide light wave next to an isolated serial heavy wave: the old
+        // global (widest × heaviest) formula multiplied the two.
+        let light: Vec<Rule> = (0..100).map(|_| rule(1)).collect();
+        let light_refs: Vec<&Rule> = light.iter().collect();
+        let heavy = [rule(8)];
+        let heavy_refs: Vec<&Rule> = heavy.iter().collect();
+        let waves = vec![light_refs, heavy_refs];
+        assert!(
+            analyze_cpu_demand_waves(&waves, 8, 64, 64).is_none(),
+            "8 threads on 64 CPUs per wave is not saturating"
+        );
+    }
+
+    #[test]
+    fn per_wave_analysis_reports_the_peak_wave() {
+        let light: Vec<Rule> = (0..100).map(|_| rule(1)).collect();
+        let light_refs: Vec<&Rule> = light.iter().collect();
+        let heavy: Vec<Rule> = (0..8).map(|_| rule(8)).collect();
+        let heavy_refs: Vec<&Rule> = heavy.iter().collect();
+        let waves = vec![light_refs, heavy_refs];
+        let demand = analyze_cpu_demand_waves(&waves, 8, 64, 64).expect("64/64 = 100%");
+        assert_eq!(demand.concurrent_jobs, 8);
+        assert_eq!(demand.max_rule_threads, 8);
+        assert_eq!(demand.demand, 64);
+    }
+
+    #[test]
+    fn unset_threads_use_the_single_thread_sentinel() {
+        let rules: Vec<Rule> = (0..8).map(|_| Rule::default()).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        let analysis = analyze_cpu_demand(&refs, 8, 100, 8, 8).expect("8 jobs on 8 CPUs");
+        assert_eq!(analysis.max_rule_threads, 1);
+        assert_eq!(analysis.demand, 8);
     }
 }
