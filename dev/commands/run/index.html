@@ -1720,6 +1720,8 @@
       
         
       
+        
+      
     
     
     
@@ -2848,6 +2850,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#failed-rule-output-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed-rule output rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-validation-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder validation (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#execute-a-published-bundle" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2907,6 +2931,17 @@
   
     <nav class="md-nav" aria-label="Checkpointing and Resuming">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variant-checkpoints-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant checkpoints (--checkpoint)
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#metadata-directory" class="md-nav__link">
@@ -3186,6 +3221,34 @@
     
   
     status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wait/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    wait
   
 
     
@@ -4760,6 +4823,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#failed-rule-output-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed-rule output rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-validation-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder validation (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#execute-a-published-bundle" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4819,6 +4904,17 @@
   
     <nav class="md-nav" aria-label="Checkpointing and Resuming">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variant-checkpoints-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant checkpoints (--checkpoint)
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#metadata-directory" class="md-nav__link">
@@ -5089,6 +5185,12 @@ keys matching nothing declared keep the literal spelling.</p>
 <td>Working directory for execution</td>
 </tr>
 <tr>
+<td><code>--checkpoint</code></td>
+<td>—</td>
+<td><code>&lt;workdir&gt;/.oxo-flow/checkpoint.json</code></td>
+<td>Checkpoint file for this run. Use one path per workflow variant (<code>smoke</code>/<code>test</code>/<code>full</code>) that shares a workdir so each variant resumes independently (see <a href="#variant-checkpoints-checkpoint">Variant checkpoints</a>)</td>
+</tr>
+<tr>
 <td><code>--log-file</code></td>
 <td>—</td>
 <td><code>.oxo-flow/logs/oxo-flow.log</code> in the workdir</td>
@@ -5227,10 +5329,10 @@ keys matching nothing declared keep the literal spelling.</p>
 <td>Skip the automatic report snapshot written after the run (see <a href="#report-snapshots">Report snapshots</a>); <code>resume</code> has the same flag</td>
 </tr>
 <tr>
-<td><code>--background</code></td>
+<td><code>--background</code> / <code>--detach</code></td>
 <td>—</td>
 <td>—</td>
-<td>Detach the run into a background process and exit 0 immediately (see <a href="#background-runs-background">Background runs (--background)</a>)</td>
+<td>Detach the run into a background process and exit 0 immediately (see <a href="#background-runs-background">Background runs (--background)</a>); <code>--detach</code> is an alias</td>
 </tr>
 <tr>
 <td><code>--allow-protected-drift</code></td>
@@ -5334,8 +5436,8 @@ there).</p>
 <td><code>--provenance</code></td>
 </tr>
 <tr>
-<td>Run detached</td>
-<td><code>--background</code></td>
+<td>Run detached / wait for it</td>
+<td><code>--background</code> / <code>--detach</code>, then <a href="../wait/"><code>oxo-flow wait</code></a></td>
 </tr>
 <tr>
 <td>Quieter output</td>
@@ -5829,21 +5931,82 @@ the site's accounting store does not report are omitted rather than guessed.
 See <a href="../cluster/#what-a-finished-job-records">What a finished job records</a>
 for the record format, the accounting-variance caveats, and the
 interrupt/re-attach semantics.</p>
+<h3 id="failed-rule-output-rollback">Failed-rule output rollback<a class="headerlink" href="#failed-rule-output-rollback" title="Permanent link">#</a></h3>
+<p>A failed rule's declared outputs are rolled back: files created by the
+attempt are deleted, and pre-existing files are moved aside as
+<code>*.oxo-failed</code> (protected outputs declared with <code>protected_output</code> are
+never touched). The failure message names the rolled-back files, so a rule
+that created one of two declared outputs and then failed shows both the
+missing file and the one that was removed:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>[oxo-flow] output validation failed: 1 declared output(s) not found: …/merge.vcf
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>[oxo-flow] declared outputs of the failed rule are rolled back
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>  (deleted or moved aside as *.oxo-failed): …/merge.vcf.idx
+</span></code></pre></div>
+<h3 id="placeholder-validation-strict-by-default">Placeholder validation (strict by default)<a class="headerlink" href="#placeholder-validation-strict-by-default" title="Permanent link">#</a></h3>
+<p>Every executing rule's rendered command is scanned for engine placeholders
+that survived rendering — <code>{sample}</code>, <code>{group}</code>, <code>{pair_id}</code>,
+<code>{experiment}</code>, <code>{control}</code>, <code>{tumor}</code>, <code>{normal}</code>, <code>{chunks}</code>, <code>{log}</code>,
+<code>{log[0]}</code>, <code>{threads}</code>, <code>{memory}</code>, <code>{effective_threads}</code>,
+<code>{effective_memory_mb}</code>,
+<code>{meta.&lt;column&gt;}</code>, <code>{config.&lt;key&gt;}</code>, <code>{params.&lt;key&gt;}</code>, <code>{input…}</code>,
+<code>{output…}</code>, <code>{wildcard.*}</code>, and <code>{values.*}</code>. Such a token has
+no value bound to it, so the shell would receive the literal brace text and
+the tool would fail on a path that looks valid. The rule fails <strong>before the
+shell spawns</strong>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>✗ rule 'trust4' failed: unresolved placeholder(s) {meta.bam_genomic} reached
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>  the rendered command — … Fix: give the rule a sample-domain binding, or
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>  add `singleton = true` for an intentional constant-metadata read. …
+</span></code></pre></div>
+<p>The fix hints are class-specific (declare the <code>[config]</code> key, check an
+<code>{input[N]}</code> index, add the sample-domain source, …). Two escape hatches
+exist while downstream workflows migrate:</p>
+<ul>
+<li><code>[engine] strict_placeholders = false</code> in the workflow, or</li>
+<li><code>OXO_FLOW_STRICT_PLACEHOLDERS=0</code> in the environment (wins per invocation).</li>
+</ul>
+<p>Both restore the historical warning-only behavior. <code>singleton = true</code>
+silences the static W041 diagnosis for an intentional one-instance
+<code>{meta.*}</code> read but does <strong>not</strong> soften this runtime gate: a <code>{meta.*}</code>
+token that survives rendering (more than one metadata row and no
+sample-like binding) is still fatal. A one-row metadata table is the
+supported constant read; use <code>{config.&lt;key&gt;}</code> for a workflow constant.
+<code>{sample}</code>/<code>{group}</code> survivors are fatal in every case. Declared <strong>output
+paths</strong> are checked too: an unresolved placeholder there is fatal even for
+a <code>singleton</code> — a literal file named after the token is never a valid
+artifact. The <code>strict_placeholders</code> switches above also restore the
+warning-only behavior for that namespaced output-path check (the
+bare-wildcard output gate is a separate, always-on correctness check).</p>
+<p>Shell <code>${...}</code> parameter expansion (<code>${#parts[@]}</code>, <code>${ch##*.clones_}</code>) is
+<strong>not</strong> engine syntax and the gate never treats it as a placeholder.
+Template rendering is textual, however: a <strong>bound</strong> name written inside
+<code>${...}</code> is substituted like any other token (<code>${sample}</code> renders as
+<code>$&lt;sample value&gt;</code>), so give shell variables names that do not collide with
+fan-out variables. Brace groups (<code>{ echo hi; }</code>) and brace
+expansion (<code>{1..10}</code>, <code>{a,b}</code>) are likewise shell text. Two realistic
+false-positive shapes need an escape: a Python f-string that prints an
+engine token (<code>python3 -c 'print(f"{sample}")'</code> — write <code>f"{{sample}}"</code>
+instead) and a shell literal (<code>\{sample\}</code>). Escape the opening brace in
+the host language (<code>\{</code> in bash, <code>{{</code> in Python f-strings) or build the
+literal from parts; <code>$</code>-prefixed and backslash-escaped braces are never
+flagged. <code>lint</code> reports the static
+diagnosis as
+<a href="../../reference/glossary/#diagnostic-codes">W041</a> — a rule that references
+the sample domain without a binding source.</p>
 <h3 id="execute-a-published-bundle">Execute a published bundle<a class="headerlink" href="#execute-a-published-bundle" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Run from a bundle (extracts, verifies checksums, shows resource requirements,</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="c1"># then prompts for confirmation — requires an interactive terminal on both</span>
-</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="c1"># stdin and stderr)</span>
-</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
-</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>
-</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="c1"># Skip confirmation for CI/scripts (also required when stdin is redirected</span>
-</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="c1"># or with --json, which is always non-interactive)</span>
-</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
-</span><span id="__span-26-9"><a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a>
-</span><span id="__span-26-10"><a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a><span class="c1"># .tar.gz format also supported</span>
-</span><span id="__span-26-11"><a id="__codelineno-26-11" name="__codelineno-26-11" href="#__codelineno-26-11"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.gz<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
-</span><span id="__span-26-12"><a id="__codelineno-26-12" name="__codelineno-26-12" href="#__codelineno-26-12"></a>
-</span><span id="__span-26-13"><a id="__codelineno-26-13" name="__codelineno-26-13" href="#__codelineno-26-13"></a><span class="c1"># Pull from remote and execute in one step</span>
-</span><span id="__span-26-14"><a id="__codelineno-26-14" name="__codelineno-26-14" href="#__codelineno-26-14"></a>oxo-flow<span class="w"> </span>pull<span class="w"> </span>gh:user/repo@v1<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>repo-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Run from a bundle (extracts, verifies checksums, shows resource requirements,</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="c1"># then prompts for confirmation — requires an interactive terminal on both</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="c1"># stdin and stderr)</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="c1"># Skip confirmation for CI/scripts (also required when stdin is redirected</span>
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="c1"># or with --json, which is always non-interactive)</span>
+</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a><span class="c1"># .tar.gz format also supported</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>pipeline-bundle.tar.gz<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
+</span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12" href="#__codelineno-28-12"></a>
+</span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13" href="#__codelineno-28-13"></a><span class="c1"># Pull from remote and execute in one step</span>
+</span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14" href="#__codelineno-28-14"></a>oxo-flow<span class="w"> </span>pull<span class="w"> </span>gh:user/repo@v1<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>--bundle<span class="w"> </span>repo-bundle.tar.zst<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span><span class="w"> </span>--yes
 </span></code></pre></div>
 <p>Bundles published with <code>publish --sign-key</code> carry an ed25519 manifest
 signature. <code>run --bundle</code> verifies it after the checksums and aborts before
@@ -5856,23 +6019,23 @@ workflow that <em>has</em> a sample dimension (<code>sample_pattern</code>,
 <code>[[sample_groups]]</code>, <code>sample_groups_file</code>, or <code>[[pairs]]</code>): a
 workflow with none rejects the flag with
 <code>--samples matched no samples in this workflow</code>.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Pilot: run the full pipeline on the first 2 samples only</span>
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2
-</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
-</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1"># Or name the pilot samples explicitly (combines with first:N)</span>
-</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2,NA12899
-</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>
-</span><span id="__span-27-7"><a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="c1"># Scale up: no flag needed — completed samples are skipped automatically</span>
-</span><span id="__span-27-8"><a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-27-9"><a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a>
-</span><span id="__span-27-10"><a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="c1"># Preview the pilot plan without executing — with a checkpoint present,</span>
-</span><span id="__span-27-11"><a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="c1"># dry-run also predicts what will actually re-run (and what stays</span>
-</span><span id="__span-27-12"><a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="c1"># protected); see dry-run's "Checkpoint-Aware Rerun Preview"</span>
-</span><span id="__span-27-13"><a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2
-</span><span id="__span-27-14"><a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a>
-</span><span id="__span-27-15"><a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a><span class="c1"># Fix a config bug found by the pilot — only affected rules re-run</span>
-</span><span id="__span-27-16"><a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a><span class="c1"># automatically (see "Config changes" below); use --rerun to force everything</span>
-</span><span id="__span-27-17"><a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--rerun
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Pilot: run the full pipeline on the first 2 samples only</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1"># Or name the pilot samples explicitly (combines with first:N)</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2,NA12899
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="c1"># Scale up: no flag needed — completed samples are skipped automatically</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="c1"># Preview the pilot plan without executing — with a checkpoint present,</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="c1"># dry-run also predicts what will actually re-run (and what stays</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="c1"># protected); see dry-run's "Checkpoint-Aware Rerun Preview"</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a><span class="c1"># Fix a config bug found by the pilot — only affected rules re-run</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a><span class="c1"># automatically (see "Config changes" below); use --rerun to force everything</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--rerun
 </span></code></pre></div>
 <p><code>--samples</code> filters every sample source (sample groups, <code>sample_pattern</code>
 discovery, and experiment/control pairs). <code>--rerun</code> re-executes the rules
@@ -5890,17 +6053,17 @@ and scale-up advice) is appended automatically.</p>
 <p>Sequencing centers deliver data in batches, so a cohort's fastq files
 trickle in over days. Instead of waiting for every sample, run the analysis
 as data arrives:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Which samples can be processed right now, and what is still missing?</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="c1">#   Sample readiness: 87/100 complete, 13 waiting</span>
-</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1">#     ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz), …</span>
-</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>
-</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="c1"># Run only the samples whose entry inputs are complete</span>
-</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>ready
-</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>
-</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="c1"># … more data arrives …</span>
-</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>ready
-</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a><span class="c1">#   Done: 5 succeeded, 87 skipped — the checkpoint skips completed samples</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Which samples can be processed right now, and what is still missing?</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="c1">#   Sample readiness: 87/100 complete, 13 waiting</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1">#     ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz), …</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="c1"># Run only the samples whose entry inputs are complete</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>ready
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="c1"># … more data arrives …</span>
+</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>ready
+</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="c1">#   Done: 5 succeeded, 87 skipped — the checkpoint skips completed samples</span>
 </span></code></pre></div>
 <p>A sample is <strong>ready</strong> when every external input belonging to it exists —
 that is, every rule input (after wildcard and <code>{config.x}</code> expansion) that
@@ -5929,23 +6092,30 @@ Relative paths resolve against the workflow file's directory (or
 </ul>
 <hr />
 <h2 id="background-runs-background">Background runs (<code>--background</code>)<a class="headerlink" href="#background-runs-background" title="Permanent link">#</a></h2>
-<p><code>run --background</code> (and <code>resume --background</code>) detaches execution into a
-background process and returns to the shell immediately:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Foreground prints one line and exits 0; the run continues in the background</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--background
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="c1">#   started in background (pid 48291) · log: .oxo-flow/logs/oxo-flow.log ·</span>
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1">#   monitor: oxo-flow status .oxo-flow/checkpoint.json · stop: kill 48291</span>
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="c1"># Detach a resumed run the same way</span>
-</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--background
+<p><code>run --background</code> (and <code>resume --background</code>; <code>--detach</code> is an alias)
+detaches execution into a background process and returns to the shell
+immediately:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1"># Foreground prints one line and exits 0; the run continues in the background</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--background
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="c1">#   started in background (pid 48291) · log: .oxo-flow/logs/oxo-flow.log ·</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="c1">#   monitor: oxo-flow status .oxo-flow/checkpoint.json ·</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="c1">#   wait: oxo-flow wait --workdir /data/run --checkpoint …/checkpoint.json ·</span>
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a><span class="c1">#   stop: kill 48291</span>
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a><span class="c1"># Detach a resumed run the same way</span>
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9" href="#__codelineno-31-9"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--background
+</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10" href="#__codelineno-31-10"></a>
+</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11" href="#__codelineno-31-11"></a><span class="c1"># Block from a script until the detached run finishes:</span>
+</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12" href="#__codelineno-31-12"></a>oxo-flow<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--workdir<span class="w"> </span>/data/run<span class="w">            </span><span class="c1"># exit 0 ok, 1 failed, 3 timeout</span>
 </span></code></pre></div>
 <p>Mechanics:</p>
 <ul>
 <li>The foreground process spawns a <strong>detached child</strong> that re-runs the same
-  command with <code>--background</code> removed — every other flag (<code>-j</code>, <code>--profile</code>,
-  <code>--samples</code>, <code>--rerun</code>, <code>--log-file</code>, …) passes through verbatim, so a
-  background run behaves exactly like a foreground one: checkpoint, workdir
-  lock, report snapshots, and resume semantics are unchanged.</li>
+  command with the detach flag (<code>--background</code> / <code>--detach</code>) removed — every
+  other flag (<code>-j</code>, <code>--profile</code>, <code>--samples</code>, <code>--rerun</code>, <code>--log-file</code>,
+  <code>--checkpoint</code>, …) passes through verbatim, so a background run behaves
+  exactly like a foreground one: checkpoint, workdir lock, report
+  snapshots, and resume semantics are unchanged.</li>
 <li>The child's stdout and stderr are redirected to the run log
   (<code>--log-file</code> if given, otherwise <code>.oxo-flow/logs/oxo-flow.log</code> in the
   workdir). In this mode the tracing tee is skipped on purpose — the
@@ -5968,7 +6138,14 @@ background process and returns to the shell immediately:</p>
   code/signal instead.</li>
 <li>The child's pid is written to <code>.oxo-flow/background.pid</code> in the workdir
   (also shown in the summary) while the run is in flight; the file is removed
-  when the child exits, so a stale pid never survives a finished run.</li>
+  when the child exits — including the signal-termination path, so a stale
+  pid never survives a finished run.</li>
+<li>The run's own terminal outcome is written to <code>&lt;checkpoint&gt;.status</code>
+  (beside the checkpoint; <code>running</code> once the workdir lock is held, then
+  <code>succeeded</code>/<code>failed</code> with the error text). Per-checkpoint placement keeps
+  variant runs in one workdir from aliasing each other.
+  <a href="../wait/"><code>oxo-flow wait</code></a> uses it to distinguish a preflight refusal
+  from a previous clean checkpoint.</li>
 <li>The child gets its own process group, so it survives terminal close and
   Ctrl-C at the shell — it keeps running until it finishes or is killed.</li>
 <li>The foreground exits <strong>0</strong> once the child is spawned; it does not wait.
@@ -5988,10 +6165,13 @@ background process and returns to the shell immediately:</p>
 </ul>
 <p>Monitoring a background run works exactly like a foreground one: poll
 <code>oxo-flow status .oxo-flow/checkpoint.json</code> (or <code>status --timing</code>), read
-the run log, and check the report snapshots in <code>.oxo-flow/reports/</code>. Stop
-a background run with <code>kill &lt;pid&gt;</code> (Unix) or <code>taskkill /PID &lt;pid&gt;</code> —
-the pid is in the summary line and (while the run is in flight) in
-<code>.oxo-flow/background.pid</code>.</p>
+the run log, and check the report snapshots in <code>.oxo-flow/reports/</code>. For
+scripted supervision, <a href="../wait/"><code>oxo-flow wait</code></a> blocks until the run
+finishes and returns a structured exit status (0 success, 1 failed or
+incomplete, 3 timeout, 4 no run found) — the native replacement for a
+poll-for-output-files shell loop. Stop a background run with <code>kill &lt;pid&gt;</code>
+(Unix) or <code>taskkill /PID &lt;pid&gt;</code> — the pid is in the summary line and
+(while the run is in flight) in <code>.oxo-flow/background.pid</code>.</p>
 <p>Notes:</p>
 <ul>
 <li>The global <code>--json</code> is <strong>rejected</strong> with <code>--background</code>: the foreground
@@ -6004,7 +6184,7 @@ the pid is in the summary line and (while the run is in flight) in
   <code>--workdir</code> is also what bundle discovery consults as a fallback: a
   <code>sample_pattern</code>/<code>pairs_pattern</code> that matches nothing inside the
   extraction is retried against the workdir.</li>
-<li><code>--background</code> is a launcher flag, not a workflow setting: the child
+<li>The detach flag is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before <code>KEY=VALUE</code> overrides) apply to the whole command line as usual.</li>
 </ul>
@@ -6015,6 +6195,20 @@ the pid is in the summary line and (while the run is in flight) in
 <li><strong>Resuming failed runs</strong>: If a job fails or is interrupted, simply run <code>oxo-flow run</code> again. The engine will skip all rules already marked as <code>completed</code> and resume from the first pending task.</li>
 <li><strong>State Inspection</strong>: Use the <a href="../status/"><code>oxo-flow status</code></a> command to view the progress of a run from its checkpoint file.</li>
 </ol>
+<h3 id="variant-checkpoints-checkpoint">Variant checkpoints (<code>--checkpoint</code>)<a class="headerlink" href="#variant-checkpoints-checkpoint" title="Permanent link">#</a></h3>
+<p>The default checkpoint is <strong>per workdir</strong> (<code>&lt;workdir&gt;/.oxo-flow/checkpoint.json</code>),
+so running a <code>pipeline.smoke.oxoflow</code> variant next to <code>pipeline.oxoflow</code> in
+the same directory shares one file. The engine detects the workflow
+identity mismatch and ignores the other workflow's completed/failed records
+— correct, but the variant runs are then silently non-reusable. Pass one
+checkpoint per variant to make each first-class:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.smoke.oxoflow<span class="w"> </span>--checkpoint<span class="w"> </span>.oxo-flow/smoke.checkpoint.json
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/smoke.checkpoint.json<span class="w">   </span><span class="c1"># resume the smoke variant</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/smoke.checkpoint.json<span class="w">   </span><span class="c1"># inspect it</span>
+</span></code></pre></div>
+<p>An explicit path wins over the workdir-derived default for load <strong>and</strong>
+save. Relative paths resolve against the process working directory, like
+every other <code>--checkpoint</code>-style argument.</p>
 <h3 id="metadata-directory">Metadata Directory<a class="headerlink" href="#metadata-directory" title="Permanent link">#</a></h3>
 <p>By default, checkpoints are saved in a hidden <code>.oxo-flow/</code> directory located in the same folder as the workflow file.</p>
 <ul>
@@ -6177,18 +6371,18 @@ compares them against the current workflow:</p>
   older binaries lack the input-excluded fingerprint, so the first subset
   run after an upgrade may re-run such a rule once (safe default).</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># min_quality is interpolated by fastp_trim; only it and its downstream re-run.</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="c1"># A flag toggled in a when-only rule whose gate stays true re-runs nothing —</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="c1"># the run reports those rules as reused instead.</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span><span class="nv">min_quality</span><span class="o">=</span><span class="m">30</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="c1"># min_quality is interpolated by fastp_trim; only it and its downstream re-run.</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="c1"># A flag toggled in a when-only rule whose gate stays true re-runs nothing —</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="c1"># the run reports those rules as reused instead.</span>
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span><span class="nv">min_quality</span><span class="o">=</span><span class="m">30</span>
 </span></code></pre></div>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="go">Config change:</span>
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="go">  min_quality: 20 → 30</span>
-</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="go">  when-condition unchanged, reused: bin_classify</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="go">  → invalidated 3 (1 directly affected), re-running 3/10 this run, skipping 7</span>
-</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="go">  ⊝ index_reference (already completed)</span>
-</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a><span class="go">  Running: fastp_trim</span>
-</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a><span class="go">  …</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="go">Config change:</span>
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="go">  min_quality: 20 → 30</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="go">  when-condition unchanged, reused: bin_classify</span>
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="go">  → invalidated 3 (1 directly affected), re-running 3/10 this run, skipping 7</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a><span class="go">  ⊝ index_reference (already completed)</span>
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6" href="#__codelineno-34-6"></a><span class="go">  Running: fastp_trim</span>
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7" href="#__codelineno-34-7"></a><span class="go">  …</span>
 </span></code></pre></div>
 <p>When a <code>when</code> gate closes at execution time, the rule is reported under
 <strong>Skipped (when condition false)</strong> with a <code>⊘</code> marker (or <code>⊝</code> in the
@@ -6263,7 +6457,7 @@ these labels:</p>
   invalidate by themselves).</li>
 </ul>
 <p>For example (from the verification of this feature):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>  · raw/S1.fq: 22 B @2026-10-27T03:08:41Z → 0 B @2026-10-27T03:08:42Z (content sha256:b29f0d4b37f… → sha256:e3b0c44298f…) (TRUNCATED) [symlink]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>  · raw/S1.fq: 22 B @2026-10-27T03:08:41Z → 0 B @2026-10-27T03:08:42Z (content sha256:b29f0d4b37f… → sha256:e3b0c44298f…) (TRUNCATED) [symlink]
 </span></code></pre></div>
 <p>A pure symlink-target flip with unchanged size/mtime/hash produces no
 diff line at all (target facts are display-only); the target surfaces
@@ -6290,13 +6484,13 @@ once per run; it is not gated on the file changing.</p>
   inputs discoverable through the workflow's <code>sample_pattern</code> directory,
   when-gated-off rules, zero-fan-out scatter rules, or <code>optional</code> rules.</li>
 </ul>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>
 </span></code></pre></div>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="go">  ↻ input changes invalidated 2 rules: gather, report</span>
-</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="go">  Running: gather</span>
-</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="go">  Running: report</span>
-</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="go">  …</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="go">  ↻ input changes invalidated 2 rules: gather, report</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="go">  Running: gather</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="go">  Running: report</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="go">  …</span>
 </span></code></pre></div>
 <p>Invalidated rules bypass the executor's freshness gate and re-execute even
 when their outputs exist and look recent; downstream rules that consumed
@@ -6352,10 +6546,10 @@ BAMs, unsorted alignments) and often useless once every downstream rule has
 consumed them. Marking a rule <code>temporary = true</code> deletes its outputs after
 a <strong>fully successful</strong> run — once every dependent has completed — and
 records a <strong>tombstone</strong> in the checkpoint:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="n">temporary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="n">temporary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span></code></pre></div>
 <p>This is checkpoint-aware, not a blind delete:</p>
 <ul>
@@ -6375,14 +6569,14 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
   kept — so the next run skips the completed producer instead of
   re-materializing it — and one line explains the choice:</li>
 </ul>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="go">  ℹ free space 39876544MB ≥ reclaim_free_disk 5120000MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="go">  ℹ free space 39876544MB ≥ reclaim_free_disk 5120000MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)</span>
 </span></code></pre></div>
 <p>If free space cannot be measured (non-Unix platforms), the outputs are
   kept as a precaution. Workflows without <code>[engine]</code> thresholds keep the
   historical unconditional deletion.</p>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1</span>
-</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="go">  …</span>
-</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a><span class="go">  …</span>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)</span>
 </span></code></pre></div>
 <p>Dry-run predicts exactly when a tombstoned rule will regenerate
 (<code>[rerun: upstream of X]</code>) — see
@@ -6391,9 +6585,9 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
 <p>Large pipelines can fill a disk mid-run. Declaring an <code>[engine]</code> section in
 the workflow makes the engine measure the working directory's free space at
 startup, at every scheduling round, and every 60 s while work is parked:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="k">[engine]</span>
-</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># floor — entering Hold below it</span>
-</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="n">reclaim_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"100G"</span><span class="w">   </span><span class="c1"># optional reclaim trigger; defaults to min_free_disk</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="k">[engine]</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># floor — entering Hold below it</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a><span class="n">reclaim_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"100G"</span><span class="w">   </span><span class="c1"># optional reclaim trigger; defaults to min_free_disk</span>
 </span></code></pre></div>
 <p>The response ladder:</p>
 <ul>
@@ -6448,8 +6642,8 @@ for the full field table and edge cases.</p>
 <h3 id="protected-data-trees-protected_data_trees">Protected data trees (<code>protected_data_trees</code>)<a class="headerlink" href="#protected-data-trees-protected_data_trees" title="Permanent link">#</a></h3>
 <p>Vendor-delivered inputs (a sequencer drop, a reference bundle) must not
 change silently while a pipeline is running against them. Declaring</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="k">[engine]</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="k">[engine]</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
 </span></code></pre></div>
 <p>makes the engine treat those workdir-relative trees as protected:</p>
 <ul>
@@ -6463,8 +6657,8 @@ change silently while a pipeline is running against them. Declaring</p>
   labeled <code>[symlink]</code>).</li>
 <li><strong><code>run</code> refuses to execute</strong> on drift:</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>Error: protected data tree drift detected (1 file(s) changed since baseline):
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>  raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>Error: protected data tree drift detected (1 file(s) changed since baseline):
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
 </span></code></pre></div>
 <p>Restore the files, or pass <code>--allow-protected-drift</code> to run anyway (the
   drift is still printed; the baseline is NOT updated — a later clean run

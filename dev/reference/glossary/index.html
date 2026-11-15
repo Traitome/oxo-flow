@@ -1718,6 +1718,8 @@
       
         
       
+        
+      
     
     
     
@@ -2557,6 +2559,34 @@
     
   
     status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/wait/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    wait
   
 
     
@@ -5688,6 +5718,10 @@ below list every code the engine currently emits.</p>
 <tr>
 <td><code>W040</code></td>
 <td>A rule has no runnable command — <code>shell</code> is missing or empty/whitespace-only and no non-empty <code>script</code> is declared; the engine skips the rule at run time. The lint mirror of <code>E022</code>; <code>transform</code> rules are exempt</td>
+</tr>
+<tr>
+<td><code>W041</code></td>
+<td>A rule references the sample domain (<code>{sample}</code>, <code>{group}</code>, <code>{meta.&lt;column&gt;}</code>, <code>{wildcard.sample}</code>, <code>{wildcard.group}</code>) with no binding source — the rule runs once and the token stays unbound (the execution-time gate rejects it). Bind the domain in <code>input</code>/<code>output</code> (a uniquely-keying <code>{meta.*}</code> OUTPUT reference or a one-row constant table also binds), declare the source (<code>sample_pattern</code>/<code>pairs_pattern</code> declarations count without data), or use <code>singleton = true</code> to silence the lint diagnosis for an intentional one-instance <code>{meta.*}</code> read (the runtime gate still requires a resolvable value). <code>{sample}</code>/<code>{group}</code> stay flagged even for a singleton</td>
 </tr>
 </tbody>
 </table>

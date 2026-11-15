@@ -1720,6 +1720,8 @@
       
         
       
+        
+      
     
     
     
@@ -2672,6 +2674,34 @@
     
   
     status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wait/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    wait
   
 
     
@@ -4068,9 +4098,9 @@ recorded instance set exactly.</p>
 <td>Skip the automatic report snapshot after the resumed run (same flag as <code>run</code>)</td>
 </tr>
 <tr>
-<td><code>--background</code></td>
+<td><code>--background</code> / <code>--detach</code></td>
 <td>—</td>
-<td>Detach the resumed run into a background process and exit 0 immediately (see <a href="../run/#background-runs-background">Background runs (--background)</a>)</td>
+<td>Detach the resumed run into a background process and exit 0 immediately (see <a href="../run/#background-runs-background">Background runs (--background)</a>); <code>--detach</code> is an alias</td>
 </tr>
 </tbody>
 </table>
@@ -4095,7 +4125,7 @@ recorded instance set exactly.</p>
   failed, in the resume banner — their stale failure entries
   from older checkpoints don't count toward the failed total, and the gate
   is re-judged on this resume anyway.</li>
-<li><code>--background</code> detaches the resumed run (see
+<li><code>--background</code> / <code>--detach</code> detaches the resumed run (see
   <a href="../run/#background-runs-background">run's Background runs section</a>).</li>
 </ul>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>

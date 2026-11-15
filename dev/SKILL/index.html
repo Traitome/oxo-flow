@@ -1903,6 +1903,8 @@
       
         
       
+        
+      
     
     
     
@@ -2742,6 +2744,34 @@
     
   
     status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/wait/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    wait
   
 
     
@@ -4221,6 +4251,9 @@ ends with a <strong>Done when</strong> condition — do not proceed without it.<
 <h3 id="3-submit-execute">3. Submit &amp; Execute<a class="headerlink" href="#3-submit-execute" title="Permanent link">#</a></h3>
 <ul>
 <li>Local: <code>oxo-flow run -j &lt;N&gt; --provenance</code> (always <code>--provenance</code>).</li>
+<li>Detached + scripted supervision: <code>oxo-flow run … --detach</code> then
+  <code>oxo-flow wait --workdir &lt;dir&gt; --timeout &lt;secs&gt;</code> (exit 0 success,
+  1 failed/incomplete, 3 timeout, 4 no run) instead of a poll-for-files loop.</li>
 <li>Cluster: <code>oxo-flow run --profile &lt;NAME&gt;</code> with a <code>[cluster]</code> block;
   manual escape hatch <code>oxo-flow cluster submit|status|cancel|logs</code>.</li>
 <li>Web: <code>POST /api/runs</code> or the web UI.</li>
@@ -4293,7 +4326,11 @@ gates do not cover your own terminal. These rules bind every command you run:</p
 <li><strong>Evidence first</strong> — never claim success without checkpoint/report evidence.</li>
 <li><strong>Real paths only</strong> — verify inputs exist before referencing them.</li>
 <li><strong>Static gates before compute</strong> — every workflow edit re-runs
-  validate → dry-run → lint.</li>
+  validate → dry-run → lint. An unbound placeholder (<code>{sample}</code>,
+  <code>{meta.&lt;col&gt;}</code>, <code>{config.&lt;key&gt;}</code>) is a hard run-time error by default;
+  lint W041 names the rule whose sample domain has no binding, and
+  <code>singleton = true</code> declares a deliberate one-instance rule. Shell
+  <code>${...}</code> is never a placeholder.</li>
 <li><strong>Correct, don't restart</strong> — prefer checkpoint resume unless inputs were
   invalidated.</li>
 <li><strong>Explicit edges</strong> — edge inference covers exact strings, globs, and

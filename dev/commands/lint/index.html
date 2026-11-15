@@ -1720,6 +1720,8 @@
       
         
       
+        
+      
     
     
     
@@ -2700,6 +2702,34 @@
     
   
     status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wait/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    wait
   
 
     
@@ -4269,6 +4299,35 @@ validates yet silently does nothing. The classic source is an
 captured; re-import after upgrading, or add the command by hand.
 <code>transform</code> rules are exempt because their command lives in
 <code>transform.map</code>/<code>transform.combine</code>.</p>
+<p><a href="../../reference/glossary/#diagnostic-codes">W041</a> flags a rule that
+references the sample domain — <code>{sample}</code>, <code>{group}</code>, <code>{wildcard.sample}</code>,
+<code>{wildcard.group}</code>, or <code>{meta.&lt;column&gt;}</code> — with no binding source. The
+rule then runs exactly once and the token stays unbound (the
+execution-time placeholder gate rejects the rendered command). The repair
+is to bind the domain in <code>input</code>/<code>output</code> and declare its source
+(<code>[[sample_groups]]</code>, <code>[[pairs]]</code>, <code>sample_pattern</code>, <code>pairs_pattern</code>,
+<code>[[values]]</code>, or a scatter) — or, for a deliberate one-instance
+<code>{meta.*}</code> read, add <code>singleton = true</code>. <code>singleton</code> silences the LINT
+diagnosis only; the execution-time gate still rejects a <code>{meta.*}</code> token
+that survives rendering (a one-row metadata table is the supported
+constant read; <code>{config.&lt;key&gt;}</code> is the workflow constant). The binding
+model is shared with the expansion engine, so:</p>
+<ul>
+<li>a <code>sample_pattern</code>/<code>pairs_pattern</code> <strong>declaration</strong> counts even when lint
+  runs without the data mounted (CI/editor);</li>
+<li>a <code>{meta.*}</code> reference in <code>output</code> binds when the metadata column(s)
+  uniquely key every instance — a constant column
+  (<code>batch_{meta.batch}.tsv</code>) does not fan out and stays flagged (the
+  engine avoids the silent duplicate-output race);</li>
+<li>a one-row metadata table is an unambiguous constant read;</li>
+<li><code>singleton = true</code> suppresses <code>{meta.*}</code> only — a <code>{sample}</code>/<code>{group}</code>
+  survivor is always a defect and stays flagged;</li>
+<li>a scatter binds its own variable (a scatter over <code>pair_id</code> does not
+  hide an unbound <code>{sample}</code>);</li>
+<li>every free-text field is scanned, including <code>log</code>, <code>script</code>,
+  <code>benchmark</code>, hooks, env-var values, and string params. Shell <code>${...}</code>
+  parameter expansion and comments are never treated as placeholders.</li>
+</ul>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
