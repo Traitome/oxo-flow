@@ -1517,6 +1517,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cpu-oversubscription-warning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU Oversubscription Warning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hpc-vs-local-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4255,6 +4266,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cpu-oversubscription-warning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU Oversubscription Warning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hpc-vs-local-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4650,30 +4672,45 @@ declare <code>resources.time_limit</code> / <code>resources.memory</code> / <cod
 instead.</p>
 <h2 id="resource-budgets">Resource Budgets<a class="headerlink" href="#resource-budgets" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[resource_budget]</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">max_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="w">        </span><span class="c1"># Reject any rule that declares more than 64 threads</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">max_memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"256G"</span><span class="w">     </span><span class="c1"># Reject any rule that declares more than 256GB</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">max_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="w">        </span><span class="c1"># Cap any rule at 64 threads; also caps the local pool</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">max_memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"256G"</span><span class="w">     </span><span class="c1"># Cap any rule at 256GB; also caps the local pool</span>
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">max_jobs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">           </span><span class="c1"># Cap concurrently running jobs (clamp; see below)</span>
 </span></code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title"><code>max_memory</code>/<code>max_threads</code> are enforced only on the cluster path</p>
-<p>The per-rule breach check runs where jobs leave for a scheduler —
-<code>oxo-flow run --profile &lt;name&gt;</code> with a <code>[cluster]</code> profile present. A
-rule whose declared <code>memory</code>/<code>threads</code> exceeds the cap aborts the run
-<strong>before anything is submitted</strong>, naming every offender:</p>
+<p><code>max_threads</code>/<code>max_memory</code> are <strong>hard per-rule caps on both paths</strong>, and the
+budget is versioned with the workflow — a shard launched locally with
+<code>oxo-flow run</code> inside an allocation honors the same <code>.oxoflow</code> file as a
+cluster submission (issue #1080).</p>
+<ul>
+<li><strong>Local</strong> (<code>oxo-flow run</code>): a rule whose declared <code>threads</code>/<code>memory</code>
+  exceeds the cap aborts the run <strong>before any rule executes</strong>, naming the
+  offender. The cap also bounds the local pool ceiling: at most
+  <code>max_threads</code> run concurrently and at most <code>max_memory</code> is committed.
+  A budget is a ceiling, never a capacity claim — a <code>max_threads = 64</code>
+  written for a cluster node does not raise a 10-CPU laptop's pool; the
+  effective value is <code>min(detected, cap)</code>.
+  A larger <code>--max-threads</code>/<code>--max-memory</code> CLI value is clamped by the
+  budget (the budget is a cap); a tighter CLI value wins; a silent CLI
+  inherits the budget, and the run prints a one-line notice naming the
+  active cap.</li>
+<li><strong>Cluster</strong> (<code>oxo-flow run --profile &lt;name&gt;</code>): a rule whose declared
+  <code>memory</code>/<code>threads</code> exceeds the cap aborts the run <strong>before anything is
+  submitted</strong>, naming every offender:</li>
+</ul>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Error: [resource_budget] exceeded by 1 rule — nothing was submitted:
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
 </span></code></pre></div>
-<p>Two consequences worth knowing:</p>
 <ul>
-<li>A plain local <code>oxo-flow run</code> <strong>does not read</strong> the per-rule
-  <code>max_memory</code>/<code>max_threads</code> limits — a 64G rule runs under a 32G cap.
-  To cap a local run, use the CLI flags instead: <code>--max-threads &lt;N&gt;</code>
-  and <code>--max-memory &lt;MB&gt;</code> (integer megabytes, e.g. <code>--max-memory
-  32768</code>; they fail fast the same way before any rule executes).</li>
-<li><code>oxo-flow cluster submit</code> currently generates scripts without the
-  budget check — only the <code>run --profile</code> cluster path enforces it.</li>
+<li><code>oxo-flow cluster submit</code> generates scripts without the budget check —
+  only the <code>run --profile</code> cluster path enforces it there.</li>
+<li>An unreadable or zero cap is an error, never "no cap": <code>max_memory =
+  "lots"</code> and <code>max_threads = 0</code> abort with a message. <code>dry-run</code> resolves
+  the same caps, prints them in the summary, and uses the thread cap for
+  its <code>-j</code> suggestion.</li>
 </ul>
-</div>
+<p>Local fast-fail example:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Error: resource budget too small for 1 rule; no rules were run:
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  - rule 'big_mem' requires 1024MB memory but the run's memory cap is 16MB (--max-memory / [resource_budget] max_memory)
+</span></code></pre></div>
 <p><code>max_jobs</code> is a run-wide concurrency cap and <strong>is enforced on both paths</strong>:</p>
 <ul>
 <li><strong>Local</strong> (<code>oxo-flow run</code>): it clamps the requested <code>-j/--jobs</code>
@@ -4687,6 +4724,34 @@ rule whose declared <code>memory</code>/<code>threads</code> exceeds the cap abo
 <p>The per-rule sentence above applies only to <code>max_threads</code>/<code>max_memory</code>: a
 cap on jobs is a total, so there is no "single rule exceeds it" condition —
 the budget throttles how much runs at once instead.</p>
+<h2 id="cpu-oversubscription-warning">CPU Oversubscription Warning<a class="headerlink" href="#cpu-oversubscription-warning" title="Permanent link">#</a></h2>
+<p>Thread auto-detection is intentionally generous: the scheduling pool can
+use every detected CPU. That is a performance good and an operational
+problem — on a shared 64-core node, <code>-j 8</code> with 8-thread rules occupies all
+64 cores for hours, heats the package, and starves co-tenants. The engine
+therefore warns <strong>before execution</strong> when the plan's worst-case thread
+demand reaches 80 % of the detected CPUs (issue #1080).</p>
+<p>The estimate is per scheduled parallel wave:
+<code>min(-j, wave width) × heaviest rule threads in that wave</code>, with both
+factors clamped by the effective pool ceiling. A strictly sequential
+workflow (one rule per wave) is never reported as saturating even with a
+large <code>-j</code>; a single 64-thread rule on a 64-core box is.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>WARN planned thread demand 64 = up to 8 concurrent jobs × 8 threads/rule,
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>     vs 64 detected CPUs (100%) — the run will occupy all cores; pass
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>     --max-threads N or lower -j to leave headroom for the OS and co-tenants
+</span></code></pre></div>
+<p>The detected CPU count is cgroup-aware: <code>num_cpus</code> honours affinity/cpuset
+and cgroup v1/v2 CPU quotas (<code>container --cpus</code>, systemd <code>CPUQuota=</code>,
+<code>cpu.max</code>), so a 4-core host under a <code>CPUQuota=200%</code> scope is reported as
+2 CPUs. The warning is computed against the <strong>effective pool ceiling</strong> a
+local run will build (<code>min(detected, [resource_budget] max_threads)</code>, or an
+explicit <code>--max-threads</code>), so a cap that leaves headroom silences it; a cap
+at or above the host still reports saturation. The estimate is per
+scheduled parallel wave, restricted to the rules the run will actually
+execute (<code>-t</code>/<code>--module</code> filtering included).</p>
+<p><code>dry-run</code> uses the same detected count (and the workflow budget) for its
+suggested <code>-j</code>, so a preview shows a safe starting point before the run
+does.</p>
 <h2 id="hpc-vs-local-best-practices">HPC vs Local Best Practices<a class="headerlink" href="#hpc-vs-local-best-practices" title="Permanent link">#</a></h2>
 <table>
 <thead>
@@ -4717,31 +4782,31 @@ the budget throttles how much runs at once instead.</p>
 <h3 id="example-same-workflow-different-targets">Example: Same Workflow, Different Targets<a class="headerlink" href="#example-same-workflow-different-targets" title="Permanent link">#</a></h3>
 <p>Because rule names must be unique within one workflow, keep the per-target
 variants in <strong>separate files</strong> (or give them distinct names):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># workflows/local.oxoflow — local development (undersubscribe)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># workflows/local.oxoflow — local development (undersubscribe)</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">[[rules]]</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
 </span></code></pre></div>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># workflows/hpc.oxoflow — HPC production (full allocation)</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">[[rules]]</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"128G"</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"highmem"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># workflows/hpc.oxoflow — HPC production (full allocation)</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="k">[[rules]]</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"128G"</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"highmem"</span>
 </span></code></pre></div>
 <h2 id="disk-space">Disk Space<a class="headerlink" href="#disk-space" title="Permanent link">#</a></h2>
 <p>Declare disk requirements for large intermediate files:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"assembly"</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble.sh"</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"500G"</span><span class="w">  </span><span class="c1"># Warn if &lt;500GB available</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"assembly"</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble.sh"</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="n">disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"500G"</span><span class="w">  </span><span class="c1"># Warn if &lt;500GB available</span>
 </span></code></pre></div>
 <p>oxo-flow emits warnings when disk requirements exceed available space but cannot enforce usage.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">#</a></h2>
@@ -4755,11 +4820,11 @@ variants in <strong>separate files</strong> (or give them distinct names):</p>
 <p>Timeout kills the rule's whole process tree on Unix systems: SIGTERM first,
 then SIGKILL after a 10-second grace window (deepest descendants first).</p>
 <p>Solution: Use wrapper script that manages its own cleanup:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>cleanup<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nb">kill</span><span class="w"> </span><span class="k">$(</span><span class="nb">jobs</span><span class="w"> </span>-p<span class="k">)</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="p">;</span><span class="w"> </span><span class="o">}</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nb">trap</span><span class="w"> </span>cleanup<span class="w"> </span>EXIT
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>your_long_running_command<span class="w"> </span><span class="p">&amp;</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nb">wait</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>cleanup<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nb">kill</span><span class="w"> </span><span class="k">$(</span><span class="nb">jobs</span><span class="w"> </span>-p<span class="k">)</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="p">;</span><span class="w"> </span><span class="o">}</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nb">trap</span><span class="w"> </span>cleanup<span class="w"> </span>EXIT
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>your_long_running_command<span class="w"> </span><span class="p">&amp;</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="nb">wait</span>
 </span></code></pre></div>
 <h3 id="oversubscription-warnings">Oversubscription Warnings<a class="headerlink" href="#oversubscription-warnings" title="Permanent link">#</a></h3>
 <p>If warnings appear but workflow succeeds, you can:</p>
@@ -4770,13 +4835,13 @@ then SIGKILL after a 10-second grace window (deepest descendants first).</p>
 </ol>
 <h2 id="optimizing-with-dag-metrics">Optimizing with DAG Metrics<a class="headerlink" href="#optimizing-with-dag-metrics" title="Permanent link">#</a></h2>
 <p>Use <code>oxo-flow graph</code> to get structural insights before tuning resources:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
 <p>The header shows key metrics:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>┌──────────────────────────────────────────────────────────┐
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>│ Workflow DAG: 12 rules, 15 dependencies                   │
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>│ Depth: 5, Width: 4, Critical path: 5 steps               │
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>└──────────────────────────────────────────────────────────┘
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>┌──────────────────────────────────────────────────────────┐
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>│ Workflow DAG: 12 rules, 15 dependencies                   │
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>│ Depth: 5, Width: 4, Critical path: 5 steps               │
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>└──────────────────────────────────────────────────────────┘
 </span></code></pre></div>
 <h3 id="interpreting-metrics-for-resource-planning">Interpreting metrics for resource planning<a class="headerlink" href="#interpreting-metrics-for-resource-planning" title="Permanent link">#</a></h3>
 <table>
@@ -4818,8 +4883,8 @@ then SIGKILL after a 10-second grace window (deepest descendants first).</p>
 <li><strong>Critical path &lt; Depth</strong>: Some branches are shallower. The critical path rules are your optimization priority — give them more threads/memory.</li>
 </ul>
 <h3 id="example-tuning-a-diamond-workflow">Example: tuning a diamond workflow<a class="headerlink" href="#example-tuning-a-diamond-workflow" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># Depth: 3, Width: 2, Critical path: source → left → merge</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># Depth: 3, Width: 2, Critical path: source → left → merge</span>
 </span></code></pre></div>
 <p>Insights:</p>
 <ul>
