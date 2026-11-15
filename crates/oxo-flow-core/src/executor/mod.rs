@@ -11,6 +11,7 @@ pub mod env_create_lock;
 pub mod env_store;
 pub mod output_invalidation;
 pub mod pixi_lock_fallback;
+pub mod placeholder_gate;
 pub mod process;
 pub mod rss;
 pub mod security;

@@ -443,6 +443,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         {
             // The run loop is gone but the handlers are still installed, so
             // a late signal must still end the process.
+            crate::background::remove_pid_file_from_env();
             std::process::exit(signal.exit_code());
         }
     });

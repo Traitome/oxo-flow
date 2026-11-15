@@ -7,6 +7,7 @@ mod background;
 pub mod banner;
 pub mod commands;
 mod logging;
+mod run_status;
 
 use crate::commands::agent_docs::agent_docs_command;
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
@@ -69,8 +70,8 @@ pub struct Cli {
     no_color: bool,
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
-    /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// knowledge, schema, verify-data, license, provenance verify, and ai;
+    /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
+    /// info, knowledge, schema, verify-data, license, provenance verify, and ai;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -100,6 +101,12 @@ pub enum Commands {
         keep_going: bool,
         #[arg(short = 'd', long, help = "Working directory for execution")]
         workdir: Option<PathBuf>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Checkpoint file for this run (default: <workdir>/.oxo-flow/checkpoint.json). Use one path per workflow variant (smoke/test/full) so each resumes independently"
+        )]
+        checkpoint: Option<PathBuf>,
         #[arg(
             long,
             value_name = "PATH",
@@ -229,6 +236,7 @@ pub enum Commands {
         /// with `kill <pid>` (the pid is in the summary and the pid file).
         #[arg(
             long,
+            visible_alias = "detach",
             help = "Detach execution into a background process (see long help)"
         )]
         background: bool,
@@ -295,7 +303,7 @@ pub enum Commands {
         /// the flag, writes its pid to .oxo-flow/background.pid, prints a
         /// summary on stderr, and exits 0 immediately (see `run
         /// --background`).
-        #[arg(long)]
+        #[arg(long, visible_alias = "detach")]
         background: bool,
     },
     /// Preview execution without running any commands (alias: plan).
@@ -588,6 +596,25 @@ pub enum Commands {
             help = "Maximum number of rules to show in the --timing view"
         )]
         limit: usize,
+    },
+    /// Block until a run in a workdir finishes, then report its outcome.
+    ///
+    /// Exit status: 0 = success, 1 = failed or incomplete, 3 = timeout
+    /// (the run is NOT cancelled), 4 = no run found. Pairs with
+    /// `run --background` for scripted supervision.
+    Wait {
+        /// Run directory (default: current directory).
+        #[arg(long, value_name = "DIR")]
+        workdir: Option<PathBuf>,
+        /// Checkpoint file (default: `<workdir>/.oxo-flow/checkpoint.json`).
+        #[arg(long, value_name = "PATH")]
+        checkpoint: Option<PathBuf>,
+        /// Maximum seconds to wait (0 = no timeout).
+        #[arg(long, default_value = "0", value_name = "SECS")]
+        timeout: u64,
+        /// Poll interval in seconds.
+        #[arg(long, default_value = "5", value_name = "SECS")]
+        interval: u64,
     },
     /// Pull a published bundle from a remote source.
     Pull {
@@ -1233,6 +1260,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Lint { .. }
         | Commands::Test { .. }
         | Commands::Status { .. }
+        | Commands::Wait { .. }
         | Commands::Batch { .. }
         | Commands::Info { .. }
         | Commands::Knowledge { .. }
@@ -1388,7 +1416,7 @@ async fn main() -> Result<()> {
             "`oxo-flow {name}` does not support --json yet{hint}.\n  \
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
-             status, batch, info, knowledge, schema, license, ai, \
+             status, wait, batch, info, knowledge, schema, license, ai, \
              provenance verify, verify-data)."
         );
     }
@@ -1445,6 +1473,7 @@ async fn main() -> Result<()> {
             jobs,
             keep_going,
             workdir,
+            checkpoint,
             log_file,
             target,
             module,
@@ -1492,7 +1521,12 @@ async fn main() -> Result<()> {
                 let log_path =
                     crate::background::resolve_log_path(&bg_workdir, log_file.as_deref());
                 let args = crate::background::strip_background_flag(std::env::args_os());
-                crate::background::launch_in_background(&args, &bg_workdir, &log_path)?;
+                crate::background::launch_in_background(
+                    &args,
+                    &bg_workdir,
+                    &log_path,
+                    checkpoint.as_deref(),
+                )?;
                 std::process::exit(0);
             }
             use anyhow::Context as _;
@@ -1628,8 +1662,10 @@ async fn main() -> Result<()> {
                 rerun,
                 no_report_snapshot,
                 max_submitted,
-                // run derives the workdir default
-                checkpoint_override: None,
+                // `run --checkpoint PATH` (#1078 F6) pins the checkpoint for
+                // workflow variants that share a workdir; the default stays
+                // derived from the workdir.
+                checkpoint_override: checkpoint,
                 allow_protected_drift,
                 strict_envs,
             })
@@ -1657,7 +1693,12 @@ async fn main() -> Result<()> {
                 )?;
                 let log_path = crate::background::resolve_log_path(&bg_workdir, None);
                 let args = crate::background::strip_background_flag(std::env::args_os());
-                crate::background::launch_in_background(&args, &bg_workdir, &log_path)?;
+                crate::background::launch_in_background(
+                    &args,
+                    &bg_workdir,
+                    &log_path,
+                    Some(&checkpoint),
+                )?;
                 std::process::exit(0);
             }
             resume_command(
@@ -1870,6 +1911,21 @@ async fn main() -> Result<()> {
             timing,
             limit,
         } => handle_status(checkpoint, workdir, cli.json, timing, limit).await?,
+        Commands::Wait {
+            workdir,
+            checkpoint,
+            timeout,
+            interval,
+        } => {
+            crate::commands::wait::wait_command(crate::commands::wait::WaitRequest {
+                workdir,
+                checkpoint,
+                timeout_secs: timeout,
+                interval_secs: interval,
+                json: cli.json,
+            })
+            .await?
+        }
         Commands::Pull { url, output } => crate::commands::pull::pull_command(&url, output).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,
         Commands::Diff {

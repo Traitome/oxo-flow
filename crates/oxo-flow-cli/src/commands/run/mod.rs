@@ -176,7 +176,17 @@ pub struct RunRequest {
     pub strict_envs: bool,
 }
 
-pub async fn run_command(
+pub async fn run_command(request: RunRequest) -> Result<()> {
+    // The run-status file records the RUN's terminal outcome, not just rule
+    // state (issue #1078 H2): `wait` must not read a previous clean
+    // checkpoint as this run's success after a preflight failure.
+    let status = crate::run_status::RunStatusHandle::new();
+    let outcome = run_command_inner(request, &status).await;
+    status.finish(&outcome);
+    outcome
+}
+
+async fn run_command_inner(
     RunRequest {
         workflow,
         jobs,
@@ -208,6 +218,7 @@ pub async fn run_command(
         from_rule,
         strict_envs,
     }: RunRequest,
+    status: &crate::run_status::RunStatusHandle,
 ) -> Result<()> {
     print_banner();
 
@@ -303,6 +314,18 @@ pub async fn run_command(
             Some(s) => anyhow::anyhow!("{e}\n  hint: {s}"),
             None => anyhow::anyhow!("{e}"),
         })?;
+    // Arm the run-status file immediately after the lock: from here on a
+    // preflight failure (protected-tree drift, bad environment spec, …) is
+    // recorded as this run's failure, so `wait` never mistakes a previous
+    // clean checkpoint for this run's outcome (issue #1078 H2).
+    // The checkpoint path is known here (only the workdir and an explicit
+    // override feed it), so arm the run-status file beside it BEFORE any
+    // preflight that can fail (issue #1078 H2). The status is per
+    // checkpoint: variant runs that share a workdir cannot alias each
+    // other's outcome (R2).
+    let checkpoint_path =
+        checkpoint_override.unwrap_or_else(|| CheckpointState::default_path(&workdir_effective));
+    status.arm(&checkpoint_path);
 
     // Issue #751: bundle runs extract the workflow into a temp dir, so
     // relative sample_pattern/pairs_pattern scans anchor inside the
@@ -588,10 +611,8 @@ pub async fn run_command(
     // freshness gate, which would otherwise silently skip re-submitted
     // rules with stale outputs).
     // An explicit checkpoint path (resume) wins over the workdir-derived
-    // default (#538); load AND save both use it.
-    let checkpoint_path = checkpoint_override.unwrap_or_else(|| {
-        CheckpointState::default_path(workdir.as_ref().unwrap_or(&workdir_default))
-    });
+    // default (#538); load AND save both use the `checkpoint_path` computed
+    // at arm time above.
     // Retention for failed-output aside files (issue #194 C2): stale
     // `.oxo-failed` evidence ages out at run start instead of accumulating
     // forever. Best-effort — cleanup must never block the run.
@@ -1097,6 +1118,13 @@ pub async fn run_command(
         // Issue #1011 P2: `--strict-envs` disables the stale-pixi.lock
         // graceful fallback so lock-based install failures hard-fail again.
         strict_envs,
+        // Issue #1078 F2: the workflow's `[engine] strict_placeholders`
+        // value (unset = the gate is on); the executor applies the
+        // `OXO_FLOW_STRICT_PLACEHOLDERS` override on top.
+        strict_placeholders: config
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.strict_placeholders),
     };
 
     // Fail fast if any rule's declared request can never fit an explicit

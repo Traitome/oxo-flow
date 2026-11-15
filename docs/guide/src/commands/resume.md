@@ -55,7 +55,7 @@ recorded instance set exactly.
 | `--keep-going` | `-k` | Continue execution when a job fails (same semantics as `run`) |
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
-| `--background` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)) |
+| `--background` / `--detach` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)); `--detach` is an alias |
 
 ## Examples
 
@@ -81,7 +81,7 @@ oxo-flow resume .oxo-flow/checkpoint.json -j 4
   failed, in the resume banner — their stale failure entries
   from older checkpoints don't count toward the failed total, and the gate
   is re-judged on this resume anyway.
-- `--background` detaches the resumed run (see
+- `--background` / `--detach` detaches the resumed run (see
   [run's Background runs section](run.md#background-runs-background)).
 
 ## See Also

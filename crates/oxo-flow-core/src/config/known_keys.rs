@@ -221,6 +221,7 @@ const ENGINE_KEYS: &[&str] = &[
     "protected_data_trees",
     "reclaim_free_disk",
     "staging_mode",
+    "strict_placeholders",
     "tier0_ram_scratch",
     "tier1_nvme_scratch",
     "tier2_shared_scratch",
@@ -301,6 +302,7 @@ const RULE_KEYS: &[&str] = &[
     "scratch",
     "shell",
     "script",
+    "singleton",
     "staging_mode",
     "tags",
     "target",
@@ -1140,6 +1142,7 @@ mod tests {
             when = "true"
             temporary = true
             scratch = true
+            singleton = true
             scatter = { variable = "v", values = ["a"] }
             transform = { split = { by = "s" }, map = "m" }
             temp_output = ["t.txt"]

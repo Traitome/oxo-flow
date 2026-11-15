@@ -23,14 +23,17 @@ use std::process::{Child, Command, Stdio};
 /// Build the detached child's argv from the foreground process's full
 /// argument list (`std::env::args_os()`, `argv[0]` included): drop `argv[0]`
 /// (the spawn replaces it with [`std::env::current_exe`]) and every exact
-/// `--background` token. Exact-token removal is safe because this helper
-/// only runs after clap parsed `background = true` — the flag was consumed
-/// as a flag, never as another option's value — so the remainder re-parses
-/// to the identical command line minus the flag.
+/// `--background` / `--detach` token. Exact-token removal is safe because
+/// this helper only runs after clap parsed `background = true` — the flag
+/// was consumed as a flag, never as another option's value — so the
+/// remainder re-parses to the identical command line minus the flag.
 pub fn strip_background_flag(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     args.into_iter()
         .skip(1) // argv[0]: replaced by current_exe() in spawn_detached
-        .filter(|arg| arg.as_os_str() != OsStr::new("--background"))
+        .filter(|arg| {
+            arg.as_os_str() != OsStr::new("--background")
+                && arg.as_os_str() != OsStr::new("--detach")
+        })
         .collect()
 }
 
@@ -127,13 +130,28 @@ impl Drop for BackgroundPidFileGuard {
         let Some(path) = &self.0 else {
             return;
         };
-        let pid = std::process::id().to_string();
-        if fs::read_to_string(path).ok().as_deref().map(str::trim) != Some(pid.as_str()) {
-            return;
-        }
-        if let Err(e) = fs::remove_file(path) {
-            tracing::warn!(error = %e, path = %path.display(), "failed to remove the background pid file");
-        }
+        remove_pid_file_if_owned(path);
+    }
+}
+
+/// Remove `path` only when it still names this process — a second
+/// background launch may have overwritten it with its own pid.
+fn remove_pid_file_if_owned(path: &Path) {
+    let pid = std::process::id().to_string();
+    if fs::read_to_string(path).ok().as_deref().map(str::trim) != Some(pid.as_str()) {
+        return;
+    }
+    if let Err(e) = fs::remove_file(path) {
+        tracing::warn!(error = %e, path = %path.display(), "failed to remove the background pid file");
+    }
+}
+
+/// Remove the pid file from the signal-termination path, which calls
+/// `std::process::exit` and therefore skips [`BackgroundPidFileGuard`]'s
+/// Drop (issue #1078 M2). No-op for foreground runs (`PID_FILE_ENV` unset).
+pub fn remove_pid_file_from_env() {
+    if let Some(path) = std::env::var_os(PID_FILE_ENV).map(PathBuf::from) {
+        remove_pid_file_if_owned(&path);
     }
 }
 
@@ -195,7 +213,12 @@ fn write_pid_file(path: &Path, pid: u32) -> io::Result<()> {
 
 /// Spawn the detached child, record its pid, print the one-line summary on
 /// stderr, and return. The caller exits 0; the child runs the normal flow.
-pub fn launch_in_background(args: &[OsString], workdir: &Path, log_path: &Path) -> Result<()> {
+pub fn launch_in_background(
+    args: &[OsString],
+    workdir: &Path,
+    log_path: &Path,
+    checkpoint: Option<&Path>,
+) -> Result<()> {
     // Fail fast instead of reporting "started" for a child that would
     // immediately die on the workdir lock (issue #70). Advisory: the child
     // still enforces the lock itself.
@@ -216,10 +239,18 @@ pub fn launch_in_background(args: &[OsString], workdir: &Path, log_path: &Path) 
     })?;
     let pid = child.id();
     write_pid_file(&pid_file, pid)?;
-    let checkpoint = workdir.join(".oxo-flow/checkpoint.json");
+    // The hints must point at the checkpoint this run actually uses
+    // (issue #1078 M1): echoing the default after `run --checkpoint PATH`
+    // sent operators to the wrong file.
+    let checkpoint = checkpoint
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| CheckpointState::default_path(workdir));
     eprintln!(
-        "started in background (pid {pid}) · log: {} · monitor: oxo-flow status {} · stop: kill {pid}",
+        "started in background (pid {pid}) · log: {} · monitor: oxo-flow status {} · \
+         wait: oxo-flow wait --workdir {} --checkpoint {} · stop: kill {pid}",
         log_path.display(),
+        checkpoint.display(),
+        workdir.display(),
         checkpoint.display()
     );
     tracing::info!(
@@ -268,6 +299,18 @@ mod tests {
         assert_eq!(
             strip_background_flag(args),
             os(&["--json", "run", "wf.oxoflow"])
+        );
+    }
+
+    #[test]
+    fn strip_background_flag_removes_the_detach_alias() {
+        // `--detach` is a visible alias of `--background`; leaving it in the
+        // child argv would make the child detach again (fork loop).
+        let args = os(&["/usr/bin/oxo-flow", "run", "wf.oxoflow", "--detach"]);
+        assert_eq!(
+            strip_background_flag(args),
+            os(&["run", "wf.oxoflow"]),
+            "the child must re-run without the alias"
         );
     }
 

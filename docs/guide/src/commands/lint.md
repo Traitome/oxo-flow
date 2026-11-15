@@ -206,6 +206,35 @@ captured; re-import after upgrading, or add the command by hand.
 `transform` rules are exempt because their command lives in
 `transform.map`/`transform.combine`.
 
+[W041](../reference/glossary.md#diagnostic-codes) flags a rule that
+references the sample domain — `{sample}`, `{group}`, `{wildcard.sample}`,
+`{wildcard.group}`, or `{meta.<column>}` — with no binding source. The
+rule then runs exactly once and the token stays unbound (the
+execution-time placeholder gate rejects the rendered command). The repair
+is to bind the domain in `input`/`output` and declare its source
+(`[[sample_groups]]`, `[[pairs]]`, `sample_pattern`, `pairs_pattern`,
+`[[values]]`, or a scatter) — or, for a deliberate one-instance
+`{meta.*}` read, add `singleton = true`. `singleton` silences the LINT
+diagnosis only; the execution-time gate still rejects a `{meta.*}` token
+that survives rendering (a one-row metadata table is the supported
+constant read; `{config.<key>}` is the workflow constant). The binding
+model is shared with the expansion engine, so:
+
+- a `sample_pattern`/`pairs_pattern` **declaration** counts even when lint
+  runs without the data mounted (CI/editor);
+- a `{meta.*}` reference in `output` binds when the metadata column(s)
+  uniquely key every instance — a constant column
+  (`batch_{meta.batch}.tsv`) does not fan out and stays flagged (the
+  engine avoids the silent duplicate-output race);
+- a one-row metadata table is an unambiguous constant read;
+- `singleton = true` suppresses `{meta.*}` only — a `{sample}`/`{group}`
+  survivor is always a defect and stays flagged;
+- a scatter binds its own variable (a scatter over `pair_id` does not
+  hide an unbound `{sample}`);
+- every free-text field is scanned, including `log`, `script`,
+  `benchmark`, hooks, env-var values, and string params. Shell `${...}`
+  parameter expansion and comments are never treated as placeholders.
+
 ---
 
 ## Notes

@@ -59,7 +59,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [ai]                # Optional: AI companion settings (provider, model, skills activation — see the AI CLI reference)
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications
-[engine]            # Optional: runtime disk-pressure guard + global scratch dir + protected data trees
+[engine]            # Optional: disk-pressure guard + scratch routing + protected data trees + placeholder gate
 ```
 
 `reference_dir` is a bare top-level key, so it must appear before the first
@@ -264,6 +264,29 @@ when no rule failed, `on_error` otherwise. The web UI executor has its
 own run loop and does not fire these hooks yet. Placeholders: every
 `[config]` key is available as `{config.<key>}`, plus `{succeeded}`,
 `{failed}`, `{skipped}`, and `{workdir}`. Unknown keys stay literal.
+
+**Cross-run chaining.** A command in `on_complete` runs synchronously
+inside the finishing run (bounded by `OXO_FLOW_HOOK_TIMEOUT_SECS`, default
+300 s), so a downstream `oxo-flow run` started there keeps the upstream
+process alive until it finishes — or is killed at the hook deadline. For
+decoupled chaining, detach the downstream run and block on it from a
+supervisor with [`oxo-flow wait`](../commands/wait.md):
+
+```toml
+[workflow]
+name = "upstream"
+on_complete = "oxo-flow run validate.oxoflow --workdir {workdir}/validate --background"
+```
+
+```bash
+oxo-flow run upstream.oxoflow
+oxo-flow wait --workdir ./validate --timeout 3600   # 0 ok, 1 failed, 3 timeout
+```
+
+The hook is best-effort: a failing `on_complete` never changes the
+upstream run's status, so drive automation from the `wait` exit code.
+Keeping both steps in one workflow (`depends_on`) remains the simplest
+in-process chain.
 
 ### Custom Interpreters (`interpreter_map`)
 
@@ -719,6 +742,7 @@ memory = "32G"
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir. The scratch location can be offloaded to a configured `[engine]` scratch tier — see [Scratch tier ladder](#scratch-tier-ladder). Local-executor-only: cluster paths reject workflows whose runnable rules declare `scratch = true` before any submission |
+| `singleton` | Boolean | `false` | Declare a deliberate one-instance rule. A rule without a sample-domain binding in `output` runs exactly once; `singleton = true` silences the `lint` [W041](../reference/glossary.md#diagnostic-codes) warning for an unbound `{meta.<column>}` and opts out of the `{meta.<column>}`-implied sample fan-out. It does **not** soften the execution-time placeholder gate — a `{meta.*}` token that survives rendering (more than one metadata row and no sample-like binding) is still fatal, as are `{sample}`/`{group}`/`{input…}` survivors. A one-row metadata table is the supported constant read; use `{config.<key>}` for a true workflow constant |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Patterns the glob parser rejects (`***`, `a**b` mid-component forms, unterminated `[a-b` ranges) fail workflow validation — a protection typo is a hard error, never a silently unprotected file. Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
@@ -1788,6 +1812,19 @@ what the tool can *actually* get on this machine. Rules that embed
 resource-sized flags should use the effective pair; rules that only pass
 the pool declaration through can keep the plain pair.
 
+**Shell `${...}` is not placeholder syntax** (issue #1078 F7). Bash
+parameter expansion — `${#parts[@]}`, `${ch##*.clones_}`, `${config[x]}` —
+is never treated as an engine placeholder by the validation gate. Rendering
+is textual, though: a **bound** fan-out name inside `${...}` is substituted
+(`${sample}` renders as `$<sample value>`), so keep shell variable names
+distinct from fan-out names. Only single-brace `{token}` forms from the table above
+(and the fan-out vocabulary `{sample}`, `{group}`, `{pair_id}`,
+`{experiment}`, `{control}`, `{tumor}`, `{normal}`, `{chunks}`) are placeholders.
+Brace groups (`{ echo hi; }`), brace expansion (`{1..10}`, `{a,b}`), and
+awk bodies (`{print $1}`) stay shell text. Every executing rule's rendered
+command is scanned for survivors; see
+[Placeholder validation](run.md#placeholder-validation-strict-by-default).
+
 **Container memory follows the same policy** — docker/singularity rules
 get the declared memory as their `--memory` cgroup limit, clamped to the
 machine's total the same way (a rule declaring `memory = "72G"` on a 4G
@@ -2426,10 +2463,21 @@ PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
   truthiness positions; a missing row or column renders `''` / `false` —
   the gate is closed, so samples without the data evaluate false instead
   of running.
-- A `{meta.<column>}` reference in a rule that never fans out (no
-  sample-like binding) is left as a residual placeholder — the engine logs
-  a **warning** at execution time and the literal text remains in the
-  rendered command.
+- A `{meta.<column>}` reference in `output` counts as a **sample-domain
+  binding** (issue #1078 F1) when a metadata table and a
+  `[[sample_groups]]`/`[[pairs]]` domain exist **and** the referenced
+  column(s) uniquely key every instance — fanning out a constant column
+  (`batch_{meta.batch}.tsv`) would make N instances write one file, so
+  that shape stays a single instance and is reported by `lint` (H5). A
+  one-row metadata table is an unambiguous **constant read** and resolves
+  even without a domain. With no sample-like binding and more than one
+  row, the token stays **literal** and the execution-time
+  [placeholder gate](run.md#placeholder-validation-strict-by-default)
+  rejects the rule (even when it declares `singleton = true`); use
+  `{config.<key>}` for a workflow-level constant. `lint` reports the
+  unbound-domain case as [W041](../reference/glossary.md#diagnostic-codes)
+  unless the rule declares `singleton = true` (which suppresses
+  `{meta.*}` only — a `{sample}`/`{group}` survivor is always a defect).
 
 ```toml
 [[rules]]
@@ -3378,6 +3426,7 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 | `min_free_disk` | String | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
 | `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
 | `tmp_dir` | String | — | Global scratch directory. Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
+| `strict_placeholders` | Boolean | `true` | Execution-time placeholder gate (issue #1078 F2). A rendered command that still carries an engine placeholder (`{sample}`, `{meta.<column>}`, `{config.<key>}`, `{input…}`, `{output…}`) fails the rule **before the shell spawns**, because it would otherwise receive the literal brace token. Set `false` to restore the historical warning-only behavior while a workflow migrates; the environment variable `OXO_FLOW_STRICT_PLACEHOLDERS=0` overrides it per invocation. The gate applies to every class, including `{meta.*}` on a `singleton` rule (a one-row metadata table resolves before the gate). Shell `${...}` parameter expansion is never treated as a placeholder |
 | `protected_data_trees` | Array of String | — | Workdir-relative data trees whose content must not change behind the engine's back — e.g. `["raw/", "reference/"]`. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud `PROTECTED TREE DRIFT:` section when a file changed, was removed, or appeared. `run` **refuses to execute** on drift unless `--allow-protected-drift` is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented |
 | `numa_aware` | Bool | `false` | Discover hardware NUMA topology at run start and enable per-rule `numactl` wrapping. Implied automatically when any rule sets `numa_pin` or `numa_node` — see [NUMA pinning](#numa-pinning) |
 | `staging_mode` | String | `"eager"` | Global default for how remote storage inputs (S3/GCS) reach a rule's shell. `eager` downloads the full object to local scratch before the rule runs; `stream` (aliases `stream_fifo`/`fifo`) streams on demand through a FIFO without buffering to disk; `passthrough` (alias `pass_through`) leaves the raw URI untouched for tools with native cloud I/O. Also accepted per-rule and in `[defaults]`; resolution is rule ← `[defaults]` ← `[engine]`. See [Remote staging and upload](cloud-storage.md#remote-staging-and-upload) |

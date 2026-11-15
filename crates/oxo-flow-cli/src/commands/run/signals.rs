@@ -137,6 +137,9 @@ pub(crate) async fn terminate_on_signal(
         None,
     )
     .await;
+    // `std::process::exit` skips Drop, so the background pid file would
+    // otherwise outlive the child (issue #1078 M2).
+    crate::background::remove_pid_file_from_env();
     std::process::exit(signal.exit_code());
 }
 

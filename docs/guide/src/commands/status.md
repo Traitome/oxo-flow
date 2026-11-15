@@ -4,6 +4,10 @@ Show execution status from a checkpoint file. Displays which rules completed
 successfully, which failed, and — with `--timing` — per-rule wall-clock times
 and total runtime.
 
+For scripted supervision that must *block* until a run finishes, use
+[`oxo-flow wait`](wait.md) instead: it polls the same checkpoint plus the
+workdir lock/background pid and returns a structured exit status.
+
 ---
 
 ## Usage

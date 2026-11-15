@@ -967,12 +967,14 @@ pub fn metadata_columns(table: &MetadataTable) -> std::collections::HashSet<Stri
 /// value, and a missing row OR column substitutes an empty string (the
 /// `when = "config.single_end_mode || {meta.endedness} == 'SE'"` gate
 /// therefore evaluates false for samples without the data — the gate is
-/// closed, never a literal token). This holds for EVERY `{meta.<column>}`
-/// reference, including rules that never fan out: with no sample-like
-/// binding at all, `metadata_row_for` is `None` and every reference still
-/// renders empty — never a literal token. (Only callers that skip this
-/// pass entirely leave the token in place; the execution-time
-/// residual-placeholder guard warns about those.)
+/// closed, never a literal token).
+///
+/// The engine calls this per expanded instance, and for a one-row table as
+/// an unambiguous constant read. A one-shot rule with no sample-like
+/// binding and more than one metadata row is deliberately left
+/// unexpanded: substituting empty would silently pass `--reference ''`,
+/// so the literal token survives to the execution-time placeholder gate
+/// (fatal, including for `singleton = true`) — issue #1078 H1.
 #[must_use = "expanding returns a new String"]
 pub fn expand_meta_namespace(
     text: &str,

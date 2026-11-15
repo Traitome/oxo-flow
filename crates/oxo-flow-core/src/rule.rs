@@ -1341,6 +1341,31 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub scratch: bool,
 
+    /// Declare this rule a deliberate single instance (issue #1078 F1).
+    ///
+    /// Without a sample-domain binding in `input`/`output` a rule runs
+    /// exactly once. That is a legal pattern (a one-shot report, a QC over
+    /// workflow-level metadata), but it is also indistinguishable from a
+    /// forgotten sample binding — the failure mode where a per-sample rule
+    /// runs once with literal brace tokens. `singleton = true` states the
+    /// intent:
+    ///
+    /// - `lint` stops warning (W041) for an unbound `{meta.<column>}`;
+    /// - the expansion pass does not infer a sample domain from a
+    ///   `{meta.<column>}` reference alone;
+    /// - a one-row metadata table still resolves `{meta.<column>}` as a
+    ///   constant read.
+    ///
+    /// It does **not** soften the execution-time placeholder gate: a
+    /// `{meta.<column>}` reference that survives rendering (no sample-like
+    /// binding and more than one metadata row) is still fatal, as are
+    /// `{sample}`/`{group}`/`{input…}` survivors — executing with the
+    /// literal brace text is always a defect. Use `{config.<key>}` for a
+    /// true workflow constant.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub singleton: bool,
+
     /// Scatter configuration for parallel execution across a variable.
     ///
     /// Fans out this rule into multiple parallel instances, one per element
@@ -1598,6 +1623,79 @@ impl Rule {
         } else {
             crate::storage::StagingMode::Eager
         }
+    }
+
+    /// Text fields scanned for per-instance substitutions when a rule fans
+    /// out (issue #1078 F1): `input`, `output`, `shell`, and `when`.
+    #[must_use]
+    pub fn expansion_texts(&self) -> Vec<&str> {
+        let mut texts: Vec<&str> = self.input.iter().map(String::as_str).collect();
+        texts.extend(self.output.iter().map(String::as_str));
+        if let Some(shell) = self.shell.as_deref() {
+            texts.push(shell);
+        }
+        if let Some(when) = self.when.as_deref() {
+            texts.push(when);
+        }
+        texts
+    }
+
+    /// Text fields the expansion engine scans when deciding whether this
+    /// rule fans out (issue #1078 F1): [`Self::expansion_texts`] plus
+    /// `output_pattern`.
+    ///
+    /// One definition shared by `expand_wildcards` and lint W041 so the two
+    /// cannot drift. `log`, `script`, and the hooks are rendered per
+    /// instance once a rule fans out, but never start a fan-out themselves:
+    /// a `{sample}` that appears only in a log path would clone the rule
+    /// into N instances writing the same declared outputs, and `${name}`
+    /// shell spellings inside a script path must never be mistaken for
+    /// wildcards (the historical contract of
+    /// `script_only_wildcards_do_not_trigger_fan_out`).
+    #[must_use]
+    pub fn fanout_trigger_texts(&self) -> Vec<&str> {
+        let mut texts = self.expansion_texts();
+        if let Some(pattern) = self.output_pattern.as_deref() {
+            texts.push(pattern);
+        }
+        texts
+    }
+
+    /// Every free-text field lint W041 scans for sample-domain placeholders
+    /// (issue #1078 F1): the fan-out trigger fields plus `log`, `script`,
+    /// `benchmark`, the hooks, environment-variable values, and string
+    /// parameter values.
+    ///
+    /// `expand_inputs` patterns are deliberately excluded: a `{sample}`
+    /// confined there is the documented aggregation idiom and does not
+    /// start a fan-out.
+    #[must_use]
+    pub fn lint_text_fields(&self) -> Vec<&str> {
+        let mut texts = self.fanout_trigger_texts();
+        if let Some(log) = self.log.as_deref() {
+            texts.push(log);
+        }
+        if let Some(script) = self.script.as_deref() {
+            texts.push(script);
+        }
+        if let Some(benchmark) = self.benchmark.as_deref() {
+            texts.push(benchmark);
+        }
+        for hook in [&self.pre_exec, &self.on_success, &self.on_failure]
+            .into_iter()
+            .flatten()
+        {
+            texts.push(hook);
+        }
+        for value in self.envvars.values() {
+            texts.push(value);
+        }
+        for value in self.params.values() {
+            if let toml::Value::String(text) = value {
+                texts.push(text);
+            }
+        }
+        texts
     }
 
     /// Validate the rule for internal consistency.

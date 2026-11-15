@@ -111,7 +111,12 @@ pub fn snapshot_outputs(
 /// Outputs declared `protected_output` are skipped entirely (issue #457).
 /// Every step is best-effort with a warning — cleanup must never mask the
 /// rule's own failure.
-pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
+///
+/// Returns the declared-output paths this call actually rolled back
+/// (deleted or moved aside) so the rule failure message can name them
+/// (issue #1078 F3).
+pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) -> Vec<PathBuf> {
+    let mut rolled_back = Vec::new();
     for snapshot in snapshots {
         // Protected outputs are never deleted or moved aside by failure
         // cleanup (issue #457) — the user declared them irreplaceable, and
@@ -152,6 +157,7 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
                     file = %snapshot.path.display(),
                     "removed output created by a failed rule"
                 );
+                rolled_back.push(snapshot.path.clone());
             }
             continue;
         }
@@ -197,8 +203,10 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
                 "moved aside pre-existing output of a failed rule (stale from an \
                  earlier era — the recorded failure schedules a re-execution)"
             );
+            rolled_back.push(snapshot.path.clone());
         }
     }
+    rolled_back
 }
 
 /// `<path>.oxo-failed` sibling for a moved-aside output. A previous failure
@@ -307,8 +315,28 @@ mod tests {
         assert!(!snapshots[0].existed);
         // The failed attempt "writes" the output, then we invalidate.
         std::fs::write(dir.path().join("out.txt"), b"partial").unwrap();
-        invalidate_failed_outputs(&snapshots).await;
+        let rolled_back = invalidate_failed_outputs(&snapshots).await;
         assert!(!dir.path().join("out.txt").exists());
+        assert_eq!(
+            rolled_back,
+            vec![dir.path().join("out.txt")],
+            "the returned list feeds the failure message (issue #1078 F3)"
+        );
+    }
+
+    #[tokio::test]
+    async fn partially_created_outputs_report_only_the_rolled_back_files() {
+        // Issue #1078 F3 live shape: a rule created one of two declared
+        // outputs, failed on the other, and the present file vanished
+        // without a word. The returned list names the file that was
+        // actually rolled back.
+        let dir = tempfile::tempdir().unwrap();
+        let rule = rule_with_outputs(&["created.txt", "missing.txt"]);
+        let snapshots = snapshot_outputs(&rule, dir.path(), &HashMap::new());
+        std::fs::write(dir.path().join("created.txt"), b"ok").unwrap();
+        let rolled_back = invalidate_failed_outputs(&snapshots).await;
+        assert_eq!(rolled_back, vec![dir.path().join("created.txt")]);
+        assert!(!dir.path().join("created.txt").exists());
     }
 
     /// A rule that also declares `protected_output` (issue #457).

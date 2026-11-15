@@ -80,6 +80,9 @@ ends with a **Done when** condition — do not proceed without it.
 ### 3. Submit & Execute
 
 - Local: `oxo-flow run -j <N> --provenance` (always `--provenance`).
+- Detached + scripted supervision: `oxo-flow run … --detach` then
+  `oxo-flow wait --workdir <dir> --timeout <secs>` (exit 0 success,
+  1 failed/incomplete, 3 timeout, 4 no run) instead of a poll-for-files loop.
 - Cluster: `oxo-flow run --profile <NAME>` with a `[cluster]` block;
   manual escape hatch `oxo-flow cluster submit|status|cancel|logs`.
 - Web: `POST /api/runs` or the web UI.
@@ -154,7 +157,11 @@ Recipes (snapshots, journal helper, scratch layout, protected-tree config):
 - **Evidence first** — never claim success without checkpoint/report evidence.
 - **Real paths only** — verify inputs exist before referencing them.
 - **Static gates before compute** — every workflow edit re-runs
-  validate → dry-run → lint.
+  validate → dry-run → lint. An unbound placeholder (`{sample}`,
+  `{meta.<col>}`, `{config.<key>}`) is a hard run-time error by default;
+  lint W041 names the rule whose sample domain has no binding, and
+  `singleton = true` declares a deliberate one-instance rule. Shell
+  `${...}` is never a placeholder.
 - **Correct, don't restart** — prefer checkpoint resume unless inputs were
   invalidated.
 - **Explicit edges** — edge inference covers exact strings, globs, and

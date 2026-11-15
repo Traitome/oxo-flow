@@ -392,6 +392,10 @@ pub struct ExecutorConfig {
     /// must never proceed on a solution that diverges from the committed
     /// lock. Default off = graceful re-solve with disclosure.
     pub strict_envs: bool,
+    /// Execution-time placeholder gate (issue #1078 F2). `None` (the CLI
+    /// default) resolves from `[engine] strict_placeholders` and
+    /// `OXO_FLOW_STRICT_PLACEHOLDERS`; tests and embedders pin it explicitly.
+    pub strict_placeholders: Option<bool>,
 }
 
 impl Default for ExecutorConfig {
@@ -423,6 +427,7 @@ impl Default for ExecutorConfig {
             hardware_topology: None,
             storage_tiers: None,
             strict_envs: false,
+            strict_placeholders: None,
         }
     }
 }
@@ -619,17 +624,24 @@ fn parse_cgroup_memory_max(content: &str) -> Option<u64> {
 /// misconfigurations). `ram_only` marks the tool-facing clamp (RAM term
 /// only) for the message. No-op when the detected figure is 0 (detection
 /// failed) — the caller's own fallback handles that.
+///
+/// The warning is emitted once per process (issue #1078 F5): on a 1.4 TB
+/// host under a 512 GB cgroup every rule used to replay the same line,
+/// drowning real warnings.
 pub(crate) fn clamp_to_cgroup_limit(detected_mb: u64, ram_only: bool) -> u64 {
     if let Some(cgroup_mb) = detect_cgroup_memory_limit_mb()
         && cgroup_mb > 0
         && detected_mb > cgroup_mb
     {
-        tracing::warn!(
-            host_mb = detected_mb,
-            cgroup_limit_mb = cgroup_mb,
-            ram_only,
-            "cgroup memory limit is below the detected host memory — clamping the auto-detected ceiling (issue #855: scheduling past the cgroup cap OOM-kills the run; override with --max-memory if this is wrong)"
-        );
+        static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+        WARN_ONCE.call_once(|| {
+            tracing::warn!(
+                host_mb = detected_mb,
+                cgroup_limit_mb = cgroup_mb,
+                ram_only,
+                "cgroup memory limit is below the detected host memory — clamping the auto-detected ceiling (issue #855: scheduling past the cgroup cap OOM-kills the run; override with --max-memory if this is wrong)"
+            );
+        });
         cgroup_mb
     } else {
         detected_mb
@@ -2560,6 +2572,10 @@ impl LocalExecutor {
             )?;
         }
 
+        // Placeholder gate switch (issue #1078 F2); the output-path check
+        // below honors the same escape hatch as the command gate.
+        let gate_enabled = crate::config::resolve_placeholder_gate(self.config.strict_placeholders);
+
         // Residual-wildcard gate (output patterns): a bare `{identifier}`
         // token surviving instance expansion means that wildcard never got
         // a value for this instance — executing would create literal-brace
@@ -2578,6 +2594,110 @@ impl LocalExecutor {
                     ),
                 });
             }
+            // Namespaced survivors (`{meta.*}`, `{config.*}`, `{params.*}`,
+            // `{input…}`, `{output…}`) are equally invalid in an output
+            // path: the engine would create a file literally named after
+            // the placeholder. Fatal even for `singleton = true` (which
+            // only softens the static diagnosis); the documented
+            // `strict_placeholders` switch restores the historical
+            // warning-only behavior (issue #1078 H1/R5).
+            let scanned = crate::wildcard::strip_shell_comments(&expanded);
+            let survivors = super::placeholder_gate::stale_placeholders(&scanned);
+            if gate_enabled && !survivors.is_empty() {
+                let tokens = survivors
+                    .iter()
+                    .map(|stale| stale.token.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(OxoFlowError::Execution {
+                    rule: rule.name.clone(),
+                    message: format!(
+                        "output pattern '{pattern}' contains unresolved engine placeholder(s) \
+                         {tokens} — the rule would create a literal-brace path; declare the \
+                         value source or use a concrete output path"
+                    ),
+                });
+            }
+        }
+
+        // Placeholder gate (issue #1078 F2). Engine placeholders are a
+        // closed vocabulary: every one of them resolves to a value for an
+        // executing rule, so a survivor means the rule never expanded and
+        // the shell is about to receive the literal brace token (live: an
+        // unexpanded per-sample rule ran TRUST4 with `{meta.bam_genomic}` as
+        // its BAM path). Fatal by default; the workflow/operator switches
+        // choose the historical warn-only behavior for migrating workflows
+        // (`[engine] strict_placeholders`, `OXO_FLOW_STRICT_PLACEHOLDERS=0`).
+        let limits = crate::scheduler::ResourceLimits {
+            threads: self.system_threads,
+            memory_mb: self.system_memory_mb,
+        };
+        let mut gate_texts: Vec<String> = std::iter::once(base_cmd.as_str())
+            .chain(resolved_commands.iter().map(String::as_str))
+            .map(crate::wildcard::strip_shell_comments)
+            .collect();
+        // Rule-level hooks and the log/benchmark paths are rendered and
+        // executed by the engine too — a survivor there is the same defect
+        // (issue #1078 M6). `render_shell_command` already warns; the gate
+        // turns the fatal classes into a pre-spawn error.
+        for text in [
+            &rule.pre_exec,
+            &rule.on_success,
+            &rule.on_failure,
+            &rule.log,
+            &rule.benchmark,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let rendered = render_shell_command(text, &rule, wildcard_values, limits);
+            gate_texts.push(crate::wildcard::strip_shell_comments(&rendered));
+        }
+        let gate =
+            super::placeholder_gate::evaluate(gate_texts.iter().map(String::as_str), gate_enabled);
+        if !gate.fatal.is_empty() {
+            let fatal = gate.tokens(&gate.fatal);
+            // Class-specific fixes: telling the user to set `singleton`
+            // for an undeclared `{config.x}` would send them in the
+            // wrong direction (issue #1078 F2 usability).
+            let mut hints: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for survivor in &gate.fatal {
+                hints.insert(match survivor.class {
+                    super::placeholder_gate::PlaceholderClass::FanOut => {
+                        "declare the value source (sample_pattern, [[sample_groups]], \
+                             [[pairs]], [[values]]) — a bare fan-out token has no value in a \
+                             rule that did not expand"
+                    }
+                    super::placeholder_gate::PlaceholderClass::Meta => {
+                        "give the rule a sample-domain binding, or use a one-row metadata table \
+                         for a constant read; `{config.<key>}` is the workflow constant \
+                         mechanism (`singleton` does not soften this gate)"
+                    }
+                    super::placeholder_gate::PlaceholderClass::Io => {
+                        "check the `{input…}`/`{output…}` index or named key against the \
+                             rule's declarations"
+                    }
+                    super::placeholder_gate::PlaceholderClass::Config => {
+                        "declare the key under `[config]`"
+                    }
+                    super::placeholder_gate::PlaceholderClass::Params => {
+                        "declare the key under the rule's `params`"
+                    }
+                });
+            }
+            let hint_text = hints.into_iter().collect::<Vec<_>>().join("; ");
+            return Err(OxoFlowError::Execution {
+                rule: rule.name.clone(),
+                message: format!(
+                    "unresolved placeholder(s) {fatal} reached the rendered command — the \
+                         engine bound no value for them in this run, so the shell would receive \
+                         the literal token (engine placeholders are filled for every executing \
+                         rule; a survivor means the rule never expanded). Fix: {hint_text}. \
+                         Shell `${{...}}` parameter expansion is never treated as a placeholder. \
+                         `OXO_FLOW_STRICT_PLACEHOLDERS=0` downgrades this gate to a warning for \
+                         migrating workflows."
+                ),
+            });
         }
 
         // Validate output paths for traversal safety
@@ -3130,7 +3250,9 @@ impl LocalExecutor {
                 push_stderr_note(&mut record, &format!("\n[oxo-flow] {e}"));
                 push_stderr_note(&mut record, &scratch_preserved_note(scratch));
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
-                super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                let rolled_back =
+                    super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                push_rollback_note(&mut record, &rolled_back);
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
                         &render_shell_command(
@@ -3171,7 +3293,10 @@ impl LocalExecutor {
                 }
                 if !stream_ok {
                     cleanup_temp_outputs(&rule, &self.config.workdir).await;
-                    super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                    let rolled_back =
+                        super::output_invalidation::invalidate_failed_outputs(&output_snapshot)
+                            .await;
+                    push_rollback_note(&mut record, &rolled_back);
                     if let Some(ref hook_cmd) = rule.on_failure {
                         run_hook(
                             &render_shell_command(
@@ -3301,7 +3426,9 @@ impl LocalExecutor {
                     push_stderr_note(&mut record, &scratch_preserved_note(scratch));
                 }
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
-                super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                let rolled_back =
+                    super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+                push_rollback_note(&mut record, &rolled_back);
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
                         &render_shell_command(
@@ -3327,7 +3454,9 @@ impl LocalExecutor {
                 push_stderr_note(&mut record, &scratch_preserved_note(scratch));
             }
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
-            super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+            let rolled_back =
+                super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
+            push_rollback_note(&mut record, &rolled_back);
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
                     &render_shell_command(
@@ -4395,6 +4524,30 @@ fn scratch_preserved_note(scratch: &Path) -> String {
     )
 }
 
+/// Name the declared outputs a failed rule rolled back (issue #1078 F3).
+///
+/// Without this, a rule that created one of two declared outputs and then
+/// failed showed only the *missing* file — the present one silently
+/// vanished, costing the reporter a debugging round to learn the step had
+/// actually run. The note makes both halves self-documenting.
+fn push_rollback_note(record: &mut JobRecord, rolled_back: &[PathBuf]) {
+    if rolled_back.is_empty() {
+        return;
+    }
+    let list = rolled_back
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    push_stderr_note(
+        record,
+        &format!(
+            "\n[oxo-flow] declared outputs of the failed rule are rolled back \
+             (deleted or moved aside as *.oxo-failed): {list}"
+        ),
+    );
+}
+
 /// Remove a scratch directory on paths where the rule's shell never
 /// started (spawn/safety failures): nothing diagnostic can exist inside,
 /// so a leftover dir is a pure leak. Best-effort — removal failure only
@@ -4655,63 +4808,40 @@ fn render_shell_command_inner(
         }
     }
     expanded = super::expand_to_fixed_point(&expanded, &shell_values, render_wildcard_value);
-    // Residual-placeholder guard: an unresolved ENGINE-known placeholder
+    // Residual-placeholder warning: an unresolved ENGINE-known placeholder
     // (sample/config/input/output/…) reaching a shell or script arg is a
     // correctness defect — the rule executes with a literal brace token.
     // Live incident: auto-sra merges received literal `--sample {sample}`
     // under a --arg-triggered invalidation cascade (12 instances failed;
     // unreproducible after the state moved on — this guard makes any
     // recurrence loud and attributable instead of silent). Literal braces
-    // in user shell code (awk '{print $1}') are NOT flagged — only the
-    // known placeholder grammar is matched.
-    const KNOWN_PLACEHOLDERS: &[&str] = &[
-        "{sample}",
-        "{group}",
-        "{pair_id}",
-        "{experiment}",
-        "{control}",
-        "{tumor}",
-        "{normal}",
-        "{log}",
-        "{threads}",
-        "{memory}",
-        "{effective_threads}",
-        "{effective_memory_mb}",
-        "{chunks}",
-    ];
-    for ph in KNOWN_PLACEHOLDERS {
-        if expanded.contains(ph) {
-            // One warn per (expanded instance, placeholder): without the
-            // dedupe one rule's single command logged the same line once
-            // per render site (output pattern + shell + hooks — the issue
-            // reporter saw it print twice from one rule's single command,
-            // #973 F6). Each fan-out instance still logs its own line —
-            // the key is the expanded instance name, and that is
-            // deliberate: the message names the instance, so N instances
-            // mean N lines pointing at their own command.
-            emit_once_per_rule(&rule.name, ph, |_| {
-                tracing::warn!(
-                    rule = %rule.name,
-                    placeholder = ph,
-                    "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
-                );
-            });
-        }
-    }
-    // Comments are prose, not executed code — scan the command with them
-    // stripped so annotations like `# {input[N]} would interpolate the
-    // glob-annotated pattern` don't read as unresolved placeholders.
+    // in user shell code (awk '{print $1}') and shell `${...}` parameter
+    // expansion are NOT flagged — the shared scanner matches only the
+    // engine's closed placeholder grammar.
+    //
+    // Issue #1078 F2: a survivor here is what the execution gate turns into
+    // a hard error; this loop stays because `dry-run`/`debug` render
+    // commands without executing them and must still surface the finding.
+    // Comments are prose, not executed code — scan with them stripped so
+    // annotations like `# {input[N]} would interpolate …` don't warn.
     let scanned = crate::wildcard::strip_shell_comments(&expanded);
-    if scanned.contains("{config.")
-        || scanned.contains("{meta.")
-        || scanned.contains("{input")
-        || scanned.contains("{output")
-    {
-        tracing::warn!(
-            rule = %rule.name,
-            command = %expanded,
-            "unresolved config/meta/input/output placeholder remained in the rendered command"
-        );
+    for stale in super::placeholder_gate::stale_placeholders(&scanned) {
+        // One warn per (expanded instance, placeholder): without the
+        // dedupe one rule's single command logged the same line once
+        // per render site (output pattern + shell + hooks — the issue
+        // reporter saw it print twice from one rule's single command,
+        // #973 F6). Each fan-out instance still logs its own line —
+        // the key is the expanded instance name, and that is
+        // deliberate: the message names the instance, so N instances
+        // mean N lines pointing at their own command.
+        emit_once_per_rule(&rule.name, &stale.token, |_| {
+            tracing::warn!(
+                rule = %rule.name,
+                placeholder = %stale.token,
+                class = stale.class.as_str(),
+                "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern/metadata declarations and the --samples selection"
+            );
+        });
     }
     expanded
 }
@@ -6502,6 +6632,135 @@ mod tests {
             !dir.path().join(".oxo-flow/content-cache").exists(),
             "a rule with no provable input identity must not populate the cache"
         );
+    }
+
+    #[tokio::test]
+    async fn placeholder_gate_fails_before_spawning_the_shell() {
+        // Issue #1078 F2: the live failure mode was a per-sample rule that
+        // never expanded and handed `{meta.bam_genomic}` to the tool. The
+        // gate fails the rule before the shell spawns.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            strict_placeholders: Some(true),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "unexpanded".to_string(),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("printf '%s' {sample} > out.txt".to_string()),
+            ..Default::default()
+        };
+        let err = ex
+            .execute_rule(&rule, &HashMap::new())
+            .await
+            .expect_err("an unbound engine placeholder must fail the rule");
+        let message = err.to_string();
+        assert!(message.contains("{sample}"), "{message}");
+        assert!(
+            !dir.path().join("out.txt").exists(),
+            "the gate must run before the shell can create outputs"
+        );
+    }
+
+    #[tokio::test]
+    async fn output_paths_reject_literal_placeholders_even_for_singletons() {
+        // A singleton only softens a `{meta.*}` survivor in a COMMAND; an
+        // output path must always be concrete, or the engine creates a file
+        // literally named after the placeholder (issue #1078 H1).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            strict_placeholders: Some(true),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "literal_path".to_string(),
+            singleton: true,
+            output: vec!["out/{meta.case_id}.tsv".to_string()].into(),
+            shell: Some("printf hi > out.tsv".to_string()),
+            ..Default::default()
+        };
+        let err = ex
+            .execute_rule(&rule, &HashMap::new())
+            .await
+            .expect_err("an unresolved placeholder in an output path must fail the rule");
+        let message = err.to_string();
+        assert!(message.contains("{meta.case_id}"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn placeholder_gate_ignores_shell_parameter_expansion() {
+        // F7: `${sample}` is the shell's own variable syntax. The gate must
+        // not turn a working bash construct into a run-killing error.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            strict_placeholders: Some(true),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "shell_var".to_string(),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("sample=ok; printf '%s' ${sample} > out.txt".to_string()),
+            ..Default::default()
+        };
+        let record = ex
+            .execute_rule(&rule, &HashMap::new())
+            .await
+            .expect("shell ${...} is not an engine placeholder");
+        assert_eq!(record.status, JobStatus::Success);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "ok"
+        );
+    }
+
+    #[tokio::test]
+    async fn placeholder_gate_env_override_restores_warning_only_mode() {
+        // The one-release escape hatch: with the gate disabled the rule
+        // executes exactly as before (the render-time warning remains).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            strict_placeholders: Some(false),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "legacy".to_string(),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("printf '%s' '{sample}' > out.txt".to_string()),
+            ..Default::default()
+        };
+        let record = ex
+            .execute_rule(&rule, &HashMap::new())
+            .await
+            .expect("the disabled gate must not fail the rule");
+        assert_eq!(record.status, JobStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn placeholder_gate_scans_rule_hooks() {
+        // Rule hooks are rendered and executed by the engine too; a
+        // surviving token there is the same defect (issue #1078 M6).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            strict_placeholders: Some(true),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "hooked".to_string(),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("printf hi > out.txt".to_string()),
+            pre_exec: Some("echo {sample}".to_string()),
+            ..Default::default()
+        };
+        let err = ex
+            .execute_rule(&rule, &HashMap::new())
+            .await
+            .expect_err("an unbound token in a hook must fail the rule");
+        assert!(err.to_string().contains("{sample}"), "{err}");
     }
 
     #[tokio::test]

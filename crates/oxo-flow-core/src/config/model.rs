@@ -839,6 +839,19 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmp_dir: Option<String>,
+    /// Placeholder gate (issue #1078 F2). Unset/`true` = the default and
+    /// recommended behavior: a rendered command still carrying an engine
+    /// placeholder (`{sample}`, `{meta.<col>}`, `{config.<key>}`,
+    /// `{input…}`, `{output…}`) fails the rule BEFORE it spawns, because the
+    /// shell would otherwise receive the literal brace token — the failure
+    /// mode behind a per-sample rule silently running once. `false` restores
+    /// the historical warning-only behavior for downstream workflows that
+    /// need a migration window; the `OXO_FLOW_STRICT_PLACEHOLDERS=0`
+    /// environment variable overrides this value per invocation.
+    /// [`crate::config::resolve_placeholder_gate`] owns the resolution.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict_placeholders: Option<bool>,
     /// Directory trees whose contents are baseline-manifested and watched
     /// for out-of-band drift (issue #935, generalizing the #926 P0 input
     /// manifests from rule inputs to whole trees). Paths are relative to
