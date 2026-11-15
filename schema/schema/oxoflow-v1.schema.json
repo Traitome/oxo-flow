@@ -456,11 +456,11 @@
       "properties": {
         "max_threads": {
           "type": "integer",
-          "description": "Reject any rule that declares more threads (cluster submissions)."
+          "description": "Reject any rule that declares more threads (local runs and cluster submissions)."
         },
         "max_memory": {
           "type": "string",
-          "description": "Reject any rule that declares more memory, e.g. \"256G\" (cluster submissions)."
+          "description": "Reject any rule that declares more memory, e.g. \"256G\" (local runs and cluster submissions)."
         },
         "max_jobs": {
           "type": "integer",
