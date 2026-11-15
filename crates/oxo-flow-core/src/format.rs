@@ -1454,9 +1454,17 @@ fn sorted_io_keys(patterns: &crate::rule::FilePatterns) -> Option<String> {
 /// Dotted placeholder namespaces the engine actually substitutes (or
 /// statically validates) — anything else in a `{namespace.key}` brace
 /// group renders as literal brace text. `input`/`output` are recognized
-/// but their key mistakes have the stricter W034 checks.
-const RECOGNIZED_PLACEHOLDER_NAMESPACES: [&str; 7] = [
-    "config", "params", "wildcard", "meta", "values", "input", "output",
+/// but their key mistakes have the stricter W034 checks; `input_group` is
+/// the `input_groups` capture vocabulary (docs: `{input_group.lane}`).
+const RECOGNIZED_PLACEHOLDER_NAMESPACES: [&str; 8] = [
+    "config",
+    "params",
+    "wildcard",
+    "meta",
+    "values",
+    "input",
+    "output",
+    "input_group",
 ];
 
 /// W039 (issue #142 H1 parity): dotted `{namespace.key}` references whose
@@ -1518,6 +1526,42 @@ fn lint_dotted_placeholders(rule: &Rule) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// W041 (issue #1078 F1): a rule references a sample-domain token
+/// (`{sample}`, `{group}`, `{wildcard.sample}`, `{wildcard.group}`,
+/// `{meta.<column>}`) with no binding source, so the rule runs once and
+/// the token stays unbound — the execution-time gate rejects it before the
+/// shell spawns. The binding model is shared with `expand_wildcards`
+/// (`WorkflowConfig::unbound_sample_domain_tokens`), so a
+/// `sample_pattern`/`pairs_pattern` declaration counts even when lint runs
+/// without the data mounted (H4), a scatter binds its variable, and
+/// `singleton = true` suppresses only `{meta.*}` — a `{sample}` survivor
+/// is always a defect (M4).
+fn lint_unbound_sample_domain(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
+    let unbound = config.unbound_sample_domain_tokens(rule);
+    if unbound.is_empty() {
+        return Vec::new();
+    }
+    let list = unbound.into_iter().collect::<Vec<_>>().join(", ");
+    vec![Diagnostic {
+        severity: Severity::Warning,
+        message: format!(
+            "the rule references {list} with no binding source — it runs once \
+             and the token(s) stay unbound (the execution-time placeholder gate \
+             rejects the rendered command)"
+        ),
+        rule: Some(rule.name.clone()),
+        code: "W041".to_string(),
+        suggestion: Some(
+            "bind the sample domain in input/output (for example `{sample}`) or in a \
+             `{meta.<column>}` OUTPUT path, and declare its source \
+             (`[[sample_groups]]`, `[[pairs]]`, `sample_pattern`, `pairs_pattern`, \
+             `[[values]]`, or a scatter); for a deliberate one-instance `{meta.*}` \
+             read declare `singleton = true`"
+                .to_string(),
+        ),
+    }]
+}
+
 /// Perform best-practice linting on a workflow configuration.
 ///
 /// Checks for:
@@ -1562,38 +1606,14 @@ pub fn lint_format(
             .ok();
 
     // Wildcard sources the engine can actually expand (W024): the same
-    // trigger sets expand_wildcards fans out on (config.rs) plus group/pair
-    // metadata keys and [[values]] tables — anything else referenced as
-    // `{name}` stays LITERAL at run time.
-    let mut declared_wildcards: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    if config.workflow.sample_pattern.is_some()
-        || !config.sample_groups.is_empty()
-        || !config.pairs.is_empty()
-    {
-        declared_wildcards.insert("sample".to_string());
-    }
-    if !config.sample_groups.is_empty() {
-        declared_wildcards.insert("group".to_string());
-        for group in &config.sample_groups {
-            for key in group.metadata.keys() {
-                declared_wildcards.insert(key.clone());
-            }
-        }
-    }
-    if !config.pairs.is_empty() {
-        // Same shared vocabulary as expand.rs (#530) — the alias list used
-        // to be retyped here.
-        for wc in config.pair_fanout_wildcards() {
-            declared_wildcards.insert(wc);
-        }
-    }
-    for table in &config.values {
-        declared_wildcards.insert(table.name.clone());
-    }
+    // declaration model W041 uses (`declared_fanout_wildcards`), including
+    // `sample_pattern`/`pairs_pattern` declarations even when the data is
+    // not mounted — anything else referenced as `{name}` stays LITERAL at
+    // run time.
+    let declared_wildcards = config.declared_fanout_wildcards();
     // Engine placeholders substituted at execution time (process.rs) —
     // always available, never literal.
-    const ENGINE_PLACEHOLDERS: [&str; 7] = [
+    const ENGINE_PLACEHOLDERS: [&str; 8] = [
         "input",
         "output",
         "log",
@@ -1601,6 +1621,8 @@ pub fn lint_format(
         "memory",
         "effective_threads",
         "effective_memory_mb",
+        // Injected by the transform/combine expansion.
+        "chunks",
     ];
 
     for rule in &config.rules {
@@ -1706,6 +1728,10 @@ pub fn lint_format(
         // decidable and always a bug (the token renders as literal brace
         // text); the bare-token and [[values]] analogs already warn.
         diagnostics.extend(lint_dotted_placeholders(rule));
+
+        // W041 (issue #1078 F1): sample-domain placeholders with no
+        // fan-out trigger field binding them run once with unbound tokens.
+        diagnostics.extend(lint_unbound_sample_domain(rule, config));
 
         // W006: Naming convention (should use snake_case)
         if rule.name.contains('-') {
@@ -7458,6 +7484,259 @@ shell = "samtools faidx {{config.reference}}"
             0,
             "comments are prose, not executed code — same rule as W034: {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn lint_w041_flags_meta_reference_without_sample_domain() {
+        // Issue #1078 F1: the live TRUST4 rule. `{meta.bam_genomic}` in
+        // input/output and no sample-domain binding anywhere — the rule
+        // runs once and the token is unbound.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "trust4"
+            input = ["{meta.bam_genomic}"]
+            output = ["calls/{meta.case_id}.tsv"]
+            shell = "trust4 {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 1, "{diagnostics:?}");
+        let hit = diagnostics.iter().find(|d| d.code == "W041").unwrap();
+        assert!(hit.message.contains("{meta."), "{}", hit.message);
+        assert!(
+            hit.suggestion
+                .as_deref()
+                .unwrap_or("")
+                .contains("singleton"),
+            "the opt-out must be named: {:?}",
+            hit.suggestion
+        );
+    }
+
+    #[test]
+    fn lint_w041_flags_sample_reference_only_in_log() {
+        // The issue's second half: `{sample}` in log/shell does not bind a
+        // sample domain when input/output carry no fan-out token.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "trust4"
+            input = ["reads.fq"]
+            output = ["calls.tsv"]
+            log = "logs/{sample}.log"
+            shell = "trust4 {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 1, "{diagnostics:?}");
+        let hit = diagnostics.iter().find(|d| d.code == "W041").unwrap();
+        assert_eq!(hit.rule.as_deref(), Some("trust4"));
+    }
+
+    #[test]
+    fn lint_w041_flags_input_only_meta_even_with_a_sample_domain() {
+        // Only an OUTPUT meta reference implies a fan-out (issue #1078 F1):
+        // with a constant output, an input-only meta reference stays
+        // unbound and must be reported.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "report"
+            input = ["{meta.bam_genomic}"]
+            output = ["report.tsv"]
+            shell = "report {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 1, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn lint_w041_singleton_does_not_hide_a_sample_reference() {
+        // `singleton = true` is the constant-METADATA opt-out; a `{sample}`
+        // survivor has no value in any one-instance rule (issue #1078 M4).
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "bad"
+            singleton = true
+            input = ["raw/{sample}.fq"]
+            output = ["out.tsv"]
+            shell = "tool {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 1, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn lint_w041_treats_a_declared_sample_pattern_as_a_source() {
+        // Issue #1078 H4: linting in CI/editor without the data mounted must
+        // not recommend the `sample_pattern` the workflow already declares.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            sample_pattern = "data/{sample}.txt"
+
+            [[rules]]
+            name = "step"
+            input = ["raw/{sample}.fq"]
+            output = ["out/{sample}.tsv"]
+            shell = "tool {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 0, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn lint_w041_scatter_binds_its_own_variable_only() {
+        // Issue #1078 M4: a scatter over `group` binds `{group}` but not
+        // `{sample}`; a scatter over `pair_id` must not hide an unbound
+        // `{sample}`.
+        let bound = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "per_group"
+            output = ["{group}.tsv"]
+            shell = "tool > {output[0]}"
+            scatter = { variable = "group", values = ["g1", "g2"] }
+        "#;
+        let config = WorkflowConfig::parse(bound).unwrap();
+        assert_eq!(
+            w041_count(&lint_format(&config, None)),
+            0,
+            "the scatter variable binds its own token"
+        );
+
+        let unbound = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "per_pair"
+            output = ["{pair_id}.tsv"]
+            shell = "tool {sample} > {output[0]}"
+            scatter = { variable = "pair_id", values = ["p1", "p2"] }
+        "#;
+        let config = WorkflowConfig::parse(unbound).unwrap();
+        assert_eq!(
+            w041_count(&lint_format(&config, None)),
+            1,
+            "a scatter over pair_id must not hide an unbound {{sample}}"
+        );
+    }
+
+    #[test]
+    fn lint_w041_scans_script_and_param_values() {
+        // Issue #1078 M5: the issue says "anywhere"; a script path or a
+        // params value carrying an unbound token must be reported too.
+        let script = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "scripted"
+            script = "scripts/{sample}.sh"
+            output = ["out.tsv"]
+        "#;
+        let config = WorkflowConfig::parse(script).unwrap();
+        assert_eq!(w041_count(&lint_format(&config, None)), 1);
+
+        let param = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "param"
+            output = ["out.tsv"]
+            shell = "tool --sample {params.sample} > {output[0]}"
+            [rules.params]
+            sample = "{sample}"
+        "#;
+        let config = WorkflowConfig::parse(param).unwrap();
+        assert_eq!(w041_count(&lint_format(&config, None)), 1);
+    }
+
+    #[test]
+    fn lint_w041_singleton_opt_out() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "report"
+            singleton = true
+            input = ["{meta.bam_genomic}"]
+            output = ["report.tsv"]
+            shell = "report {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 0, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn lint_w041_silent_for_bound_sample_domain() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "trim"
+            input = ["raw/{sample}.fq"]
+            output = ["trimmed/{sample}.fq"]
+            shell = "cutadapt {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 0, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn lint_w041_ignores_shell_parameter_expansion() {
+        // F7: `${sample}` is the shell's own variable syntax, not an
+        // engine placeholder — it must never trigger W041.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "post"
+            input = ["a.bam"]
+            output = ["b.bam"]
+            shell = "sample=post; echo ${sample} ${meta.id} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(w041_count(&diagnostics), 0, "{diagnostics:?}");
+    }
+
+    fn w041_count(diagnostics: &[Diagnostic]) -> usize {
+        diagnostics.iter().filter(|d| d.code == "W041").count()
     }
 
     #[test]

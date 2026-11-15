@@ -43,6 +43,7 @@ keys matching nothing declared keep the literal spelling.
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
 | `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (see [JSON output](#json-output)) |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
+| `--checkpoint` | — | `<workdir>/.oxo-flow/checkpoint.json` | Checkpoint file for this run. Use one path per workflow variant (`smoke`/`test`/`full`) that shares a workdir so each variant resumes independently (see [Variant checkpoints](#variant-checkpoints-checkpoint)) |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--from-rule` | — | — | Re-run from RULE downstream: invalidates the transitive-dependent closure of RULE in the checkpoint, then runs RULE and everything downstream of it (issue #1017). Unlike `--target` (upstream closure), `--from-rule` propagates downstream — stale downstream outputs are invalidated before the freshness gate so they re-execute with the new upstream results |
@@ -66,7 +67,7 @@ keys matching nothing declared keep the literal spelling.
 | `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
-| `--background` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)) |
+| `--background` / `--detach` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)); `--detach` is an alias |
 | `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
 | `--strict-envs` | — | — | Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see [Stale pixi.lock fallback](#stale-pixilock-fallback)) — for GxP-style deployments that must never run on a re-solved environment |
 | `--verbose` | `-v` | — | Enable debug-level logging |
@@ -109,7 +110,7 @@ Common flags at a glance — every flag is documented in the
 | Resource budgets | `--max-threads`, `--max-memory` |
 | Machine-readable output | `--json` (see [JSON output](#json-output)) |
 | Output checksums | `--provenance` |
-| Run detached | `--background` |
+| Run detached / wait for it | `--background` / `--detach`, then [`oxo-flow wait`](wait.md) |
 | Quieter output | `--quiet`, `--verbose`, `--no-color` |
 
 ---
@@ -707,6 +708,77 @@ See [What a finished job records](cluster.md#what-a-finished-job-records)
 for the record format, the accounting-variance caveats, and the
 interrupt/re-attach semantics.
 
+### Failed-rule output rollback
+
+A failed rule's declared outputs are rolled back: files created by the
+attempt are deleted, and pre-existing files are moved aside as
+`*.oxo-failed` (protected outputs declared with `protected_output` are
+never touched). The failure message names the rolled-back files, so a rule
+that created one of two declared outputs and then failed shows both the
+missing file and the one that was removed:
+
+```text
+[oxo-flow] output validation failed: 1 declared output(s) not found: …/merge.vcf
+[oxo-flow] declared outputs of the failed rule are rolled back
+  (deleted or moved aside as *.oxo-failed): …/merge.vcf.idx
+```
+
+### Placeholder validation (strict by default)
+
+Every executing rule's rendered command is scanned for engine placeholders
+that survived rendering — `{sample}`, `{group}`, `{pair_id}`,
+`{experiment}`, `{control}`, `{tumor}`, `{normal}`, `{chunks}`, `{log}`,
+`{log[0]}`, `{threads}`, `{memory}`, `{effective_threads}`,
+`{effective_memory_mb}`,
+`{meta.<column>}`, `{config.<key>}`, `{params.<key>}`, `{input…}`,
+`{output…}`, `{wildcard.*}`, and `{values.*}`. Such a token has
+no value bound to it, so the shell would receive the literal brace text and
+the tool would fail on a path that looks valid. The rule fails **before the
+shell spawns**:
+
+```text
+✗ rule 'trust4' failed: unresolved placeholder(s) {meta.bam_genomic} reached
+  the rendered command — … Fix: give the rule a sample-domain binding, or
+  add `singleton = true` for an intentional constant-metadata read. …
+```
+
+The fix hints are class-specific (declare the `[config]` key, check an
+`{input[N]}` index, add the sample-domain source, …). Two escape hatches
+exist while downstream workflows migrate:
+
+- `[engine] strict_placeholders = false` in the workflow, or
+- `OXO_FLOW_STRICT_PLACEHOLDERS=0` in the environment (wins per invocation).
+
+Both restore the historical warning-only behavior. `singleton = true`
+silences the static W041 diagnosis for an intentional one-instance
+`{meta.*}` read but does **not** soften this runtime gate: a `{meta.*}`
+token that survives rendering (more than one metadata row and no
+sample-like binding) is still fatal. A one-row metadata table is the
+supported constant read; use `{config.<key>}` for a workflow constant.
+`{sample}`/`{group}` survivors are fatal in every case. Declared **output
+paths** are checked too: an unresolved placeholder there is fatal even for
+a `singleton` — a literal file named after the token is never a valid
+artifact. The `strict_placeholders` switches above also restore the
+warning-only behavior for that namespaced output-path check (the
+bare-wildcard output gate is a separate, always-on correctness check).
+
+Shell `${...}` parameter expansion (`${#parts[@]}`, `${ch##*.clones_}`) is
+**not** engine syntax and the gate never treats it as a placeholder.
+Template rendering is textual, however: a **bound** name written inside
+`${...}` is substituted like any other token (`${sample}` renders as
+`$<sample value>`), so give shell variables names that do not collide with
+fan-out variables. Brace groups (`{ echo hi; }`) and brace
+expansion (`{1..10}`, `{a,b}`) are likewise shell text. Two realistic
+false-positive shapes need an escape: a Python f-string that prints an
+engine token (`python3 -c 'print(f"{sample}")'` — write `f"{{sample}}"`
+instead) and a shell literal (`\{sample\}`). Escape the opening brace in
+the host language (`\{` in bash, `{{` in Python f-strings) or build the
+literal from parts; `$`-prefixed and backslash-escaped braces are never
+flagged. `lint` reports the static
+diagnosis as
+[W041](../reference/glossary.md#diagnostic-codes) — a rule that references
+the sample domain without a binding source.
+
 ### Execute a published bundle
 
 ```bash
@@ -824,26 +896,33 @@ Semantics:
 
 ## Background runs (`--background`)
 
-`run --background` (and `resume --background`) detaches execution into a
-background process and returns to the shell immediately:
+`run --background` (and `resume --background`; `--detach` is an alias)
+detaches execution into a background process and returns to the shell
+immediately:
 
 ```bash
 # Foreground prints one line and exits 0; the run continues in the background
 oxo-flow run pipeline.oxoflow --background
 #   started in background (pid 48291) · log: .oxo-flow/logs/oxo-flow.log ·
-#   monitor: oxo-flow status .oxo-flow/checkpoint.json · stop: kill 48291
+#   monitor: oxo-flow status .oxo-flow/checkpoint.json ·
+#   wait: oxo-flow wait --workdir /data/run --checkpoint …/checkpoint.json ·
+#   stop: kill 48291
 
 # Detach a resumed run the same way
 oxo-flow resume .oxo-flow/checkpoint.json --background
+
+# Block from a script until the detached run finishes:
+oxo-flow wait --workdir /data/run            # exit 0 ok, 1 failed, 3 timeout
 ```
 
 Mechanics:
 
 - The foreground process spawns a **detached child** that re-runs the same
-  command with `--background` removed — every other flag (`-j`, `--profile`,
-  `--samples`, `--rerun`, `--log-file`, …) passes through verbatim, so a
-  background run behaves exactly like a foreground one: checkpoint, workdir
-  lock, report snapshots, and resume semantics are unchanged.
+  command with the detach flag (`--background` / `--detach`) removed — every
+  other flag (`-j`, `--profile`, `--samples`, `--rerun`, `--log-file`,
+  `--checkpoint`, …) passes through verbatim, so a background run behaves
+  exactly like a foreground one: checkpoint, workdir lock, report
+  snapshots, and resume semantics are unchanged.
 - The child's stdout and stderr are redirected to the run log
   (`--log-file` if given, otherwise `.oxo-flow/logs/oxo-flow.log` in the
   workdir). In this mode the tracing tee is skipped on purpose — the
@@ -866,7 +945,14 @@ Mechanics:
   code/signal instead.
 - The child's pid is written to `.oxo-flow/background.pid` in the workdir
   (also shown in the summary) while the run is in flight; the file is removed
-  when the child exits, so a stale pid never survives a finished run.
+  when the child exits — including the signal-termination path, so a stale
+  pid never survives a finished run.
+- The run's own terminal outcome is written to `<checkpoint>.status`
+  (beside the checkpoint; `running` once the workdir lock is held, then
+  `succeeded`/`failed` with the error text). Per-checkpoint placement keeps
+  variant runs in one workdir from aliasing each other.
+  [`oxo-flow wait`](wait.md) uses it to distinguish a preflight refusal
+  from a previous clean checkpoint.
 - The child gets its own process group, so it survives terminal close and
   Ctrl-C at the shell — it keeps running until it finishes or is killed.
 - The foreground exits **0** once the child is spawned; it does not wait.
@@ -886,10 +972,13 @@ Which commands accept `--background`:
 
 Monitoring a background run works exactly like a foreground one: poll
 `oxo-flow status .oxo-flow/checkpoint.json` (or `status --timing`), read
-the run log, and check the report snapshots in `.oxo-flow/reports/`. Stop
-a background run with `kill <pid>` (Unix) or `taskkill /PID <pid>` —
-the pid is in the summary line and (while the run is in flight) in
-`.oxo-flow/background.pid`.
+the run log, and check the report snapshots in `.oxo-flow/reports/`. For
+scripted supervision, [`oxo-flow wait`](wait.md) blocks until the run
+finishes and returns a structured exit status (0 success, 1 failed or
+incomplete, 3 timeout, 4 no run found) — the native replacement for a
+poll-for-output-files shell loop. Stop a background run with `kill <pid>`
+(Unix) or `taskkill /PID <pid>` — the pid is in the summary line and
+(while the run is in flight) in `.oxo-flow/background.pid`.
 
 Notes:
 
@@ -903,7 +992,7 @@ Notes:
   `--workdir` is also what bundle discovery consults as a fallback: a
   `sample_pattern`/`pairs_pattern` that matches nothing inside the
   extraction is retried against the workdir.
-- `--background` is a launcher flag, not a workflow setting: the child
+- The detach flag is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before `KEY=VALUE` overrides) apply to the whole command line as usual.
 
@@ -915,6 +1004,25 @@ oxo-flow automatically persists execution state to a **checkpoint file** after e
 
 1.  **Resuming failed runs**: If a job fails or is interrupted, simply run `oxo-flow run` again. The engine will skip all rules already marked as `completed` and resume from the first pending task.
 2.  **State Inspection**: Use the [`oxo-flow status`](./status.md) command to view the progress of a run from its checkpoint file.
+
+### Variant checkpoints (`--checkpoint`)
+
+The default checkpoint is **per workdir** (`<workdir>/.oxo-flow/checkpoint.json`),
+so running a `pipeline.smoke.oxoflow` variant next to `pipeline.oxoflow` in
+the same directory shares one file. The engine detects the workflow
+identity mismatch and ignores the other workflow's completed/failed records
+— correct, but the variant runs are then silently non-reusable. Pass one
+checkpoint per variant to make each first-class:
+
+```bash
+oxo-flow run pipeline.smoke.oxoflow --checkpoint .oxo-flow/smoke.checkpoint.json
+oxo-flow resume .oxo-flow/smoke.checkpoint.json   # resume the smoke variant
+oxo-flow status .oxo-flow/smoke.checkpoint.json   # inspect it
+```
+
+An explicit path wins over the workdir-derived default for load **and**
+save. Relative paths resolve against the process working directory, like
+every other `--checkpoint`-style argument.
 
 ### Metadata Directory
 

@@ -195,6 +195,7 @@ nav:
       - schema: commands/schema.md
       - serve: commands/serve.md
       - status: commands/status.md
+      - wait: commands/wait.md
       - template: commands/template.md
       - test: commands/test.md
       - touch: commands/touch.md

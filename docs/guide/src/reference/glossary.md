@@ -463,6 +463,7 @@ below list every code the engine currently emits.
 | `W038` | A rule sets `format_hint` — parsed but consumed by nothing; the engine performs no format-specific I/O today. `pipe` is NOT flagged (since #997 it selects `staging_mode = "stream_fifo"`) |
 | `W039` | A dotted `{namespace.key}` placeholder uses an unrecognized namespace (e.g. `{metadata.batch}` instead of `{meta.batch}`) — the token is never substituted and the tool receives literal brace text |
 | `W040` | A rule has no runnable command — `shell` is missing or empty/whitespace-only and no non-empty `script` is declared; the engine skips the rule at run time. The lint mirror of `E022`; `transform` rules are exempt |
+| `W041` | A rule references the sample domain (`{sample}`, `{group}`, `{meta.<column>}`, `{wildcard.sample}`, `{wildcard.group}`) with no binding source — the rule runs once and the token stays unbound (the execution-time gate rejects it). Bind the domain in `input`/`output` (a uniquely-keying `{meta.*}` OUTPUT reference or a one-row constant table also binds), declare the source (`sample_pattern`/`pairs_pattern` declarations count without data), or use `singleton = true` to silence the lint diagnosis for an intentional one-instance `{meta.*}` read (the runtime gate still requires a resolvable value). `{sample}`/`{group}` stay flagged even for a singleton |
 
 Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
 reachable through `oxo-flow lint` (not `validate`, which reports only

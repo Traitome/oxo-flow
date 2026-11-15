@@ -434,32 +434,16 @@ impl WorkflowConfig {
                 continue;
             }
 
-            // Collect all text fields that might contain wildcards. The fan-out
-            // TRIGGER set is input/output/shell only — script and the hooks
-            // substitute per instance when the rule fans out, but never start
-            // a fan-out themselves (cloning on a hook-only wildcard would
-            // duplicate the whole rule execution, and `${name}` bash
-            // spellings inside script would false-trigger). `when` joins the
-            // trigger set: a rule whose pair/group scope is expressed only in
-            // `when` (snakemake-style per-sample DAG morphing, e.g.
-            // `when = "wildcard.control != ''"`) still fans out per combo.
-            let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
-            all_text.extend(rule.output.iter().map(String::as_str));
-            if let Some(ref shell) = rule.shell {
-                all_text.push(shell);
-            }
-            if let Some(ref when) = rule.when {
-                all_text.push(when);
-            }
-            // The fan-out TRIGGER text: `all_text` plus the rule's own
-            // `output_pattern` (issue #227 item 5). A producer fans out on
-            // its pattern's BOUND wildcards ({sample}, {assembler}, …) so
-            // every instance scans only its own slice of the filesystem;
-            // its fresh wildcard stays unbound through expansion.
-            let mut trigger_text: Vec<&str> = all_text.clone();
-            if let Some(ref op) = rule.output_pattern {
-                trigger_text.push(op);
-            }
+            // Text fields that carry per-instance substitutions, and the
+            // fan-out TRIGGER set. Both definitions live on `Rule`
+            // (issue #1078 F1) so lint W041 and this engine cannot drift.
+            // `output_pattern` joins the trigger set; `log`, `script`, and
+            // the hooks never start a fan-out (a `{sample}` only in a log
+            // path would clone the rule into N instances writing the same
+            // declared outputs, and `${name}` shell spellings inside a
+            // script path must not be mistaken for wildcards).
+            let all_text: Vec<&str> = rule.expansion_texts();
+            let trigger_text: Vec<&str> = rule.fanout_trigger_texts();
 
             // `{meta.<column>}` plan-time typo check (issue #227 item 2): a
             // column no row defines renders empty on every instance —
@@ -510,7 +494,6 @@ impl WorkflowConfig {
                     t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
                 })
             });
-            let uses_pair_wildcard = !pair_combos.is_empty() && mentions_pair;
             if mentions_pair && pair_combos.is_empty() {
                 // Collector before the fresh-wildcard `continue` below:
                 // deferred consumers that lost their pair source are
@@ -518,12 +501,28 @@ impl WorkflowConfig {
                 pair_orphan_rules.push(rule.name.clone());
             }
 
-            let mentions_group = trigger_text.iter().any(|t| {
-                group_wildcards.iter().any(|w| {
-                    t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
-                })
-            });
-            let uses_group_wildcard = !group_combos.is_empty() && mentions_group;
+            // Issue #1078 F1: a `{meta.<column>}` reference in OUTPUT can
+            // imply the sample domain when a metadata table and group/pair
+            // combos exist. The output must be uniquely keyed by its meta
+            // tokens (H5): fanning out `batch_{meta.batch}.tsv` would make N
+            // instances write one file. `singleton = true` opts out, and a
+            // meta reference in `when` never triggers (the values gate
+            // relies on the values combo having no sample-like binding).
+            let meta_keyed = if self.metadata.is_empty() {
+                false
+            } else if !group_combos.is_empty() {
+                self.meta_outputs_keyed(rule, &group_combos)
+            } else {
+                self.meta_outputs_keyed(rule, &pair_combos)
+            };
+            // One branch predicate feeds expansion and lint W041
+            // (`rule_fanout_branch`); expand passes the real combo sets.
+            let branch = self.rule_fanout_branch(
+                rule,
+                !pair_combos.is_empty(),
+                !group_combos.is_empty(),
+                meta_keyed,
+            );
 
             // `[[values]]` fan-out: tables whose names appear in the rule —
             // in inputs/outputs/shells, `expand_inputs` patterns, or its own
@@ -537,7 +536,6 @@ impl WorkflowConfig {
                 .collect();
             let active_value_tables = self.active_value_tables_for_rule(rule);
             let active_value_tables: Vec<&ValueGroup> = active_value_tables.iter().collect();
-            let uses_value_wildcard = !active_value_tables.is_empty();
 
             // output_pattern consumer detection (issue #227 item 5): a rule
             // referencing a fresh wildcard — in inputs, outputs, shell,
@@ -636,7 +634,7 @@ impl WorkflowConfig {
             // exactly as before.
             let value_combos = self.cartesian_value_combos(&active_value_tables)?;
 
-            if uses_pair_wildcard {
+            if branch == super::RuleFanoutBranch::Pair {
                 let orig_name = rule.name.clone();
                 let mut expanded_names = Vec::new();
                 // Expand for each value-combo × pair combination (orthogonal
@@ -774,7 +772,7 @@ impl WorkflowConfig {
                     }
                 }
                 name_map.insert(orig_name, expanded_names);
-            } else if uses_group_wildcard {
+            } else if branch == super::RuleFanoutBranch::Group {
                 let orig_name = rule.name.clone();
                 let mut expanded_names = Vec::new();
                 // Expand for each value-combo × (group, sample) combination
@@ -912,7 +910,7 @@ impl WorkflowConfig {
                     }
                 }
                 name_map.insert(orig_name, expanded_names);
-            } else if uses_value_wildcard {
+            } else if branch == super::RuleFanoutBranch::Values {
                 // [[values]] fan-out without pair/group wildcards.
                 let orig_name = rule.name.clone();
                 let mut expanded_names = Vec::new();
@@ -996,9 +994,10 @@ impl WorkflowConfig {
                     expand_command_text_fields(&mut expanded, rule, |s| {
                         expand_rule_shell(s, combo)
                     });
-                    // Per-instance `{meta.<column>}` substitution (issue
-                    // #227 item 2) — see the pair branch.
-                    self.apply_instance_meta(&mut expanded, combo);
+                    // A values-only combo has no sample-like binding; the
+                    // guarded pass leaves `{meta.*}` literal (for the
+                    // execution gate) unless a row resolves (issue #1078 R3).
+                    self.apply_instance_meta_guarded(&mut expanded, combo);
 
                     self.expansion_values
                         .insert(new_name.clone(), combo.clone());
@@ -1008,13 +1007,27 @@ impl WorkflowConfig {
                 }
                 name_map.insert(orig_name, expanded_names);
             } else {
-                // No expansion needed — keep rule as-is
+                // No fan-out: one instance. A one-row metadata table is an
+                // unambiguous constant read, so `{meta.<column>}` resolves
+                // against that row. With no sample-like binding and more than
+                // one row there is no row to choose: the command tokens stay
+                // LITERAL so the execution-time placeholder gate rejects the
+                // rule (warning only for `singleton = true`) instead of
+                // silently passing an empty `--reference ''` (issue #1078
+                // H1). The `when` gate still closes (missing row → false).
+                let mut expanded = rule.clone();
+                if rule.scatter.is_none() {
+                    self.apply_instance_meta_guarded(
+                        &mut expanded,
+                        &crate::wildcard::WildcardValues::new(),
+                    );
+                }
                 if !seen_names.insert(rule.name.clone()) {
                     return Err(OxoFlowError::DuplicateRule {
                         name: rule.name.clone(),
                     });
                 }
-                expanded_rules.push(rule.clone());
+                expanded_rules.push(expanded);
             }
         }
 
@@ -1180,6 +1193,14 @@ impl WorkflowConfig {
                     expand_command_text_fields(&mut scattered_rule, &rule, |text| {
                         expand_pattern(text, &combo).unwrap_or_else(|_| text.to_string())
                     });
+                    // `{meta.<column>}` resolves against the scatter binding
+                    // when the scatter variable is a metadata lookup key
+                    // (`sample`, `pair_id`, `experiment`, `control`); a
+                    // single-row table is an unambiguous constant read.
+                    // Otherwise leave the token literal for the execution
+                    // gate — substituting empty would silently pass an empty
+                    // argument (issue #1078 H1).
+                    self.apply_instance_meta_guarded(&mut scattered_rule, &combo);
 
                     // Carry the pre-scatter [[values]] bindings over to the
                     // scattered name and add the scatter variable, so
@@ -1700,6 +1721,39 @@ impl WorkflowConfig {
         variables
     }
 
+    /// Guarded `{meta.*}` substitution for branches that have no
+    /// sample-like binding (values-only, one-shot, scatter).
+    ///
+    /// A row is used when the combo resolves one; a one-row table is an
+    /// unambiguous constant read; otherwise the command tokens stay
+    /// LITERAL so the execution-time placeholder gate rejects the rule
+    /// instead of silently passing an empty argument (issue #1078 H1/R3).
+    /// A meta `when` gate is still baked to a closed verdict.
+    fn apply_instance_meta_guarded(
+        &self,
+        expanded: &mut Rule,
+        combo: &crate::wildcard::WildcardValues,
+    ) {
+        let mut effective = combo.clone();
+        if crate::wildcard::metadata_row_for(&effective, &self.metadata).is_none()
+            && self.metadata.len() == 1
+            && let Some(key) = self.metadata.keys().next()
+        {
+            effective.insert("sample".to_string(), key.clone());
+        }
+        if crate::wildcard::metadata_row_for(&effective, &self.metadata).is_some() {
+            self.apply_instance_meta(expanded, &effective);
+        } else if let Some(when) = expanded.when.as_deref()
+            && when.contains("{meta.")
+        {
+            expanded.when = Some(Self::bake_meta_when(
+                when,
+                &self.metadata,
+                &crate::wildcard::WildcardValues::new(),
+            ));
+        }
+    }
+
     /// Apply the per-instance `{meta.<column>}` substitution (issue #227
     /// item 2) to every text field of an expanded rule — inputs, outputs,
     /// shell, log, `when`, script, the hooks, and `output_pattern` — the
@@ -1720,6 +1774,10 @@ impl WorkflowConfig {
                 .is_some_and(|s| s.contains("{meta."))
             || expanded
                 .log
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .benchmark
                 .as_deref()
                 .is_some_and(|s| s.contains("{meta."))
             || expanded
@@ -1767,6 +1825,7 @@ impl WorkflowConfig {
         expanded.output = meta_expand_patterns(&expanded.output);
         expanded.shell = expanded.shell.as_deref().map(expand);
         expanded.log = expanded.log.as_deref().map(expand);
+        expanded.benchmark = expanded.benchmark.as_deref().map(expand);
         // `when` gets the bake treatment (quoted literals in comparisons,
         // true/false in truthiness positions) so the execution-time re-check
         // re-evaluates this same verdict — plain substitution would leave

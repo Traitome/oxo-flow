@@ -259,6 +259,51 @@ fn reject_scratch_rules(plan: &ScheduledPlan, to_run: &HashSet<String>) -> Resul
     ))
 }
 
+/// Issue #1078 F2: the local executor gates a rule's rendered command before
+/// the shell spawns. The cluster path renders the job script itself, so the
+/// same gate runs here over every command about to leave for the scheduler —
+/// otherwise an unexpanded per-sample rule would ship a literal
+/// `{meta.bam_genomic}` to a remote node and fail there.
+fn reject_unbound_placeholders(
+    plan: &ScheduledPlan,
+    config: &WorkflowConfig,
+    to_run: &HashSet<String>,
+) -> Result<()> {
+    let enabled = oxo_flow_core::config::resolve_placeholder_gate(
+        config
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.strict_placeholders),
+    );
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue;
+        };
+        let scanned = oxo_flow_core::wildcard::strip_shell_comments(&sr.shell_cmd);
+        let outcome =
+            oxo_flow_core::executor::placeholder_gate::evaluate([scanned.as_str()], enabled);
+        if !outcome.fatal.is_empty() {
+            offenders.push(format!("{name}: {}", outcome.tokens(&outcome.fatal)));
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "unresolved placeholder(s) reached the rendered command of {} — the \
+         engine bound no value for them, so the remote job would receive the \
+         literal brace token. Fix the value source (`sample_pattern`, \
+         `[[sample_groups]]`, `[[pairs]]`, `[[values]]`, or the `{{config…}}`/\
+         `{{params…}}` declaration); a one-row metadata table is the constant \
+         `{{meta.*}}` read (`singleton` does not soften this gate). The local \
+         executor rejects the same commands; `OXO_FLOW_STRICT_PLACEHOLDERS=0` \
+         downgrades the gate:\n  {}",
+        oxo_flow_core::plural(offenders.len(), "rule", "rules"),
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -500,6 +545,7 @@ pub(crate) async fn run_on_cluster(
     reject_checkpoint_reentry(&plan, &to_run)?;
     reject_localrules(&plan, &to_run)?;
     reject_scratch_rules(&plan, &to_run)?;
+    reject_unbound_placeholders(&plan, args.config, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
     let mut max_submitted = args
@@ -670,6 +716,7 @@ mod tests {
     use super::reject_checkpoint_reentry;
     use super::reject_localrules;
     use super::reject_scratch_rules;
+    use super::reject_unbound_placeholders;
     use oxo_flow_core::backend::ScheduledPlan;
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
@@ -975,6 +1022,73 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = scratch_plan(dir.path());
         assert!(reject_scratch_rules(&plan, &std::collections::HashSet::new()).is_ok());
+    }
+
+    /// A plan with one rule whose shell is supplied by the test.
+    fn placeholder_plan(
+        workdir: &std::path::Path,
+        shell: &str,
+        strict: Option<bool>,
+    ) -> (WorkflowConfig, ScheduledPlan) {
+        let toml = format!(
+            "[workflow]\nname = \"ph\"\n[[rules]]\nname = \"bad\"\nshell = \"{shell}\"\n\
+             output = [\"out.txt\"]\n"
+        );
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        if let Some(strict) = strict {
+            let mut engine = config.engine.clone().unwrap_or_default();
+            engine.strict_placeholders = Some(strict);
+            config.engine = Some(engine);
+        }
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        (config, plan)
+    }
+
+    #[test]
+    fn placeholder_gate_rejects_unbound_cluster_commands() {
+        // Issue #1078 F2: an unexpanded per-sample rule must never ship a
+        // literal `{sample}` to a remote node.
+        let dir = tempfile::tempdir().unwrap();
+        let (config, plan) = placeholder_plan(dir.path(), "echo {sample} > out.txt", None);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let msg = reject_unbound_placeholders(&plan, &config, &to_run)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("bad") && msg.contains("{sample}"),
+            "the rejection must name the rule and the token: {msg}"
+        );
+    }
+
+    #[test]
+    fn placeholder_gate_passes_clean_cluster_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, plan) = placeholder_plan(dir.path(), "echo hi > out.txt", None);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_unbound_placeholders(&plan, &config, &to_run).is_ok());
+    }
+
+    #[test]
+    fn placeholder_gate_honors_the_workflow_escape_hatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, plan) = placeholder_plan(dir.path(), "echo {sample} > out.txt", Some(false));
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(
+            reject_unbound_placeholders(&plan, &config, &to_run).is_ok(),
+            "[engine] strict_placeholders = false must restore warn-only mode"
+        );
     }
 
     #[test]

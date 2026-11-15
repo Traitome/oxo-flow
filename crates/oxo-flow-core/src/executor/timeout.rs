@@ -3,6 +3,41 @@
 /// state and exit cleanly before the engine escalates.
 pub const SIGTERM_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Whether a live process with `pid` exists (best-effort, cross-platform).
+///
+/// `oxo-flow wait` uses this to decide whether a background child is still
+/// running. PID reuse is possible, but the pid file is removed on normal
+/// exit and this probe is consulted only while that file exists — a reused
+/// pid can delay `wait` until its timeout, never turn a failure into a
+/// success. `EPERM` counts as alive (the process exists but belongs to
+/// another user).
+#[must_use]
+pub fn process_exists(pid: u32) -> bool {
+    // Pid 0 targets the caller's process group and a wrapped negative pid
+    // targets every process — neither is a real pid-file entry.
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+        match kill(Pid::from_raw(pid as i32), None) {
+            Ok(()) => true,
+            Err(nix::errno::Errno::EPERM) => true,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let Ok(mut system) = sysinfo::System::new() else {
+            return false;
+        };
+        system.refresh_processes(sysinfo::ProcessesToUpdate::All, false);
+        system.process(sysinfo::Pid::from_u32(pid)).is_some()
+    }
+}
+
 /// Kill a process and all its descendants (deepest first), gracefully:
 /// SIGTERM the whole subtree, poll [`SIGTERM_GRACE`] for survivors,
 /// re-scan for descendants spawned during the window, then SIGKILL

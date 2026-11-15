@@ -21,6 +21,65 @@ pub use parse::resolve_rule_templates;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 
+/// Environment variable that overrides the execution-time placeholder gate.
+pub const STRICT_PLACEHOLDERS_ENV: &str = "OXO_FLOW_STRICT_PLACEHOLDERS";
+
+/// Which fan-out branch `expand_wildcards` takes for a rule (issue #1078
+/// F1). Shared with lint W041 so the binding model cannot drift from the
+/// engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleFanoutBranch {
+    Pair,
+    Group,
+    Values,
+    None,
+}
+
+/// Whether the execution-time placeholder gate is enabled (issue #1078 F2).
+///
+/// A rendered rule command that still carries an engine placeholder has no
+/// value bound to it: the shell receives the literal brace token and the
+/// tool either fails on a file named `{meta.bam_genomic}` or — worse —
+/// writes one. The gate is enabled by default for every run.
+///
+/// Resolution order (first match wins):
+///
+/// 1. `OXO_FLOW_STRICT_PLACEHOLDERS` — the operator escape hatch:
+///    `0`/`false`/`no`/`off` restores the historical warn-and-execute
+///    behavior, `1`/`true`/`yes`/`on` forces the gate on.
+/// 2. `[engine] strict_placeholders` — the workflow-level opt-out.
+/// 3. Default: enabled.
+///
+/// An unparseable env value warns and falls through to the workflow/default
+/// value: a typo must never silently disable a correctness gate.
+#[must_use]
+pub fn resolve_placeholder_gate(workflow_value: Option<bool>) -> bool {
+    match std::env::var(STRICT_PLACEHOLDERS_ENV) {
+        Ok(raw) => match parse_env_switch(&raw) {
+            Some(enabled) => enabled,
+            None => {
+                tracing::warn!(
+                    value = %raw,
+                    env = STRICT_PLACEHOLDERS_ENV,
+                    "value is not a boolean — using the workflow/default placeholder gate"
+                );
+                workflow_value.unwrap_or(true)
+            }
+        },
+        Err(_) => workflow_value.unwrap_or(true),
+    }
+}
+
+/// Parse the boolean spellings accepted by [`STRICT_PLACEHOLDERS_ENV`].
+fn parse_env_switch(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "0" | "false" | "no" | "off" => Some(false),
+        "1" | "true" | "yes" | "on" => Some(true),
+        _ => None,
+    }
+}
+
 impl WorkflowConfig {
     /// The directory `when` conditions with `file_exists(...)` and
     /// `input_groups` patterns resolve against — the workflow file's parent
@@ -345,6 +404,251 @@ impl WorkflowConfig {
             }
         }
         wildcards
+    }
+
+    /// Every wildcard name this workflow DECLARES a fan-out source for,
+    /// whether or not the source discovered files at plan time (issue
+    /// #1078 H4). `sample_pattern` / `pairs_pattern` count as declarations:
+    /// linting in CI or an editor without the data mounted must not report
+    /// a missing source the workflow explicitly names. Shared by lint W024
+    /// and W041 so their source models cannot drift.
+    #[must_use]
+    pub fn declared_fanout_wildcards(&self) -> std::collections::HashSet<String> {
+        let mut declared = std::collections::HashSet::new();
+        let declares_sample_pattern = self.workflow.sample_pattern.is_some();
+        let declares_pairs_pattern = self.workflow.pairs_pattern.is_some();
+        if declares_sample_pattern
+            || declares_pairs_pattern
+            || !self.sample_groups.is_empty()
+            || !self.pairs.is_empty()
+        {
+            declared.insert("sample".to_string());
+        }
+        if !self.sample_groups.is_empty() {
+            declared.insert("group".to_string());
+            for group in &self.sample_groups {
+                for key in group.metadata.keys() {
+                    declared.insert(key.clone());
+                }
+            }
+        }
+        if !self.pairs.is_empty() || declares_pairs_pattern {
+            for wildcard in self.pair_fanout_wildcards() {
+                declared.insert(wildcard);
+            }
+        }
+        for table in &self.values {
+            declared.insert(table.name.clone());
+        }
+        declared
+    }
+
+    /// The fan-out branch `expand_wildcards` takes for this rule, shared
+    /// with lint W041 so the binding model cannot drift (issue #1078 F1).
+    ///
+    /// `has_pairs` / `has_groups` are the combos the engine actually has
+    /// (expand passes the post-`when`-filter sets); lint passes the
+    /// **declared** sources so a workflow linted without its data mounted
+    /// is not reported as broken (H4). `meta_keyed` states that a
+    /// `{meta.*}`-implied domain would produce distinct output paths (H5).
+    pub(crate) fn rule_fanout_branch(
+        &self,
+        rule: &Rule,
+        has_pairs: bool,
+        has_groups: bool,
+        meta_keyed: bool,
+    ) -> RuleFanoutBranch {
+        let trigger = rule.fanout_trigger_texts();
+        let pair_wildcards = self.pair_fanout_wildcards();
+        let group_wildcards = self.group_fanout_wildcards();
+        let mentions = |wildcards: &[String]| {
+            trigger.iter().any(|text| {
+                wildcards.iter().any(|w| {
+                    text.contains(&format!("{{{w}}}")) || text.contains(&format!("wildcard.{w}"))
+                })
+            })
+        };
+        let mentions_pair = has_pairs && mentions(&pair_wildcards);
+        let mentions_group = has_groups && mentions(&group_wildcards);
+        let mentions_meta = rule.output.iter().any(|text| text.contains("{meta."));
+        // A scatter rule binds `{meta.*}` in its own scatter pass, one
+        // instance per scatter value. Implying a group/pair domain here
+        // would first clone the rule per combo and then scatter every
+        // clone, duplicating outputs (issue #1078 R9).
+        let meta_domain = rule.scatter.is_none()
+            && !rule.singleton
+            && mentions_meta
+            && meta_keyed
+            && !self.metadata.is_empty()
+            && (has_pairs || has_groups);
+        let use_pair = mentions_pair || (meta_domain && !has_groups);
+        let use_group = !use_pair && (mentions_group || meta_domain);
+        if use_pair {
+            RuleFanoutBranch::Pair
+        } else if use_group {
+            RuleFanoutBranch::Group
+        } else if !self.active_value_tables_for_rule(rule).is_empty() {
+            RuleFanoutBranch::Values
+        } else {
+            RuleFanoutBranch::None
+        }
+    }
+
+    /// Whether the `{meta.*}` tokens in this rule's outputs uniquely key
+    /// the instance combos (issue #1078 H5). Fanning out a rule whose
+    /// output path repeats a constant metadata value
+    /// (`batch_{meta.batch}.tsv`) would make N instances write one file
+    /// silently; the meta-implied domain is inferred only when the output
+    /// tokens distinguish every combo.
+    pub(crate) fn meta_outputs_keyed(
+        &self,
+        rule: &Rule,
+        combos: &[crate::wildcard::WildcardValues],
+    ) -> bool {
+        let outputs: Vec<&str> = rule.output.iter().map(String::as_str).collect();
+        // An active `[[values]]` dimension multiplies the instances; unless
+        // its own key appears in the output, the meta-implied fan-out would
+        // still bake duplicate paths (issue #1078 R8).
+        for table in self.active_value_tables_for_rule(rule) {
+            let keyed = outputs.iter().any(|out| {
+                out.contains(&format!("{{{}}}", table.name))
+                    || out.contains(&format!("{{values.{}}}", table.name))
+            });
+            if !keyed {
+                return false;
+            }
+        }
+        // An explicit unique instance key already distinguishes the paths.
+        if outputs
+            .iter()
+            .any(|out| out.contains("{sample}") || out.contains("{pair_id}"))
+        {
+            return true;
+        }
+        let columns: Vec<String> = outputs
+            .iter()
+            .flat_map(|out| model::META_NS_RE.captures_iter(out))
+            .map(|cap| cap[1].to_string())
+            .collect();
+        if columns.is_empty() || combos.is_empty() {
+            return false;
+        }
+        let mut tuples: std::collections::HashSet<Vec<String>> = std::collections::HashSet::new();
+        for combo in combos {
+            let Some(row) = crate::wildcard::metadata_row_for(combo, &self.metadata) else {
+                return false;
+            };
+            let tuple: Vec<String> = columns
+                .iter()
+                .map(|column| row.get(column).cloned().unwrap_or_default())
+                .collect();
+            if tuple.iter().any(String::is_empty) || !tuples.insert(tuple) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Sample-domain tokens that stay unbound in this rule (issue #1078
+    /// F1): `{sample}`, `{group}`, `{wildcard.sample}`,
+    /// `{wildcard.group}`, and `{meta.*}`. Lint W041 reports each one.
+    ///
+    /// The binding model mirrors [`Self::rule_fanout_branch`]: a branch
+    /// binds its own vocabulary, value tables merge into the pair/group
+    /// branches, a scatter binds its variable, and a metadata row binds
+    /// `{meta.*}` when the branch carries a sample-like combo (or a
+    /// single-row table is an unambiguous constant read). `singleton`
+    /// suppresses `{meta.*}` only — a `{sample}`/`{group}` survivor has no
+    /// value in any one-instance rule and must stay visible (issue #1078
+    /// M4).
+    #[must_use]
+    pub(crate) fn unbound_sample_domain_tokens(
+        &self,
+        rule: &Rule,
+    ) -> std::collections::BTreeSet<String> {
+        let mut unbound = std::collections::BTreeSet::new();
+        // `input_groups` discovers its own domain at plan time.
+        if !rule.input_groups.is_empty() {
+            return unbound;
+        }
+
+        let has_pairs = !self.pairs.is_empty() || self.workflow.pairs_pattern.is_some();
+        let has_groups = !self.sample_groups.is_empty() || self.workflow.sample_pattern.is_some();
+        let combos: Vec<crate::wildcard::WildcardValues> = if !self.sample_groups.is_empty() {
+            crate::wildcard::wildcard_combinations_from_groups(&self.sample_groups)
+        } else if !self.pairs.is_empty() {
+            crate::wildcard::wildcard_combinations_from_pairs(&self.pairs)
+        } else {
+            Vec::new()
+        };
+        // A declared discovery pattern with no data mounted cannot be
+        // judged here — assume the declared source is valid (H4).
+        let meta_keyed = if combos.is_empty() {
+            self.workflow.sample_pattern.is_some() || self.workflow.pairs_pattern.is_some()
+        } else {
+            self.meta_outputs_keyed(rule, &combos)
+        };
+        let branch = self.rule_fanout_branch(rule, has_pairs, has_groups, meta_keyed);
+
+        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+        match branch {
+            RuleFanoutBranch::Pair => bound.extend(self.pair_fanout_wildcards()),
+            RuleFanoutBranch::Group => bound.extend(self.group_fanout_wildcards()),
+            RuleFanoutBranch::Values => {
+                bound.extend(
+                    self.active_value_tables_for_rule(rule)
+                        .into_iter()
+                        .map(|table| table.name),
+                );
+            }
+            RuleFanoutBranch::None => {}
+        }
+        if matches!(branch, RuleFanoutBranch::Pair | RuleFanoutBranch::Group) {
+            bound.extend(
+                self.active_value_tables_for_rule(rule)
+                    .into_iter()
+                    .map(|table| table.name),
+            );
+        }
+        if let Some(scatter) = &rule.scatter {
+            bound.insert(scatter.variable.clone());
+        }
+        // A scatter over a metadata lookup key resolves `{meta.*}` per
+        // scattered instance even though the branch above is `None`
+        // (issue #1078 R9).
+        let scatter_binds_meta = rule.scatter.as_ref().is_some_and(|scatter| {
+            crate::wildcard::METADATA_LOOKUP_KEYS.contains(&scatter.variable.as_str())
+        });
+        let meta_bound = !self.metadata.is_empty()
+            && (scatter_binds_meta
+                || matches!(branch, RuleFanoutBranch::Pair | RuleFanoutBranch::Group)
+                || self.metadata.len() == 1
+                || (matches!(branch, RuleFanoutBranch::Values)
+                    && self.active_value_tables_for_rule(rule).iter().any(|table| {
+                        crate::wildcard::METADATA_LOOKUP_KEYS.contains(&table.name.as_str())
+                    })));
+
+        for text in rule.lint_text_fields() {
+            let scanned = crate::wildcard::strip_shell_comments(text);
+            for stale in crate::executor::placeholder_gate::stale_placeholders(&scanned) {
+                let token = stale.token.as_str();
+                if token.starts_with("{meta.") {
+                    if !meta_bound && !rule.singleton {
+                        unbound.insert(stale.token);
+                    }
+                    continue;
+                }
+                let name = match token {
+                    "{sample}" | "{wildcard.sample}" => "sample",
+                    "{group}" | "{wildcard.group}" => "group",
+                    _ => continue,
+                };
+                if !bound.contains(name) {
+                    unbound.insert(stale.token);
+                }
+            }
+        }
+        unbound
     }
 
     /// Validate the group-level metadata vocabulary (issue #283).

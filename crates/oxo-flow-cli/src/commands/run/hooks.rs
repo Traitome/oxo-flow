@@ -29,6 +29,24 @@ pub(crate) async fn run_terminal_hook(
     values.insert("skipped".to_string(), skipped.to_string());
     values.insert("workdir".to_string(), workdir.display().to_string());
     let rendered = oxo_flow_core::executor::process::expand_placeholders(hook_cmd, &values);
+    // Rule placeholders are not substituted here — only `[config]`, the
+    // counters, and `{workdir}` (issue #1078 M6). A surviving engine token
+    // would execute literally; warn without changing the run status.
+    let scanned = oxo_flow_core::wildcard::strip_shell_comments(&rendered);
+    let survivors = oxo_flow_core::executor::placeholder_gate::stale_placeholders(&scanned);
+    if !survivors.is_empty() {
+        let tokens = survivors
+            .iter()
+            .map(|stale| stale.token.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tracing::warn!(
+            hook = if failed > 0 { "on_error" } else { "on_complete" },
+            placeholders = %tokens,
+            "workflow-level hook still carries engine placeholder(s) — only [config] keys, the \
+             run counters, and {{workdir}} are substituted; the shell receives the literal token"
+        );
+    }
     oxo_flow_core::executor::process::run_workflow_hook(
         &rendered,
         workdir,

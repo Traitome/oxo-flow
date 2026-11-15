@@ -491,6 +491,10 @@
           "type": "string",
           "description": "Global scratch directory injected as TMPDIR/TMP/TEMP into every rule shell so tools that spill caches into the system temp directory write to a volume with room. Relative paths resolve against the workflow file's directory; created on demand. OXO_FLOW_TMPDIR overrides it per invocation."
         },
+        "strict_placeholders": {
+          "type": "boolean",
+          "description": "Execution-time placeholder gate (default true). A rendered command or declared output path that still carries an engine placeholder ({sample}, {meta.<column>}, {config.<key>}, {params.<key>}, {input...}, {output...}, {wildcard.*}, {values.*}) fails the rule before it spawns, because the shell would receive the literal brace token. Applies to local and cluster execution, rule-level hooks, log/benchmark paths, and output paths. Set false (or OXO_FLOW_STRICT_PLACEHOLDERS=0) to restore the historical warning-only behavior. singleton = true silences the static W041 diagnosis and opts out of meta-implied fan-out but never softens this gate; a one-row metadata table resolves {meta.<column>} before the gate. Shell ${...} parameter expansion, escaped braces, and brace expansions are never treated as placeholders."
+        },
         "staging_mode": {
           "type": "string",
           "enum": [
@@ -1778,6 +1782,10 @@
         "scratch": {
           "type": "boolean",
           "description": "Run the rule in a private scratch directory"
+        },
+        "singleton": {
+          "type": "boolean",
+          "description": "Declare a deliberate single-instance rule. Without a sample-domain binding in output the rule runs once; singleton = true silences the lint W041 diagnosis for an unbound {meta.<column>} and opts out of the meta-implied sample fan-out. It does NOT soften the execution-time placeholder gate: a {meta.*} token that survives rendering (more than one metadata row and no sample-like binding) fails before the shell spawns, as do {sample}/{group}/{input...} survivors. A one-row metadata table is the supported constant read; use {config.<key>} for a true workflow constant."
         },
         "temporary": {
           "type": "boolean",

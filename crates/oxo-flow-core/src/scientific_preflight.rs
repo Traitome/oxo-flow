@@ -263,6 +263,11 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         // "wildcard.control != ''"` carries no `{control}` braces, so the
         // bare match alone missed #531's `wildcard.<key>` form and the
         // race detector stayed silent on rules the engine DOES fan out.
+        //
+        // Meta-implied fan-out (issue #1078 F1) is inferred only when the
+        // output meta tokens uniquely key every combo
+        // (`WorkflowConfig::meta_outputs_keyed`), so it cannot contribute
+        // an unrepresented dimension here.
         let triggers_pair = !config.pairs.is_empty()
             && all_text.iter().any(|t| {
                 pair_wildcards.iter().any(|w| {

@@ -6912,6 +6912,336 @@ fn values_fanout_when_meta_reference_filters_not_phantoms() {
 }
 
 #[test]
+fn meta_only_input_output_fans_out_over_sample_groups() {
+    // Issue #1078 F1 (live): the per-sample TRUST4 rule carried its BAM path
+    // and output name as `{meta.*}` only — no `{sample}` in input/output —
+    // so the old trigger set missed it, the rule ran once, and the literal
+    // `{meta.bam_genomic}` reached the tool. A metadata reference in a
+    // fan-out trigger field is itself a sample-domain binding.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_genomic\tcase_id\nS1\t/data/S1.bam\tC1\nS2\t/data/S2.bam\tC2\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "trust4"
+        input = ["{meta.bam_genomic}"]
+        output = ["calls/{meta.case_id}.tsv"]
+        shell = "trust4 {input[0]} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    let trust4: Vec<&crate::rule::Rule> = config
+        .rules
+        .iter()
+        .filter(|r| r.name.starts_with("trust4"))
+        .collect();
+    assert_eq!(
+        trust4.len(),
+        2,
+        "one instance per sample: {:?}",
+        config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+    let mut inputs: Vec<String> = trust4.iter().flat_map(|r| r.input.to_vec()).collect();
+    inputs.sort();
+    assert_eq!(inputs, vec!["/data/S1.bam", "/data/S2.bam"]);
+    let mut outputs: Vec<String> = trust4.iter().flat_map(|r| r.output.to_vec()).collect();
+    outputs.sort();
+    assert_eq!(outputs, vec!["calls/C1.tsv", "calls/C2.tsv"]);
+}
+
+#[test]
+fn meta_in_input_only_does_not_clone_a_constant_output() {
+    // The meta-implied fan-out keys on OUTPUT (issue #1078 F1): an
+    // input-only meta reference with a constant declared output must stay a
+    // single instance — cloning it would race N instances on one path. With
+    // multiple metadata rows there is no row to choose, so the token stays
+    // LITERAL for the execution-time gate (H1), never silently empty.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_genomic\nS1\t/data/S1.bam\nS2\t/data/S2.bam\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "report"
+        input = ["{meta.bam_genomic}"]
+        output = ["report.tsv"]
+        shell = "report {input[0]} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(
+        config.rules.len(),
+        1,
+        "a constant output must not be cloned by an input-only meta reference"
+    );
+    assert_eq!(
+        config.rules[0].input.to_vec(),
+        vec!["{meta.bam_genomic}"],
+        "an unresolvable meta token must reach the execution gate, not render empty"
+    );
+}
+
+#[test]
+fn singleton_meta_rule_reads_a_single_row_constant() {
+    // A deliberate one-instance rule (`singleton = true`) with a one-row
+    // metadata table is an unambiguous constant read: `{meta.<column>}`
+    // resolves to that row's value (issue #1078 H1 — the issue's "constant
+    // metadata column" pattern).
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbatch\nS1\tB1\n",
+        "",
+        r#"
+        [[rules]]
+        name = "report"
+        singleton = true
+        output = ["report.txt"]
+        shell = "echo {meta.batch} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules.len(), 1);
+    let rule = &config.rules[0];
+    assert_eq!(rule.shell.as_deref(), Some("echo B1 > {output[0]}"));
+}
+
+#[test]
+fn multi_row_meta_without_a_domain_stays_literal_for_the_gate() {
+    // With several metadata rows and no sample-like binding there is no
+    // unambiguous value: the token must survive to the execution-time gate
+    // (fatal, even for `singleton = true`) instead of silently
+    // becoming an empty CLI argument (issue #1078 H1).
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbatch\nS1\tB1\nS2\tB2\n",
+        "",
+        r#"
+        [[rules]]
+        name = "report"
+        singleton = true
+        output = ["report.txt"]
+        shell = "echo {meta.batch} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules.len(), 1);
+    assert_eq!(
+        config.rules[0].shell.as_deref(),
+        Some("echo {meta.batch} > {output[0]}"),
+        "the gate must see the literal token"
+    );
+}
+
+#[test]
+fn unkeyed_meta_outputs_do_not_fan_out() {
+    // Issue #1078 H5: two samples sharing a metadata value must not fan
+    // out onto one output path. The output meta tokens are not unique, so
+    // the rule stays a single instance and W041 reports the unbound token.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_genomic\tbatch\nS1\t/data/S1.bam\tB1\nS2\t/data/S2.bam\tB1\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "merge"
+        input = ["{meta.bam_genomic}"]
+        output = ["batch_{meta.batch}.tsv"]
+        shell = "merge {input[0]} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    let merge: Vec<&crate::rule::Rule> = config
+        .rules
+        .iter()
+        .filter(|r| r.name.starts_with("merge"))
+        .collect();
+    assert_eq!(
+        merge.len(),
+        1,
+        "a non-unique meta output must not be cloned into racing instances"
+    );
+    assert!(
+        merge[0]
+            .output
+            .iter()
+            .any(|pattern| pattern.contains("{meta.")),
+        "the gate must see the literal meta token: {:?}",
+        merge[0].output.to_vec()
+    );
+}
+
+#[test]
+fn values_branch_does_not_silently_empty_meta() {
+    // Issue #1078 R3: a values-only combo has no sample-like binding, so a
+    // `{meta.*}` reference must stay LITERAL for the execution gate —
+    // substituting empty would silently run with an empty argument.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbatch\nS1\tB1\nS2\tB2\n",
+        "",
+        r#"
+        [[values]]
+        name = "chr"
+        values = ["1"]
+
+        [[rules]]
+        name = "out"
+        input = ["reads/{chr}.fq"]
+        output = ["out_{chr}_{meta.batch}.txt"]
+        shell = "echo {chr}-{meta.batch} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules.len(), 1);
+    assert_eq!(
+        config.rules[0].shell.as_deref(),
+        Some("echo 1-{meta.batch} > {output[0]}"),
+        "the meta token must survive to the gate"
+    );
+    assert_eq!(
+        config.rules[0].output.to_vec(),
+        vec!["out_1_{meta.batch}.txt"],
+        "the output token must survive to the output-path gate"
+    );
+}
+
+#[test]
+fn meta_fan_out_requires_the_values_dimension_to_be_keyed() {
+    // Issue #1078 R8: the values table multiplies the instances; an output
+    // that does not carry its key would still collide, so the meta-implied
+    // fan-out is not inferred. The values branch runs and leaves the meta
+    // token literal for the gate.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_genomic\tcase_id\nS1\t/data/S1.bam\tC1\nS2\t/data/S2.bam\tC2\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[values]]
+        name = "chr"
+        values = ["1", "2"]
+
+        [[rules]]
+        name = "out"
+        input = ["reads/{chr}.fq"]
+        output = ["out_{meta.case_id}.txt"]
+        shell = "echo {chr}-{meta.case_id} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    let outs: Vec<&crate::rule::Rule> = config
+        .rules
+        .iter()
+        .filter(|rule| rule.name.starts_with("out"))
+        .collect();
+    assert_eq!(outs.len(), 2, "one instance per values entry");
+    for rule in outs {
+        assert!(
+            rule.output.iter().any(|pattern| pattern.contains("{meta.")),
+            "an unkeyed values dimension must not bake the meta output: {:?}",
+            rule.output.to_vec()
+        );
+    }
+}
+
+#[test]
+fn scatter_with_meta_output_is_not_double_expanded() {
+    // Issue #1078 R9: a scatter over a metadata lookup key binds
+    // `{meta.*}` in its own pass, one instance per scatter value. The
+    // meta-implied group domain must not also clone the rule — that would
+    // scatter every clone and declare each output twice.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tcase_id\nS1\tC1\nS2\tC2\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "report"
+        output = ["out/{meta.case_id}.txt"]
+        shell = "echo report >> {output[0]}"
+        scatter = { variable = "sample", values = ["S1", "S2"] }
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let unbound = config.unbound_sample_domain_tokens(&config.rules[0].clone());
+    assert!(
+        unbound.is_empty(),
+        "a scatter over a metadata key binds {{meta.*}} for W041: {unbound:?}"
+    );
+    config.expand_wildcards().unwrap();
+    let mut outs: Vec<String> = config
+        .rules
+        .iter()
+        .map(|rule| rule.output.to_vec().join(","))
+        .collect();
+    outs.sort();
+    assert_eq!(
+        outs,
+        vec!["out/C1.txt".to_string(), "out/C2.txt".to_string()],
+        "exactly one instance per scatter value, with no duplicates"
+    );
+}
+
+#[test]
+fn singleton_opts_out_of_meta_implied_fan_out() {
+    // `singleton = true` keeps a meta-only rule at one instance even when a
+    // sample domain exists.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_genomic\nS1\t/data/S1.bam\nS2\t/data/S2.bam\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "report"
+        singleton = true
+        output = ["report.txt"]
+        shell = "echo {meta.unknown_column} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules.len(), 1, "singleton must not fan out");
+}
+
+#[test]
+fn placeholder_gate_env_spellings_are_parsed() {
+    // Issue #1078 F2: the operator escape hatch accepts the usual boolean
+    // spellings; anything else falls through to the workflow/default value
+    // (a typo must never silently disable the gate).
+    for raw in ["0", "false", "no", "off", " OFF "] {
+        assert_eq!(parse_env_switch(raw), Some(false), "{raw:?}");
+    }
+    for raw in ["1", "true", "yes", "on", " On "] {
+        assert_eq!(parse_env_switch(raw), Some(true), "{raw:?}");
+    }
+    for raw in ["", "all", "strict", "2"] {
+        assert_eq!(parse_env_switch(raw), None, "{raw:?}");
+    }
+}
+
+#[test]
 fn metadata_file_loads_tsv_rows_into_config() {
     // `[workflow] metadata_file` loads a per-sample table: the first column
     // is the sample id (matching `{sample}` values), the remaining columns

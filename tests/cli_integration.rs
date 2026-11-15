@@ -741,7 +741,7 @@ fn cli_subcommand_help_has_no_banner() {
 #[test]
 fn cli_quiet_help_matches_actual_behavior() {
     // Issue #1066: the global --quiet doc-comment claimed "errors only",
-    // but 33 of 34 subcommands produce identical output with and without
+    // but nearly all subcommands produce identical output with and without
     // it. The wording must stay truthful: it suppresses the version
     // banner and run-time narration, not errors.
     oxo_flow_cmd()
@@ -11545,13 +11545,14 @@ fn run_unbound_placeholder_warn_emits_once_per_rule() {
     .unwrap();
 
     let out = oxo_flow_cmd()
+        .env("OXO_FLOW_STRICT_PLACEHOLDERS", "0")
         .args(["run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
         .unwrap();
     assert!(
         out.status.success(),
-        "run itself must succeed: {}",
+        "run itself must succeed under the escape hatch: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -11559,6 +11560,313 @@ fn run_unbound_placeholder_warn_emits_once_per_rule() {
     assert_eq!(
         count, 1,
         "one (rule, placeholder) pair must warn exactly once, got {count}: {stderr}"
+    );
+}
+
+/// Issue #1078 R7: the detached-run → wait lifecycle across directories.
+///
+/// `wait --checkpoint` is invoked immediately from an unrelated cwd, before
+/// the run has written its checkpoint: it must poll for the checkpoint (the
+/// recorded workdir supplies the lock/pid location) instead of probing the
+/// caller's cwd, then block to completion.
+#[test]
+fn wait_blocks_on_a_detached_run_from_another_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("run");
+    let other = dir.path().join("other");
+    fs::create_dir_all(&run_dir).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    let wf = run_dir.join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"wait-it\"\n\n[[rules]]\nname = \"sleeper\"\n\
+         output = [\"done.txt\"]\nshell = \"sleep 2; echo done > done.txt\"\n",
+    )
+    .unwrap();
+    let checkpoint = run_dir.join("ck.json");
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--workdir",
+            run_dir.to_str().unwrap(),
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--detach",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "detach failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = oxo_flow_cmd()
+        .args([
+            "wait",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--timeout",
+            "60",
+            "--interval",
+            "1",
+        ])
+        .current_dir(&other)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "wait failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        run_dir.join("done.txt").exists(),
+        "wait must not report success before the run produced its output"
+    );
+    assert!(
+        checkpoint.with_extension("json.status").exists(),
+        "the run status lives beside the checkpoint"
+    );
+}
+
+/// Issue #1078 R11: a run that fails preflight after arming its status but
+/// before its first checkpoint save must be reported as a failure — not
+/// "no run" and not a hang.
+#[test]
+fn wait_reports_a_preflight_failure_without_a_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).unwrap();
+    let wf = run_dir.join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pf\"\n\n[[rules]]\nname = \"r\"\n\
+         input = [\"missing-file.txt\"]\noutput = [\"o.txt\"]\n\
+         shell = \"cat missing-file.txt > o.txt\"\n",
+    )
+    .unwrap();
+    let checkpoint = run_dir.join("ck.json");
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--workdir",
+            run_dir.to_str().unwrap(),
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the preflight failure must fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = oxo_flow_cmd()
+        .args([
+            "wait",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--timeout",
+            "5",
+            "--interval",
+            "1",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "wait must report the recorded failure, not no-run: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Issue #1078 R10: status is per-checkpoint, so activity from another
+/// variant sharing the workdir must not turn a finished variant's
+/// succeeded status into a failure.
+#[test]
+fn wait_trusts_a_finished_variant_while_another_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let smoke = dir.path().join("smoke.oxoflow");
+    fs::write(
+        &smoke,
+        "[workflow]\nname = \"smoke\"\n\n[[rules]]\nname = \"ok\"\n\
+         output = [\"ok.txt\"]\nshell = \"echo ok > ok.txt\"\n",
+    )
+    .unwrap();
+    let full = dir.path().join("full.oxoflow");
+    fs::write(
+        &full,
+        "[workflow]\nname = \"full\"\n\n[[rules]]\nname = \"slow\"\n\
+         output = [\"slow.txt\"]\nshell = \"sleep 2; echo slow > slow.txt\"\n",
+    )
+    .unwrap();
+    let smoke_ck = dir.path().join("smoke.json");
+    let full_ck = dir.path().join("full.json");
+
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            smoke.to_str().unwrap(),
+            "--workdir",
+            dir.path().to_str().unwrap(),
+            "--checkpoint",
+            smoke_ck.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            full.to_str().unwrap(),
+            "--workdir",
+            dir.path().to_str().unwrap(),
+            "--checkpoint",
+            full_ck.to_str().unwrap(),
+            "--detach",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Ensure the full variant is actually in flight (it arms its status
+    // right after taking the workdir lock) before waiting on smoke.
+    let full_status = full_ck.with_extension("json.status");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !full_status.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(
+        full_status.exists(),
+        "the full variant never armed its status"
+    );
+
+    let out = oxo_flow_cmd()
+        .args([
+            "wait",
+            "--workdir",
+            dir.path().to_str().unwrap(),
+            "--checkpoint",
+            smoke_ck.to_str().unwrap(),
+            "--timeout",
+            "30",
+            "--interval",
+            "1",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the finished smoke variant must stay a success: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Issue #1078 R12: a zero-byte checkpoint is not a successful run.
+#[test]
+fn wait_rejects_an_empty_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("ck.json");
+    fs::write(&checkpoint, "").unwrap();
+
+    let out = oxo_flow_cmd()
+        .args([
+            "wait",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--timeout",
+            "2",
+            "--interval",
+            "1",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "an empty checkpoint is no run: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let workdir = dir.path().join("dir");
+    fs::create_dir_all(workdir.join(".oxo-flow")).unwrap();
+    fs::write(workdir.join(".oxo-flow").join("checkpoint.json"), "").unwrap();
+    let out = oxo_flow_cmd()
+        .args([
+            "wait",
+            "--workdir",
+            workdir.to_str().unwrap(),
+            "--timeout",
+            "2",
+            "--interval",
+            "1",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "an empty default checkpoint is no run: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Issue #1078 F2: an unbound engine placeholder is a hard error by
+/// default — the shell would receive the literal brace token.
+#[test]
+fn run_unbound_placeholder_is_a_hard_error_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("gate.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"gate\"\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"out/done.txt\"]\nshell = \"mkdir -p out && echo {sample} > out/done.txt\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "an unbound placeholder must fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unresolved placeholder(s) {sample}"),
+        "the gate names the offending token: {stderr}"
+    );
+    assert!(
+        !dir.path().join("out/done.txt").exists(),
+        "the gate must fail before the shell can create outputs"
     );
 }
 
