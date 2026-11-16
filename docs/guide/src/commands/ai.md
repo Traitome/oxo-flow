@@ -52,15 +52,15 @@ days, and whether the source is auto-updated (`auto`) or manually curated
 (`manual`):
 
 ```text
-Knowledge freshness:
-  bioconda_tools (auto) 6487 records, generated 2026-09-01 (7 days)
-  biotools_overlay (auto) 1925 records, generated 2026-08-23 (15 days)
-  commercial_tools (auto) 25 records, generated 2026-09-01 (7 days)
-  edam_terms (auto) 839 records, generated 2026-09-01 (7 days)
-  nfcore_modules (auto) 2000 records, generated 2026-09-01 (7 days)
-  pipeline_graph (auto) 543 records, generated 2026-09-01 (7 days)
-  skillgraph_docs (auto) 77 records, generated 2026-09-01 (7 days)
-  skills_index (auto) 562 records, generated 2026-09-01 (7 days)
+Knowledge freshness (example output from the 2026-11-16 knowledge refresh):
+  bioconda_tools (auto) 6688 records, generated 2026-11-16 (1 day)
+  biotools_overlay (auto) 1943 records, generated 2026-11-16 (1 day)
+  commercial_tools (auto) 25 records, generated 2026-11-16 (1 day)
+  edam_terms (auto) 839 records, generated 2026-11-16 (1 day)
+  nfcore_modules (auto) 2151 records, generated 2026-11-16 (1 day)
+  pipeline_graph (auto) 543 records, generated 2026-11-16 (1 day)
+  skillgraph_docs (auto) 77 records, generated 2026-11-16 (1 day)
+  skills_index (auto) 562 records, generated 2026-11-16 (1 day)
 ```
 
 - Auto-updated sources older than 60 days are flagged `STALE` — the same

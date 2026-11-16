@@ -1,9 +1,11 @@
 # Evaluate the AI Features
 
 oxo-flow's AI surfaces (tool lookup, `template --ai` workflow generation,
-`ai explain`, `--ai-recover`) are evaluated with a self-contained
-benchmark in the `eval/` directory of the repository. The judge is
-oxo-flow's own fresh knowledge base plus its own validators
+and `ai explain`) are evaluated with a self-contained benchmark in the
+`eval/` directory of the repository; `report --ai` interpretation has its
+own seeded-failure benchmark under `eval/interpretation/`. `--ai-recover`
+repair application remains prototype/blocked (ROADMAP Stage 12.3). The
+judge is oxo-flow's own fresh knowledge base plus its own validators
 (`validate`, `lint`) — a closed loop an external MCQ benchmark cannot
 provide.
 

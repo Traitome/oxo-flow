@@ -104,14 +104,14 @@ compiled, licensed, and audited in isolation.
 |---|---|---|---|
 | `oxo-flow-core` | library | — | The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting |
 | `oxo-flow-ai` | library | — | AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system |
-| `oxo-flow-web` | library | core, ai | REST/SSE server: 9 domains, storage backends, SSE broadcast, OpenAPI |
+| `oxo-flow-web` | library + binary (`oxo-flow-web`) | core, ai | REST/SSE server: 9 domains, storage backends, SSE broadcast, OpenAPI |
 | `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 35 subcommands, run loop, human rendering |
 | `oxo-flow-desktop` | binary (excluded from the workspace) | web | Native desktop shell (wry + tao) around the embedded server; built by a separate cargo invocation, version kept in lockstep by `scripts/bump-version.sh` |
 
 ```mermaid
 flowchart TB
     subgraph binary["Binary"]
-        CLI["oxo-flow-cli<br/>(crate oxo-flow)"]
+        CLI["oxo-flow-cli<br/>(crate oxo-flow-cli)"]
     end
     subgraph servers["Server libraries"]
         WEB["oxo-flow-web<br/>REST · SSE · OpenAPI"]

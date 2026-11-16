@@ -15,8 +15,8 @@ The Diagnostics Engine analyzes failed pipeline runs and returns:
 It does NOT use AI. It matches error signatures (log keywords, exit codes)
 against a curated library of 31 error patterns (tool, resource, data,
 system, and config classes — see
-`crates/oxo-flow-web/src/domains/execution/diagnostics.rs` for the full
-list).
+`crates/oxo-flow-core/src/diagnostics.rs` for the full list; the web
+domain re-exports the same table).
 
 ## Matching semantics
 
@@ -181,8 +181,8 @@ The biological type system verifies formal format and coordination contracts acr
 | `TYPE-001` | Format | Data format incompatibility across producer and consumer channels (e.g. SAM passed into BAM consumer) | Synthesizes conversion rules (e.g. `samtools view -b`) |
 | `TYPE-002` | Sort Order | Sort order conflict (e.g. queryname-sorted BAM piped into coordinate-indexed consumer) | Inserts sort step (`samtools sort`) |
 | `TYPE-003` | Index | Missing companion index artifact (e.g. BAM without `.bai`, VCF without `.tbi`) | Generates indexer rule (`samtools index`, `tabix -p vcf`) |
-| `TYPE-004` | Assembly | Reference build conflict (e.g. GRCh38 BAM consumed by GRCh37 variant caller) | Re-aligns or re-indexes with matching reference genome |
-| `TYPE-005` | Metadata | Missing read group `@RG` metadata fields required by downstream tools | Injects read group tags (`bwa mem -R '@RG...'`) |
+| `TYPE-004` | Assembly | Reference build conflict (e.g. GRCh38 BAM consumed by GRCh37 variant caller) | Remediation hint only — realign against the matching reference build or liftover (no synthesized command) |
+| `TYPE-005` | Metadata | Missing read group `@RG` metadata fields required by downstream tools | Synthesizes `gatk AddOrReplaceReadGroups …` (read groups can also be added at alignment, e.g. `bwa mem -R`) |
 | `TYPE-006` | Compression | Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required) | Re-compresses stream (`bgzip`) |
 | `TYPE-007` | Attributes | Extensible attribute contract mismatch: the consumer's declared `[types.*]` attributes (e.g. `variant_type=germline` implied by `gvcf`) are missing or hold different values on the producer side | Declares the missing `key=value` attributes on the producer output type |
 | `TYPE-UNKNOWN` | Resolution | A `types.<name>` reference on a rule input/output does not match any `[types.*]` declaration (or inline spec fails to parse) | Fixes the type name or adds the missing `[types.*]` declaration |

@@ -12,9 +12,13 @@ oxo-flow import [OPTIONS] <SOURCE>
 
 The `import` command transpiles Nextflow DSL2 process definitions and
 Snakemake rules into `.oxoflow` pipelines. It is a **best-effort translator**,
-not a full language implementation: every construct it cannot map faithfully
-is either reported as a warning on stderr or rejected with a clear error — it
-never silently emits an empty command or an invented file path.
+not a full language implementation. For Nextflow, every construct it cannot
+map faithfully is reported as a warning on stderr or rejected with a clear
+error. Snakemake support is narrower (rules, I/O, threads/resources,
+conda/container, and shell bodies); an unsupported directive such as
+`script:` or `run:` can be rejected by the generated-TOML parse/validate
+gate rather than translated. In neither case does it silently emit a
+workflow with an invented command or file path.
 
 ## What is extracted
 

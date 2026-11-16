@@ -546,7 +546,7 @@ Maturity labels used below:
 | Study | Maturity | Remaining exit evidence |
 | :--- | :--- | :--- |
 | AI synthesis and fault-injection benchmark | Simulation only | Matched Arms A/B/C, held-out intents, multiple seeds, run-level data, and pre-registered analysis |
-| Cohort and hardware scalability | Simulation or smoke test only | Measured campaigns on named hardware; current cohort evidence is a 10-sample, 30-node CLI pilot |
+| Cohort and hardware scalability | Operational field evidence only; no controlled benchmark | Operational evidence now exists: a live production campaign (11,123 TCGA RNA-seq samples, 33 cancer types, ≈87 TB of BAMs) runs MiXCR 4.7.0 + TRUST4 1.1.5 on Slurm through `run --profile` in four per-node shard workflows with pixi environments (cluster backend in production since 2026-11-16; first full-cohort pass in progress). Crash-restart (#1083), cluster observability (#1085), dispatch-order (#1089), and CPU-oversubscription (#1080) findings were addressed with regression tests on `main`. Still required: a completed cohort pass, measured throughput/cost data, and pre-registered scalability campaigns on named hardware |
 | Human-factors study | Simulation only | Ethics approval, real participants, randomized task order, and complete SUS/TLX analysis |
 | Manuscript and artifact package | Planned / blocked | No submission, acceptance, independent replication, or journal-ready package exists |
 

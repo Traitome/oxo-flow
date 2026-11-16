@@ -1,6 +1,6 @@
 # Introduction
 
-**oxo-flow** is a Rust-native bioinformatics pipeline engine engineered for performance, reproducibility, and environment isolation. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
+**oxo-flow** is a Rust-native bioinformatics pipeline engine for verifiable, AI-native science. It compiles declarative TOML workflows into a static Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
 
 ```bash
 # Define your workflow in TOML
@@ -37,7 +37,7 @@ Done: 5 succeeded, 0 skipped, 0 failed
 
 ## What Is oxo-flow?
 
-oxo-flow is a high-performance workflow engine built from the ground up in Rust for bioinformatics and clinical genomics. You define pipelines in a clean TOML format (`.oxoflow` files), and oxo-flow handles dependency resolution, environment activation, parallel execution, and report generation — with compile-time safety guarantees and zero interpreter overhead.
+oxo-flow is a high-performance workflow engine built from the ground up in Rust for bioinformatics and clinical genomics. You define pipelines in a clean TOML format (`.oxoflow` files), and oxo-flow handles dependency resolution, environment activation, parallel execution, and report generation — with Rust's memory safety and zero interpreter overhead.
 
 ### Core capabilities
 
@@ -46,13 +46,13 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
 | **AI Companion & Scientist Team** | Natural language pipeline generation, intelligent refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile |
 | **Disk-pressure & scratch safety** | Multi-stage runtime disk-pressure guard (Normal → Reclaim → Hold → Abort) with cascade reclamation, plus global `tmp_dir` scratch isolation |
-| **Cryptographic provenance** | Checkpoint truth anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback |
+| **Cryptographic provenance** | Local run checkpoints anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback (cluster-path checksum recording is outstanding — issue #1093) |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
 | **Reporting** | Generate structured HTML, JSON, Markdown, and PDF reports from checkpoint data — execution truth, failure diagnosis, and file checksums |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **VS Code extension** | First-party `traitome.oxo-flow` IDE for `.oxoflow` — schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (published to [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow); also attached as a VSIX to every release) |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
-| **Cluster backends** | Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling |
+| **Cluster backends** | Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling; `run --profile` folds terminal verdicts into the checkpoint as jobs settle and re-queues interrupted rules on restart, `cluster status --json` / `cluster logs` map scheduler ids back to rule instances, and `[engine] dispatch_order = "sample"` orders equal-priority ties by sample so a sample's stages run adjacent |
 | **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
 
 ---
@@ -62,11 +62,24 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 oxo-flow rethinks bioinformatics workflow orchestration from the ground up:
 
 1. **DAG as pure declarative data, not imperative code** — `.oxoflow` TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.
-2. **Cryptographic determinism over file timestamps** — Exact reproducibility through SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old `mtime` heuristics as the source of truth.
+2. **Cryptographic determinism over file timestamps** — Change detection anchored on SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old `mtime` heuristics as the freshness signal. Checksums prove declared state, not biological or bitwise equivalence.
 3. **Physical resource boundaries as first-class constraints** — Built-in multi-stage runtime disk-pressure protection and scratch volume isolation (`tmp_dir`) prevent catastrophic out-of-disk failures on long-running pipelines.
 4. **Environment isolation** — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) reduce tool-version conflicts; this is not a complete host or tenant boundary.
 5. **Rust-native compiled performance & safety** — Compiled native binary with no embedded Python or JVM runtime, `#![forbid(unsafe_code)]`, and fast startup; bioinformatics tools, containers, and environment managers remain explicit external dependencies.
 6. **AI as an architectural citizen** — Grounded on deterministic engine APIs with structured `{code, message, detail, suggestion}` error contracts, unified validation feedback loops, and 30+ domain diagnostic patterns.
+
+---
+
+## Why a new engine for the AI era?
+
+The dominant workflow engines were designed for humans writing code by hand. Snakemake embeds arbitrary Python and Nextflow wires data through Groovy channel operators — expressive for humans, but in both the DAG is whatever the script computes at runtime, so nothing can fully verify it before compute starts. oxo-flow declares the entire workflow as schema-validated TOML data and compiles a static DAG first: the same shape an LLM can emit, a schema can reject, and an engine can verify before a single CPU-hour is spent. That is what makes the machine contract possible — stable `E`/`W`/`SCI-*`/`TYPE-*` diagnostic codes, `--json` on every gate, and AI-generated pipelines that must pass the engine's own validate/dry-run gates before they can run.
+
+The trade-off is stated honestly: dynamic DSLs remain unmatched for free-form programmatic logic, and ecosystem gravity (nf-core modules, community Snakemake rules) is real. oxo-flow bets on the verifiability side for cohort-scale production runs and offers `oxo-flow import` for existing Nextflow/Snakemake work (prototype-grade — see [LIMITATIONS](https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md)).
+
+The scientific agenda behind this bet rests on four methodological pillars — **BioTypes** (biological type contracts on DAG edges, checked statically with `TYPE-*` diagnostics, remediation hints, and synthesized coercion commands where mechanical), an **autonomous self-healing runtime** (30+ diagnostic patterns, `SCI-*` scientific preflight, `--ai-recover` safety-gated repair proposals, and a seeded-failure `report --ai` interpretation benchmark), a **universal ecosystem transpiler** (Nextflow/Snakemake import, prototype-grade), and **cryptographic provenance** (SHA-256 output checksums, config fingerprints, protected-data audits). Each is anchored to shipped functionality and carries an explicit maturity label in the [Vision](vision.md) page and [ROADMAP Phase 12](https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md).
+
+!!! tip "Field-hardened, not just CI-green"
+    The cluster path is exercised by a live production campaign: 11,123 TCGA RNA-seq samples across 33 cancer types (10,481 with matched genomic + chimeric BAMs), ≈87 TB of input BAMs, profiled with MiXCR 4.7.0 + TRUST4 1.1.5 on Slurm via `run --profile` and pixi environments (cluster backend in production since 2026-11-16; the first full-cohort pass is still in progress). Crash-restart silent loss (#1083), run-blind `cluster status`/`logs` (#1085), phase-wise dispatch starvation (#1089), and local CPU oversubscription (#1080) were found there; the campaign mitigated them pipeline-side on v0.30.0, and the engine fixes landed upstream with regression tests.
 
 ---
 
