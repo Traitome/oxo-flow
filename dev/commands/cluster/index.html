@@ -5207,13 +5207,15 @@ becomes available</strong>, not when the run loop finishes: a submission records
 terminal record the driver observes settling rewrites it as success /
 failed / cancelled and saves immediately, and the post-run accounting
 re-folds the same records idempotently. A driver that crashes mid-run
-therefore leaves a truthful checkpoint — jobs that settled are recorded as
+therefore leaves a truthful checkpoint — jobs that settle are recorded as
 completed or failed, so the freshness gate on restart skips them instead of
-re-running rules whose outputs already exist. Two verdict kinds reach the
-checkpoint only when the driver returns (a signal interruption's records,
-and short-circuit skips for rules blocked by a failed upstream), so a hard
-crash inside that window can still lose them — resume re-queues them, which
-is the safe direction.</p>
+re-running rules whose outputs already exist. Two record kinds do not ride
+the settle hook: a signal interruption's records are folded by the run
+command after the driver returns, and short-circuit Skipped records (rules
+blocked by a failed upstream) are not folded at all — resume re-queues them
+instead, which is the safe direction. A hard crash inside those windows can
+still lose a verdict, but only in the same safe direction: the rule is
+re-run, never falsely skipped.</p>
 <p>A restart must also refuse to trust outputs written by jobs that were still
 in flight at crash time: a non-terminal <code>running</code>/<code>pending</code> execution
 record poisons the freshness gate for that rule — on restart the engine

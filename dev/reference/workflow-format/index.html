@@ -4344,6 +4344,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#dispatch-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatch order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#response-ladder" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6743,6 +6754,17 @@
   
     <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatch order
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#response-ladder" class="md-nav__link">
@@ -11126,9 +11148,10 @@ and, on failure, an <code>error</code> summary. Notifications are <strong>best-e
 an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.</p>
 <h2 id="engine-runtime-disk-pressure-guard"><code>[engine]</code> — Runtime Disk-Pressure Guard<a class="headerlink" href="#engine-runtime-disk-pressure-guard" title="Permanent link">#</a></h2>
-<p>Optional run-time disk monitoring and hardware placement knobs. Without this
-section the engine never measures free space mid-run and behavior is
-unchanged.</p>
+<p>Optional run-time engine policies: disk monitoring, scratch routing,
+hardware placement, protected-data drift detection, and ready-rule dispatch
+ordering. Without this section the engine never measures free space mid-run
+and behavior is unchanged.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-115-1"><a id="__codelineno-115-1" name="__codelineno-115-1" href="#__codelineno-115-1"></a><span class="k">[engine]</span>
 </span><span id="__span-115-2"><a id="__codelineno-115-2" name="__codelineno-115-2" href="#__codelineno-115-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
 </span><span id="__span-115-3"><a id="__codelineno-115-3" name="__codelineno-115-3" href="#__codelineno-115-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
@@ -11139,6 +11162,7 @@ unchanged.</p>
 </span><span id="__span-115-8"><a id="__codelineno-115-8" name="__codelineno-115-8" href="#__codelineno-115-8"></a><span class="c1"># tier0_ram_scratch = "/dev/shm"        # optional: RAM/tmpfs scratch tier</span>
 </span><span id="__span-115-9"><a id="__codelineno-115-9" name="__codelineno-115-9" href="#__codelineno-115-9"></a><span class="c1"># tier1_nvme_scratch = "/mnt/nvme/scratch"  # optional: local NVMe/SSD scratch tier</span>
 </span><span id="__span-115-10"><a id="__codelineno-115-10" name="__codelineno-115-10" href="#__codelineno-115-10"></a><span class="c1"># tier2_shared_scratch = "/lustre/scratch"  # optional: shared cluster FS scratch tier</span>
+</span><span id="__span-115-11"><a id="__codelineno-115-11" name="__codelineno-115-11" href="#__codelineno-115-11"></a><span class="c1"># dispatch_order = "sample"   # optional: per-sample ready-rule tie-break; default "rule"</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -11210,8 +11234,36 @@ unchanged.</p>
 <td>—</td>
 <td>Tier 2 scratch root: shared cluster filesystem (Lustre / GPFS / BeeGFS / NFS) — largest capacity, shared with other nodes</td>
 </tr>
+<tr>
+<td><code>dispatch_order</code></td>
+<td>String</td>
+<td><code>"rule"</code></td>
+<td>Tie-break for ready-rule dispatch when effective priorities are equal (the declared <code>priority</code> plus the aging counter). <code>"rule"</code>: sort by instance name — the historical behaviour. <code>"sample"</code>: sort by the instance's fan-out binding (sample / group / pair / <code>[[values]]</code> value), then by the rule's declaration order in the workflow file. See <a href="#dispatch-order">Dispatch order</a></td>
+</tr>
 </tbody>
 </table>
+<h3 id="dispatch-order">Dispatch order<a class="headerlink" href="#dispatch-order" title="Permanent link">#</a></h3>
+<p><code>dispatch_order</code> decides only the <em>tie-break</em> between ready rules whose
+effective priority is equal — <code>priority</code> remains the primary key in both
+modes, and the total work, dependency order and resource caps are
+unchanged.</p>
+<p>With the default <code>"rule"</code>, instances sort by name. Because expanded names
+are <code>&lt;rule&gt;_&lt;group&gt;_&lt;sample&gt;</code>, this groups every instance of one rule
+together, so a per-sample fan-out/fan-in workflow runs as a sequence of
+global phases: all producers of every sample, then all consumers of every
+sample, and so on.</p>
+<p>With <code>"sample"</code>, instances sort by the fan-out binding they were expanded
+from (the sample, group, pair or <code>[[values]]</code> value), then by the rule's
+declaration order in the file. All ready stages of one sample are
+dispatched before the next sample's, so a per-sample pipeline drains
+sample by sample and its first per-sample result appears when sample 1
+finishes rather than at the end of the slowest global phase.</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-116-1"><a id="__codelineno-116-1" name="__codelineno-116-1" href="#__codelineno-116-1"></a><span class="k">[engine]</span>
+</span><span id="__span-116-2"><a id="__codelineno-116-2" name="__codelineno-116-2" href="#__codelineno-116-2"></a><span class="n">dispatch_order</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sample"</span>
+</span></code></pre></div>
+<p>A worked diamond example (<code>align ∥ qc → merge</code>) is in
+<a href="../../how-to/run-on-cluster/#scheduling-fairness">Run on a cluster: Scheduling Fairness</a>.
+The default <code>"rule"</code> keeps existing runs byte-identical.</p>
 <h3 id="response-ladder">Response ladder<a class="headerlink" href="#response-ladder" title="Permanent link">#</a></h3>
 <p>Each measurement (run start, loop head, and every 60 s while the run is
 parked or between dispatch batches) classifies the working directory's free
@@ -11350,12 +11402,12 @@ workdir where fixed-filename outputs collide across concurrent instances.
 Remove the directive or run those rules on the local path).</p>
 <hr />
 <h2 id="resource_groups-shared-resource-pools"><code>[resource_groups]</code> — Shared Resource Pools<a class="headerlink" href="#resource_groups-shared-resource-pools" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-116-1"><a id="__codelineno-116-1" name="__codelineno-116-1" href="#__codelineno-116-1"></a><span class="k">[resource_groups.db_conn]</span>
-</span><span id="__span-116-2"><a id="__codelineno-116-2" name="__codelineno-116-2" href="#__codelineno-116-2"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-116-3"><a id="__codelineno-116-3" name="__codelineno-116-3" href="#__codelineno-116-3"></a><span class="n">wait</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"queue"</span>
-</span><span id="__span-116-4"><a id="__codelineno-116-4" name="__codelineno-116-4" href="#__codelineno-116-4"></a>
-</span><span id="__span-116-5"><a id="__codelineno-116-5" name="__codelineno-116-5" href="#__codelineno-116-5"></a><span class="k">[resource_groups.api]</span>
-</span><span id="__span-116-6"><a id="__codelineno-116-6" name="__codelineno-116-6" href="#__codelineno-116-6"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-117-1"><a id="__codelineno-117-1" name="__codelineno-117-1" href="#__codelineno-117-1"></a><span class="k">[resource_groups.db_conn]</span>
+</span><span id="__span-117-2"><a id="__codelineno-117-2" name="__codelineno-117-2" href="#__codelineno-117-2"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-117-3"><a id="__codelineno-117-3" name="__codelineno-117-3" href="#__codelineno-117-3"></a><span class="n">wait</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"queue"</span>
+</span><span id="__span-117-4"><a id="__codelineno-117-4" name="__codelineno-117-4" href="#__codelineno-117-4"></a>
+</span><span id="__span-117-5"><a id="__codelineno-117-5" name="__codelineno-117-5" href="#__codelineno-117-5"></a><span class="k">[resource_groups.api]</span>
+</span><span id="__span-117-6"><a id="__codelineno-117-6" name="__codelineno-117-6" href="#__codelineno-117-6"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
 </span></code></pre></div>
 <p>Named capacity pools shared across rules. A rule consumes a pool via
 <code>[rules.resources]</code> <code>groups</code> (see
@@ -11404,12 +11456,12 @@ rate-limited external resources (APIs, database connections).</p>
 </ul>
 <hr />
 <h2 id="reference_db-tracked-reference-database-versions"><code>[[reference_db]]</code> — Tracked Reference Database Versions<a class="headerlink" href="#reference_db-tracked-reference-database-versions" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-117-1"><a id="__codelineno-117-1" name="__codelineno-117-1" href="#__codelineno-117-1"></a><span class="k">[[reference_db]]</span>
-</span><span id="__span-117-2"><a id="__codelineno-117-2" name="__codelineno-117-2" href="#__codelineno-117-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"GRCh38"</span>
-</span><span id="__span-117-3"><a id="__codelineno-117-3" name="__codelineno-117-3" href="#__codelineno-117-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"p14"</span>
-</span><span id="__span-117-4"><a id="__codelineno-117-4" name="__codelineno-117-4" href="#__codelineno-117-4"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"</span>
-</span><span id="__span-117-5"><a id="__codelineno-117-5" name="__codelineno-117-5" href="#__codelineno-117-5"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256:abc123"</span>
-</span><span id="__span-117-6"><a id="__codelineno-117-6" name="__codelineno-117-6" href="#__codelineno-117-6"></a><span class="n">accessed_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2026-01-15"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-118-1"><a id="__codelineno-118-1" name="__codelineno-118-1" href="#__codelineno-118-1"></a><span class="k">[[reference_db]]</span>
+</span><span id="__span-118-2"><a id="__codelineno-118-2" name="__codelineno-118-2" href="#__codelineno-118-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"GRCh38"</span>
+</span><span id="__span-118-3"><a id="__codelineno-118-3" name="__codelineno-118-3" href="#__codelineno-118-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"p14"</span>
+</span><span id="__span-118-4"><a id="__codelineno-118-4" name="__codelineno-118-4" href="#__codelineno-118-4"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"</span>
+</span><span id="__span-118-5"><a id="__codelineno-118-5" name="__codelineno-118-5" href="#__codelineno-118-5"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256:abc123"</span>
+</span><span id="__span-118-6"><a id="__codelineno-118-6" name="__codelineno-118-6" href="#__codelineno-118-6"></a><span class="n">accessed_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2026-01-15"</span>
 </span></code></pre></div>
 <p>Declares the exact versions of external reference databases a workflow
 depends on. Entries are recorded in the run's software-versions report
@@ -11461,11 +11513,11 @@ reference data they consumed.</p>
 accepted — declare the other fields when the provenance matters.</p>
 <hr />
 <h2 id="citation-citation-metadata"><code>[citation]</code> — Citation Metadata<a class="headerlink" href="#citation-citation-metadata" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-118-1"><a id="__codelineno-118-1" name="__codelineno-118-1" href="#__codelineno-118-1"></a><span class="k">[citation]</span>
-</span><span id="__span-118-2"><a id="__codelineno-118-2" name="__codelineno-118-2" href="#__codelineno-118-2"></a><span class="n">doi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.1234/test"</span>
-</span><span id="__span-118-3"><a id="__codelineno-118-3" name="__codelineno-118-3" href="#__codelineno-118-3"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://github.com/example/test"</span>
-</span><span id="__span-118-4"><a id="__codelineno-118-4" name="__codelineno-118-4" href="#__codelineno-118-4"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"Alice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Bob"</span><span class="p">]</span>
-</span><span id="__span-118-5"><a id="__codelineno-118-5" name="__codelineno-118-5" href="#__codelineno-118-5"></a><span class="n">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"My Workflow Paper"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-119-1"><a id="__codelineno-119-1" name="__codelineno-119-1" href="#__codelineno-119-1"></a><span class="k">[citation]</span>
+</span><span id="__span-119-2"><a id="__codelineno-119-2" name="__codelineno-119-2" href="#__codelineno-119-2"></a><span class="n">doi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.1234/test"</span>
+</span><span id="__span-119-3"><a id="__codelineno-119-3" name="__codelineno-119-3" href="#__codelineno-119-3"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://github.com/example/test"</span>
+</span><span id="__span-119-4"><a id="__codelineno-119-4" name="__codelineno-119-4" href="#__codelineno-119-4"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"Alice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Bob"</span><span class="p">]</span>
+</span><span id="__span-119-5"><a id="__codelineno-119-5" name="__codelineno-119-5" href="#__codelineno-119-5"></a><span class="n">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"My Workflow Paper"</span>
 </span></code></pre></div>
 <p>Optional provenance metadata describing how the workflow itself should be
 cited. All fields are optional; entries round-trip through formatting and
