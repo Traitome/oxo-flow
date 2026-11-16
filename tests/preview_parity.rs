@@ -841,3 +841,59 @@ shell = "echo bad_rule >> exec_log.txt; exit 3"
         "only the failed rule re-runs: {pred:?}"
     );
 }
+
+/// 15. Non-terminal execution records (issue #1083 F1): a rule left with a
+///     `running` record by a dead run has untrusted partial outputs on
+///     disk. Both the preview and the run must treat it as never completed
+///     — the on-disk output's existence/mtime is never a freshness verdict
+///     for a non-terminal record (preview `Interrupted` status; executor
+///     gate `interrupted_before_start`). Issue #77 parity is untouched:
+///     rules with NO record at all keep the existence-based skip.
+#[test]
+fn parity_stale_running_record_never_trusts_partial_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "chain.oxoflow", &chain_workflow());
+    fs::write(dir.path().join("in.txt"), "data-aaaa").unwrap();
+    baseline_run(dir.path(), &wf, &[]);
+
+    // Simulate a dead run: step2 was in flight when the process died. Its
+    // output file still sits on disk, fresh and complete-looking, but the
+    // checkpoint says it never reached a terminal state — no completion
+    // record, no input manifest, only the in-flight marker (issue #685
+    // `running` set) plus a `running` execution record in `rule_runs`,
+    // which is what `was_interrupted` reads on restart (#1083).
+    let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint).unwrap()).unwrap();
+    json["completed_rules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|v| v.as_str() != Some("step2"));
+    if let Some(manifests) = json["input_manifests"].as_object_mut() {
+        manifests.remove("step2");
+    }
+    json["rule_runs"]["step2"]["status"] = serde_json::json!("running");
+    json["running"] = serde_json::json!(["step2"]);
+    fs::write(&checkpoint, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+
+    // Parity: preview and run agree — step2 re-runs (partial outputs are
+    // untrusted), step1 stays protected. The executed set must contain
+    // step2 and NOT step1.
+    let (predicted_run, predicted_skip) = assert_parity(
+        dir.path(),
+        &[wf.to_str().unwrap()],
+        &[wf.to_str().unwrap()],
+        "stale running record",
+    );
+    assert_eq!(
+        predicted_run,
+        HashSet::from(["step2".to_string()]),
+        "a running-record rule with a fresh-looking partial output must re-run: \
+         {predicted_run:?}"
+    );
+    assert_eq!(
+        predicted_skip,
+        HashSet::from(["step1".to_string()]),
+        "completed rules without a running record stay protected: {predicted_skip:?}"
+    );
+}

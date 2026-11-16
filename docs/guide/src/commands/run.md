@@ -1014,6 +1014,14 @@ oxo-flow automatically persists execution state to a **checkpoint file** after e
 1.  **Resuming failed runs**: If a job fails or is interrupted, simply run `oxo-flow run` again. The engine will skip all rules already marked as `completed` and resume from the first pending task.
 2.  **State Inspection**: Use the [`oxo-flow status`](./status.md) command to view the progress of a run from its checkpoint file.
 
+A rule whose latest execution record is a non-terminal **`running`** state
+(a crash or `kill` while the rule was in flight) never passes the freshness
+gate: on restart the engine re-runs it instead of trusting the
+partially-written outputs, so a killed job's half-finished outputs are not
+mistaken for finished work (issue #1083). Rules with no checkpoint entry at
+all keep their historical freshness semantics — output existence alone
+decides, as before (issue #77).
+
 ### Variant checkpoints (`--checkpoint`)
 
 The default checkpoint is **per workdir** (`<workdir>/.oxo-flow/checkpoint.json`),

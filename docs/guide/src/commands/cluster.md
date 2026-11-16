@@ -636,6 +636,29 @@ re-attach path exists, use `oxo-flow cluster status` (run-aware; `--all`
 for the raw scheduler view) and `oxo-flow cluster cancel <JOB_ID>...` to
 inspect or clean up jobs orphaned by a crashed driver.
 
+### Crash-safe checkpoint folding (issue #1083)
+
+The driver folds every job verdict into the checkpoint **as soon as it
+becomes available**, not when the run loop finishes: a submission records a
+`running` execution record plus the in-flight marker (issue #685), every
+terminal record the driver observes settling rewrites it as success /
+failed / cancelled and saves immediately, and the post-run accounting
+re-folds the same records idempotently. A driver that crashes mid-run
+therefore leaves a truthful checkpoint — jobs that settled are recorded as
+completed or failed, so the freshness gate on restart skips them instead of
+re-running rules whose outputs already exist. Two verdict kinds reach the
+checkpoint only when the driver returns (a signal interruption's records,
+and short-circuit skips for rules blocked by a failed upstream), so a hard
+crash inside that window can still lose them — resume re-queues them, which
+is the safe direction.
+
+A restart must also refuse to trust outputs written by jobs that were still
+in flight at crash time: a non-terminal `running`/`pending` execution
+record poisons the freshness gate for that rule — on restart the engine
+re-runs it instead of treating the partially-written outputs as completion
+(see [run's checkpointing section](run.md#checkpointing-and-resuming)). Rules with no
+checkpoint entry at all keep their historical freshness semantics.
+
 ---
 
 ## Notes
