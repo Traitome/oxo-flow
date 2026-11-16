@@ -298,6 +298,7 @@ fn backend_driver_executes_reentry_rounds() {
             DriverOptions {
                 sensitive_values: &[],
                 on_submit: None,
+                on_settle: None,
                 run_dir: run_dir.path(),
                 on_checkpoint: Some(Box::new(|rule_name: &str| {
                     let manifest = dir.path().join("discover.toml");

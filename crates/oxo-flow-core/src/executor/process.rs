@@ -2503,15 +2503,23 @@ impl LocalExecutor {
         // instead of deep-copying every recorded checksum per rule (#268
         // item 4). Consistency across the handful of queries below is all
         // that matters, and the small view is enough.
-        let freshness_checksums: Option<BTreeMap<String, String>> = match &self.config.checkpoint {
+        let (freshness_checksums, interrupted_before_start): (
+            Option<BTreeMap<String, String>>,
+            bool,
+        ) = match &self.config.checkpoint {
             Some(ck) => {
                 let guard = ck.lock().await;
+                // Issue #1083: a rule whose last execution record still
+                // reads `running`/`pending` was submitted by a driver that
+                // died before the job settled. Its outputs may be partial,
+                // so the freshness gate must not treat them as completion.
+                let interrupted = guard.was_interrupted(&rule.name);
                 let expanded: Vec<String> = rule
                     .output
                     .iter()
                     .map(|o| super::checkpoint::expand_config_in_path(o, wildcard_values))
                     .collect();
-                if expanded.iter().all(|o| guard.checksums.contains_key(o)) {
+                let checksums = if expanded.iter().all(|o| guard.checksums.contains_key(o)) {
                     Some(
                         expanded
                             .iter()
@@ -2522,12 +2530,14 @@ impl LocalExecutor {
                     // Not every output has a recorded hash — the gate
                     // degrades to the mtime path either way.
                     None
-                }
+                };
+                (checksums, interrupted)
             }
-            None => None,
+            None => (None, false),
         };
         if !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
+            && !interrupted_before_start
             && super::checkpoint::should_skip_rule_with_checksums_async(
                 &rule,
                 &self.config.workdir,
