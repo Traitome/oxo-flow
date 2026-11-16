@@ -10,6 +10,7 @@
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
+use crate::scheduler::DispatchOrder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -862,18 +863,23 @@ impl ResourceBudget {
     }
 }
 
-/// Runtime disk-pressure monitoring thresholds (issue #843).
+/// Runtime engine policies.
 ///
-/// The engine watches free space on the working directory's filesystem at
+/// Most prominently the disk-pressure guard (issue #843): the engine
+/// watches free space on the working directory's filesystem at
 /// rule-completion boundaries and periodically while jobs run. Crossing
 /// `min_free_disk` emits a WARN diagnostic; crossing `reclaim_free_disk`
 /// additionally pauses new submissions and reclaims tombstone-eligible
 /// outputs of completed temporary rules (regenerable on resume), aborting
 /// only when even reclamation cannot free enough space.
 ///
-/// Both values use the shared memory-size syntax — `"5G"`, `"500M"`,
+/// Both thresholds use the shared memory-size syntax — `"5G"`, `"500M"`,
 /// `"1T"` — where a bare number means MiB. Omitting the section (or both
 /// keys) keeps today's behavior: one pre-run advisory check, no monitoring.
+///
+/// The section also carries scratch routing (issue #907), protected-tree
+/// drift baselines (issue #935), the strict-placeholder gate (issue #1078),
+/// and ready-rule dispatch ordering (issue #1089).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EngineConfig {
     /// Free-space floor. Dropping below it logs a WARN diagnostic
@@ -954,6 +960,17 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier2_shared_scratch: Option<String>,
+
+    /// Tie-break for ready-rule dispatch when effective priorities are equal
+    /// (issue #1089). `"rule"` (default) sorts by instance name — the
+    /// historical behaviour. `"sample"` sorts by the instance's fan-out
+    /// binding (sample/group/pair) and then by the rule's declaration order
+    /// in the workflow file, so all ready stages of one sample are
+    /// dispatched before the next sample's. `priority` remains the primary
+    /// key in both modes.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispatch_order: Option<DispatchOrder>,
 }
 
 impl EngineConfig {

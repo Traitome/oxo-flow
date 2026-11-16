@@ -3404,9 +3404,10 @@ run status or its exit code.
 
 ## `[engine]` — Runtime Disk-Pressure Guard
 
-Optional run-time disk monitoring and hardware placement knobs. Without this
-section the engine never measures free space mid-run and behavior is
-unchanged.
+Optional run-time engine policies: disk monitoring, scratch routing,
+hardware placement, protected-data drift detection, and ready-rule dispatch
+ordering. Without this section the engine never measures free space mid-run
+and behavior is unchanged.
 
 ```toml
 [engine]
@@ -3419,6 +3420,7 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 # tier0_ram_scratch = "/dev/shm"        # optional: RAM/tmpfs scratch tier
 # tier1_nvme_scratch = "/mnt/nvme/scratch"  # optional: local NVMe/SSD scratch tier
 # tier2_shared_scratch = "/lustre/scratch"  # optional: shared cluster FS scratch tier
+# dispatch_order = "sample"   # optional: per-sample ready-rule tie-break; default "rule"
 ```
 
 | Field | Type | Default | Description |
@@ -3433,6 +3435,36 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 | `tier0_ram_scratch` | String | — | Tier 0 scratch root: RAM disk or tmpfs (e.g. `/dev/shm`) — lowest latency, capacity-constrained. Only used for small scratch requests (see [Scratch tier ladder](#scratch-tier-ladder)) |
 | `tier1_nvme_scratch` | String | — | Tier 1 scratch root: local NVMe/SSD (e.g. `/mnt/nvme/scratch`) — high IOPS, moderate capacity |
 | `tier2_shared_scratch` | String | — | Tier 2 scratch root: shared cluster filesystem (Lustre / GPFS / BeeGFS / NFS) — largest capacity, shared with other nodes |
+| `dispatch_order` | String | `"rule"` | Tie-break for ready-rule dispatch when effective priorities are equal (the declared `priority` plus the aging counter). `"rule"`: sort by instance name — the historical behaviour. `"sample"`: sort by the instance's fan-out binding (sample / group / pair / `[[values]]` value), then by the rule's declaration order in the workflow file. See [Dispatch order](#dispatch-order) |
+
+### Dispatch order
+
+`dispatch_order` decides only the *tie-break* between ready rules whose
+effective priority is equal — `priority` remains the primary key in both
+modes, and the total work, dependency order and resource caps are
+unchanged.
+
+With the default `"rule"`, instances sort by name. Because expanded names
+are `<rule>_<group>_<sample>`, this groups every instance of one rule
+together, so a per-sample fan-out/fan-in workflow runs as a sequence of
+global phases: all producers of every sample, then all consumers of every
+sample, and so on.
+
+With `"sample"`, instances sort by the fan-out binding they were expanded
+from (the sample, group, pair or `[[values]]` value), then by the rule's
+declaration order in the file. All ready stages of one sample are
+dispatched before the next sample's, so a per-sample pipeline drains
+sample by sample and its first per-sample result appears when sample 1
+finishes rather than at the end of the slowest global phase.
+
+```toml
+[engine]
+dispatch_order = "sample"
+```
+
+A worked diamond example (`align ∥ qc → merge`) is in
+[Run on a cluster: Scheduling Fairness](../how-to/run-on-cluster.md#scheduling-fairness).
+The default `"rule"` keeps existing runs byte-identical.
 
 ### Response ladder
 

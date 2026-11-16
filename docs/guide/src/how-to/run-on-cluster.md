@@ -530,6 +530,63 @@ Cluster submission honors the same fairness contract as local execution:
   "waiting for resources:" diagnostics have no cluster counterpart by
   design — the pool lives on the scheduler, not in the engine.
 
+### Per-sample dispatch order
+
+Equal-priority ties are broken by instance name by default. Expanded
+instance names are `<rule>_<group>_<sample>`, so that tie-break groups
+every instance of one rule together: a per-sample pipeline submits all
+`align` instances, then all `qc` instances, then all `merge` instances.
+The first `merge` cannot run until the slowest sample's producers finish,
+and no per-sample result exists until the end of the run.
+
+Set `[engine] dispatch_order = "sample"` to order ties by the sample
+binding first, then by rule declaration order:
+
+```toml
+[engine]
+dispatch_order = "sample"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "align"
+output = ["out/{sample}/align.bam"]
+shell = "align {sample} > out/{sample}/align.bam"
+
+[[rules]]
+name = "qc"
+output = ["out/{sample}/qc.txt"]
+shell = "qc {sample} > out/{sample}/qc.txt"
+
+[[rules]]
+name = "merge"
+input = ["out/{sample}/align.bam", "out/{sample}/qc.txt"]
+output = ["out/{sample}/merge.txt"]
+shell = "merge out/{sample}/align.bam out/{sample}/qc.txt > out/{sample}/merge.txt"
+```
+
+Both producers read the same sample independently, and `merge` joins
+them. Under the default `"rule"` mode the ready list is
+`align_S1, align_S2, qc_S1, qc_S2, …`; under `"sample"` it is
+`align_S1, qc_S1, align_S2, qc_S2, …`, and once sample 1's producers
+finish, `merge_S1` jumps ahead of the remaining sample-2 producers at
+the next free slot. Per-sample results therefore appear as each sample
+completes, with the same total work and the same `max_submitted` cap.
+
+The setting is only a tie-break over *currently ready* rules: it never
+reorders dependencies, and it does not delay sample 2's independent
+producers behind sample 1's unfinished stages. `priority` remains the
+primary key — a rule whose declared (`+ aging`) priority is higher still
+jumps the queue, which is useful for a genuinely urgent one-off rule.
+Use `priority` for per-rule urgency and `dispatch_order = "sample"` for
+per-sample pipeline flow.
+
+The same ordering is honored by local execution and by the cluster
+driver. The default `"rule"` mode is byte-identical to previous
+releases.
+
 ---
 
 ## See Also

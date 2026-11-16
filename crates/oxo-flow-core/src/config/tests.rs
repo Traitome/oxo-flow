@@ -10410,3 +10410,43 @@ fn resource_budget_rejects_unreadable_or_zero_caps() {
         "a zero memory cap can never run anything"
     );
 }
+
+#[test]
+fn engine_dispatch_order_defaults_to_rule_and_parses_sample() {
+    // Issue #1089: an absent section / unset key keeps the historical
+    // rule-name tie-break; "sample" opts into sample-aware dispatch ties;
+    // any other value is a parse error rather than a silent fallback.
+    let default = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
+    assert_eq!(
+        default.dispatch_order(),
+        crate::scheduler::DispatchOrder::Rule
+    );
+
+    // `parse` also runs the E017 known-key gate, so this doubles as proof
+    // that `dispatch_order` is a whitelisted `[engine]` key.
+    let explicit = WorkflowConfig::parse(&format!(
+        "{MINIMAL_WORKFLOW}\n[engine]\ndispatch_order = \"sample\"\n"
+    ))
+    .unwrap();
+    assert_eq!(
+        explicit.dispatch_order(),
+        crate::scheduler::DispatchOrder::Sample
+    );
+
+    let spelled_out = WorkflowConfig::parse(&format!(
+        "{MINIMAL_WORKFLOW}\n[engine]\ndispatch_order = \"rule\"\n"
+    ))
+    .unwrap();
+    assert_eq!(
+        spelled_out.dispatch_order(),
+        crate::scheduler::DispatchOrder::Rule
+    );
+
+    assert!(
+        WorkflowConfig::parse(&format!(
+            "{MINIMAL_WORKFLOW}\n[engine]\ndispatch_order = \"phases\"\n"
+        ))
+        .is_err(),
+        "an unknown dispatch_order must fail to parse"
+    );
+}

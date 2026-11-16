@@ -215,7 +215,12 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
     let blocked: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let rule_names: Vec<String> = order.to_vec();
     let rule_name_refs: Vec<&str> = rule_names.iter().map(String::as_str).collect();
-    let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_name_refs);
+    // `[engine] dispatch_order` (issue #1089): captured once up front, like
+    // `priority_map` below — both are ordering inputs over the initial
+    // instance set.
+    let dispatch = oxo_flow_core::scheduler::DispatchKeys::from_config(config);
+    let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_name_refs)
+        .with_dispatch(dispatch.clone());
     let mut order_set: std::collections::HashSet<String> = order.iter().cloned().collect();
     let run_started = std::time::Instant::now();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
@@ -359,10 +364,11 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
     // set minus already-submitted rules, then sorted by EFFECTIVE priority
     // — declared priority plus the rounds a rule has waited ready-but-not-
     // submitted (the aging counter of issue #123, cluster-side issue #134)
-    // — descending, ties broken by name for determinism. Priorities are
-    // captured ONCE up front: the config mutates mid-run across checkpoint
-    // re-entry (issue #78 P3), and re-reading priorities per round would
-    // drift the ordering.
+    // — descending, ties broken by the configured dispatch order (name by
+    // default, sample-aware under issue #1089). Priorities are captured
+    // ONCE up front: the config mutates mid-run across checkpoint re-entry
+    // (issue #78 P3), and re-reading priorities per round would drift the
+    // ordering.
     let priority_map: std::collections::HashMap<String, i32> = config
         .rules
         .iter()
@@ -550,6 +556,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             &submitted,
             &priority_map,
             &waited_rounds,
+            &dispatch,
         );
         // jobs was clamped to >= 1 at run_command entry, so a raw 0 can
         // never silently suppress all submissions (issue #136 fix 1).

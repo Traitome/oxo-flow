@@ -470,8 +470,17 @@
     },
     "engine": {
       "type": "object",
-      "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, and protected-tree drift baselines. Sizes use T/G/M/K suffixes; a bare number means MiB.",
+      "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, and ready-rule dispatch ordering. Sizes use T/G/M/K suffixes; a bare number means MiB.",
       "properties": {
+        "dispatch_order": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "sample"
+          ],
+          "default": "rule",
+          "description": "Tie-break for ready-rule dispatch when effective priorities are equal (priority stays the primary key). \"rule\" (default): alphabetical instance name — the historical phase-ordered behaviour. \"sample\": the instance's fan-out binding (sample/group/pair) first, then the rule's declaration order in the workflow file, so all ready stages of one sample are dispatched before the next sample's."
+        },
         "min_free_disk": {
           "type": "string",
           "description": "Free-space floor on the working directory's filesystem (e.g. \"5G\"). Dropping below logs a WARN diagnostic, deduplicated per crossing."

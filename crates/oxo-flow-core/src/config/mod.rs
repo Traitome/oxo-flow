@@ -804,6 +804,15 @@ impl WorkflowConfig {
         self.expansion_templates.get(instance).map(String::as_str)
     }
 
+    /// Ready-rule tie-break policy (`[engine] dispatch_order`, issue #1089).
+    /// An absent section or unset key keeps the historical name ordering.
+    pub fn dispatch_order(&self) -> crate::scheduler::DispatchOrder {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.dispatch_order)
+            .unwrap_or_default()
+    }
+
     /// Whether the rule's `when` condition evaluates FALSE against the
     /// merged config — the plan-time gate `run` applies (the same inputs
     /// the CLI's `when_condition_false` used before delegating here; typed
