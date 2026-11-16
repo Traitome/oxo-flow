@@ -448,7 +448,7 @@ plus per-state counts:
 
 ```bash
 $ oxo-flow cluster status
-Cluster: run .oxo-flow/runs/2026-01-01T12-00-00-000
+Cluster: run .oxo-flow/runs/latest
   completed 34   running 16   pending 11070   failed 1
   instance            job      state    elapsed    exit
   mixcr_all_0056507f  1400_1   running  2:24:11    -

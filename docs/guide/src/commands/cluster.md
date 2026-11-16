@@ -170,12 +170,12 @@ submission line to review, e.g. `sbatch cluster_scripts/*.sh`.
 In a workflow directory that has run through `run --profile <cluster>`,
 `status` reads the newest run directory (`.oxo-flow/runs/latest`, or
 `--run-dir <DIR>`), maps every scheduler id back to its rule instance
-through `jobs/<instance>/job.id`, overlays the live scheduler state, and
-prints one row per instance plus per-state counts:
+through `jobs/<instance>/job.id`, overlays the live scheduler state when the
+scheduler answers, and prints one row per instance plus per-state counts:
 
 ```bash
 $ oxo-flow cluster status
-Cluster: run .oxo-flow/runs/2026-01-01T12-00-00-000
+Cluster: run .oxo-flow/runs/latest
   completed 34   running 16   pending 11070   failed 1
   instance            job      state    elapsed    exit
   mixcr_all_0056507f  1400_1   running  2:24:11    -
@@ -227,9 +227,9 @@ With a run directory present, the argument may be a scheduler id or a
 rule-instance name (without one it is a scheduler id). Sources are tried in
 order:
 
-1. the engine's captured `<workdir>/logs/<instance>.out/.err` — present for
-   every submitted job, including array elements whose directive carries
-   `%A_%a` (SLURM) / `%I` (LSF);
+1. the engine's captured `<workdir>/logs/<instance>.out/.err` — the path
+   every rendered job script declares, including array elements whose
+   directive carries `%A_%a` (SLURM) / `%I` (LSF);
 2. the scheduler's accounting store (`sacct` / `qstat -x` / `qacct` /
    `bacct`);
 3. `scontrol show job <id>` on SLURM, which reads the controller's
