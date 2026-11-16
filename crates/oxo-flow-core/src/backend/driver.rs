@@ -992,7 +992,23 @@ impl BackendDriver {
                                             "",
                                             "FAILED",
                                         ));
-                                        return_record_failure(&mut records, &mut done, &f, &e);
+                                        let record =
+                                            return_record_failure(&mut records, &mut done, &f, &e);
+                                        // Issue #1083 F2: this failure record
+                                        // never reaches the main settle site
+                                        // below, so fire the settle hook here
+                                        // too — a crash between this settle
+                                        // and run() returning must not lose
+                                        // the verdict either.
+                                        if let Some(ref mut hook) = opts.on_settle
+                                            && let Err(e) = hook(record.clone()).await
+                                        {
+                                            tracing::warn!(
+                                                rule = %record.rule,
+                                                error = %e,
+                                                "checkpoint settle hook failed"
+                                            );
+                                        }
                                         emit(
                                             &mut events,
                                             "FAILED",
@@ -1461,13 +1477,17 @@ fn write_status_full(
     write_private(job_dir.join("status.json").as_path(), body.as_bytes())
 }
 
+/// Push a Failed record for a rule whose checkpoint re-entry hook errored
+/// (issue #78): the manifest is unreadable, so the rule counts as failed
+/// even though the backend reported the job Completed. Returns the record
+/// so the settle-hook fire sites can pass it to the caller's fold (#1083).
 fn return_record_failure(
     records: &mut Vec<JobRecord>,
     done: &mut HashMap<String, JobStatus>,
     f: &InFlight,
     e: &OxoFlowError,
-) {
-    records.push(JobRecord {
+) -> JobRecord {
+    let record = JobRecord {
         signal: None,
         rule: f.rule.clone(),
         status: JobStatus::Failed,
@@ -1483,8 +1503,10 @@ fn return_record_failure(
         max_rss_mb: None,
         cpu_seconds: None,
         caption: None,
-    });
+    };
+    records.push(record.clone());
     done.insert(f.rule.clone(), JobStatus::Failed);
+    record
 }
 
 /// Job-directory-safe rule names: alphanumerics plus `. _ - =` survive,
@@ -1780,6 +1802,166 @@ mod tests {
         let mut seen_rules: Vec<&str> = seen.iter().map(|(rule, _)| rule.as_str()).collect();
         seen_rules.sort_unstable();
         assert_eq!(seen_rules, ["a", "b"]);
+    }
+
+    #[test]
+    fn settle_hook_fires_for_checkpoint_hook_failure_record() {
+        // Issue #1083 F2: the re-entry-manifest failure path
+        // (`return_record_failure`) pushes a Failed record that never
+        // reaches the normal settle site — it must still pass the settle
+        // hook, or the caller's checkpoint fold misses it and a crash
+        // right after loses the verdict.
+        let fx = setup();
+        let workdir = fx.workdir.path();
+        let wf = workdir.join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            concat!(
+                "[workflow]\nname = \"cp\"\n",
+                "[[rules]]\nname = \"ck\"\nshell = \"echo hi > out.txt\"\n",
+                "output = [\"out.txt\"]\ncheckpoint = true\n",
+                "checkpoint_manifest = \"manifest.toml\"\n"
+            ),
+        )
+        .unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let mut plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+            },
+        );
+        let settled: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
+        let hook_settled = settled.clone();
+        let on_settle = move |record: JobRecord| {
+            let settled = hook_settled.clone();
+            Box::pin(async move {
+                settled.lock().unwrap().push(record.rule);
+                Ok(())
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        };
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: Some(Box::new(|_rule: &str| {
+                        Err(OxoFlowError::Config {
+                            message: "manifest missing".into(),
+                        })
+                    })),
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: Some(Box::new(on_settle)),
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rule, "ck");
+        assert_eq!(records[0].status, JobStatus::Failed);
+        assert!(
+            records[0]
+                .skip_reason
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("re-entry manifest:")
+        );
+        let settled = settled.lock().unwrap();
+        assert_eq!(
+            settled.as_slice(),
+            &["ck".to_string()],
+            "the re-entry failure record must pass the settle hook: {settled:?}"
+        );
+    }
+
+    #[test]
+    fn settle_hook_does_not_fire_for_signal_interrupted_records() {
+        // Interrupted records bypass the settle site (they are assembled in
+        // the cancel branch and returned via Err(Cancelled)); the caller
+        // keeps folding them through the Cancelled arm. Pin that contract:
+        // the hook must capture nothing on this path.
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Running));
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: Some(cancel_rx),
+            },
+        );
+        let settled: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
+        let hook_settled = settled.clone();
+        let on_settle = move |record: JobRecord| {
+            let settled = hook_settled.clone();
+            Box::pin(async move {
+                settled.lock().unwrap().push(record.rule);
+                Ok(())
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        };
+        cancel_tx
+            .send(Some(CancelSignal {
+                signal_name: "SIGINT",
+                signum: 2,
+            }))
+            .unwrap();
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(d.run(
+            &mut plan,
+            &to_run,
+            DriverOptions {
+                run_dir: fx.run_dir.path(),
+                on_checkpoint: None,
+                merge: None,
+                sensitive_values: &[],
+                on_submit: None,
+                on_settle: Some(Box::new(on_settle)),
+            },
+        ));
+        match result {
+            Err(OxoFlowError::Cancelled { records, .. }) => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].status, JobStatus::Failed);
+                assert_eq!(records[0].signal, Some(2));
+            }
+            other => panic!("expected Cancelled error, got: {other:?}"),
+        }
+        let settled = settled.lock().unwrap();
+        assert!(
+            settled.is_empty(),
+            "interrupted records must not pass the settle hook: {settled:?}"
+        );
+        assert_eq!(backend.state().lock().unwrap().cancelled, vec!["job-1"]);
     }
 
     #[test]

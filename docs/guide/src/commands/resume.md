@@ -81,6 +81,9 @@ oxo-flow resume .oxo-flow/checkpoint.json -j 4
   failed, in the resume banner — their stale failure entries
   from older checkpoints don't count toward the failed total, and the gate
   is re-judged on this resume anyway.
+- A rule recorded as still **`running`** in the checkpoint (its process was
+  killed mid-execution) is always re-run on resume — its partial outputs
+  never pass the freshness gate (issue #1083).
 - `--background` / `--detach` detaches the resumed run (see
   [run's Background runs section](run.md#background-runs-background)).
 
