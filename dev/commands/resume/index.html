@@ -4125,6 +4125,9 @@ recorded instance set exactly.</p>
   failed, in the resume banner — their stale failure entries
   from older checkpoints don't count toward the failed total, and the gate
   is re-judged on this resume anyway.</li>
+<li>A rule recorded as still <strong><code>running</code></strong> in the checkpoint (its process was
+  killed mid-execution) is always re-run on resume — its partial outputs
+  never pass the freshness gate (issue #1083).</li>
 <li><code>--background</code> / <code>--detach</code> detaches the resumed run (see
   <a href="../run/#background-runs-background">run's Background runs section</a>).</li>
 </ul>

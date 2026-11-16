@@ -6201,6 +6201,13 @@ poll-for-output-files shell loop. Stop a background run with <code>kill &lt;pid&
 <li><strong>Resuming failed runs</strong>: If a job fails or is interrupted, simply run <code>oxo-flow run</code> again. The engine will skip all rules already marked as <code>completed</code> and resume from the first pending task.</li>
 <li><strong>State Inspection</strong>: Use the <a href="../status/"><code>oxo-flow status</code></a> command to view the progress of a run from its checkpoint file.</li>
 </ol>
+<p>A rule whose latest execution record is a non-terminal <strong><code>running</code></strong> state
+(a crash or <code>kill</code> while the rule was in flight) never passes the freshness
+gate: on restart the engine re-runs it instead of trusting the
+partially-written outputs, so a killed job's half-finished outputs are not
+mistaken for finished work (issue #1083). Rules with no checkpoint entry at
+all keep their historical freshness semantics — output existence alone
+decides, as before (issue #77).</p>
 <h3 id="variant-checkpoints-checkpoint">Variant checkpoints (<code>--checkpoint</code>)<a class="headerlink" href="#variant-checkpoints-checkpoint" title="Permanent link">#</a></h3>
 <p>The default checkpoint is <strong>per workdir</strong> (<code>&lt;workdir&gt;/.oxo-flow/checkpoint.json</code>),
 so running a <code>pipeline.smoke.oxoflow</code> variant next to <code>pipeline.oxoflow</code> in
