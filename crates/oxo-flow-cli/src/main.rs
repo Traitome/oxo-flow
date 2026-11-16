@@ -71,7 +71,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
-    /// info, knowledge, schema, verify-data, license, provenance verify, and ai;
+    /// info, knowledge, schema, verify-data, license, provenance verify, ai,
+    /// and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -1164,8 +1165,10 @@ pub enum ClusterAction {
         #[arg(long, help = "Generate job scripts with dependency support")]
         with_dependencies: bool,
     },
-    /// Show the status of submitted cluster jobs. Without job IDs, list the
-    /// user's jobs the scheduler currently reports.
+    /// Show the status of submitted cluster jobs. When a run directory
+    /// exists (or --run-dir is given), show one row per rule instance,
+    /// resolving any job IDs through it; `--all` keeps the raw scheduler
+    /// view.
     Status {
         #[arg(
             short = 'b',
@@ -1173,8 +1176,22 @@ pub enum ClusterAction {
             help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
+        #[arg(
+            value_name = "JOB_IDS",
+            help = "One or more job IDs or rule-instance names"
+        )]
         job_ids: Vec<String>,
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Run directory written by `run --profile` (default: .oxo-flow/runs/latest when it exists)"
+        )]
+        run_dir: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "List the scheduler's raw job view instead of the current run directory"
+        )]
+        all: bool,
     },
     /// Cancel submitted cluster jobs.
     Cancel {
@@ -1187,7 +1204,9 @@ pub enum ClusterAction {
         #[arg(value_name = "JOB_IDS", required = true, help = "One or more job IDs")]
         job_ids: Vec<String>,
     },
-    /// Fetch logs for a submitted cluster job.
+    /// Fetch logs for a submitted cluster job or rule instance. Sources, in
+    /// order: the engine's run-dir capture, the accounting store, then the
+    /// scheduler's controller record.
     Logs {
         #[arg(
             short = 'b',
@@ -1195,8 +1214,16 @@ pub enum ClusterAction {
             help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_ID", help = "Cluster job ID")]
+        #[arg(value_name = "JOB_ID", help = "Cluster job ID or rule-instance name")]
         job_id: String,
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Run directory written by `run --profile` (default: .oxo-flow/runs/latest when it exists)"
+        )]
+        run_dir: Option<PathBuf>,
+        #[arg(long, value_name = "N", help = "Print only the last N log lines")]
+        tail: Option<usize>,
     },
 }
 
@@ -1269,6 +1296,14 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Ai { .. } => true,
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
         Commands::VerifyData { .. } => true,
+        // The monitoring half of the family emits JSON documents; `submit`
+        // still generates scripts and has no document to emit.
+        Commands::Cluster { action } => matches!(
+            action,
+            ClusterAction::Status { .. }
+                | ClusterAction::Cancel { .. }
+                | ClusterAction::Logs { .. }
+        ),
         _ => false,
     }
 }
@@ -2023,7 +2058,7 @@ async fn main() -> Result<()> {
             format,
             output,
         } => handle_export(workflow, format, output)?,
-        Commands::Cluster { action } => cluster_command(action).await?,
+        Commands::Cluster { action } => cluster_command(action, cli.json).await?,
         Commands::Batch {
             template,
             items,
@@ -2246,4 +2281,34 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod cluster_json_tests {
+    use super::{Cli, json_supported};
+    use clap::Parser;
+
+    #[test]
+    fn cluster_monitoring_subcommands_accept_global_json() {
+        // Issue #1085 C5: `cluster status|cancel|logs --json` used to be
+        // rejected by the global-flag support gate.
+        for args in [
+            vec!["oxo-flow", "cluster", "status", "--json"],
+            vec!["oxo-flow", "cluster", "cancel", "1", "--json"],
+            vec!["oxo-flow", "cluster", "logs", "1", "--json"],
+        ] {
+            let cli = Cli::try_parse_from(args.clone()).unwrap();
+            assert!(cli.json, "{args:?}");
+            assert!(json_supported(&cli.command), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn cluster_submit_still_rejects_json() {
+        // `submit` generates scripts; it has no JSON document to emit, and
+        // silently ignoring the flag would violate the gate's contract.
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "cluster", "submit", "wf.oxoflow", "--json"]).unwrap();
+        assert!(!json_supported(&cli.command));
+    }
 }

@@ -6,11 +6,17 @@ use oxo_flow_core::backend::cluster::elementwise_aftercorr;
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::ClusterAction;
 use crate::commands::print_banner;
+
+/// Human `cluster status` rows printed before truncation. A production run
+/// can hold >10k instances; the machine forms (TSV on a pipe, `--json`)
+/// always carry every instance.
+const STATUS_ROW_LIMIT: usize = 50;
 
 /// Resolve a `--backend` value, refusing to guess.
 ///
@@ -319,7 +325,346 @@ fn generate_submit_wrapper(
     Ok(script)
 }
 
-pub async fn cluster_command(action: ClusterAction) -> Result<()> {
+// ── Run-aware status/logs (issue #1085) ────────────────────────────────
+//
+// `run --profile <cluster>` records one directory per rule instance under
+// `.oxo-flow/runs/<stamp>/jobs/<instance>/`: `job.id` (scheduler id),
+// `job.sh`, and `status.json` (state + timestamps + accounting figures).
+// The engine also captures each job's stdout/stderr under
+// `<workdir>/logs/<instance>.out/.err`. These helpers read that state so
+// `cluster status|logs` can answer questions about a RUN, not just about
+// raw scheduler ids.
+
+/// One rule instance as recorded in a run directory.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RunInstance {
+    instance: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    submitted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_rss_mb: Option<u64>,
+}
+
+impl RunInstance {
+    /// Parse one `jobs/<instance>/` directory. Missing files degrade to
+    /// `unknown` rather than failing the whole report: a run directory is
+    /// written incrementally, so a half-created instance is expected.
+    fn from_dir(name: String, dir: &Path) -> RunInstance {
+        let job_id = std::fs::read_to_string(dir.join("job.id"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let status: Option<serde_json::Value> = std::fs::read_to_string(dir.join("status.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let text = |key: &str| {
+            status
+                .as_ref()
+                .and_then(|v| v.get(key))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let number = |key: &str| {
+            status
+                .as_ref()
+                .and_then(|v| v.get(key))
+                .and_then(|v| v.as_u64())
+        };
+        RunInstance {
+            instance: name,
+            job_id: job_id.or_else(|| text("job_id")),
+            state: text("state")
+                .unwrap_or_else(|| "unknown".to_string())
+                .to_ascii_lowercase(),
+            submitted_at: text("submitted_at"),
+            finished_at: text("finished_at"),
+            exit_code: status
+                .as_ref()
+                .and_then(|v| v.get("exit_code"))
+                .and_then(serde_json::Value::as_i64),
+            elapsed_secs: number("elapsed_secs"),
+            cpu_seconds: status
+                .as_ref()
+                .and_then(|v| v.get("cpu_seconds"))
+                .and_then(serde_json::Value::as_f64),
+            max_rss_mb: number("max_rss_mb"),
+        }
+    }
+
+    /// Human elapsed figure: the accounting store's own when present,
+    /// otherwise the recorded submit/finish span. `-` when neither exists
+    /// (a live job's `status.json` carries no timestamps until it settles).
+    fn elapsed_label(&self) -> String {
+        if let Some(secs) = self.elapsed_secs {
+            return format_duration(secs);
+        }
+        let (Some(submitted), Some(finished)) = (&self.submitted_at, &self.finished_at) else {
+            return "-".to_string();
+        };
+        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
+        match (parse(submitted), parse(finished)) {
+            (Some(a), Some(b)) => {
+                let secs = (b - a).num_seconds().max(0);
+                format_duration(secs as u64)
+            }
+            _ => "-".to_string(),
+        }
+    }
+}
+
+fn format_duration(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    format!("{h}:{m:02}:{s:02}")
+}
+
+/// Load every instance recorded under `<run-dir>/jobs/`, sorted by name.
+fn load_run_instances(run_dir: &Path) -> Result<Vec<RunInstance>> {
+    let jobs = run_dir.join("jobs");
+    let entries = std::fs::read_dir(&jobs)
+        .with_context(|| format!("cannot read run directory {}", jobs.display()))?;
+    let mut instances = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("cannot read an entry of {}", jobs.display()))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let dir = entry.path();
+        // Array submissions also create `jobs/<template>/chunk-N/` bookkeeping
+        // directories. Only real instances carry `job.id` or `status.json`
+        // directly; a container without either is not a rule instance.
+        if !dir.join("job.id").exists() && !dir.join("status.json").exists() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        instances.push(RunInstance::from_dir(name, &dir));
+    }
+    instances.sort_by(|a, b| a.instance.cmp(&b.instance));
+    Ok(instances)
+}
+
+/// The workflow's default run directory: `run --profile` repoints
+/// `.oxo-flow/runs/latest` after every invocation. `None` when this
+/// directory has never hosted a cluster run.
+fn default_run_dir() -> Option<PathBuf> {
+    let latest = PathBuf::from(".oxo-flow").join("runs").join("latest");
+    latest.is_dir().then_some(latest)
+}
+
+/// The workdir a run directory belongs to (`<workdir>/.oxo-flow/runs/<stamp>`).
+fn run_workdir(run_dir: &Path) -> Option<PathBuf> {
+    let canonical = run_dir.canonicalize().ok()?;
+    let runs = canonical.parent()?;
+    if runs.file_name()? != "runs" {
+        return None;
+    }
+    let dot_oxo = runs.parent()?;
+    if dot_oxo.file_name()? != ".oxo-flow" {
+        return None;
+    }
+    dot_oxo.parent().map(Path::to_path_buf)
+}
+
+/// Scheduler log paths declared by a rendered job script.
+///
+/// Array scripts carry scheduler placeholders (`%A_%a` for SLURM, `%I` for
+/// LSF) rather than the instance name, so the per-element file can only be
+/// found by substituting this element's ids.
+fn declared_log_paths(script: &str, backend: ClusterBackend, element_id: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        let value = match backend {
+            ClusterBackend::Slurm => trimmed
+                .strip_prefix("#SBATCH --output=")
+                .or_else(|| trimmed.strip_prefix("#SBATCH --error=")),
+            ClusterBackend::Pbs => trimmed
+                .strip_prefix("#PBS -o ")
+                .or_else(|| trimmed.strip_prefix("#PBS -e ")),
+            ClusterBackend::Sge => trimmed
+                .strip_prefix("#$ -o ")
+                .or_else(|| trimmed.strip_prefix("#$ -e ")),
+            ClusterBackend::Lsf => trimmed
+                .strip_prefix("#BSUB -o ")
+                .or_else(|| trimmed.strip_prefix("#BSUB -e ")),
+            _ => None,
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        paths.push(PathBuf::from(resolve_array_placeholders(
+            value.trim(),
+            backend,
+            element_id,
+        )));
+    }
+    paths
+}
+
+/// Substitute the scheduler's array placeholders with one element's ids.
+fn resolve_array_placeholders(pattern: &str, backend: ClusterBackend, element_id: &str) -> String {
+    match backend {
+        // SLURM element ids are `<base>_<index>`; `%A` is the base and `%a`
+        // the index.
+        ClusterBackend::Slurm => {
+            let (base, index) = element_id
+                .rsplit_once('_')
+                .filter(|(_, index)| index.parse::<u32>().is_ok())
+                .unwrap_or((element_id, ""));
+            pattern.replace("%A", base).replace("%a", index)
+        }
+        // LSF element ids are `<base>[<index>]`; `%I` is the index.
+        ClusterBackend::Lsf => {
+            let index = element_id
+                .rsplit_once('[')
+                .and_then(|(_, rest)| rest.strip_suffix(']'))
+                .unwrap_or("");
+            pattern.replace("%I", index)
+        }
+        // PBS/SGE append their own per-subjob suffixes to a shared path,
+        // which cannot be predicted from the directive alone.
+        _ => pattern.to_string(),
+    }
+}
+
+/// One instance's engine-captured stdout/stderr, if the scheduler wrote it.
+///
+/// Candidates, in order: `logs/<instance>.out/.err` (plain jobs), then the
+/// paths declared by this instance's copied `job.sh` (arrays, where the
+/// directive carries `%A_%a`/`%I` rather than the instance name). The
+/// capture is the primary `cluster logs` source: it exists on every site,
+/// including those without Slurm accounting.
+fn read_captured_logs(
+    workdir: &Path,
+    instance: &str,
+    instance_dir: Option<&Path>,
+    backend: ClusterBackend,
+) -> Option<String> {
+    let logs_dir = workdir.join("logs");
+    let mut candidates = vec![
+        logs_dir.join(format!("{instance}.out")),
+        logs_dir.join(format!("{instance}.err")),
+    ];
+    if let Some(dir) = instance_dir
+        && let Ok(script) = std::fs::read_to_string(dir.join("job.sh"))
+    {
+        let element_id = std::fs::read_to_string(dir.join("job.id"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        for path in declared_log_paths(&script, backend, &element_id) {
+            let full = if path.is_absolute() {
+                path
+            } else {
+                workdir.join(path)
+            };
+            if !candidates.contains(&full) {
+                candidates.push(full);
+            }
+        }
+    }
+    let mut sections: Vec<String> = Vec::new();
+    for path in candidates {
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && !text.trim().is_empty()
+        {
+            sections.push(format!("==> {} <==\n{}", path.display(), text));
+        }
+    }
+    (!sections.is_empty()).then(|| sections.join("\n"))
+}
+
+/// Apply `--tail N`: keep the last N lines, preserving a trailing newline.
+fn tail_lines(text: &str, tail: Option<usize>) -> String {
+    let Some(n) = tail else {
+        return text.to_string();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    let mut out = lines[start..].join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// The first non-empty candidate in fallback order.
+///
+/// Pure so the `cluster logs` chain — run-dir capture → accounting →
+/// `scontrol` — is unit-testable without a live scheduler. A failed
+/// command contributes `None`: the next source is tried, never an error
+/// exit before the chain is exhausted (issue #1085 C3).
+fn first_log_source(
+    attempts: Vec<(&'static str, Option<String>)>,
+) -> Option<(&'static str, String)> {
+    attempts
+        .into_iter()
+        .find_map(|(source, text)| text.filter(|t| !t.trim().is_empty()).map(|t| (source, t)))
+}
+
+/// Overlay live scheduler states onto the run-directory states. The
+/// driver writes `PENDING` at submission and updates it only when the job
+/// settles, so without this a running job would render as pending.
+fn overlay_scheduler_states(instances: &mut [RunInstance], report: &[(String, BackendJobStatus)]) {
+    for instance in instances.iter_mut() {
+        let Some(job_id) = instance.job_id.as_deref() else {
+            continue;
+        };
+        let Some((_, status)) = report.iter().find(|(id, _)| id == job_id) else {
+            continue;
+        };
+        if *status != BackendJobStatus::Unknown {
+            instance.state = status.label().to_string();
+        }
+    }
+}
+
+/// Per-state counts for the status summary, keyed alphabetically.
+fn state_counts(instances: &[RunInstance]) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for instance in instances {
+        *counts.entry(instance.state.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// The scheduler ids for a set of instances (deduplicated, order-preserved).
+fn instance_job_ids(instances: &[RunInstance]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for id in instances.iter().filter_map(|i| i.job_id.clone()) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// One machine-readable status line: the fields a script needs, tab-separated.
+fn instance_tsv(instance: &RunInstance) -> String {
+    format!(
+        "{}\t{}\t{}\t{}\t{}",
+        instance.instance,
+        instance.job_id.as_deref().unwrap_or("-"),
+        instance.state,
+        instance.elapsed_label(),
+        instance
+            .exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    )
+}
+
+pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
     print_banner();
     match action {
         ClusterAction::Submit {
@@ -641,8 +986,119 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             }
         }
 
-        ClusterAction::Status { backend, job_ids } => {
+        ClusterAction::Status {
+            backend,
+            job_ids,
+            run_dir,
+            all,
+        } => {
             let cluster_backend = resolve_backend(backend.as_deref())?;
+
+            // Run-aware mode (issue #1085): an explicit `--run-dir`, or the
+            // workflow's newest run directory when one exists. `--all` and
+            // checkouts that never hosted a cluster run keep the raw
+            // scheduler view.
+            if !all && (run_dir.is_some() || default_run_dir().is_some()) {
+                let dir = run_dir
+                    .clone()
+                    .or_else(default_run_dir)
+                    .expect("run-aware mode implies a directory");
+                let mut instances = load_run_instances(&dir)?;
+                if !job_ids.is_empty() {
+                    instances.retain(|instance| {
+                        job_ids.iter().any(|query| {
+                            query == &instance.instance
+                                || instance.job_id.as_deref() == Some(query.as_str())
+                        })
+                    });
+                }
+
+                // Best-effort live-state overlay (PENDING is written at
+                // submission; the driver only updates it on settlement).
+                // A scheduler failure must not hide the recorded state.
+                let ids = instance_job_ids(&instances);
+                if !ids.is_empty() {
+                    let report = tokio::task::spawn_blocking(move || {
+                        query_status(&cluster_backend, &ids, |program, args| {
+                            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                            let output = std::process::Command::new(program)
+                                .args(&arg_refs)
+                                .output()
+                                .map_err(|e| anyhow::anyhow!("Failed to execute {program}: {e}"))?;
+                            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                        })
+                    })
+                    .await
+                    .context("status query task failed")?;
+                    if let Ok(report) = report {
+                        overlay_scheduler_states(&mut instances, &report);
+                    }
+                }
+
+                let counts = state_counts(&instances);
+                if json {
+                    let doc = serde_json::json!({
+                        "run_dir": dir.display().to_string(),
+                        "counts": counts,
+                        "instances": instances,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&doc)?);
+                    return Ok(());
+                }
+
+                eprintln!("{} run {}", "Cluster:".bold().cyan(), dir.display());
+                if counts.is_empty() {
+                    eprintln!("  no rule instances recorded");
+                } else {
+                    let summary: Vec<String> = counts
+                        .iter()
+                        .map(|(state, count)| format!("{state} {count}"))
+                        .collect();
+                    eprintln!("  {}", summary.join("   "));
+                }
+                if !instances.is_empty() {
+                    let width = instances
+                        .iter()
+                        .map(|i| i.instance.len())
+                        .max()
+                        .unwrap_or(8)
+                        .max("instance".len());
+                    eprintln!(
+                        "  {:<width$}  {:<8}  {:<10}  {:<10}  exit",
+                        "instance", "job", "state", "elapsed"
+                    );
+                    for instance in instances.iter().take(STATUS_ROW_LIMIT) {
+                        eprintln!(
+                            "  {:<width$}  {:<8}  {:<10}  {:<10}  {}",
+                            instance.instance,
+                            instance.job_id.as_deref().unwrap_or("-"),
+                            instance.state,
+                            instance.elapsed_label(),
+                            instance
+                                .exit_code
+                                .map(|code| code.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                        );
+                    }
+                    if instances.len() > STATUS_ROW_LIMIT {
+                        eprintln!(
+                            "  … {} more (use --json for the full list)",
+                            instances.len() - STATUS_ROW_LIMIT
+                        );
+                    }
+                }
+
+                // Machine-readable form on stdout (one tab-separated row
+                // per instance). In a TTY the human table above is the
+                // whole answer — printing the same list twice was issue
+                // #1085 C1.
+                if !std::io::stdout().is_terminal() {
+                    for instance in &instances {
+                        println!("{}", instance_tsv(instance));
+                    }
+                }
+                return Ok(());
+            }
 
             if job_ids.is_empty() {
                 // No ids: answer "what of MINE is in the queue right now" —
@@ -690,9 +1146,20 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 }
                 // Machine-readable form on stdout, one `<id>\t<state>` per
                 // job — human output stays on stderr, the codebase-wide
-                // convention.
-                for (id, status) in &listing {
-                    println!("{id}\t{}", status.label());
+                // convention. A TTY keeps only the human listing (issue
+                // #1085 C1: the same list printed twice).
+                if json {
+                    let jobs: Vec<serde_json::Value> = listing
+                        .iter()
+                        .map(|(id, status)| {
+                            serde_json::json!({"job_id": id, "state": status.label()})
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&jobs)?);
+                } else if !std::io::stdout().is_terminal() {
+                    for (id, status) in &listing {
+                        println!("{id}\t{}", status.label());
+                    }
                 }
                 return Ok(());
             }
@@ -775,9 +1242,18 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 eprintln!("{}", status_line(id, *status));
             }
             // Machine-readable form on stdout, one `<id>\t<state>` per job —
-            // human output stays on stderr, the codebase-wide convention.
-            for (id, status) in &report {
-                println!("{id}\t{}", status.label());
+            // human output stays on stderr, the codebase-wide convention. A
+            // TTY keeps only the human listing (issue #1085 C1).
+            if json {
+                let jobs: Vec<serde_json::Value> = report
+                    .iter()
+                    .map(|(id, status)| serde_json::json!({"job_id": id, "state": status.label()}))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&jobs)?);
+            } else if !std::io::stdout().is_terminal() {
+                for (id, status) in &report {
+                    println!("{id}\t{}", status.label());
+                }
             }
         }
 
@@ -794,6 +1270,39 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 "Cluster:".bold().cyan(),
                 oxo_flow_core::plural(job_ids.len(), "job", "jobs")
             );
+
+            if json {
+                let ids_for_cmd = job_ids.clone();
+                let output = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(cancel_cmd)
+                        .args(&ids_for_cmd)
+                        .output()
+                })
+                .await
+                .context("cancel task failed")?;
+                match output {
+                    Ok(out) if out.status.success() => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "command": cancel_cmd,
+                                "job_ids": job_ids,
+                                "success": true,
+                                "output": String::from_utf8_lossy(&out.stdout),
+                            }))?
+                        );
+                    }
+                    Ok(out) => anyhow::bail!(
+                        "Command failed with exit code: {}",
+                        out.status.code().unwrap_or(-1)
+                    ),
+                    Err(e) => {
+                        eprintln!("  Is {} installed on this system?", cancel_cmd);
+                        anyhow::bail!("Failed to execute cancel command: {}", e);
+                    }
+                }
+                return Ok(());
+            }
 
             let cancel_status = {
                 let job_ids = job_ids.clone();
@@ -823,13 +1332,53 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             }
         }
 
-        ClusterAction::Logs { backend, job_id } => {
-            // Issue #67 §4: the last CLI stub. SLURM fetches a precise
-            // accounting record (`sacct --format=JobID,State,ExitCode,
-            // Elapsed,MaxRSS`); PBS/SGE/LSF stay best-effort (qstat -f /
-            // qacct / bacct) — the same per-scheduler contract the
-            // BackendDriver uses.
+        ClusterAction::Logs {
+            backend,
+            job_id,
+            run_dir,
+            tail,
+        } => {
+            // Issue #1085 C3: `logs` used to REQUIRE the accounting store
+            // (`sacct`) and fail outright on sites without slurmdbd. The
+            // chain is now run-dir capture → accounting → scontrol, and the
+            // argument may be a rule instance as well as a scheduler id.
             let cluster_backend = resolve_backend(backend.as_deref())?;
+            let dir = run_dir.clone().or_else(default_run_dir);
+            let mut instance: Option<RunInstance> = None;
+            let mut resolved_id = job_id.clone();
+            if let Some(dir) = &dir
+                && let Ok(instances) = load_run_instances(dir)
+            {
+                instance = instances
+                    .iter()
+                    .find(|i| i.instance == job_id)
+                    .or_else(|| {
+                        instances
+                            .iter()
+                            .find(|i| i.job_id.as_deref() == Some(job_id.as_str()))
+                    })
+                    .cloned();
+                if let Some(found) = &instance
+                    && let Some(id) = &found.job_id
+                {
+                    resolved_id = id.clone();
+                }
+            }
+
+            // 1. The engine's own capture. Present for every submitted job,
+            //    accounting or not.
+            let captured = instance.as_ref().and_then(|found| {
+                let dir = dir.as_deref()?;
+                let workdir = run_workdir(dir)?;
+                read_captured_logs(
+                    &workdir,
+                    &found.instance,
+                    Some(&dir.join("jobs").join(&found.instance)),
+                    cluster_backend,
+                )
+            });
+
+            // 2. Accounting store (sacct / qstat -x / qacct / bacct).
             let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
                 cluster_backend,
                 oxo_flow_core::cluster::ClusterJobConfig {
@@ -840,17 +1389,50 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     extra_args: Vec::new(),
                 },
             );
-            let logs = executor
-                .logs(&job_id)
-                .await
-                .context("failed to fetch job logs")?;
-            if logs.trim().is_empty() {
-                eprintln!(
-                    "{} No accounting records found for job ID {}",
-                    "Warning:".bold().yellow(),
-                    job_id
+            let accounting = executor.logs(&resolved_id).await.ok();
+
+            // 3. The controller's in-memory record (SLURM), which survives
+            //    briefly after a job leaves the queue and needs no slurmdbd.
+            let scontrol = if cluster_backend == ClusterBackend::Slurm {
+                tokio::process::Command::new("scontrol")
+                    .args(["show", "job", &resolved_id])
+                    .output()
+                    .await
+                    .ok()
+                    .filter(|out| out.status.success())
+                    .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+            } else {
+                None
+            };
+
+            let Some((source, logs)) = first_log_source(vec![
+                ("run-dir", captured),
+                ("accounting", accounting),
+                ("scontrol", scontrol),
+            ]) else {
+                anyhow::bail!(
+                    "no logs found for '{job_id}' — the run directory has no captured \
+                     logs (try --run-dir) and the scheduler returned neither an \
+                     accounting nor a controller record"
+                );
+            };
+            let logs = tail_lines(&logs, tail);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "job_id": resolved_id,
+                        "instance": instance.as_ref().map(|i| i.instance.clone()),
+                        "source": source,
+                        "logs": logs,
+                    }))?
                 );
             } else {
+                eprintln!(
+                    "{} logs for {} (source: {source})",
+                    "Cluster:".bold().cyan(),
+                    resolved_id
+                );
                 println!("{logs}");
             }
         }
@@ -861,8 +1443,10 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cluster_command, generate_submit_wrapper, query_my_jobs, query_status,
-        resolve_backend_with, status_line,
+        cluster_command, first_log_source, generate_submit_wrapper, instance_tsv,
+        load_run_instances, overlay_scheduler_states, query_my_jobs, query_status,
+        read_captured_logs, resolve_backend_with, run_workdir, state_counts, status_line,
+        tail_lines,
     };
     use crate::ClusterAction;
     use oxo_flow_core::backend::BackendJobStatus;
@@ -874,7 +1458,7 @@ mod tests {
     fn run(action: ClusterAction) -> anyhow::Result<()> {
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(cluster_command(action))
+            .block_on(cluster_command(action, false))
     }
 
     fn workflow_file(dir: &std::path::Path) -> PathBuf {
@@ -952,6 +1536,8 @@ mod tests {
             ClusterAction::Status {
                 backend: Some("slrm".to_string()),
                 job_ids: vec!["1".to_string()],
+                run_dir: None,
+                all: false,
             },
             ClusterAction::Cancel {
                 backend: Some("torque".to_string()),
@@ -960,6 +1546,8 @@ mod tests {
             ClusterAction::Logs {
                 backend: Some("ge".to_string()),
                 job_id: "1".to_string(),
+                run_dir: None,
+                tail: None,
             },
         ];
         for action in cases {
@@ -1305,6 +1893,150 @@ mod tests {
             wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
                 || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
             "missing merge.sh degrades to afterok:\n{wrapper}"
+        );
+    }
+
+    // ── Run-aware status/logs (issue #1085) ───────────────────────────
+
+    /// A realistic `run --profile` layout: two instances under
+    /// `.oxo-flow/runs/<stamp>/jobs/`, plus the engine's captured logs.
+    fn run_dir_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let wf = root.path().join("wf");
+        let run_dir = wf.join(".oxo-flow/runs/2026-01-01T00-00-00-000");
+        std::fs::create_dir_all(run_dir.join("jobs/mixcr_all_S1")).unwrap();
+        std::fs::create_dir_all(run_dir.join("jobs/trust4_all_S1")).unwrap();
+        std::fs::create_dir_all(wf.join("logs")).unwrap();
+        std::fs::write(run_dir.join("jobs/mixcr_all_S1/job.id"), "1400_1\n").unwrap();
+        std::fs::write(
+            run_dir.join("jobs/mixcr_all_S1/status.json"),
+            r#"{"state":"PENDING","job_id":"1400_1","command":"mixcr run"}"#,
+        )
+        .unwrap();
+        std::fs::write(run_dir.join("jobs/trust4_all_S1/job.id"), "1401_2").unwrap();
+        std::fs::write(
+            run_dir.join("jobs/trust4_all_S1/status.json"),
+            r#"{"state":"COMPLETED","job_id":"1401_2","submitted_at":"2026-01-01T00:00:00.000Z","finished_at":"2026-01-01T00:02:05.000Z","exit_code":0,"elapsed_secs":125}"#,
+        )
+        .unwrap();
+        std::fs::write(wf.join("logs/mixcr_all_S1.out"), "alignment 93%\n").unwrap();
+        std::fs::write(wf.join("logs/mixcr_all_S1.err"), "warn: low reads\n").unwrap();
+        // Array-submission bookkeeping: a template container with a chunk
+        // script and no per-instance files. It must not surface as a rule
+        // instance.
+        let chunk = run_dir.join("jobs/mixcr_template/chunk-1");
+        std::fs::create_dir_all(&chunk).unwrap();
+        std::fs::write(chunk.join("job.sh"), "#!/bin/bash\ntrue\n").unwrap();
+        (root, wf, run_dir)
+    }
+
+    #[test]
+    fn run_dir_maps_instances_to_scheduler_ids() {
+        // Issue #1085 C2: `jobs/<instance>/job.id` already records the
+        // mapping — status just never used it.
+        let (_root, wf, run_dir) = run_dir_fixture();
+        let mut instances = load_run_instances(&run_dir).unwrap();
+        assert_eq!(
+            instances.len(),
+            2,
+            "array chunk containers are not instances: {instances:?}"
+        );
+        assert_eq!(instances[0].instance, "mixcr_all_S1");
+        assert_eq!(instances[0].job_id.as_deref(), Some("1400_1"));
+        assert_eq!(instances[0].state, "pending");
+        assert_eq!(instances[1].exit_code, Some(0));
+        assert_eq!(instances[1].elapsed_label(), "0:02:05");
+        assert_eq!(
+            run_workdir(&run_dir),
+            Some(wf.canonicalize().unwrap()),
+            "the run directory must resolve back to its workflow workdir"
+        );
+
+        // The live scheduler overlays only its own verdicts; an Unknown
+        // answer (job already left the queue) leaves the recorded state.
+        overlay_scheduler_states(
+            &mut instances,
+            &[("1400_1".to_string(), BackendJobStatus::Running)],
+        );
+        assert_eq!(instances[0].state, "running");
+
+        let counts = state_counts(&instances);
+        assert_eq!(counts.get("running"), Some(&1));
+        assert_eq!(counts.get("completed"), Some(&1));
+        assert!(
+            instance_tsv(&instances[0]).starts_with("mixcr_all_S1\t1400_1\trunning\t"),
+            "machine row must carry instance/id/state: {}",
+            instance_tsv(&instances[0])
+        );
+    }
+
+    #[test]
+    fn captured_logs_prefer_child_output_and_apply_tail() {
+        // Issue #1085 C3: the engine writes logs/<instance>.out/.err for
+        // every job, accounting or not.
+        let (_root, wf, _run_dir) = run_dir_fixture();
+        let logs = read_captured_logs(&wf, "mixcr_all_S1", None, ClusterBackend::Slurm).unwrap();
+        assert!(logs.contains("alignment 93%"));
+        assert!(logs.contains("warn: low reads"));
+        assert!(read_captured_logs(&wf, "no_such_instance", None, ClusterBackend::Slurm).is_none());
+        assert_eq!(tail_lines("a\nb\nc\n", Some(2)), "b\nc\n");
+        assert_eq!(tail_lines("a\nb\n", None), "a\nb\n");
+    }
+
+    #[test]
+    fn array_instance_logs_resolve_from_the_rendered_script() {
+        // Real deployments submit thousands of sibling instances as
+        // scheduler arrays; the log directive then carries `%A_%a`, not the
+        // instance name (issue #1085 C3 — the capture must still be found).
+        let root = tempfile::tempdir().unwrap();
+        let wf = root.path().join("wf");
+        let instance_dir = wf.join(".oxo-flow/runs/2026-01-01/jobs/mixcr_all_S1");
+        std::fs::create_dir_all(&instance_dir).unwrap();
+        std::fs::create_dir_all(wf.join("logs")).unwrap();
+        std::fs::write(instance_dir.join("job.id"), "1401_2").unwrap();
+        std::fs::write(
+            instance_dir.join("job.sh"),
+            "#!/bin/bash\n#SBATCH --output=logs/mixcr.%A_%a.out\n#SBATCH --error=logs/mixcr.%A_%a.err\n",
+        )
+        .unwrap();
+        std::fs::write(wf.join("logs/mixcr.1401_2.out"), "array element output\n").unwrap();
+
+        let logs = read_captured_logs(
+            &wf,
+            "mixcr_all_S1",
+            Some(&instance_dir),
+            ClusterBackend::Slurm,
+        )
+        .unwrap();
+        assert!(logs.contains("array element output"), "{logs}");
+        assert!(
+            logs.contains("mixcr.1401_2.out"),
+            "source must be named: {logs}"
+        );
+    }
+
+    #[test]
+    fn logs_fallback_chain_skips_failed_sources() {
+        // Issue #1085 C3: without sacct the command must fall through to
+        // the next source, not exit with "failed to fetch job logs".
+        assert_eq!(
+            first_log_source(vec![
+                ("run-dir", Some("captured".into())),
+                ("accounting", Some("sacct".into())),
+            ]),
+            Some(("run-dir", "captured".to_string()))
+        );
+        assert_eq!(
+            first_log_source(vec![
+                ("run-dir", None),
+                ("accounting", Some("   ".into())),
+                ("scontrol", Some("JobState=RUNNING".into())),
+            ]),
+            Some(("scontrol", "JobState=RUNNING".to_string()))
+        );
+        assert_eq!(
+            first_log_source(vec![("run-dir", None), ("accounting", None)]),
+            None
         );
     }
 }

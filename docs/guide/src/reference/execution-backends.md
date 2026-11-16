@@ -64,7 +64,9 @@ and performs real submission and tracking:
   including array elements like `12345_12`.
 - `poll` — `squeue -j <ids> --noheader -o "%i|%T"` and per-backend
   equivalents.
-- `cancel` / `logs` — `scancel` / `sacct` and equivalents.
+- `cancel` / `logs` — `scancel` / scheduler records (`sacct` and
+  equivalents; `cluster logs` additionally falls back to `scontrol show
+  job` on SLURM).
 
 ## `BackendDriver`
 

@@ -11,6 +11,8 @@ use common::workspace_bin;
 
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 const WORKFLOW: &str = r#"
 [workflow]
@@ -360,5 +362,233 @@ fn cluster_profile_without_backend_is_an_actionable_error() {
     assert!(
         stderr.contains("backend") && stderr.contains("slurm"),
         "error should name the missing key and a valid value:\n{stderr}"
+    );
+}
+
+// ── Run-aware monitoring and crash recovery (issues #1085, #1083) ──────
+
+/// Run any CLI command in the workflow dir with the mock scheduler on PATH.
+fn oxo_flow(dir: &Path, args: &[&str]) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        fixtures_dir().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    StdCommand::new(workspace_bin("oxo-flow"))
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("MOCK_SCHEDULER_DIR", dir.join("sched"))
+        .output()
+        .unwrap()
+}
+
+/// Spawn `run --profile slurm`, keeping the child handle so a test can kill
+/// the driver mid-run.
+fn spawn_run(dir: &Path) -> std::process::Child {
+    let path = format!(
+        "{}:{}",
+        fixtures_dir().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    StdCommand::new(workspace_bin("oxo-flow"))
+        .args(["run", "wf.oxoflow", "--profile", "slurm"])
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("MOCK_SCHEDULER_DIR", dir.join("sched"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+fn wait_for(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    predicate()
+}
+
+fn rule_run_status(checkpoint: &Path, rule: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(checkpoint).ok()?;
+    let ck: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    ck["rule_runs"][rule]["status"].as_str().map(str::to_string)
+}
+
+/// The log path an engine-rendered script declares, with array placeholders
+/// resolved for one element — an independent oracle for the CLI's resolver.
+fn declared_log_path(script: &str, element_id: &str) -> PathBuf {
+    let directive = script
+        .lines()
+        .find_map(|line| line.trim_start().strip_prefix("#SBATCH --output="))
+        .expect("job.sh must declare a SLURM output path");
+    let (base, index) = element_id.rsplit_once('_').unwrap_or((element_id, ""));
+    PathBuf::from(directive.trim().replace("%A", base).replace("%a", index))
+}
+
+/// Simulated scheduler, real engine: a full `run --profile` writes the run
+/// directory, and `cluster status|logs` must answer from it — including the
+/// array `%A_%a` log path and id-to-instance mapping (issue #1085).
+#[test]
+fn cluster_status_and_logs_read_a_real_run_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    let out = run(dir.path(), &["--profile", "slurm"]);
+    assert!(
+        out.status.success(),
+        "cluster run failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The two `align` samples are grouped into one scheduler array; each
+    // per-instance script declares `%A_%a`, not the instance name.
+    let instance = "align_batch_S1";
+    let job_dir = dir.path().join(".oxo-flow/runs/latest/jobs").join(instance);
+    let script = std::fs::read_to_string(job_dir.join("job.sh")).unwrap();
+    let job_id = std::fs::read_to_string(job_dir.join("job.id"))
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        job_id.contains('_'),
+        "expected an array element id, got {job_id}"
+    );
+    let log_path = declared_log_path(&script, &job_id);
+    assert!(
+        !log_path.to_string_lossy().contains('%'),
+        "array placeholders must be resolved: {}",
+        log_path.display()
+    );
+    std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+    std::fs::write(dir.path().join(&log_path), "alignment marker 93%\n").unwrap();
+
+    // status --json: the run-aware document maps every instance.
+    let status = oxo_flow(dir.path(), &["--json", "cluster", "status"]);
+    assert!(
+        status.status.success(),
+        "status failed:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert!(
+        doc["run_dir"]
+            .as_str()
+            .unwrap()
+            .contains(".oxo-flow/runs/latest"),
+        "{doc}"
+    );
+    assert_eq!(doc["counts"]["completed"], 4, "{doc}");
+    let instances = doc["instances"].as_array().unwrap();
+    assert_eq!(instances.len(), 4, "{doc}");
+    assert!(
+        instances
+            .iter()
+            .all(|i| i["state"] == "completed" && i["job_id"].is_string()),
+        "every instance needs its scheduler id and terminal state: {doc}"
+    );
+
+    // logs by instance name reads the captured file first, even though the
+    // directive carried array placeholders.
+    let logs = oxo_flow(dir.path(), &["cluster", "logs", instance]);
+    assert!(
+        logs.status.success(),
+        "logs failed:\n{}",
+        String::from_utf8_lossy(&logs.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&logs.stdout);
+    assert!(stdout.contains("alignment marker 93%"), "{stdout}");
+    assert!(String::from_utf8_lossy(&logs.stderr).contains("source: run-dir"));
+
+    // ... and a scheduler id maps back to the same instance.
+    let by_id = oxo_flow(dir.path(), &["--json", "cluster", "logs", &job_id]);
+    assert!(
+        by_id.status.success(),
+        "logs by id failed:\n{}",
+        String::from_utf8_lossy(&by_id.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&by_id.stdout).unwrap();
+    assert_eq!(doc["source"], "run-dir", "{doc}");
+    assert_eq!(doc["instance"], instance, "{doc}");
+    assert!(
+        doc["logs"].as_str().unwrap().contains("alignment marker"),
+        "{doc}"
+    );
+
+    // --tail keeps only the requested trailing lines.
+    std::fs::write(dir.path().join(&log_path), "first\nsecond\nthird\n").unwrap();
+    let tailed = oxo_flow(dir.path(), &["cluster", "logs", instance, "--tail", "1"]);
+    let stdout = String::from_utf8_lossy(&tailed.stdout);
+    assert!(
+        stdout.contains("third") && !stdout.contains("first"),
+        "{stdout}"
+    );
+}
+
+/// Simulated scheduler, real driver crash: kill the driver while its job has
+/// written a partial output, then restart. The rule must be submitted again
+/// (issue #1083), and the restarted run must finish it.
+#[test]
+fn killed_job_with_partial_output_is_requeued_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    std::fs::write(
+        dir.path().join("wf.oxoflow"),
+        r#"
+[workflow]
+name = "crash"
+
+[[rules]]
+name = "stream"
+output = ["out/done.txt"]
+shell = "mkdir -p out && echo started > out/done.txt && { [ -f FAST ] || sleep 10; } && echo done >> out/done.txt"
+"#,
+    )
+    .unwrap();
+
+    let mut child = spawn_run(dir.path());
+    let partial = dir.path().join("out/done.txt");
+    let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
+    let observed = wait_for(Duration::from_secs(30), || {
+        partial.exists() && rule_run_status(&checkpoint, "stream").as_deref() == Some("running")
+    });
+    child.kill().expect("kill the driver");
+    let _ = child.wait();
+    assert!(
+        observed,
+        "driver never recorded a running submission together with the partial output"
+    );
+
+    let partial_text = std::fs::read_to_string(&partial).unwrap();
+    assert!(partial_text.contains("started"), "{partial_text}");
+    assert!(
+        !partial_text.contains("done"),
+        "the killed job must not have finished: {partial_text}"
+    );
+
+    // Re-run with the slow path disabled: the rule must be submitted again,
+    // not skipped because its partial output exists.
+    std::fs::write(dir.path().join("FAST"), "").unwrap();
+    let restarted = run(dir.path(), &["--profile", "slurm"]);
+    assert!(
+        restarted.status.success(),
+        "restart failed:\n{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let events =
+        std::fs::read_to_string(dir.path().join(".oxo-flow/runs/latest/events.jsonl")).unwrap();
+    assert!(
+        events.lines().any(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            v["t"] == "SUBMITTED" && v["rule"] == "stream"
+        }),
+        "the interrupted rule must be submitted again:\n{events}"
+    );
+    assert!(
+        std::fs::read_to_string(&partial).unwrap().contains("done"),
+        "the restarted run must complete the rule"
     );
 }
