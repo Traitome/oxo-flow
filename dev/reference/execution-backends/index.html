@@ -4075,7 +4075,9 @@ and performs real submission and tracking:</p>
   including array elements like <code>12345_12</code>.</li>
 <li><code>poll</code> — <code>squeue -j &lt;ids&gt; --noheader -o "%i|%T"</code> and per-backend
   equivalents.</li>
-<li><code>cancel</code> / <code>logs</code> — <code>scancel</code> / <code>sacct</code> and equivalents.</li>
+<li><code>cancel</code> / <code>logs</code> — <code>scancel</code> / scheduler records (<code>sacct</code> and
+  equivalents; <code>cluster logs</code> additionally falls back to <code>scontrol show
+  job</code> on SLURM).</li>
 </ul>
 <h2 id="backenddriver"><code>BackendDriver</code><a class="headerlink" href="#backenddriver" title="Permanent link">#</a></h2>
 <p><code>oxo_flow_core::backend::driver::BackendDriver</code> executes a <code>ScheduledPlan</code>

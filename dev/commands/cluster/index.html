@@ -2112,10 +2112,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fetch-a-jobs-scheduler-record" class="md-nav__link">
+  <a href="#fetch-a-jobs-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fetch a job's scheduler record
+        Fetch a job's logs
       
     </span>
   </a>
@@ -4408,10 +4408,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fetch-a-jobs-scheduler-record" class="md-nav__link">
+  <a href="#fetch-a-jobs-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fetch a job's scheduler record
+        Fetch a job's logs
       
     </span>
   </a>
@@ -4610,7 +4610,7 @@ or cancel/collect jobs after an interrupted run.</p>
 </tr>
 <tr>
 <td><code>status</code></td>
-<td>Show the status of submitted cluster jobs</td>
+<td>Show submitted cluster jobs — per rule instance when a <code>run --profile</code> directory exists, raw scheduler view with <code>--all</code></td>
 </tr>
 <tr>
 <td><code>cancel</code></td>
@@ -4618,7 +4618,7 @@ or cancel/collect jobs after an interrupted run.</p>
 </tr>
 <tr>
 <td><code>logs</code></td>
-<td>Fetch the scheduler's job record (SLURM: <code>sacct</code> accounting output) for a submitted cluster job</td>
+<td>Fetch a job's logs — engine-captured output first, then the accounting store, then the scheduler's controller record</td>
 </tr>
 </tbody>
 </table>
@@ -4799,35 +4799,61 @@ rather than on every sample's.</p>
 <code>(dry-run) generating … job scripts … nothing is submitted</code> and ends with the
 submission line to review, e.g. <code>sbatch cluster_scripts/*.sh</code>.</p>
 <h3 id="check-job-status">Check job status<a class="headerlink" href="#check-job-status" title="Permanent link">#</a></h3>
-<p>With no ids, <code>status</code> lists <strong>your</strong> queued jobs (all jobs the scheduler
-reports for your user) — the natural first question after a submit:</p>
+<p>In a workflow directory that has run through <code>run --profile &lt;cluster&gt;</code>,
+<code>status</code> reads the newest run directory (<code>.oxo-flow/runs/latest</code>, or
+<code>--run-dir &lt;DIR&gt;</code>), maps every scheduler id back to its rule instance
+through <code>jobs/&lt;instance&gt;/job.id</code>, overlays the live scheduler state when the
+scheduler answers, and prints one row per instance plus per-state counts:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span><span class="nb">jobs</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Cluster:<span class="w"> </span>run<span class="w"> </span>.oxo-flow/runs/latest
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>completed<span class="w"> </span><span class="m">34</span><span class="w">   </span>running<span class="w"> </span><span class="m">16</span><span class="w">   </span>pending<span class="w"> </span><span class="m">11070</span><span class="w">   </span>failed<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>instance<span class="w">            </span>job<span class="w">      </span>state<span class="w">    </span>elapsed<span class="w">    </span><span class="nb">exit</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span>mixcr_all_0056507f<span class="w">  </span>1400_1<span class="w">   </span>running<span class="w">  </span><span class="m">2</span>:24:11<span class="w">    </span>-
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span>trust4_all_01ea7cb3<span class="w"> </span>1400_2<span class="w">   </span>running<span class="w">  </span><span class="m">0</span>:12:02<span class="w">    </span>-
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span>standardize_1218<span class="w">    </span>1401_1<span class="w">   </span>pending<span class="w">  </span>-<span class="w">          </span>-
 </span></code></pre></div>
-<p>Pass the ids the submit/run step printed to answer exactly those — including
-finished ones, which are settled from the scheduler's accounting store:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+<p><code>--json</code> emits the same document (<code>run_dir</code>, <code>counts</code>, <code>instances[]</code>). The
+human table is capped at 50 rows; TSV on a pipe and <code>--json</code> always carry
+every instance. Pass ids or instance names to answer exactly those — they
+are resolved through the run directory when one exists. Ids that belong to
+another run are not answered in this mode; use <code>--all</code> for the raw
+scheduler view.</p>
+<p><code>--all</code>, or a checkout with no run directory, keeps the raw scheduler view.
+With no ids that lists <strong>your</strong> queued jobs — the natural first question
+after a plain <code>cluster submit</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>--all
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span><span class="nb">jobs</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
+</span></code></pre></div>
+<p>Finished jobs are settled from the scheduler's accounting store:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>--all<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
 </span></code></pre></div>
 <h3 id="cancel-specific-jobs">Cancel specific jobs<a class="headerlink" href="#cancel-specific-jobs" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
 </span></code></pre></div>
-<h3 id="fetch-a-jobs-scheduler-record">Fetch a job's scheduler record<a class="headerlink" href="#fetch-a-jobs-scheduler-record" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>logs<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span>
+<p><code>cancel --json</code> reports the command, the job ids, a success flag, and the
+scheduler's output.</p>
+<h3 id="fetch-a-jobs-logs">Fetch a job's logs<a class="headerlink" href="#fetch-a-jobs-logs" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>logs<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span>
 </span></code></pre></div>
-<p>SLURM prints the job's <code>sacct</code> record
-(<code>JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU</code>); PBS/SGE/LSF are
-best-effort (<code>qstat -f</code> / <code>qacct</code> / <code>bacct</code>). Requires the
-scheduler's client commands on <code>PATH</code>.</p>
-<p><code>cluster logs</code> on SLURM reads <code>sacct</code> directly and does NOT fall back to
-<code>scontrol</code>: on clusters without slurmdbd (accounting storage disabled),
-<code>sacct</code> exits non-zero and this command errors with
-<code>'sacct' exited 1: Slurm accounting storage is disabled</code> (live-verified on
-such a cluster). The <code>scontrol show job &lt;id&gt;</code> fallback mentioned below
-belongs to run-time <strong>settlement</strong> inside <code>oxo-flow run</code>, not to this
-command.</p>
+<p>With a run directory present, the argument may be a scheduler id or a
+rule-instance name (without one it is a scheduler id). Sources are tried in
+order:</p>
+<ol>
+<li>the engine's captured <code>&lt;workdir&gt;/logs/&lt;instance&gt;.out/.err</code> — the path
+   every rendered job script declares, including array elements whose
+   directive carries <code>%A_%a</code> (SLURM) / <code>%I</code> (LSF);</li>
+<li>the scheduler's accounting store (<code>sacct</code> / <code>qstat -x</code> / <code>qacct</code> /
+   <code>bacct</code>);</li>
+<li><code>scontrol show job &lt;id&gt;</code> on SLURM, which reads the controller's
+   in-memory record after the job leaves the queue.</li>
+</ol>
+<p>Because the captured output is tried first, <code>cluster logs</code> works on
+clusters with accounting storage disabled — a failed <code>sacct</code> falls through
+instead of ending the command. <code>--tail N</code> prints only the last N lines and
+<code>--json</code> emits <code>{job_id, instance, source, logs}</code>.</p>
 <p>On SLURM clusters <strong>without slurmdbd</strong>, settlement in <code>oxo-flow run</code> falls
 back to <code>scontrol show job &lt;id&gt;</code>, which reads the controller's in-memory
 record (state + exit code; no Elapsed/RSS/CPU). A job that has left both the
@@ -4838,18 +4864,6 @@ via the rule's output files.</p>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <h3 id="basic-output">Basic Output<a class="headerlink" href="#basic-output" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow v0.30.1 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>Cluster: Generating slurm job scripts for 5 rule instances
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  ✓ cluster_scripts/fastqc.sh
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  ✓ cluster_scripts/trim_reads.sh
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  ✓ cluster_scripts/bwa_align_S1.sh
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  ✓ cluster_scripts/bwa_align_S2.sh
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  ✓ cluster_scripts/bwa_align_S3.sh
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>Done: 5 scripts written to cluster_scripts
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>  Submit with: sbatch cluster_scripts/*.sh
-</span></code></pre></div>
-<h3 id="with-dependencies-output">With Dependencies Output<a class="headerlink" href="#with-dependencies-output" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>oxo-flow v0.30.1 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>Cluster: Generating slurm job scripts for 5 rule instances
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  ✓ cluster_scripts/fastqc.sh
@@ -4857,10 +4871,22 @@ via the rule's output files.</p>
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  ✓ cluster_scripts/bwa_align_S1.sh
 </span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>  ✓ cluster_scripts/bwa_align_S2.sh
 </span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>  ✓ cluster_scripts/bwa_align_S3.sh
-</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>  ✓ cluster_scripts/submit.sh (dependency-aware submit script)
-</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>
-</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>Done: 6 scripts written to cluster_scripts
-</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>  Submit with: bash cluster_scripts/submit.sh
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>Done: 5 scripts written to cluster_scripts
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>  Submit with: sbatch cluster_scripts/*.sh
+</span></code></pre></div>
+<h3 id="with-dependencies-output">With Dependencies Output<a class="headerlink" href="#with-dependencies-output" title="Permanent link">#</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow v0.30.1 — Rust-native bioinformatics pipeline engine
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>Cluster: Generating slurm job scripts for 5 rule instances
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>  ✓ cluster_scripts/fastqc.sh
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>  ✓ cluster_scripts/trim_reads.sh
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>  ✓ cluster_scripts/bwa_align_S1.sh
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>  ✓ cluster_scripts/bwa_align_S2.sh
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>  ✓ cluster_scripts/bwa_align_S3.sh
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>  ✓ cluster_scripts/submit.sh (dependency-aware submit script)
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>Done: 6 scripts written to cluster_scripts
+</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>  Submit with: bash cluster_scripts/submit.sh
 </span></code></pre></div>
 <hr />
 <h2 id="generated-script-example">Generated Script Example<a class="headerlink" href="#generated-script-example" title="Permanent link">#</a></h2>
@@ -4871,61 +4897,61 @@ directives; <code>--walltime</code> — or a rule's <code>time_limit</code>, whi
 run directory so relative output paths stay inside it — <code>#SBATCH --chdir</code> on SLURM,
 a body <code>cd</code> on PBS, <code>#$ -wd</code> on SGE, <code>#BSUB -cwd</code> on LSF):</p>
 <h3 id="slurm-script">SLURM Script<a class="headerlink" href="#slurm-script" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1">#SBATCH --chdir='/abs/path/to/workdir'</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="c1">#SBATCH --job-name=bwa_align</span>
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1">#SBATCH --cpus-per-task=16</span>
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="c1">#SBATCH --mem=32G</span>
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="c1">#SBATCH --partition=compute</span>
-</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1">#SBATCH --output=logs/bwa_align.out</span>
-</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="c1">#SBATCH --error=logs/bwa_align.err</span>
-</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>
-</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>
-</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1">#SBATCH --chdir='/abs/path/to/workdir'</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="c1">#SBATCH --job-name=bwa_align</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1">#SBATCH --cpus-per-task=16</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">#SBATCH --mem=32G</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="c1">#SBATCH --partition=compute</span>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="c1">#SBATCH --output=logs/bwa_align.out</span>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="c1">#SBATCH --error=logs/bwa_align.err</span>
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>
+</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>
+</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="pbstorque-script">PBS/Torque Script<a class="headerlink" href="#pbstorque-script" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1">#PBS -N bwa_align</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="c1">#PBS -l nodes=1:ppn=16,mem=32G</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1">#PBS -o logs/bwa_align.out</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">#PBS -e logs/bwa_align.err</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="nb">cd</span><span class="w"> </span><span class="s1">'/abs/path/to/workdir'</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1">#PBS -N bwa_align</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="c1">#PBS -l nodes=1:ppn=16,mem=32G</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1">#PBS -o logs/bwa_align.out</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">#PBS -e logs/bwa_align.err</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="nb">cd</span><span class="w"> </span><span class="s1">'/abs/path/to/workdir'</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="sge-script">SGE Script<a class="headerlink" href="#sge-script" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1">#$ -wd '/abs/path/to/workdir'</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="c1">#$ -N bwa_align</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1">#$ -pe smp 16</span>
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">#$ -l h_vmem=32G</span>
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="c1">#$ -o logs/bwa_align.out</span>
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="c1">#$ -e logs/bwa_align.err</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>
-</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1">#$ -wd '/abs/path/to/workdir'</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1">#$ -N bwa_align</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1">#$ -pe smp 16</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="c1">#$ -l h_vmem=32G</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="c1">#$ -o logs/bwa_align.out</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1">#$ -e logs/bwa_align.err</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <h3 id="lsf-script">LSF Script<a class="headerlink" href="#lsf-script" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1">#BSUB -cwd '/abs/path/to/workdir'</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1">#BSUB -J bwa_align</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1">#BSUB -n 16</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="c1">#BSUB -M 33554432</span>
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1">#BSUB -o logs/bwa_align.out</span>
-</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="c1">#BSUB -e logs/bwa_align.err</span>
-</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
-</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>
-</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="c1">#BSUB -cwd '/abs/path/to/workdir'</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="c1">#BSUB -J bwa_align</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1">#BSUB -n 16</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="c1">#BSUB -M 33554432</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1">#BSUB -o logs/bwa_align.out</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="c1">#BSUB -e logs/bwa_align.err</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a>conda<span class="w"> </span>run<span class="w"> </span>--no-capture-output<span class="w"> </span>-n<span class="w"> </span>bwa_env<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq &gt; aligned.sam'</span>
 </span></code></pre></div>
 <p>Memory is emitted as an explicit KB figure (<code>32G</code> → <code>33554432</code>) in both
 <code>-R 'rusage[mem=…]'</code> and <code>-M</code>: LSF's documented mem_spec unit set is
@@ -4941,44 +4967,44 @@ the read-only mount rules are specified once in
 <a href="../../how-to/run-on-cluster/#environment-wrapping">Environment Wrapping</a>.</p>
 <h3 id="dependency-aware-submit-script">Dependency-Aware Submit Script<a class="headerlink" href="#dependency-aware-submit-script" title="Permanent link">#</a></h3>
 <p>When using <code>--with-dependencies</code>, oxo-flow generates a <code>submit.sh</code> wrapper that handles job submission order:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="ch">#!/bin/bash</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="c1"># Auto-generated dependency-aware submit script</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="c1"># Generated by oxo-flow</span>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="nb">set</span><span class="w"> </span>-e
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Track job IDs</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nb">declare</span><span class="w"> </span>-A<span class="w"> </span>JOB_IDS
-</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>
-</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="c1"># Submit one script and echo its scheduler job id.</span>
-</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a>oxo_submit<span class="o">()</span><span class="w"> </span><span class="o">{</span>
-</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span><span class="nb">local</span><span class="w"> </span>out<span class="w"> </span>id
-</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">  </span><span class="nv">out</span><span class="o">=</span><span class="k">$(</span>sbatch<span class="w"> </span>--parsable<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="k">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nv">$?</span>
-</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="w">  </span><span class="nv">id</span><span class="o">=</span><span class="si">${</span><span class="nv">out</span><span class="p">%%;*</span><span class="si">}</span>
-</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="nv">$id</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
-</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a><span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"oxo-flow: cannot parse job id from: </span><span class="nv">$out</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
-</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="m">1</span>
-</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a><span class="w">  </span><span class="k">fi</span>
-</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$id</span><span class="s2">"</span>
-</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20" href="#__codelineno-22-20"></a><span class="o">}</span>
-</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a>
-</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting fastqc...'</span>
-</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a>JOB_IDS<span class="o">[</span>fastqc<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>cluster_scripts/fastqc.sh<span class="k">)</span>
-</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted fastqc as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a>
-</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting trim_reads...'</span>
-</span><span id="__span-22-27"><a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
-</span><span id="__span-22-28"><a id="__codelineno-22-28" name="__codelineno-22-28" href="#__codelineno-22-28"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted trim_reads as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="__span-22-29"><a id="__codelineno-22-29" name="__codelineno-22-29" href="#__codelineno-22-29"></a>
-</span><span id="__span-22-30"><a id="__codelineno-22-30" name="__codelineno-22-30" href="#__codelineno-22-30"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting bwa_align...'</span>
-</span><span id="__span-22-31"><a id="__codelineno-22-31" name="__codelineno-22-31" href="#__codelineno-22-31"></a>JOB_IDS<span class="o">[</span>bwa_align<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/bwa_align.sh<span class="k">)</span>
-</span><span id="__span-22-32"><a id="__codelineno-22-32" name="__codelineno-22-32" href="#__codelineno-22-32"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted bwa_align as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[bwa_align]</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="__span-22-33"><a id="__codelineno-22-33" name="__codelineno-22-33" href="#__codelineno-22-33"></a>
-</span><span id="__span-22-34"><a id="__codelineno-22-34" name="__codelineno-22-34" href="#__codelineno-22-34"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'All jobs submitted successfully!'</span>
-</span><span id="__span-22-35"><a id="__codelineno-22-35" name="__codelineno-22-35" href="#__codelineno-22-35"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Job ID mapping:'</span>
-</span><span id="__span-22-36"><a id="__codelineno-22-36" name="__codelineno-22-36" href="#__codelineno-22-36"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="p">!JOB_IDS[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-</span><span id="__span-22-37"><a id="__codelineno-22-37" name="__codelineno-22-37" href="#__codelineno-22-37"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"  </span><span class="nv">$name</span><span class="s2">: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[</span><span class="nv">$name</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="__span-22-38"><a id="__codelineno-22-38" name="__codelineno-22-38" href="#__codelineno-22-38"></a><span class="k">done</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="c1"># Auto-generated dependency-aware submit script</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="c1"># Generated by oxo-flow</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1"># Track job IDs</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="nb">declare</span><span class="w"> </span>-A<span class="w"> </span>JOB_IDS
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a><span class="c1"># Submit one script and echo its scheduler job id.</span>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>oxo_submit<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a><span class="w">  </span><span class="nb">local</span><span class="w"> </span>out<span class="w"> </span>id
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a><span class="w">  </span><span class="nv">out</span><span class="o">=</span><span class="k">$(</span>sbatch<span class="w"> </span>--parsable<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="k">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nv">$?</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a><span class="w">  </span><span class="nv">id</span><span class="o">=</span><span class="si">${</span><span class="nv">out</span><span class="p">%%;*</span><span class="si">}</span>
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="nv">$id</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a><span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"oxo-flow: cannot parse job id from: </span><span class="nv">$out</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17" href="#__codelineno-23-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="m">1</span>
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18" href="#__codelineno-23-18"></a><span class="w">  </span><span class="k">fi</span>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19" href="#__codelineno-23-19"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$id</span><span class="s2">"</span>
+</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a><span class="o">}</span>
+</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a>
+</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting fastqc...'</span>
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>JOB_IDS<span class="o">[</span>fastqc<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>cluster_scripts/fastqc.sh<span class="k">)</span>
+</span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24" href="#__codelineno-23-24"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted fastqc as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a>
+</span><span id="__span-23-26"><a id="__codelineno-23-26" name="__codelineno-23-26" href="#__codelineno-23-26"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting trim_reads...'</span>
+</span><span id="__span-23-27"><a id="__codelineno-23-27" name="__codelineno-23-27" href="#__codelineno-23-27"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
+</span><span id="__span-23-28"><a id="__codelineno-23-28" name="__codelineno-23-28" href="#__codelineno-23-28"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted trim_reads as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-23-29"><a id="__codelineno-23-29" name="__codelineno-23-29" href="#__codelineno-23-29"></a>
+</span><span id="__span-23-30"><a id="__codelineno-23-30" name="__codelineno-23-30" href="#__codelineno-23-30"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting bwa_align...'</span>
+</span><span id="__span-23-31"><a id="__codelineno-23-31" name="__codelineno-23-31" href="#__codelineno-23-31"></a>JOB_IDS<span class="o">[</span>bwa_align<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/bwa_align.sh<span class="k">)</span>
+</span><span id="__span-23-32"><a id="__codelineno-23-32" name="__codelineno-23-32" href="#__codelineno-23-32"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted bwa_align as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[bwa_align]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-23-33"><a id="__codelineno-23-33" name="__codelineno-23-33" href="#__codelineno-23-33"></a>
+</span><span id="__span-23-34"><a id="__codelineno-23-34" name="__codelineno-23-34" href="#__codelineno-23-34"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'All jobs submitted successfully!'</span>
+</span><span id="__span-23-35"><a id="__codelineno-23-35" name="__codelineno-23-35" href="#__codelineno-23-35"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Job ID mapping:'</span>
+</span><span id="__span-23-36"><a id="__codelineno-23-36" name="__codelineno-23-36" href="#__codelineno-23-36"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="p">!JOB_IDS[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-23-37"><a id="__codelineno-23-37" name="__codelineno-23-37" href="#__codelineno-23-37"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"  </span><span class="nv">$name</span><span class="s2">: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[</span><span class="nv">$name</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-23-38"><a id="__codelineno-23-38" name="__codelineno-23-38" href="#__codelineno-23-38"></a><span class="k">done</span>
 </span></code></pre></div>
 <p>Different backends use different dependency syntax:</p>
 <table>
@@ -5011,7 +5037,7 @@ the read-only mount rules are specified once in
 <p>When a downstream rule has exactly one upstream dependency and BOTH scripts
 declare the same straight <code>#SBATCH --array=START-END</code> range (typically via
 <code>--extra-arg "--array=1-N"</code>), the wrapper chains them element-wise:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>aftercorr:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>aftercorr:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
 </span></code></pre></div>
 <p><code>aftercorr</code> pairs array elements by index, so element 1 of the downstream
 starts as soon as element 1 of the upstream finishes instead of waiting for
@@ -5024,18 +5050,18 @@ suffix does not block the match — it bounds concurrency, not the index set.</p
 <h2 id="cluster-submission-run-profile">Cluster submission (<code>run --profile</code>)<a class="headerlink" href="#cluster-submission-run-profile" title="Permanent link">#</a></h2>
 <p>A profile that also carries a <code>[cluster]</code> block makes <code>run --profile</code> submit
 to a scheduler instead of executing locally:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># profiles/slurm.toml</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="k">[cluster]</span>
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">      </span><span class="c1"># required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">        </span><span class="c1"># a rule's own time_limit wins</span>
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="w">           </span><span class="c1"># jobs in flight at once</span>
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim directives</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a><span class="k">[config]</span>
-</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># profiles/slurm.toml</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="k">[cluster]</span>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">      </span><span class="c1"># required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">        </span><span class="c1"># a rule's own time_limit wins</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="w">           </span><span class="c1"># jobs in flight at once</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim directives</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a><span class="k">[config]</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12" href="#__codelineno-25-12"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
 </span></code></pre></div>
 <p>Keys the profile omits fall back to the driver defaults: <code>max_submitted</code>
 50, <code>max_array_size</code> 1001, <code>poll_interval</code> 5s — the authoritative
@@ -5043,10 +5069,10 @@ to a scheduler instead of executing locally:</p>
 carries the complete knob list. <code>extra_args</code> entries are
 emitted as scheduler directives verbatim and are not validated — a typo
 reaches the scheduler as written.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>
-</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="c1"># one-off override of the profile's queue cap</span>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm<span class="w"> </span>--max-submitted<span class="w"> </span><span class="m">100</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="c1"># one-off override of the profile's queue cap</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--profile<span class="w"> </span>slurm<span class="w"> </span>--max-submitted<span class="w"> </span><span class="m">100</span>
 </span></code></pre></div>
 <p>Profiles are looked up in the <strong>workflow's own</strong> <code>profiles/</code> directory —
 there is no user- or system-level profile location, so a site profile shared
@@ -5061,7 +5087,10 @@ jobs, and dependencies are chained per instance. The run submits at most
 <code>max_submitted</code> jobs at a time, tracks them to completion, and writes the
 checkpoint exactly as a local run does — <code>status</code>, <code>resume</code>, and re-run
 invalidation behave identically, and a second <code>run --profile slurm</code> with
-nothing changed submits nothing.</p>
+nothing changed submits nothing. Terminal verdicts are folded into the
+checkpoint as each job settles, and a rule still recorded as
+<code>running</code>/<code>pending</code> after a driver crash is re-queued rather than trusted
+because its output file exists (a killed job can leave a partial file).</p>
 <p>The run's scratch directory (<code>[engine] tmp_dir</code> / <code>OXO_FLOW_TMPDIR</code>, issue</p>
 <h1 id="907-travels-onto-the-cluster-too-every-submitted-job-script-exports">907) travels onto the cluster too: every submitted job script exports<a class="headerlink" href="#907-travels-onto-the-cluster-too-every-submitted-job-script-exports" title="Permanent link">#</a></h1>
 <p><code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> to the resolved directory before the rule's command
@@ -5084,10 +5113,10 @@ writing fixed filenames collide across concurrent instances. See
 scheduler-visible directive (threads, memory, time limit, partition,
 account, GPU spec, environment, workdir) are grouped into <strong>one scheduler
 array</strong> automatically:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">[cluster]</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
-</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
-</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="w">                        </span><span class="c1"># scatter groups are chunked into several arrays</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">                        </span><span class="c1"># scatter groups are chunked into several arrays</span>
 </span></code></pre></div>
 <ul>
 <li>One submission instead of N <code>sbatch</code>/<code>qsub</code> calls — one queue entry that
@@ -5110,34 +5139,34 @@ arrays element-wise (see
 <a href="#element-wise-array-chaining-slurm">Element-wise array chaining (SLURM)</a>).</p>
 <h3 id="run-directory-layout">Run directory layout<a class="headerlink" href="#run-directory-layout" title="Permanent link">#</a></h3>
 <p>Each run leaves a directory you can navigate with ordinary tools:</p>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="go">  events.jsonl                        # append-only submit/complete/fail log</span>
-</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="go">  index.json                          # array index → instance name</span>
-</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="go">  jobs/&lt;rule&gt;/job.sh                  # the exact script submitted</span>
-</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="go">  jobs/&lt;rule&gt;/job.id                  # scheduler job id</span>
-</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="go">  jobs/&lt;rule&gt;/status.json</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="go">  events.jsonl                        # append-only submit/complete/fail log</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="go">  index.json                          # array index → instance name</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="go">  jobs/&lt;rule&gt;/job.sh                  # the exact script submitted</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="go">  jobs/&lt;rule&gt;/job.id                  # scheduler job id</span>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="go">  jobs/&lt;rule&gt;/status.json</span>
 </span></code></pre></div>
 <p>Every <code>events.jsonl</code> line carries an RFC 3339 <code>ts</code>, so the log reconstructs
 a timeline rather than just an ordering:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"SUBMITTED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"COMPLETED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"SUBMITTED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"COMPLETED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="what-a-finished-job-records">What a finished job records<a class="headerlink" href="#what-a-finished-job-records" title="Permanent link">#</a></h3>
 <p>When a job leaves the queue, oxo-flow reads the scheduler's accounting store
 (<code>sacct</code>, <code>qstat -x -f</code>, <code>qacct</code>, <code>bacct</code>) and writes what it found into
 <code>status.json</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="p">{</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"4812345"</span><span class="p">,</span>
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa mem ref.fa data/S1.fq &gt; aln/S1.bam"</span><span class="p">,</span>
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="w">  </span><span class="nt">"submitted_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span>
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">  </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span>
-</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="w">  </span><span class="nt">"queue_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span>
-</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a><span class="w">  </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="w">  </span><span class="nt">"elapsed_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">1894</span><span class="p">,</span>
-</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="w">  </span><span class="nt">"max_rss_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">24680</span><span class="p">,</span>
-</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="w">  </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">14203</span>
-</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="p">{</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"4812345"</span><span class="p">,</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa mem ref.fa data/S1.fq &gt; aln/S1.bam"</span><span class="p">,</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">  </span><span class="nt">"submitted_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">  </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="w">  </span><span class="nt">"queue_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a><span class="w">  </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="w">  </span><span class="nt">"elapsed_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">1894</span><span class="p">,</span>
+</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a><span class="w">  </span><span class="nt">"max_rss_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">24680</span><span class="p">,</span>
+</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="w">  </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">14203</span>
+</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12" href="#__codelineno-30-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>queue_wait_secs</code> is submit-to-finish minus the scheduler's own elapsed
 time — the driver never observes the moment a job starts, so the split
@@ -5163,13 +5192,14 @@ Signals are watched on the cluster path only; the local executor has its
 own (pre-existing) signal handling.</p>
 <p>What remains out of scope is <em>re-attaching</em>: a driver that died without a
 signal (crash, OOM) cannot adopt the scheduler job ids of a previous
-process. Those jobs keep running under the scheduler, and a subsequent
+process. Those jobs keep running under the scheduler; a subsequent
 <code>resume</code> / <code>--resume-failed</code> re-queues their rules from the checkpoint's
-RUNNING entries rather than reusing the live job ids — completed work on
-shared storage is still honored by the invalidation analysis. Until a
-re-attach path exists, use <code>oxo-flow cluster status</code> (no ids: lists your
-queued jobs) and <code>oxo-flow cluster cancel &lt;JOB_ID&gt;...</code> to inspect or clean
-up jobs orphaned by a crashed driver.</p>
+RUNNING entries rather than reusing the live job ids — verdicts the driver
+had already observed settling were folded into the checkpoint, so their work
+is not repeated. Until a
+re-attach path exists, use <code>oxo-flow cluster status</code> (run-aware; <code>--all</code>
+for the raw scheduler view) and <code>oxo-flow cluster cancel &lt;JOB_ID&gt;...</code> to
+inspect or clean up jobs orphaned by a crashed driver.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

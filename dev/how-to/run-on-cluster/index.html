@@ -4892,19 +4892,34 @@ for the HPC serve mode.</p>
 <p>Or use oxo-flow's status command with a checkpoint file:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/checkpoint.json
 </span></code></pre></div>
-<p><code>oxo-flow cluster status</code> answers two questions. <strong>With no ids</strong> it lists
-every job the scheduler currently reports for your user — the natural check
-right after a submit:</p>
+<p><code>oxo-flow cluster status</code> answers two questions. For a deployment that runs
+through <code>run --profile &lt;cluster&gt;</code>, it reads the newest run directory
+(<code>.oxo-flow/runs/latest</code>, or <code>--run-dir &lt;DIR&gt;</code>) and prints one row per rule
+instance — mapping scheduler ids back through <code>jobs/&lt;instance&gt;/job.id</code> —
+plus per-state counts:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span><span class="nb">jobs</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>Cluster:<span class="w"> </span>run<span class="w"> </span>.oxo-flow/runs/latest
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>completed<span class="w"> </span><span class="m">34</span><span class="w">   </span>running<span class="w"> </span><span class="m">16</span><span class="w">   </span>pending<span class="w"> </span><span class="m">11070</span><span class="w">   </span>failed<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>instance<span class="w">            </span>job<span class="w">      </span>state<span class="w">    </span>elapsed<span class="w">    </span><span class="nb">exit</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span>mixcr_all_0056507f<span class="w">  </span>1400_1<span class="w">   </span>running<span class="w">  </span><span class="m">2</span>:24:11<span class="w">    </span>-
+</span></code></pre></div>
+<p><code>--json</code> emits the same document for dashboards. For logs,
+<code>oxo-flow cluster logs &lt;id-or-instance&gt;</code> reads the engine-captured
+<code>logs/&lt;instance&gt;.out/.err</code> before the accounting store, so it works on sites
+without <code>slurmdbd</code>; <code>--tail N</code> trims the output.</p>
+<p><strong>With <code>--all</code> or no run directory</strong> it falls back to the raw scheduler
+view. With no ids it lists every job the scheduler currently reports for
+your user — the natural check right after a plain <code>cluster submit</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>--all
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span><span class="nb">jobs</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
 </span></code></pre></div>
 <p><strong>With ids</strong> (the ones submit/run printed) it answers exactly those,
 settling finished jobs from the scheduler's accounting store:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span><span class="m">12345</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span><span class="m">12345</span>
 </span></code></pre></div>
 <p>Every cluster action resolves its backend the same way: the <code>--backend</code> /
 <code>-b</code> flag if given, then <code>$OXO_FLOW_CLUSTER_BACKEND</code>, then <code>slurm</code>. On a
