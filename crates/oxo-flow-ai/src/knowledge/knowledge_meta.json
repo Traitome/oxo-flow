@@ -1,89 +1,89 @@
 {
+  "generated_at": "2026-11-16T11:04:56Z",
   "sources": {
     "bioconda_tools": {
-      "count": 6667,
-      "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6222,
-      "description": "",
+      "auto": true,
+      "count": 6688,
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-11-01T10:10:45Z",
-      "auto": true
-    },
-    "skills_index": {
-      "count": 562,
-      "url": "https://github.com/GPTomics/bioSkills",
-      "domains": 64,
       "description": "",
-      "data_file": "skills_index.jsonl",
-      "generated_at": "2026-11-01T10:28:28Z",
-      "auto": true
+      "excluded": 6225,
+      "generated_at": "2026-11-16T10:44:43Z",
+      "url": "https://conda.anaconda.org/bioconda/channeldata.json"
     },
-    "nfcore_modules": {
-      "count": 2125,
-      "url": "https://github.com/nf-core/modules",
+    "biotools_overlay": {
+      "auto": true,
+      "count": 1943,
+      "data_file": "biotools_overlay.jsonl",
       "description": "",
-      "data_file": "nfcore_modules.jsonl",
-      "generated_at": "2026-11-01T10:28:17Z",
-      "auto": true
+      "generated_at": "2026-11-16T11:03:20Z",
+      "seen": 32332,
+      "stop_reason": "max-pages reached",
+      "targets": 8527,
+      "url": "https://bio.tools/api/tool/"
     },
     "commercial_tools": {
-      "count": 25,
+      "auto": true,
       "auto_count": 10,
+      "count": 25,
+      "data_file": "commercial_tools.jsonl",
+      "description": "",
+      "generated_at": "2026-11-16T11:03:23Z",
       "kinds": [
         "github-releases",
         "manual",
         "pin",
         "scrape"
-      ],
-      "description": "",
-      "data_file": "commercial_tools.jsonl",
-      "generated_at": "2026-11-01T10:27:38Z",
-      "auto": true
-    },
-    "pipeline_graph": {
-      "count": 543,
-      "url": "https://skillgraph.pipette.bio/mcp",
-      "stats": {
-        "skills": 78,
-        "transitions": 483,
-        "papers": 11337,
-        "nodes": 78,
-        "edges": 465
-      },
-      "description": "",
-      "data_file": "pipeline_graph.jsonl",
-      "generated_at": "2026-11-01T10:28:22Z",
-      "auto": true
-    },
-    "biotools_overlay": {
-      "count": 1931,
-      "url": "https://bio.tools/api/tool/",
-      "targets": 8494,
-      "seen": 32294,
-      "stop_reason": "max-pages reached",
-      "description": "",
-      "data_file": "biotools_overlay.jsonl",
-      "generated_at": "2026-11-01T10:27:36Z",
-      "auto": true
+      ]
     },
     "edam_terms": {
+      "auto": true,
       "count": 839,
-      "records": 835,
-      "url": "https://github.com/edamontology/edamontology",
-      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
-      "description": "",
       "data_file": "edam_terms.jsonl",
-      "generated_at": "2026-11-01T10:27:38Z",
-      "auto": true
+      "description": "",
+      "generated_at": "2026-11-16T11:03:23Z",
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "records": 835,
+      "url": "https://github.com/edamontology/edamontology"
+    },
+    "nfcore_modules": {
+      "auto": true,
+      "count": 2151,
+      "data_file": "nfcore_modules.jsonl",
+      "description": "",
+      "generated_at": "2026-11-16T11:04:37Z",
+      "url": "https://github.com/nf-core/modules"
+    },
+    "pipeline_graph": {
+      "auto": true,
+      "count": 543,
+      "data_file": "pipeline_graph.jsonl",
+      "description": "",
+      "generated_at": "2026-11-16T11:04:45Z",
+      "stats": {
+        "edges": 465,
+        "nodes": 78,
+        "papers": 11337,
+        "skills": 78,
+        "transitions": 483
+      },
+      "url": "https://skillgraph.pipette.bio/mcp"
     },
     "skillgraph_docs": {
+      "auto": true,
       "count": 77,
-      "url": "https://skillgraph.pipette.bio/mcp",
-      "description": "full SKILL.md docs per skill, served via lookup_doc",
       "data_file": "skillgraph_docs.jsonl",
-      "generated_at": "2026-11-01T10:28:22Z",
-      "auto": true
+      "description": "full SKILL.md docs per skill, served via lookup_doc",
+      "generated_at": "2026-11-16T11:04:44Z",
+      "url": "https://skillgraph.pipette.bio/mcp"
+    },
+    "skills_index": {
+      "auto": true,
+      "count": 562,
+      "data_file": "skills_index.jsonl",
+      "description": "",
+      "domains": 64,
+      "generated_at": "2026-11-16T11:04:56Z",
+      "url": "https://github.com/GPTomics/bioSkills"
     }
-  },
-  "generated_at": "2026-11-01T10:28:28Z"
+  }
 }
