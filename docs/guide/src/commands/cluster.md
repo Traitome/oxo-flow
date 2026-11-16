@@ -23,9 +23,9 @@ oxo-flow cluster <COMMAND>
 | Action | Description |
 |---|---|
 | `submit` | Submit a workflow to a cluster scheduler |
-| `status` | Show the status of submitted cluster jobs |
+| `status` | Show submitted cluster jobs — per rule instance when a `run --profile` directory exists, raw scheduler view with `--all` |
 | `cancel` | Cancel submitted cluster jobs |
-| `logs` | Fetch the scheduler's job record (SLURM: `sacct` accounting output) for a submitted cluster job |
+| `logs` | Fetch a job's logs — engine-captured output first, then the accounting store, then the scheduler's controller record |
 
 ---
 
@@ -167,22 +167,45 @@ submission line to review, e.g. `sbatch cluster_scripts/*.sh`.
 
 ### Check job status
 
-With no ids, `status` lists **your** queued jobs (all jobs the scheduler
-reports for your user) — the natural first question after a submit:
+In a workflow directory that has run through `run --profile <cluster>`,
+`status` reads the newest run directory (`.oxo-flow/runs/latest`, or
+`--run-dir <DIR>`), maps every scheduler id back to its rule instance
+through `jobs/<instance>/job.id`, overlays the live scheduler state, and
+prints one row per instance plus per-state counts:
 
 ```bash
 $ oxo-flow cluster status
+Cluster: run .oxo-flow/runs/2026-01-01T12-00-00-000
+  completed 34   running 16   pending 11070   failed 1
+  instance            job      state    elapsed    exit
+  mixcr_all_0056507f  1400_1   running  2:24:11    -
+  trust4_all_01ea7cb3 1400_2   running  0:12:02    -
+  standardize_1218    1401_1   pending  -          -
+```
+
+`--json` emits the same document (`run_dir`, `counts`, `instances[]`). The
+human table is capped at 50 rows; TSV on a pipe and `--json` always carry
+every instance. Pass ids or instance names to answer exactly those — they
+are resolved through the run directory when one exists. Ids that belong to
+another run are not answered in this mode; use `--all` for the raw
+scheduler view.
+
+`--all`, or a checkout with no run directory, keeps the raw scheduler view.
+With no ids that lists **your** queued jobs — the natural first question
+after a plain `cluster submit`:
+
+```bash
+$ oxo-flow cluster status --all
 Cluster: Executing 'squeue -u alice --noheader -o %i|%T'...
 Cluster: 2 queued jobs
   12345: running
   12346: pending
 ```
 
-Pass the ids the submit/run step printed to answer exactly those — including
-finished ones, which are settled from the scheduler's accounting store:
+Finished jobs are settled from the scheduler's accounting store:
 
 ```bash
-oxo-flow cluster status 12345 12346
+oxo-flow cluster status --all 12345 12346
 ```
 
 ### Cancel specific jobs
@@ -191,24 +214,31 @@ oxo-flow cluster status 12345 12346
 oxo-flow cluster cancel -b slurm 12345 12346
 ```
 
-### Fetch a job's scheduler record
+`cancel --json` reports the command, the job ids, a success flag, and the
+scheduler's output.
+
+### Fetch a job's logs
 
 ```bash
 oxo-flow cluster logs -b slurm 12345
 ```
 
-SLURM prints the job's `sacct` record
-(`JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU`); PBS/SGE/LSF are
-best-effort (`qstat -f` / `qacct` / `bacct`). Requires the
-scheduler's client commands on `PATH`.
+With a run directory present, the argument may be a scheduler id or a
+rule-instance name (without one it is a scheduler id). Sources are tried in
+order:
 
-`cluster logs` on SLURM reads `sacct` directly and does NOT fall back to
-`scontrol`: on clusters without slurmdbd (accounting storage disabled),
-`sacct` exits non-zero and this command errors with
-`'sacct' exited 1: Slurm accounting storage is disabled` (live-verified on
-such a cluster). The `scontrol show job <id>` fallback mentioned below
-belongs to run-time **settlement** inside `oxo-flow run`, not to this
-command.
+1. the engine's captured `<workdir>/logs/<instance>.out/.err` — present for
+   every submitted job, including array elements whose directive carries
+   `%A_%a` (SLURM) / `%I` (LSF);
+2. the scheduler's accounting store (`sacct` / `qstat -x` / `qacct` /
+   `bacct`);
+3. `scontrol show job <id>` on SLURM, which reads the controller's
+   in-memory record after the job leaves the queue.
+
+Because the captured output is tried first, `cluster logs` works on
+clusters with accounting storage disabled — a failed `sacct` falls through
+instead of ending the command. `--tail N` prints only the last N lines and
+`--json` emits `{job_id, instance, source, logs}`.
 
 On SLURM clusters **without slurmdbd**, settlement in `oxo-flow run` falls
 back to `scontrol show job <id>`, which reads the controller's in-memory
@@ -470,7 +500,10 @@ jobs, and dependencies are chained per instance. The run submits at most
 `max_submitted` jobs at a time, tracks them to completion, and writes the
 checkpoint exactly as a local run does — `status`, `resume`, and re-run
 invalidation behave identically, and a second `run --profile slurm` with
-nothing changed submits nothing.
+nothing changed submits nothing. Terminal verdicts are folded into the
+checkpoint as each job settles, and a rule still recorded as
+`running`/`pending` after a driver crash is re-queued rather than trusted
+because its output file exists (a killed job can leave a partial file).
 
 The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
 #907) travels onto the cluster too: every submitted job script exports
@@ -594,13 +627,14 @@ own (pre-existing) signal handling.
 
 What remains out of scope is *re-attaching*: a driver that died without a
 signal (crash, OOM) cannot adopt the scheduler job ids of a previous
-process. Those jobs keep running under the scheduler, and a subsequent
+process. Those jobs keep running under the scheduler; a subsequent
 `resume` / `--resume-failed` re-queues their rules from the checkpoint's
-RUNNING entries rather than reusing the live job ids — completed work on
-shared storage is still honored by the invalidation analysis. Until a
-re-attach path exists, use `oxo-flow cluster status` (no ids: lists your
-queued jobs) and `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean
-up jobs orphaned by a crashed driver.
+RUNNING entries rather than reusing the live job ids — verdicts the driver
+had already observed settling were folded into the checkpoint, so their work
+is not repeated. Until a
+re-attach path exists, use `oxo-flow cluster status` (run-aware; `--all`
+for the raw scheduler view) and `oxo-flow cluster cancel <JOB_ID>...` to
+inspect or clean up jobs orphaned by a crashed driver.
 
 ---
 

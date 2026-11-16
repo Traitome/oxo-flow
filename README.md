@@ -210,9 +210,16 @@ oxo-flow supports job submission to HPC and cloud batch schedulers including SLU
 # Submit a workflow to a SLURM cluster
 oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
 
-# Check submission status (no job ids: lists the user's jobs; --backend optional)
-oxo-flow cluster status --backend slurm <job-id>
+# Per-instance status for a `run --profile` deployment (newest run dir by default)
 oxo-flow cluster status
+oxo-flow cluster status --run-dir .oxo-flow/runs/2026-01-01T12-00-00-000 --json
+
+# Raw scheduler view (no ids: lists the user's jobs; --backend optional)
+oxo-flow cluster status --all
+oxo-flow cluster status --backend slurm <job-id>
+
+# Logs for an id or rule instance: captured output, then accounting, then scontrol
+oxo-flow cluster logs <job-id-or-instance> --tail 50
 
 # Cancel a submitted job
 oxo-flow cluster cancel --backend slurm <job-id>

@@ -440,12 +440,31 @@ Or use oxo-flow's status command with a checkpoint file:
 oxo-flow status .oxo-flow/checkpoint.json
 ```
 
-`oxo-flow cluster status` answers two questions. **With no ids** it lists
-every job the scheduler currently reports for your user — the natural check
-right after a submit:
+`oxo-flow cluster status` answers two questions. For a deployment that runs
+through `run --profile <cluster>`, it reads the newest run directory
+(`.oxo-flow/runs/latest`, or `--run-dir <DIR>`) and prints one row per rule
+instance — mapping scheduler ids back through `jobs/<instance>/job.id` —
+plus per-state counts:
 
 ```bash
 $ oxo-flow cluster status
+Cluster: run .oxo-flow/runs/2026-01-01T12-00-00-000
+  completed 34   running 16   pending 11070   failed 1
+  instance            job      state    elapsed    exit
+  mixcr_all_0056507f  1400_1   running  2:24:11    -
+```
+
+`--json` emits the same document for dashboards. For logs,
+`oxo-flow cluster logs <id-or-instance>` reads the engine-captured
+`logs/<instance>.out/.err` before the accounting store, so it works on sites
+without `slurmdbd`; `--tail N` trims the output.
+
+**With `--all` or no run directory** it falls back to the raw scheduler
+view. With no ids it lists every job the scheduler currently reports for
+your user — the natural check right after a plain `cluster submit`:
+
+```bash
+$ oxo-flow cluster status --all
 Cluster: Executing 'squeue -u alice --noheader -o %i|%T'...
 Cluster: 2 queued jobs
   12345: running
