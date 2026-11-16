@@ -214,9 +214,12 @@ impl BackendDriver {
 
     /// Fair-dispatch ordering (issue #134): the cluster counterpart of the
     /// local priority aging — ready rules are sorted by effective priority
-    /// (declared + rounds waited, ties by name), so fresh high-priority
-    /// arrivals cannot starve a producer parked at the submission cap.
-    /// The caller ages the tail that is NOT submitted this round.
+    /// (declared + rounds waited), so fresh high-priority arrivals cannot
+    /// starve a producer parked at the submission cap. Effective-priority
+    /// ties follow the plan's [`DispatchKeys`](crate::scheduler::DispatchKeys)
+    /// — name order by default, sample-aware ordering under `[engine]
+    /// dispatch_order = "sample"` (issue #1089). The caller ages the tail
+    /// that is NOT submitted this round.
     fn aged_ready_order(
         ready: Vec<String>,
         plan: &ScheduledPlan,
@@ -228,7 +231,7 @@ impl BackendDriver {
                 + waited.get(a).copied().unwrap_or(0);
             let pb = plan.rules.get(b).map(|sr| sr.rule.priority).unwrap_or(0)
                 + waited.get(b).copied().unwrap_or(0);
-            pb.cmp(&pa).then_with(|| a.cmp(b))
+            pb.cmp(&pa).then_with(|| plan.dispatch.cmp_names(a, b))
         });
         ready
     }
@@ -1613,6 +1616,137 @@ mod tests {
         let waited = HashMap::new();
         let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &waited);
         assert_eq!(ordered, vec!["a", "z"]);
+    }
+
+    /// A two-sample diamond (`a → (b ∥ c) → d`) built through the real
+    /// expansion path, so `ScheduledPlan::build` records the fan-out keys
+    /// the driver uses for tie-breaking (issue #1089). `boosted` gives one
+    /// template `priority = 7`.
+    fn diamond_plan(workdir: &Path, dispatch_order: &str, boosted: Option<&str>) -> ScheduledPlan {
+        let priority = |name: &str| {
+            if boosted == Some(name) {
+                "\npriority = 7"
+            } else {
+                ""
+            }
+        };
+        let toml = format!(
+            r#"
+[workflow]
+name = "diamond"
+[engine]
+dispatch_order = "{dispatch_order}"
+[[sample_groups]]
+name = "batch"
+samples = ["S1", "S2"]
+[[rules]]
+name = "a"{pa}
+shell = "touch out/{{sample}}/a.txt"
+output = ["out/{{sample}}/a.txt"]
+[[rules]]
+name = "b"{pb}
+input = ["out/{{sample}}/a.txt"]
+shell = "touch out/{{sample}}/b.txt"
+output = ["out/{{sample}}/b.txt"]
+[[rules]]
+name = "c"{pc}
+input = ["out/{{sample}}/a.txt"]
+shell = "touch out/{{sample}}/c.txt"
+output = ["out/{{sample}}/c.txt"]
+[[rules]]
+name = "d"{pd}
+input = ["out/{{sample}}/b.txt", "out/{{sample}}/c.txt"]
+shell = "touch out/{{sample}}/d.txt"
+output = ["out/{{sample}}/d.txt"]
+"#,
+            pa = priority("a"),
+            pb = priority("b"),
+            pc = priority("c"),
+            pd = priority("d"),
+        );
+        let wf = workdir.join(format!("diamond_{dispatch_order}.oxoflow"));
+        std::fs::write(&wf, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn aged_ready_order_rule_mode_keeps_name_tie_break() {
+        // Regression baseline (issue #1089): the default mode still sorts
+        // equal-priority instances by name — every `a` instance first, then
+        // `b`, and so on.
+        let workdir = setup().workdir;
+        let plan = diamond_plan(workdir.path(), "rule", None);
+        let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &HashMap::new());
+        assert_eq!(
+            ordered,
+            vec![
+                "a_batch_S1",
+                "a_batch_S2",
+                "b_batch_S1",
+                "b_batch_S2",
+                "c_batch_S1",
+                "c_batch_S2",
+                "d_batch_S1",
+                "d_batch_S2",
+            ]
+        );
+    }
+
+    #[test]
+    fn aged_ready_order_sample_mode_groups_by_sample_then_declaration() {
+        // Issue #1089: equal effective priority, ordering by the instance's
+        // sample binding and then by `[[rules]]` declaration order — not by
+        // name. All of sample 1's stages precede sample 2's.
+        let workdir = setup().workdir;
+        let plan = diamond_plan(workdir.path(), "sample", None);
+        let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &HashMap::new());
+        assert_eq!(
+            ordered,
+            vec![
+                "a_batch_S1",
+                "b_batch_S1",
+                "c_batch_S1",
+                "d_batch_S1",
+                "a_batch_S2",
+                "b_batch_S2",
+                "c_batch_S2",
+                "d_batch_S2",
+            ]
+        );
+    }
+
+    #[test]
+    fn aged_ready_order_sample_mode_keeps_priority_primary() {
+        // Issue #1089: priority still outranks the sample key. `c` holds
+        // priority 7, so both `c` instances sort before every other stage;
+        // the sample key only breaks the tie between c_S1 and c_S2.
+        let workdir = setup().workdir;
+        let plan = diamond_plan(workdir.path(), "sample", Some("c"));
+        let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &HashMap::new());
+        assert_eq!(
+            ordered,
+            vec![
+                "c_batch_S1",
+                "c_batch_S2",
+                "a_batch_S1",
+                "b_batch_S1",
+                "d_batch_S1",
+                "a_batch_S2",
+                "b_batch_S2",
+                "d_batch_S2",
+            ]
+        );
     }
 
     /// Build a plan for a chain workflow: rule N+1 consumes rule N's output

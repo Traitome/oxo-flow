@@ -116,21 +116,24 @@ pub(crate) fn free_kilobytes(path: &std::path::Path) -> Option<u64> {
 }
 
 /// Sorts the scheduler's ready list by effective priority: declared priority
-/// plus rounds already waited (the aging counter of issue #123), ties broken
-/// by name. Pure and unit-tested — the dispatch loop feeds it the live ready
-/// list every round, so passed-over rules gain priority until submitted.
+/// plus rounds already waited (the aging counter of issue #123). Effective
+/// priority ties follow `dispatch` — name order by default, sample-aware
+/// ordering under `[engine] dispatch_order = "sample"` (issue #1089). Pure
+/// and unit-tested — the dispatch loop feeds it the live ready list every
+/// round, so passed-over rules gain priority until submitted.
 pub(crate) fn age_ready_list(
     mut ready: Vec<String>,
     order_set: &std::collections::HashSet<String>,
     submitted: &std::collections::HashSet<String>,
     priority_map: &std::collections::HashMap<String, i32>,
     waited: &std::collections::HashMap<String, i32>,
+    dispatch: &oxo_flow_core::scheduler::DispatchKeys,
 ) -> Vec<String> {
     ready.retain(|name| order_set.contains(name) && !submitted.contains(name));
     ready.sort_by(|a, b| {
         let pa = priority_map.get(a).copied().unwrap_or(0) + waited.get(a).copied().unwrap_or(0);
         let pb = priority_map.get(b).copied().unwrap_or(0) + waited.get(b).copied().unwrap_or(0);
-        pb.cmp(&pa).then_with(|| a.cmp(b))
+        pb.cmp(&pa).then_with(|| dispatch.cmp_names(a, b))
     });
     ready
 }
@@ -696,6 +699,10 @@ mod tests {
         names.iter().map(|n| n.to_string()).collect()
     }
 
+    fn name_dispatch() -> oxo_flow_core::scheduler::DispatchKeys {
+        oxo_flow_core::scheduler::DispatchKeys::default()
+    }
+
     #[test]
     fn age_ready_list_orders_by_declared_priority_then_name() {
         // Arrange
@@ -707,6 +714,7 @@ mod tests {
             &HashSet::new(),
             &priority,
             &std::collections::HashMap::new(),
+            &name_dispatch(),
         );
         // Assert
         assert_eq!(ready, vec!["high", "low"]);
@@ -727,6 +735,7 @@ mod tests {
             &HashSet::new(),
             &priority,
             &waited,
+            &name_dispatch(),
         );
         // Assert
         assert_eq!(ready, vec!["dump", "merge"]);
@@ -744,6 +753,7 @@ mod tests {
             &submitted,
             &priority,
             &std::collections::HashMap::new(),
+            &name_dispatch(),
         );
         // Assert — b is already submitted, so it cannot be dispatched again.
         assert_eq!(ready, vec!["a", "c"]);
@@ -759,8 +769,83 @@ mod tests {
             &HashSet::new(),
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
+            &name_dispatch(),
         );
         // Assert — equal effective priority (0), name tie-break.
         assert_eq!(ready, vec!["a", "z"]);
+    }
+
+    #[test]
+    fn age_ready_list_sample_dispatch_breaks_ties_by_sample_then_rule_order() {
+        // Issue #1089: equal effective priority, but the sample binding and
+        // the workflow declaration order decide — not the instance name.
+        // `align_s2` must not jump ahead of sample 1's whole pipeline just
+        // because "align" sorts before "merge".
+        // Arrange
+        let keys = [
+            ("align_s1", ("s1", 0)),
+            ("merge_s1", ("s1", 1)),
+            ("align_s2", ("s2", 0)),
+            ("merge_s2", ("s2", 1)),
+        ]
+        .into_iter()
+        .map(|(name, (key, index))| (name.to_string(), (key.to_string(), index)))
+        .collect();
+        let dispatch = oxo_flow_core::scheduler::DispatchKeys::new(
+            oxo_flow_core::scheduler::DispatchOrder::Sample,
+            keys,
+        );
+        // Act
+        let ready = age_ready_list(
+            vec![
+                "align_s2".into(),
+                "merge_s1".into(),
+                "align_s1".into(),
+                "merge_s2".into(),
+            ],
+            &set_of(&["align_s1", "merge_s1", "align_s2", "merge_s2"]),
+            &HashSet::new(),
+            &map_of(&[
+                ("align_s1", 0),
+                ("merge_s1", 0),
+                ("align_s2", 0),
+                ("merge_s2", 0),
+            ]),
+            &std::collections::HashMap::new(),
+            &dispatch,
+        );
+        // Assert — all of s1 before s2; declaration order inside a sample.
+        assert_eq!(ready, vec!["align_s1", "merge_s1", "align_s2", "merge_s2"]);
+    }
+
+    #[test]
+    fn age_ready_list_sample_dispatch_keeps_priority_primary() {
+        // Issue #1089: priority remains the primary key; the sample binding
+        // only breaks effective-priority ties.
+        // Arrange
+        let keys = [
+            ("align_s1", ("s1", 0)),
+            ("merge_s1", ("s1", 1)),
+            ("align_s2", ("s2", 0)),
+            ("merge_s2", ("s2", 1)),
+        ]
+        .into_iter()
+        .map(|(name, (key, index))| (name.to_string(), (key.to_string(), index)))
+        .collect();
+        let dispatch = oxo_flow_core::scheduler::DispatchKeys::new(
+            oxo_flow_core::scheduler::DispatchOrder::Sample,
+            keys,
+        );
+        // Act
+        let ready = age_ready_list(
+            vec!["align_s1".into(), "merge_s2".into(), "align_s2".into()],
+            &set_of(&["align_s1", "merge_s2", "align_s2"]),
+            &HashSet::new(),
+            &map_of(&[("align_s1", 0), ("merge_s2", 10), ("align_s2", 0)]),
+            &std::collections::HashMap::new(),
+            &dispatch,
+        );
+        // Assert — merge_s2's higher priority wins over every sample-1 rule.
+        assert_eq!(ready, vec!["merge_s2", "align_s1", "align_s2"]);
     }
 }

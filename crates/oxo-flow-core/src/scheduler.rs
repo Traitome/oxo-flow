@@ -5,11 +5,198 @@
 //! The scheduler determines which jobs can run concurrently based on
 //! available resources and dependency satisfaction.
 
+use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
 use crate::error::Result;
 use crate::executor::{JobRecord, JobStatus};
 use crate::rule::Rule;
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+
+/// Ready-rule tie-break policy for scheduling (`[engine] dispatch_order`,
+/// issue #1089).
+///
+/// `Rule::priority` is always the primary dispatch key; this policy only
+/// decides between rules whose effective priority is equal (including the
+/// priority-aging counter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DispatchOrder {
+    /// Sort ready instances by instance name — the historical behaviour.
+    /// With the conventional `<rule>_<group>_<sample>` instance naming this
+    /// groups all instances of one rule together, so a per-sample
+    /// fan-out/fan-in workflow runs as a sequence of phases.
+    #[default]
+    Rule,
+    /// Sort ready instances by their fan-out binding (the group/sample or
+    /// pair identity first, then any remaining bindings such as
+    /// `[[values]]`), then by the rule's declaration order in the workflow
+    /// file. All ready stages of one sample are dispatched before the next
+    /// sample's, so per-sample results appear as each sample completes
+    /// instead of after the slowest global phase.
+    Sample,
+}
+
+/// Precomputed per-instance ordering keys for [`DispatchOrder::Sample`]
+/// (issue #1089).
+///
+/// The engine records each instance's fan-out provenance during expansion
+/// (`expansion_pairs`, `expansion_values`, `expansion_samples` on
+/// [`WorkflowConfig`]) and maps every instance to its source `[[rules]]`
+/// entry through `expansion_templates`; this type turns that provenance
+/// into one canonical `(binding key, declaration index)` pair per
+/// instance. Instance names are never parsed.
+#[derive(Debug, Clone, Default)]
+pub struct DispatchKeys {
+    order: DispatchOrder,
+    /// Instance name → (canonical fan-out binding key, declaration index).
+    keys: HashMap<String, (String, usize)>,
+}
+
+impl DispatchKeys {
+    /// Build the ordering keys for a workflow. In the default
+    /// [`DispatchOrder::Rule`] mode the map stays empty: `ready_rules`
+    /// keeps its historical name sort and this type only carries the mode.
+    pub fn from_config(config: &WorkflowConfig) -> Self {
+        let order = config.dispatch_order();
+        if order == DispatchOrder::Rule {
+            return Self::default();
+        }
+
+        // `rule_templates` preserves the pre-expansion file order — the
+        // declared `[[rules]]` sequence issue #1089 asks for. It is empty
+        // only when a caller never expanded wildcards; fall back to the
+        // current rule list, which is then still in file order.
+        let declared: HashMap<&str, usize> = if config.rule_templates.is_empty() {
+            config
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(index, rule)| (rule.name.as_str(), index))
+                .collect()
+        } else {
+            config
+                .rule_templates
+                .iter()
+                .enumerate()
+                .map(|(index, rule)| (rule.name.as_str(), index))
+                .collect()
+        };
+        let expanded: HashMap<&str, usize> = config
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| (rule.name.as_str(), index))
+            .collect();
+
+        let mut keys = HashMap::with_capacity(config.rules.len());
+        for rule in &config.rules {
+            let template = config.template_of(&rule.name).unwrap_or(rule.name.as_str());
+            let declaration_index = declared
+                .get(template)
+                .or_else(|| expanded.get(template))
+                .copied()
+                .unwrap_or(usize::MAX);
+            keys.insert(
+                rule.name.clone(),
+                (instance_binding_key(config, &rule.name), declaration_index),
+            );
+        }
+        Self { order, keys }
+    }
+
+    /// Explicit construction for backends/tests that carry their own keys.
+    pub fn new(order: DispatchOrder, keys: HashMap<String, (String, usize)>) -> Self {
+        Self { order, keys }
+    }
+
+    /// The configured mode. [`DispatchOrder::Rule`] means the historical
+    /// name ordering is in force.
+    pub fn order(&self) -> DispatchOrder {
+        self.order
+    }
+
+    /// Order two instance names under the configured tie-break.
+    ///
+    /// `Rule`: plain name comparison (byte-identical to the pre-#1089
+    /// sort). `Sample`: fan-out binding key, then declaration index, then
+    /// name. Instances with no recorded key sort after keyed ones, by name
+    /// among themselves.
+    pub fn cmp_names(&self, a: &str, b: &str) -> Ordering {
+        match self.order {
+            DispatchOrder::Rule => a.cmp(b),
+            DispatchOrder::Sample => match (self.keys.get(a), self.keys.get(b)) {
+                (Some((key_a, index_a)), Some((key_b, index_b))) => key_a
+                    .cmp(key_b)
+                    .then_with(|| index_a.cmp(index_b))
+                    .then_with(|| a.cmp(b)),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => a.cmp(b),
+            },
+        }
+    }
+}
+
+/// The sample-like binding names that lead the ordering key, in priority
+/// order. A group binding rides along with `sample` so equal sample names
+/// in different groups never merge; pair workflows lead with their pair
+/// identity.
+const LEADING_BINDINGS: &[&str] = &["group", "sample", "pair_id", "experiment", "control"];
+
+/// Canonical, injective rendering of one instance's fan-out bindings.
+///
+/// The sample-like identity leads the key and the remaining bindings follow
+/// sorted by name, so an orthogonal `[[values]]` fan-out can never
+/// interleave one sample's stages with another's: the identity prefix
+/// dominates the comparison. Binding maps are `HashMap`s, so the tail is
+/// sorted before rendering; `{:?}` escapes quotes, backslashes and control
+/// characters, so no metadata value can forge a separator and merge two
+/// samples into one ordering group.
+fn binding_key(entries: &[(&String, &String)]) -> String {
+    let mut leading: Vec<(&str, &str)> = Vec::new();
+    let mut consumed: Vec<&str> = Vec::new();
+    for name in LEADING_BINDINGS {
+        if let Some((_, value)) = entries.iter().find(|(key, _)| key.as_str() == *name) {
+            leading.push((name, value.as_str()));
+            consumed.push(name);
+        }
+    }
+    let mut rest: Vec<(&str, &str)> = entries
+        .iter()
+        .filter(|(key, _)| !consumed.contains(&key.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    rest.sort_unstable();
+    rest.dedup();
+    format!("{leading:?}|{rest:?}")
+}
+
+/// The binding key issue #1089 orders by: the sample/group/pair binding of
+/// an expanded instance (plus any orthogonal `[[values]]` binding). Rules
+/// that never fanned out have no binding and therefore an empty key.
+fn instance_binding_key(config: &WorkflowConfig, instance: &str) -> String {
+    let mut entries: Vec<(&String, &String)> = Vec::new();
+    if let Some(bindings) = config.expansion_pairs.get(instance) {
+        entries.extend(bindings.iter());
+    }
+    if let Some(bindings) = config.expansion_values.get(instance) {
+        entries.extend(bindings.iter());
+    }
+    if entries.is_empty() {
+        // Some fan-out paths record the sample names without a full combo
+        // (readiness attribution); fall back to those so a sample-keyed
+        // instance still groups with its own stages.
+        if let Some(samples) = config.expansion_samples.get(instance) {
+            let mut samples = samples.clone();
+            samples.sort_unstable();
+            samples.dedup();
+            return format!("samples{samples:?}");
+        }
+    }
+    binding_key(&entries)
+}
 
 /// Tracks the state of all jobs in a workflow execution.
 #[derive(Debug)]
@@ -22,6 +209,10 @@ pub struct SchedulerState {
 
     /// Map from rule name to execution record (once complete).
     records: HashMap<String, JobRecord>,
+
+    /// Ready-rule tie-break policy + keys (issue #1089). The default keeps
+    /// the historical name sort.
+    dispatch: DispatchKeys,
 }
 
 impl SchedulerState {
@@ -36,7 +227,15 @@ impl SchedulerState {
             statuses,
             running: HashSet::new(),
             records: HashMap::new(),
+            dispatch: DispatchKeys::default(),
         }
+    }
+
+    /// Attach the run's `[engine] dispatch_order` keys (issue #1089).
+    /// Without this call `ready_rules` keeps the historical name sort.
+    pub fn with_dispatch(mut self, dispatch: DispatchKeys) -> Self {
+        self.dispatch = dispatch;
+        self
     }
 
     /// Returns the status of a rule.
@@ -166,8 +365,13 @@ impl SchedulerState {
             }
         }
 
-        // Sort by name for deterministic ordering
-        ready.sort();
+        // Deterministic ordering: historical name sort by default, or the
+        // configured sample-aware tie-break (issue #1089).
+        if self.dispatch.order() == DispatchOrder::Rule {
+            ready.sort();
+        } else {
+            ready.sort_by(|a, b| self.dispatch.cmp_names(a, b));
+        }
         Ok(ready)
     }
 
@@ -1708,6 +1912,7 @@ impl ResourcePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WorkflowConfig;
     use crate::rule::{EnvironmentSpec, Resources};
 
     fn make_rules() -> Vec<Rule> {
@@ -1769,6 +1974,185 @@ mod tests {
 
         let ready = state.ready_rules(&dag).unwrap();
         assert_eq!(ready, vec!["a"]);
+    }
+
+    /// Two-sample diamond: `a → (b ∥ c) → d`, one instance per sample.
+    /// `dispatch_order` is written verbatim into `[engine]` when `Some`.
+    fn diamond_config(dispatch_order: Option<&str>) -> WorkflowConfig {
+        let engine = dispatch_order
+            .map(|order| format!("[engine]\ndispatch_order = \"{order}\"\n"))
+            .unwrap_or_default();
+        let toml = format!(
+            r#"
+[workflow]
+name = "diamond"
+{engine}
+[[sample_groups]]
+name = "batch"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "a"
+shell = "touch out/{{sample}}/a.txt"
+output = ["out/{{sample}}/a.txt"]
+
+[[rules]]
+name = "b"
+input = ["out/{{sample}}/a.txt"]
+shell = "touch out/{{sample}}/b.txt"
+output = ["out/{{sample}}/b.txt"]
+
+[[rules]]
+name = "c"
+input = ["out/{{sample}}/a.txt"]
+shell = "touch out/{{sample}}/c.txt"
+output = ["out/{{sample}}/c.txt"]
+
+[[rules]]
+name = "d"
+input = ["out/{{sample}}/b.txt", "out/{{sample}}/c.txt"]
+shell = "touch out/{{sample}}/d.txt"
+output = ["out/{{sample}}/d.txt"]
+"#
+        );
+        let mut config: WorkflowConfig = toml::from_str(&toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        config
+    }
+
+    fn success_record(rule: String) -> JobRecord {
+        JobRecord {
+            signal: None,
+            rule,
+            status: JobStatus::Success,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+        }
+    }
+
+    /// Dispatch one ready rule at a time (`-j 1`) and record the sequence.
+    fn dispatch_sequence(config: &WorkflowConfig) -> Vec<String> {
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let names: Vec<&str> = config.rules.iter().map(|rule| rule.name.as_str()).collect();
+        let mut state =
+            SchedulerState::new(&names).with_dispatch(DispatchKeys::from_config(config));
+        let mut sequence = Vec::new();
+        while !state.is_complete() {
+            let ready = state.ready_rules(&dag).unwrap();
+            assert!(
+                !ready.is_empty(),
+                "no ready rule before completion: {sequence:?}"
+            );
+            let next = ready[0].clone();
+            state.mark_completed(success_record(next.clone()));
+            sequence.push(next);
+        }
+        sequence
+    }
+
+    #[test]
+    fn rule_dispatch_keeps_historical_phase_order() {
+        // Regression baseline (issue #1089): the default mode dispatches
+        // every instance of one rule before the next rule's instances —
+        // alphabetical instance-name order, unchanged by this feature.
+        let config = diamond_config(None);
+        assert_eq!(config.dispatch_order(), DispatchOrder::Rule);
+        assert_eq!(
+            dispatch_sequence(&config),
+            vec![
+                "a_batch_S1",
+                "a_batch_S2",
+                "b_batch_S1",
+                "b_batch_S2",
+                "c_batch_S1",
+                "c_batch_S2",
+                "d_batch_S1",
+                "d_batch_S2",
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_rule_dispatch_matches_the_default() {
+        // `dispatch_order = "rule"` is the documented default spelled out.
+        let default = diamond_config(None);
+        let explicit = diamond_config(Some("rule"));
+        assert_eq!(default.dispatch_order(), explicit.dispatch_order());
+        assert_eq!(dispatch_sequence(&default), dispatch_sequence(&explicit));
+    }
+
+    #[test]
+    fn sample_dispatch_orders_stages_within_one_sample() {
+        // Issue #1089: with equal priority, ready ties follow the sample
+        // binding then the `[[rules]]` declaration order. Sample 1's whole
+        // diamond drains before sample 2's producer starts, so per-sample
+        // results appear as each sample completes.
+        let config = diamond_config(Some("sample"));
+        assert_eq!(config.dispatch_order(), DispatchOrder::Sample);
+        assert_eq!(
+            dispatch_sequence(&config),
+            vec![
+                "a_batch_S1",
+                "b_batch_S1",
+                "c_batch_S1",
+                "d_batch_S1",
+                "a_batch_S2",
+                "b_batch_S2",
+                "c_batch_S2",
+                "d_batch_S2",
+            ]
+        );
+    }
+
+    #[test]
+    fn sample_key_leads_over_orthogonal_value_bindings() {
+        // A `[[values]]` fan-out is orthogonal to the sample fan-out. The
+        // sample identity must lead the key so value A of sample 2 does not
+        // interleave between sample 1's values (issue #1089).
+        let mut config: WorkflowConfig = toml::from_str(
+            r#"
+[workflow]
+name = "values"
+[engine]
+dispatch_order = "sample"
+[[sample_groups]]
+name = "batch"
+samples = ["S1", "S2"]
+[[values]]
+name = "assembler"
+values = ["A", "B"]
+[[rules]]
+name = "run"
+shell = "touch out/{sample}/{assembler}.txt"
+output = ["out/{sample}/{assembler}.txt"]
+"#,
+        )
+        .unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let names: Vec<&str> = config.rules.iter().map(|rule| rule.name.as_str()).collect();
+        let state = SchedulerState::new(&names).with_dispatch(DispatchKeys::from_config(&config));
+        assert_eq!(
+            state.ready_rules(&dag).unwrap(),
+            vec![
+                "run_assembler_A_batch_S1",
+                "run_assembler_B_batch_S1",
+                "run_assembler_A_batch_S2",
+                "run_assembler_B_batch_S2",
+            ]
+        );
     }
 
     #[test]

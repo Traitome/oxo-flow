@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "cade35c5ba55d6deace1ad397441aff6445928ea5b7f266cf1cf9d7ad3f202d6",
+  "schemaSha256": "c9130eb49a97caff6b1482b2ee797938912aefecb4de57732ad13ab2d7e93f4a",
   "contexts": {
     "root": {
       "keys": [
@@ -32,7 +32,7 @@
         },
         {
           "key": "engine",
-          "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, and protected-tree drift baselines. Sizes use T/G/M/K suffixes; a bare number means MiB.",
+          "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, and ready-rule dispatch ordering. Sizes use T/G/M/K suffixes; a bare number means MiB.",
           "type": "object"
         },
         {
@@ -288,6 +288,15 @@
     },
     "engine": {
       "keys": [
+        {
+          "key": "dispatch_order",
+          "description": "Tie-break for ready-rule dispatch when effective priorities are equal (priority stays the primary key). \"rule\" (default): alphabetical instance name — the historical phase-ordered behaviour. \"sample\": the instance's fan-out binding (sample/group/pair) first, then the rule's declaration order in the workflow file, so all ready stages of one sample are dispatched before the next sample's.",
+          "type": "string",
+          "enums": [
+            "rule",
+            "sample"
+          ]
+        },
         {
           "key": "min_free_disk",
           "description": "Free-space floor on the working directory's filesystem (e.g. \"5G\"). Dropping below logs a WARN diagnostic, deduplicated per crossing.",

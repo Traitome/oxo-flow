@@ -10,6 +10,7 @@ use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::executor::process::build_execution_command;
 use crate::rule::Rule;
+use crate::scheduler::DispatchKeys;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -237,6 +238,11 @@ pub struct ScheduledPlan {
     pub order: Vec<String>,
     pub groups: Vec<Vec<String>>,
     pub rules: HashMap<String, ScheduledRule>,
+    /// Ready-rule tie-break policy and per-instance keys (`[engine]
+    /// dispatch_order`, issue #1089). The default keeps the historical
+    /// name ordering, so plans built outside [`ScheduledPlan::build`] are
+    /// unaffected.
+    pub dispatch: DispatchKeys,
 }
 
 impl ScheduledPlan {
@@ -261,6 +267,7 @@ impl ScheduledPlan {
             order,
             groups,
             rules,
+            dispatch: DispatchKeys::from_config(config),
         })
     }
 
@@ -316,6 +323,9 @@ impl ScheduledPlan {
             }
         }
         self.groups = dag.parallel_groups()?;
+        // Rebuild the dispatch keys: checkpoint re-entry can create new
+        // instances, and their expansion provenance is only known now.
+        self.dispatch = DispatchKeys::from_config(config);
         Ok(())
     }
 }

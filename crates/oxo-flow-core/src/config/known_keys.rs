@@ -214,8 +214,9 @@ const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"]
 
 /// Keys of the `[engine]` table (issue #843 disk-pressure monitoring;
 /// issue #907 global temp-directory routing; issue #935 protected-tree
-/// drift baselines).
+/// drift baselines; issue #1089 dispatch tie-break).
 const ENGINE_KEYS: &[&str] = &[
+    "dispatch_order",
     "min_free_disk",
     "numa_aware",
     "protected_data_trees",
