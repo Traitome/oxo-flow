@@ -347,11 +347,21 @@ fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
 /// Fold one driver-returned record into the checkpoint, mirroring the local
 /// loop's bookkeeping so `status`, `resume`, and re-runs cannot tell the two
 /// execution paths apart.
-async fn record_outcome(
-    args: &ClusterRunArgs<'_>,
-    record: &JobRecord,
-    summary: &mut ClusterRunSummary,
-) {
+///
+/// Invoked twice per record on the normal path: once by the driver's settle
+/// hook as the job settles (issue #1083 — a crash from here on must not lose
+/// the verdict), and once by the post-run loop that also counts the summary.
+/// Both writes are idempotent.
+async fn fold_record(args: &ClusterRunArgs<'_>, record: &JobRecord) {
+    // Skip-only records carry no completion credit. Return before taking
+    // the lock: a blocked downstream wave can produce thousands of these,
+    // and each one would otherwise pay a full checkpoint serialization.
+    if !matches!(
+        record.status,
+        JobStatus::Success | JobStatus::Failed | JobStatus::Cancelled
+    ) {
+        return;
+    }
     let duration = record
         .finished_at
         .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
@@ -363,7 +373,6 @@ async fn record_outcome(
     let mut ck = args.checkpoint.lock().await;
     match record.status {
         JobStatus::Success => {
-            summary.succeeded += 1;
             let rule = args.config.get_rule(&record.rule);
             let benchmark = BenchmarkRecord {
                 rule: record.rule.clone(),
@@ -397,18 +406,6 @@ async fn record_outcome(
             }
         }
         JobStatus::Failed => {
-            // A failed `required = false` rule is recorded and reported but
-            // does not fail the run (issue #99 B2, cluster path) — the same
-            // contract as the local loop.
-            let is_required = args
-                .config
-                .get_rule(&record.rule)
-                .is_none_or(|r| r.required);
-            if is_required {
-                summary.failed += 1;
-            } else {
-                summary.non_required_failed += 1;
-            }
             ck.record_run(record, output_tail_bytes);
             ck.mark_failed(&record.rule);
         }
@@ -417,19 +414,131 @@ async fn record_outcome(
         // itself reporting a cancelled job, which counts as neither success
         // nor failure but must still persist to the checkpoint.
         JobStatus::Cancelled => {
-            summary.skipped += 1;
             ck.record_run(record, output_tail_bytes);
             ck.mark_failed(&record.rule);
         }
-        _ => {
-            summary.skipped += 1;
-        }
+        // Skipped records carry no completion credit — nothing to persist.
+        _ => {}
     }
     // M-7: the local scheduler loop saves through the async API at every
     // site; the cluster path must not serialize submissions behind fsync
     // latency either.
     if let Err(e) = ck.save_to_file_async(args.checkpoint_path).await {
         tracing::warn!("Failed to save checkpoint: {e}");
+    }
+}
+
+/// Count one driver-returned record into the run summary.
+///
+/// Kept separate from [`fold_record`]: the settle hook persists state during
+/// the run but must not increment counters that the post-run loop owns (the
+/// same record arrives twice).
+fn count_outcome(config: &WorkflowConfig, record: &JobRecord, summary: &mut ClusterRunSummary) {
+    match record.status {
+        JobStatus::Success => summary.succeeded += 1,
+        JobStatus::Failed => {
+            // A failed `required = false` rule is recorded and reported but
+            // does not fail the run (issue #99 B2, cluster path) — the same
+            // contract as the local loop.
+            let is_required = config.get_rule(&record.rule).is_none_or(|r| r.required);
+            if is_required {
+                summary.failed += 1;
+            } else {
+                summary.non_required_failed += 1;
+            }
+        }
+        // A signal-interrupted job arrives as Failed (handled above) — the
+        // driver only ever produces Cancelled records from the scheduler
+        // itself reporting a cancelled job, which counts as neither success
+        // nor failure but must still persist to the checkpoint.
+        JobStatus::Cancelled => summary.skipped += 1,
+        _ => summary.skipped += 1,
+    }
+}
+
+/// Fold one driver-returned record into the checkpoint and the summary.
+async fn record_outcome(
+    args: &ClusterRunArgs<'_>,
+    record: &JobRecord,
+    summary: &mut ClusterRunSummary,
+) {
+    count_outcome(args.config, record, summary);
+    fold_record(args, record).await;
+}
+
+/// What this cluster run will submit, derived from the same preview
+/// `dry-run` reports.
+struct SubmissionPlan {
+    to_run: HashSet<String>,
+    /// Rules skipped because their declared outputs exist but the
+    /// checkpoint holds no completion record. A killed job can leave
+    /// exactly that shape (issue #1083) — the run narrates them instead of
+    /// counting them silently as done.
+    skipped_fresh: Vec<String>,
+}
+
+/// The will-run set: the preview's non-skip rules, unioned with the run's
+/// own forced rules.
+///
+/// `force_rules` must be unioned here because by the time the cluster path
+/// runs, `run_command` has already applied and persisted its invalidation
+/// analysis — the cleared completion records and refreshed manifests the
+/// preview would need to re-derive a cascade are gone, so a cascaded rule
+/// whose outputs still look fresh classifies as a skip. `force_rules` is
+/// that analysis's own output, and the local executor gets it for exactly
+/// this purpose (see `ExecutorConfig.force_rules`), so consuming both here
+/// is what keeps the two paths deciding identically.
+#[allow(clippy::too_many_arguments)]
+fn plan_submissions(
+    ck: &CheckpointState,
+    config: &WorkflowConfig,
+    dag: &WorkflowDag,
+    order: &[String],
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    sensitive_keys: &HashSet<String>,
+    interpreter_map: &HashMap<String, String>,
+    checkpoint_path: &Path,
+    rerun: bool,
+    resume_failed: bool,
+    force_rules: &HashSet<String>,
+) -> SubmissionPlan {
+    let preview = crate::commands::run_preview::preview_run_plan(
+        ck,
+        config,
+        dag,
+        order,
+        workdir,
+        wildcard_values,
+        sensitive_keys,
+        interpreter_map,
+        checkpoint_path,
+        rerun,
+        resume_failed,
+    );
+    let mut to_run: HashSet<String> = preview
+        .plan
+        .iter()
+        .filter(|p| !p.status.is_skip())
+        .map(|p| p.name.clone())
+        .collect();
+    // Forced rules are still constrained to this run's execution set — a
+    // `--target` subset must not pull in rules the user excluded.
+    to_run.extend(
+        order
+            .iter()
+            .filter(|name| force_rules.contains(*name))
+            .cloned(),
+    );
+    let skipped_fresh = preview
+        .plan
+        .iter()
+        .filter(|p| p.status == crate::commands::run_preview::RuleStatus::SkippedFresh)
+        .map(|p| p.name.clone())
+        .collect();
+    SubmissionPlan {
+        to_run,
+        skipped_fresh,
     }
 }
 
@@ -440,19 +549,11 @@ pub(crate) async fn run_on_cluster(
 ) -> Result<ClusterRunSummary> {
     let (backend, cluster_config) = job_config(cluster)?;
 
-    // The will-run set: the same computation `dry-run` reports.
-    //
-    // It is unioned with `force_rules` because by the time the cluster path
-    // runs, `run_command` has already applied and persisted its invalidation
-    // analysis — the cleared completion records and refreshed manifests the
-    // preview would need to re-derive a cascade are gone, so a cascaded rule
-    // whose outputs still look fresh classifies as a skip. `force_rules` is
-    // that analysis's own output, and the local executor gets it for exactly
-    // this purpose (see `ExecutorConfig.force_rules`), so consuming both here
-    // is what keeps the two paths deciding identically.
-    let mut to_run: HashSet<String> = {
+    // The will-run set: the same computation `dry-run` reports (see
+    // `plan_submissions` for why `force_rules` is unioned in).
+    let submission = {
         let ck = args.checkpoint.lock().await;
-        let preview = crate::commands::run_preview::preview_run_plan(
+        plan_submissions(
             &ck,
             args.config,
             args.dag,
@@ -464,22 +565,30 @@ pub(crate) async fn run_on_cluster(
             args.checkpoint_path,
             args.rerun,
             args.resume_failed,
-        );
-        preview
-            .plan
-            .iter()
-            .filter(|p| !p.status.is_skip())
-            .map(|p| p.name.clone())
-            .collect()
+            args.force_rules,
+        )
     };
-    // Forced rules are still constrained to this run's execution set — a
-    // `--target` subset must not pull in rules the user excluded.
-    to_run.extend(
-        args.order
-            .iter()
-            .filter(|name| args.force_rules.contains(*name))
-            .cloned(),
-    );
+    let to_run = submission.to_run;
+    if !submission.skipped_fresh.is_empty() {
+        // Issue #1083 (suggestion 4): output existence is not completion.
+        // Say when a rule is skipped on that heuristic alone, so a lost
+        // sample cannot hide behind a green run.
+        let shown: Vec<String> = submission.skipped_fresh.iter().take(5).cloned().collect();
+        let more = submission.skipped_fresh.len().saturating_sub(shown.len());
+        eprintln!(
+            "  {} {} skipped because declared outputs exist but the checkpoint \
+             has no completion record — a killed job can leave partial outputs; \
+             pass --rerun to force re-execution: {}{}",
+            "Warning:".bold().yellow(),
+            oxo_flow_core::plural(submission.skipped_fresh.len(), "rule was", "rules were"),
+            shown.join(", "),
+            if more > 0 {
+                format!(" (+{more} more)")
+            } else {
+                String::new()
+            }
+        );
+    }
 
     let mut summary = ClusterRunSummary {
         succeeded: 0,
@@ -631,6 +740,11 @@ pub(crate) async fn run_on_cluster(
         let output_tail_bytes = oxo_flow_core::executor::output_tail_bytes_from_env();
         Box::pin(async move {
             let mut ck = ck.lock().await;
+            // The in-flight set is what the local scheduler consults
+            // (issue #685); on this path it is also the truthful answer to
+            // "was this rule submitted and never settled" when the driver
+            // dies (issue #1083).
+            ck.mark_running(&rule);
             ck.record_run(
                 &oxo_flow_core::executor::JobRecord {
                     signal: None,
@@ -657,6 +771,19 @@ pub(crate) async fn run_on_cluster(
             ck.save_to_file_async(&path).await
         })
     };
+    // Incremental completion folding (issue #1083): the driver hands every
+    // terminal record to this hook as it settles, and the checkpoint is
+    // saved immediately. A crash from here on leaves authoritative
+    // completed/failed sets instead of an empty `completed_rules`, so the
+    // restart never has to guess from output existence.
+    let settle_args = &args;
+    let on_settle: oxo_flow_core::backend::driver::SettleHook<'_> =
+        Box::new(move |record: JobRecord| {
+            Box::pin(async move {
+                fold_record(settle_args, &record).await;
+                Ok(())
+            })
+        });
     let run_result = driver
         .run(
             &mut plan,
@@ -667,6 +794,7 @@ pub(crate) async fn run_on_cluster(
                 merge: None,
                 sensitive_values: args.sensitive_values,
                 on_submit: Some(Box::new(on_submit)),
+                on_settle: Some(on_settle),
             },
         )
         .await;
@@ -713,6 +841,7 @@ pub(crate) async fn run_on_cluster(
 mod tests {
     use super::check_budget;
     use super::cluster_env_cache_dir;
+    use super::plan_submissions;
     use super::reject_checkpoint_reentry;
     use super::reject_localrules;
     use super::reject_scratch_rules;
@@ -721,6 +850,7 @@ mod tests {
     use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
     use oxo_flow_core::dag::WorkflowDag;
     use oxo_flow_core::environment::EnvironmentResolver;
+    use oxo_flow_core::executor::checkpoint::{CheckpointState, RuleRunRecord};
     use std::collections::HashMap;
 
     #[test]
@@ -857,6 +987,121 @@ mod tests {
             max_jobs: None,
         };
         assert!(check_budget(&plan, &std::collections::HashSet::new(), &budget).is_ok());
+    }
+
+    /// A one-rule crash-recovery fixture: `emit` writes `out/S1/done.txt`
+    /// incrementally (start marker first, `done` last) — the shape of a
+    /// streaming tool and of the issue #1083 reproduction.
+    fn interrupted_fixture(
+        dir: &std::path::Path,
+    ) -> (
+        WorkflowConfig,
+        WorkflowDag,
+        Vec<String>,
+        HashMap<String, String>,
+        std::path::PathBuf,
+    ) {
+        let wf = dir.join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            r#"
+[workflow]
+name = "crash"
+
+[[rules]]
+name = "emit"
+output = ["out/S1/done.txt"]
+shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo done >> out/S1/done.txt"
+"#,
+        )
+        .unwrap();
+        // The killed job's partial output: the file exists, the rule never
+        // finished.
+        std::fs::create_dir_all(dir.join("out/S1")).unwrap();
+        std::fs::write(dir.join("out/S1/done.txt"), "started\n").unwrap();
+
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        (
+            config,
+            dag,
+            order,
+            HashMap::new(),
+            dir.join(".oxo-flow/checkpoint.json"),
+        )
+    }
+
+    fn running_record() -> RuleRunRecord {
+        RuleRunRecord {
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+            command: None,
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: Some("running".to_string()),
+            skip_reason: None,
+            signal: None,
+        }
+    }
+
+    #[test]
+    fn killed_job_with_partial_output_is_requeued_on_restart() {
+        // Issue #1083 regression: the driver was killed while this Slurm
+        // job was running. Its declared output exists (partially written),
+        // and the checkpoint carries the submit-time `running` record.
+        // Nothing proves the rule finished — the restart must submit it.
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, values, checkpoint_path) = interrupted_fixture(dir.path());
+        let mut ck = CheckpointState::new();
+        ck.rule_runs.insert("emit".to_string(), running_record());
+
+        let plan = plan_submissions(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &values,
+            &std::collections::HashSet::new(),
+            &config.workflow.interpreter_map,
+            &checkpoint_path,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+        );
+        assert!(
+            plan.to_run.contains("emit"),
+            "an interrupted submission must be re-queued, not skipped as 'outputs up-to-date'"
+        );
+        assert!(
+            plan.skipped_fresh.is_empty(),
+            "the interrupted rule must not be reported as a fresh skip"
+        );
+
+        // Control: without the execution record the same on-disk state is
+        // the historical crash-leftover skip — and it is now narrated
+        // instead of passing silently.
+        let plan = plan_submissions(
+            &CheckpointState::new(),
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &values,
+            &std::collections::HashSet::new(),
+            &config.workflow.interpreter_map,
+            &checkpoint_path,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+        );
+        assert!(!plan.to_run.contains("emit"));
+        assert_eq!(plan.skipped_fresh, vec!["emit".to_string()]);
     }
 
     /// A plan whose single rule declares checkpoint re-entry.

@@ -1033,6 +1033,24 @@ impl CheckpointState {
         self.completed_rules.contains(rule)
     }
 
+    /// Whether the rule's last recorded execution attempt ended without a
+    /// terminal verdict — the scheduler-backed paths persist a `running`
+    /// record at submit time, so a record still reading `running` (or
+    /// `pending`) means the driver died before the job settled (issue
+    /// #1083).
+    ///
+    /// A rule in this state may have written part of its declared outputs
+    /// before the scheduler killed it. Completion must therefore never be
+    /// inferred from output existence: the restart has to re-queue it.
+    /// Terminal failures stay out — `failed` is an answer, just not a
+    /// successful one, and `--resume-failed` governs those.
+    pub fn was_interrupted(&self, rule: &str) -> bool {
+        matches!(
+            self.rule_runs.get(rule).and_then(|r| r.status.as_deref()),
+            Some("running") | Some("pending")
+        )
+    }
+
     /// Returns `true` if the rule should be skipped (i.e., it already completed).
     pub fn should_skip(&self, rule: &str) -> bool {
         self.is_completed(rule)
@@ -3500,6 +3518,50 @@ mod tests {
             serde_json::from_str(r#"{"completed_rules":["x"],"failed_rules":[],"benchmarks":{}}"#)
                 .unwrap();
         assert!(legacy.running_rules().is_empty());
+    }
+
+    /// A `rule_runs` record with only its status populated (the shape the
+    /// cluster path persists at submit time).
+    fn run_record(status: Option<&str>) -> RuleRunRecord {
+        RuleRunRecord {
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+            command: None,
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: status.map(str::to_string),
+            skip_reason: None,
+            signal: None,
+        }
+    }
+
+    #[test]
+    fn interrupted_rules_are_not_completed() {
+        // Issue #1083: the cluster path persists a `running` record at
+        // submit time. If the driver dies before the job settles, that
+        // record is the only completion evidence — and it says the rule
+        // did NOT finish. Outputs on disk may be half-written.
+        let mut ck = CheckpointState::new();
+        ck.rule_runs
+            .insert("mixcr_all_X".into(), run_record(Some("running")));
+        ck.rule_runs
+            .insert("trust4_all_X".into(), run_record(Some("pending")));
+        ck.rule_runs
+            .insert("standardize_all_X".into(), run_record(Some("success")));
+        ck.rule_runs
+            .insert("cleanup_all_X".into(), run_record(Some("failed")));
+        ck.rule_runs.insert("legacy".into(), run_record(None));
+
+        assert!(ck.was_interrupted("mixcr_all_X"));
+        assert!(ck.was_interrupted("trust4_all_X"));
+        assert!(!ck.was_interrupted("standardize_all_X"));
+        // A failure is a terminal answer, not an interruption: it is
+        // governed by --resume-failed instead.
+        assert!(!ck.was_interrupted("cleanup_all_X"));
+        assert!(!ck.was_interrupted("legacy"));
+        assert!(!ck.was_interrupted("never_recorded"));
     }
 
     #[test]

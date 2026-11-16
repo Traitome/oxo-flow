@@ -104,6 +104,23 @@ pub type SubmitHook = Box<
         + Send,
 >;
 
+/// Settle hook: observes every terminal [`JobRecord`] the moment the driver
+/// reconciles it.
+///
+/// The cluster path uses this to fold completions into the checkpoint
+/// incrementally (issue #1083): folding only after `run` returns lost every
+/// completion when the driver was killed, leaving the restart with no
+/// trustworthy state. Errors are logged, not fatal — a checkpoint write
+/// failure must not abort a run whose jobs are already executing.
+pub type SettleHook<'a> = Box<
+    dyn FnMut(
+            JobRecord,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>
+        + Send
+        + 'a,
+>;
+
 /// Per-run hooks: checkpoint re-entry (issue #78 P3).
 pub struct DriverOptions<'a> {
     /// Run directory root: `events.jsonl` + `jobs/<rule>/` below it.
@@ -119,6 +136,8 @@ pub struct DriverOptions<'a> {
     pub sensitive_values: &'a [String],
     /// Invoked after each successful submission `(rule, job_id)`.
     pub on_submit: Option<SubmitHook>,
+    /// Invoked as each job settles with its terminal record (issue #1083).
+    pub on_settle: Option<SettleHook<'a>>,
 }
 
 /// Executes a static plan through a backend.
@@ -1135,6 +1154,18 @@ impl BackendDriver {
                         record.skip_reason.as_deref(),
                     );
                     done.insert(f.rule.clone(), record.status);
+                    // Issue #1083: persist the terminal verdict before the
+                    // next polling round — a driver killed from here on
+                    // leaves a checkpoint that already knows what finished.
+                    if let Some(ref mut hook) = opts.on_settle
+                        && let Err(e) = hook(record.clone()).await
+                    {
+                        tracing::warn!(
+                            rule = %record.rule,
+                            error = %e,
+                            "checkpoint settle hook failed"
+                        );
+                    }
                     records.push(record);
                 }
             }
@@ -1674,6 +1705,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -1691,6 +1723,63 @@ mod tests {
         let ev = events(&fx);
         assert_eq!(ev.iter().filter(|e| e["t"] == "SUBMITTED").count(), 2);
         assert_eq!(ev.iter().filter(|e| e["t"] == "COMPLETED").count(), 2);
+    }
+
+    #[test]
+    fn driver_settle_hook_observes_each_terminal_record() {
+        // Issue #1083: the cluster path folds completions into the
+        // checkpoint AS JOBS SETTLE. Without this hook a driver crash loses
+        // every verdict since start, and the restart has no trustworthy
+        // completion record — the output-existence heuristic then decides.
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = chain_plan(
+            fx.workdir.path(),
+            &[
+                ("a", "echo a > a.txt", "a.txt"),
+                ("b", "cat a.txt && echo b > b.txt", "b.txt"),
+            ],
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_hook = seen.clone();
+        let on_settle = move |record: JobRecord| -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<()>> + Send>,
+        > {
+            let seen = seen_hook.clone();
+            Box::pin(async move {
+                seen.lock()
+                    .unwrap()
+                    .push((record.rule.clone(), record.status));
+                Ok(())
+            })
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: Some(Box::new(on_settle)),
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2);
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            2,
+            "every settled job must reach the fold hook: {seen:?}"
+        );
+        assert!(seen.iter().all(|(_, status)| *status == JobStatus::Success));
+        let mut seen_rules: Vec<&str> = seen.iter().map(|(rule, _)| rule.as_str()).collect();
+        seen_rules.sort_unstable();
+        assert_eq!(seen_rules, ["a", "b"]);
     }
 
     #[test]
@@ -1717,6 +1806,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -1764,6 +1854,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -1812,6 +1903,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -1860,6 +1952,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .expect("a fresh dependency must not stall the driver");
@@ -1911,6 +2004,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -1955,6 +2049,7 @@ mod tests {
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -2018,6 +2113,7 @@ shell = "cat {input} > merged.txt"
                 DriverOptions {
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
@@ -2145,6 +2241,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2193,6 +2290,7 @@ shell = "echo asm > out/{assembler}.txt"
                         merge: None,
                         sensitive_values: &[],
                         on_submit: None,
+                        on_settle: None,
                     },
                 ))
                 .unwrap_err();
@@ -2234,6 +2332,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &["s3cr3t-token-42".to_string()],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -2299,6 +2398,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2445,6 +2545,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -2524,6 +2625,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -2574,6 +2676,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .expect("the blind-settlement guard must end the run");
@@ -2638,6 +2741,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2694,6 +2798,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: Some(Box::new(on_submit)),
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -2754,6 +2859,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2809,6 +2915,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2848,6 +2955,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2894,6 +3002,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -2966,6 +3075,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();
@@ -3020,6 +3130,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap_err();
@@ -3090,6 +3201,7 @@ shell = "echo asm > out/{assembler}.txt"
                     merge: None,
                     sensitive_values: &[],
                     on_submit: None,
+                    on_settle: None,
                 },
             ))
             .unwrap();

@@ -47,6 +47,12 @@ pub enum RuleStatus {
     /// from a run whose checkpoint was never written after a crash or a
     /// failed exit).
     SkippedFresh,
+    /// Submitted to a scheduler but never settled: the checkpoint carries
+    /// a `running`/`pending` execution record from a driver that died
+    /// before polling the result (issue #1083). Nothing proves the rule
+    /// finished — its declared outputs may be partially written — so the
+    /// freshness gate must not skip it.
+    Interrupted,
 }
 
 impl RuleStatus {
@@ -132,6 +138,12 @@ impl RuleStatus {
             RuleStatus::SkippedFresh => {
                 ("skip", "skip-fresh", "outputs up-to-date".to_string(), None)
             }
+            RuleStatus::Interrupted => (
+                "run",
+                "run-interrupted",
+                "submitted but never settled — outputs may be partial".to_string(),
+                None,
+            ),
         }
     }
 }
@@ -406,6 +418,12 @@ pub fn preview_run_plan(
             // the executor freshness gate, so config invalidation wins here.
             if config_invalidated.contains(name) {
                 RuleStatus::ConfigInvalidated
+            } else if ck.was_interrupted(name) {
+                // Issue #1083: a `running`/`pending` execution record with
+                // no terminal verdict means the submitted job's fate is
+                // unknown. A partially written output must never be read
+                // as completion, so the freshness gate is bypassed.
+                RuleStatus::Interrupted
             } else if config.get_rule(name).is_some_and(|rule| {
                 rule_outputs_exist_fresh(rule, workdir, wildcard_values, Some(&ck.checksums))
             }) {
@@ -1169,7 +1187,7 @@ pub(crate) fn merge_profile(
 mod tests {
     use super::*;
     use oxo_flow_core::config::WorkflowConfig;
-    use oxo_flow_core::executor::checkpoint::snapshot_input_manifest;
+    use oxo_flow_core::executor::checkpoint::{RuleRunRecord, snapshot_input_manifest};
 
     /// Issue #241: a `when` with a relative `file_exists(...)` gate must
     /// resolve against the workflow root — the process cwd is irrelevant.
@@ -1565,6 +1583,33 @@ version = "1.0"
         assert!(format!("{err2:#}").contains("no .toml/.oxoflow profile files"));
     }
 
+    /// Deterministic freshness for the `fixture()` workdir: the fixture
+    /// writes inputs and outputs back to back, and on filesystems with
+    /// coarse timestamp granularity (server /tmp is XFS: ~1ms ticks
+    /// collapse back-to-back writes to the same mtime) the strict `>`
+    /// comparison in `file_is_newer` ties and the freshness gate flips (CI
+    /// flake class: trim_cohort_S1 / align_cohort_S2 stayed
+    /// NeverCompleted). Age each dependency TIER so every out-vs-in
+    /// comparison is strict regardless of tick granularity: raw/* (trim's
+    /// inputs) oldest, trimmed/* (trim's output AND align's input) newer,
+    /// and the pre-created aligned/* + combined.bam keep their creation
+    /// mtimes — newest of all.
+    fn age_fixture_tiers(dir: &std::path::Path) {
+        let older_raw = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
+        let older_trim = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
+        for (f, t) in [
+            ("raw/S1.fq", older_raw),
+            ("raw/S2.fq", older_raw),
+            ("trimmed/S1.fq", older_trim),
+            ("trimmed/S2.fq", older_trim),
+        ] {
+            let path = dir.join(f);
+            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(t))
+                .unwrap();
+        }
+    }
+
     #[test]
     fn empty_checkpoint_with_fresh_outputs_skips_everything() {
         // The fixture pre-creates every declared output. With no checkpoint,
@@ -1575,30 +1620,7 @@ version = "1.0"
         // NOT skip it either — it stays NeverCompleted.
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = fixture(dir.path());
-        // Deterministic freshness: the fixture writes inputs and outputs
-        // back to back, and on filesystems with coarse timestamp
-        // granularity (server /tmp is XFS: ~1ms ticks collapse
-        // back-to-back writes to the same mtime) the strict `>`
-        // comparison in `file_is_newer` ties and the freshness gate flips
-        // (CI flake class: trim_cohort_S1 / align_cohort_S2 stayed
-        // NeverCompleted). Age each dependency TIER so every out-vs-in
-        // comparison is strict regardless of tick granularity: raw/*
-        // (trim's inputs) oldest, trimmed/* (trim's output AND align's
-        // input) newer, and the pre-created aligned/* + combined.bam keep
-        // their creation mtimes — newest of all.
-        let older_raw = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
-        let older_trim = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
-        for (f, t) in [
-            ("raw/S1.fq", older_raw),
-            ("raw/S2.fq", older_raw),
-            ("trimmed/S1.fq", older_trim),
-            ("trimmed/S2.fq", older_trim),
-        ] {
-            let path = dir.path().join(f);
-            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-            file.set_times(std::fs::FileTimes::new().set_modified(t))
-                .unwrap();
-        }
+        age_fixture_tiers(dir.path());
         let ck = CheckpointState::new();
         let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
         assert_eq!(preview.plan.len(), 5);
@@ -1613,6 +1635,61 @@ version = "1.0"
         assert_eq!(preview.will_skip, 4);
         assert_eq!(preview.protected_outside, 0);
         assert!(preview.cascade_chains.is_empty());
+    }
+
+    #[test]
+    fn interrupted_submission_is_not_skipped_as_fresh() {
+        // Issue #1083: a cluster job killed mid-write leaves its declared
+        // output on disk (partially written) and a `running` execution
+        // record in the checkpoint. Output existence must not be read as
+        // completion — the restart has to re-queue the rule.
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        age_fixture_tiers(dir.path());
+        assert!(
+            dir.path().join("trimmed/S1.fq").exists(),
+            "the fixture pre-creates the output the killed job left behind"
+        );
+
+        let mut ck = CheckpointState::new();
+        ck.rule_runs.insert(
+            "trim_cohort_S1".to_string(),
+            RuleRunRecord {
+                exit_code: None,
+                started_at: None,
+                finished_at: None,
+                command: None,
+                stderr_tail: None,
+                stdout_tail: None,
+                caption: None,
+                status: Some("running".to_string()),
+                skip_reason: None,
+                signal: None,
+            },
+        );
+
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(
+            status_of(&preview, "trim_cohort_S1"),
+            &RuleStatus::Interrupted,
+            "a submitted-but-unsettled rule must never classify as fresh"
+        );
+        assert!(!RuleStatus::Interrupted.is_skip());
+
+        // Control: the same on-disk state without an execution record keeps
+        // the historical crash-leftover behavior (issue #77 parity).
+        let preview = run_preview(
+            &CheckpointState::new(),
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &wildcard_values,
+        );
+        assert_eq!(
+            status_of(&preview, "trim_cohort_S1"),
+            &RuleStatus::SkippedFresh
+        );
     }
 
     #[test]

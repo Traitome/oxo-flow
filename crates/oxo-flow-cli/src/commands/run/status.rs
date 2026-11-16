@@ -290,6 +290,13 @@ pub(crate) fn compute_staleness_reasons(
                 ),
             ),
             RuleStatus::Forced => ("forced".to_string(), "--rerun was requested".to_string()),
+            // Not reachable for a completed rule (mark_completed overwrites
+            // the running record), but the match must stay exhaustive: an
+            // interrupted rule has no completion credit to explain.
+            RuleStatus::Interrupted => (
+                "interrupted".to_string(),
+                "submitted but never settled — outputs may be partial".to_string(),
+            ),
         };
         reasons.insert(entry.name.clone(), (reason, detail));
     }
