@@ -72,11 +72,13 @@ produces an unrunnable workflow, the import fails and no output file is written.
 - A single-quoted script that references a declared input variable: Nextflow
   does not interpolate single-quoted strings, so mapping the variable would
   change the command.
-- Fan-in inputs: an input wildcard that appears in **no** output of the rule
-  (e.g. `expand("quant/{sample}.sf", …)` feeding a constant
-  `results/report.txt`, or `rules.<name>.output` into a constant output).
-  Emitting a wildcard input would create one instance per sample that all
-  overwrite the same output. Use the engine's `expand_inputs` fan-in construct
+- Fan-in and mixed outputs: a wildcard input that appears in **no** output of
+  the rule (e.g. `expand("quant/{sample}.sf", …)` feeding a constant
+  `results/report.txt`, or `rules.<name>.output` into a constant output), or a
+  wildcard fan-out whose output set mixes wildcard and constant paths (e.g.
+  `out/{sample}.bam` plus `reports/summary.txt`). Every instance would write
+  the constant output, and a wildcard input with no matching output has no
+  fan-out source. Use the engine's `expand_inputs` fan-in construct
   (workflow-format reference) or hand-port the rule.
 - A process declared with `path` inputs but never invoked in a `workflow {}`
   block (the input source is unknown).
@@ -107,9 +109,11 @@ per-rule `wildcard_constraints:`, `shadow:`, `group:`, `default_target:`,
 `handlers:`, `include:`, `subworkflow`, `module`, `use rule`, `configfile:`,
 `ruleorder:`, `onsuccess:`, `onerror:`, `directory(...)`, lambda/config/params/
 checkpoints-based dynamic input/output, unknown directives, unknown resource
-keys, duplicate rule names, fan-in inputs (a wildcard input with no matching
-output wildcard — use `expand_inputs` or hand-port), and `{params.*}` /
-`{resources.*}` / `{rule}` / `{checkpoints.*}` placeholders in `shell:`.
+keys, duplicate rule names, fan-in/mixed outputs (a wildcard input with no
+matching output wildcard, or wildcard inputs alongside a constant output that
+every instance would overwrite — use `expand_inputs` or hand-port), and
+`{params.*}` / `{resources.*}` / `{rule}` / `{checkpoints.*}` placeholders in
+`shell:`.
 
 For a fan-out `expand(pattern, key=[...])`, the explicit value list is **not
 materialized**: the pattern is imported, but the wildcard domain must be
