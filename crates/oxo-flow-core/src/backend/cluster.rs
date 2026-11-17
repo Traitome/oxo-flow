@@ -1414,7 +1414,13 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
             continue;
         }
         let cells = accounting_columns(trimmed);
-        if cells.len() > 1 && cells[0].eq_ignore_ascii_case("JobID") {
+        // Reviewer catch (release-audit round): the first cell may carry a
+        // sacct format-name variant — `JobIDRaw` on raw stores, `JobIDOK` on
+        // completed-only views. Prefix-matching (not exact equality) keeps
+        // every JobID* header recognized; main's blanket
+        // `starts_with("JobID")` filter treated all of them as headers, and
+        // the tighter check here would have regressed those stores.
+        if cells.len() > 1 && cells[0].to_ascii_lowercase().starts_with("jobid") {
             // Header row: derive the column layout from the names actually
             // present; a name outside the known set keeps its positional
             // fallback slot.
@@ -2262,6 +2268,22 @@ mod accounting_tests {
 4813        00:01:22  COMPLETED      0:0    128.2M\n";
         assert_eq!(
             parse_accounting(&ClusterBackend::Slurm, text),
+            Some(TerminalRecord {
+                status: BackendJobStatus::Completed,
+                exit_code: Some(0),
+                elapsed_secs: Some(82),
+                max_rss_mb: Some(128),
+                cpu_seconds: None,
+            })
+        );
+        // Sacct format-name variants (`JobIDRaw` on raw stores, `JobIDOK` on
+        // completed-only views) must keep matching as header rows — main's
+        // blanket `starts_with("JobID")` filter treated them as headers, and
+        // an exact-equality check here would regress those stores.
+        let raw = "       JobIDRaw    Elapsed      State ExitCode    MaxRSS\n\
+4813        00:01:22  COMPLETED      0:0    128.2M\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Slurm, raw),
             Some(TerminalRecord {
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
