@@ -228,6 +228,11 @@ Authorization: Bearer <token>
 Revokes the presented session server-side — the token stops
 authenticating immediately instead of living out its configured TTL. The
 client should drop its local copy (`logged_out: true` on success).
+Revocation is **fail-closed** (issue #1135): if the session row cannot be
+deleted the endpoint answers `500 DB_ERROR` rather than `logged_out: true`,
+so a client is never told a still-live token is dead. A token that was
+already absent (e.g. a repeated logout) is the benign case and still
+succeeds.
 Deleting a user (`DELETE /api/users/{id}`) cascades: the deleted user's
 sessions and API keys are removed with the account.
 

@@ -1277,13 +1277,13 @@ impl StorageBackend for SqliteBackend {
         .map_err(|e| e.to_string())
     }
 
-    async fn delete_session(&self, token: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM sessions WHERE token = ?")
+    async fn delete_session(&self, token: &str) -> Result<u64, String> {
+        let result = sqlx::query("DELETE FROM sessions WHERE token = ?")
             .bind(token)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     async fn cleanup_expired_sessions(&self) -> Result<u64, String> {
@@ -2474,10 +2474,13 @@ mod tests {
         let cleaned = backend.cleanup_expired_sessions().await.unwrap();
         assert_eq!(cleaned, 1, "Should clean up 1 expired session");
 
-        // Delete valid session
-        backend.delete_session(&token).await.unwrap();
+        // Delete valid session: reports one row actually removed (#1135).
+        assert_eq!(backend.delete_session(&token).await.unwrap(), 1);
         let deleted = backend.get_session(&token).await.unwrap();
         assert!(deleted.is_none());
+        // Second delete of the same token removes nothing (benign no-op),
+        // which logout distinguishes from a real revoke.
+        assert_eq!(backend.delete_session(&token).await.unwrap(), 0);
     }
 
     // -----------------------------------------------------------------------

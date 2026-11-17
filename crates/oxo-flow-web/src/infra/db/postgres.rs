@@ -1095,13 +1095,13 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| e.to_string())
     }
 
-    async fn delete_session(&self, token: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM sessions WHERE token = $1")
+    async fn delete_session(&self, token: &str) -> Result<u64, String> {
+        let result = sqlx::query("DELETE FROM sessions WHERE token = $1")
             .bind(token)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     async fn cleanup_expired_sessions(&self) -> Result<u64, String> {
