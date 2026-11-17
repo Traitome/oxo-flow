@@ -7,6 +7,7 @@
 
 use super::{
     escape_toml_basic, infer_bio_types, normalize_memory, push_types_contract, render_shell,
+    wildcard_names,
 };
 use crate::error::{OxoFlowError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +51,12 @@ struct DeclaredPath {
     temp: bool,
     protected: bool,
     ancient: bool,
+    /// Source line of the declaration (diagnostics).
+    line: usize,
+    /// Declared through expand(...) — fan-in/fan-out validation applies.
+    from_expand: bool,
+    /// expand(...) carried an explicit value list (not materialized).
+    expand_values: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -294,6 +301,9 @@ fn parse_snakemake(source: &str) -> Result<ParsedSnakemake> {
         }
     }
     resolve_rule_outputs(&mut rules)?;
+    for rule in &rules {
+        validate_input_domains(rule, &mut warnings)?;
+    }
     Ok((rules, warnings, wildcard_constraints))
 }
 
@@ -641,6 +651,97 @@ fn parse_rule(
     Ok((rule, i))
 }
 
+/// `expand()` can be a fan-OUT input (the rule's output carries the same
+/// wildcard) or a fan-IN input (one output consumes many per-sample files).
+///
+/// Fan-out maps to a normal wildcard input, with a warning that the explicit
+/// value list is not materialized. Fan-in cannot be represented by a
+/// wildcard rule — every instance would write the same output — so it is a
+/// hard error pointing at the engine's `expand_inputs` fan-in construct.
+fn validate_input_domains(rule: &ParsedRule, warnings: &mut Vec<String>) -> Result<()> {
+    if rule.sink {
+        return Ok(());
+    }
+    let output_wildcards: BTreeSet<String> = rule
+        .outputs
+        .iter()
+        .filter_map(|path| match &path.source {
+            PathSource::Literal(pattern) => Some(wildcard_names(pattern)),
+            PathSource::RuleOutput(_) => None,
+        })
+        .flatten()
+        .collect();
+
+    // General fan-in shape: a wildcard input feeding a rule whose outputs are
+    // all constant. One instance per input value would overwrite the same
+    // output, whether the input came from expand(), rules.X.output, or a
+    // literal per-sample pattern.
+    if !rule.outputs.is_empty() && output_wildcards.is_empty() {
+        for path in &rule.inputs {
+            let PathSource::Literal(pattern) = &path.source else {
+                continue;
+            };
+            let wildcards = wildcard_names(pattern);
+            if !wildcards.is_empty() {
+                let names = wildcards.into_iter().collect::<Vec<_>>().join(", ");
+                return Err(line_error(
+                    path.line,
+                    format!(
+                        "fan-in input is not supported: input pattern '{pattern}' carries \
+                         wildcard(s) {{{names}}}, but rule '{}' declares only constant \
+                         output(s). Emitting one instance per input would overwrite the same \
+                         output. Use the engine's `expand_inputs` fan-in construct \
+                         (workflow-format reference) or hand-port this rule",
+                        rule.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    for path in &rule.inputs {
+        if !path.from_expand {
+            continue;
+        }
+        let PathSource::Literal(pattern) = &path.source else {
+            continue;
+        };
+        let wildcards = wildcard_names(pattern);
+        let fan_out = !wildcards.is_empty()
+            && wildcards
+                .iter()
+                .all(|wildcard| output_wildcards.contains(wildcard));
+        if !fan_out {
+            let missing = wildcards
+                .iter()
+                .filter(|wildcard| !output_wildcards.contains(*wildcard))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(line_error(
+                path.line,
+                format!(
+                    "expand() fan-in is not supported: input pattern '{pattern}' carries \
+                     wildcard(s) {{{missing}}} that do not appear in any output of rule '{}'. \
+                     Emitting a wildcard input would turn this into a per-sample rule whose \
+                     instances overwrite the same output. Use the engine's `expand_inputs` \
+                     fan-in construct (workflow-format reference) or hand-port this rule",
+                    rule.name
+                ),
+            ));
+        }
+        if path.expand_values {
+            warnings.push(format!(
+                "line {}: expand() explicit value list is not materialized — the pattern \
+                 '{pattern}' was imported, but declare the wildcard domain with \
+                 sample_pattern / [[sample_groups]] / [[values]] before running",
+                path.line
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_u32(value: &str, line: usize, field: &str) -> Result<u32> {
     value.parse::<u32>().map_err(|_| {
         line_error(
@@ -666,7 +767,9 @@ fn parse_path_line(
         if item.is_empty() {
             continue;
         }
-        let (name, value) = match item.split_once('=') {
+        // The `=` splitter MUST be top-level aware: expand(...) carries
+        // keyword arguments (`sample=[...]`) whose `=` is inside the call.
+        let (name, value) = match split_top_level_once(item, '=') {
             Some((name, value)) => (Some(name.trim().to_string()), value.trim()),
             None => (None, item),
         };
@@ -751,6 +854,9 @@ fn parse_path_value(value: &str, line: usize) -> Result<DeclaredPath> {
             temp,
             protected: false,
             ancient: false,
+            line,
+            from_expand: false,
+            expand_values: false,
         });
     }
     if let Some(rest) = inner.strip_prefix("expand(") {
@@ -778,6 +884,9 @@ fn parse_path_value(value: &str, line: usize) -> Result<DeclaredPath> {
             temp,
             protected,
             ancient,
+            line,
+            from_expand: true,
+            expand_values: split_top_level_once(rest, '=').is_some(),
         });
     }
     if inner.starts_with("lambda")
@@ -800,20 +909,25 @@ fn parse_path_value(value: &str, line: usize) -> Result<DeclaredPath> {
         ));
     }
     let was_quoted = inner.starts_with('"') || inner.starts_with('\'');
-    let literal = unquote(inner);
-    if literal.is_empty()
-        || (!was_quoted
-            && literal
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-    {
+    if !was_quoted {
+        // Every supported non-literal form was handled above. An unquoted
+        // remainder means the declaration was split or parsed incorrectly
+        // (e.g. a top-level `=` inside expand()). Never accept it as a path:
+        // brackets, parentheses, `=`, and commas are the exact junk this
+        // guard exists to reject.
         return Err(line_error(
             line,
             format!(
-                "input/output entry `{value}` is not a quoted path — the importer only accepts \
-                 quoted literal patterns, expand(...), temp(...), protected(...), ancient(...), \
-                 and rules.<name>.output"
+                "cannot parse input/output declaration `{value}` — expected a quoted path, \
+                 expand(...), temp(...), protected(...), ancient(...), or rules.<name>.output"
             ),
+        ));
+    }
+    let literal = unquote(inner);
+    if literal.is_empty() {
+        return Err(line_error(
+            line,
+            format!("input/output declaration `{value}` is an empty quoted path"),
         ));
     }
     Ok(DeclaredPath {
@@ -822,6 +936,9 @@ fn parse_path_value(value: &str, line: usize) -> Result<DeclaredPath> {
         temp,
         protected,
         ancient,
+        line,
+        from_expand: false,
+        expand_values: false,
     })
 }
 
@@ -1348,7 +1465,16 @@ fn translate_token(
                     ),
                 ));
             };
-            Ok(Some(if *index == 0 {
+            // `{input}`/`{output}` expand to ALL entries (space-joined), so
+            // a named reference must use the indexed form whenever the rule
+            // declares more than one entry. Using `{input}` for index 0 in a
+            // multi-input rule duplicated every other input in the command.
+            let total = if head == "input" {
+                rule.inputs.len()
+            } else {
+                rule.outputs.len()
+            };
+            Ok(Some(if total == 1 {
                 format!("{{{head}}}")
             } else {
                 format!("{{{head}[{index}]}}")
@@ -1407,6 +1533,38 @@ fn translate_token(
             Ok(None)
         }
     }
+}
+
+/// Split at the first top-level occurrence of `needle` (outside quotes and
+/// nested `()[]{}`). Returns `None` when the needle never occurs at depth 0.
+fn split_top_level_once(text: &str, needle: char) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if ch == needle && depth == 0 => {
+                return Some((&text[..idx], &text[idx + ch.len_utf8()..]));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn split_top_level(text: &str) -> Vec<&str> {
@@ -1643,7 +1801,10 @@ rule pair:
         "tool {input.r1} {input.r2} {output.bam}"
 "#;
         let toml = transpile_snakemake(source).expect("named I/O must transpile");
-        assert!(toml.contains("tool {input} {input[1]} {output}"), "{toml}");
+        assert!(
+            toml.contains("tool {input[0]} {input[1]} {output}"),
+            "multi-input named refs must use indexed placeholders: {toml}"
+        );
 
         let bad = source.replace("{input.r1}", "{input.nope}");
         let error = transpile_snakemake(&bad).expect_err("unknown named input must fail");
@@ -1703,5 +1864,116 @@ rule x:
 "#;
         let error = transpile_snakemake(source).expect_err("duplicate names must fail");
         assert!(error.to_string().contains("duplicate"), "{error}");
+    }
+
+    #[test]
+    fn expand_with_explicit_values_keeps_the_pattern_and_warns() {
+        let source = r#"
+rule quantify:
+    input:
+        expand("raw/{sample}.fastq", sample=["A", "B"])
+    output:
+        "quant/{sample}.sf"
+    shell:
+        "salmon quant -r {input} -o quant/{sample}"
+"#;
+        let (toml, warnings) =
+            transpile_snakemake_with_warnings(source).expect("expand must transpile");
+        assert!(
+            toml.contains(r#"input = ["raw/{sample}.fastq"]"#),
+            "expand must yield the wildcard pattern: {toml}"
+        );
+        assert!(
+            !toml.contains(r#"["A""#) && !toml.contains(r#""])"#),
+            "expand keyword arguments must never leak into a path: {toml}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("explicit value list is not materialized")),
+            "the un-materialized value list must be warned about: {warnings:?}"
+        );
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        assert_eq!(
+            config.rules[0].input,
+            vec!["raw/{sample}.fastq".to_string()].into()
+        );
+        assert_eq!(
+            config.rules[0].output,
+            vec!["quant/{sample}.sf".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn top_level_equals_split_ignores_nested_arguments() {
+        assert_eq!(
+            split_top_level_once(r#"expand("a/{x}.txt", x=["A", "B"])"#, '='),
+            None
+        );
+        assert_eq!(
+            split_top_level_once(r#"r1="a/{x}_1.txt""#, '='),
+            Some((r#"r1"#, r#""a/{x}_1.txt""#))
+        );
+    }
+
+    #[test]
+    fn unquoted_declaration_is_a_hard_error() {
+        let source = r#"
+rule x:
+    input:
+        data/{sample}.txt
+    output:
+        "out/{sample}.txt"
+    shell:
+        "cp {input} {output}"
+"#;
+        let error = transpile_snakemake(source).expect_err("unquoted path must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot parse input/output declaration"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn expand_fan_in_is_a_hard_error_with_actionable_guidance() {
+        let source = r#"
+rule report:
+    input:
+        expand("quant/{sample}.sf", sample=["A", "B"])
+    output:
+        "results/report.txt"
+    shell:
+        "cat {input} > {output}"
+"#;
+        let error = transpile_snakemake(source).expect_err("fan-in expand must fail");
+        let message = error.to_string();
+        assert!(message.contains("fan-in"), "{message}");
+        assert!(message.contains("expand_inputs"), "{message}");
+        assert!(message.contains("line 4"), "{message}");
+    }
+
+    #[test]
+    fn rules_output_fan_in_is_a_hard_error() {
+        let source = r#"
+rule quantify:
+    input:
+        "raw/{sample}.fastq"
+    output:
+        "quant/{sample}.sf"
+    shell:
+        "salmon -r {input} -o quant/{sample}"
+
+rule report:
+    input:
+        rules.quantify.output
+    output:
+        "results/report.txt"
+    shell:
+        "cat {input} > {output}"
+"#;
+        let error = transpile_snakemake(source).expect_err("fan-in rules.output must fail");
+        assert!(error.to_string().contains("fan-in"), "{error}");
     }
 }

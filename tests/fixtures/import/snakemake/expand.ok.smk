@@ -1,13 +1,13 @@
-# Supported subset: expand() input patterns, temp() outputs, wildcard
-# constraints, localrules, and envmodules.
+# Supported subset: fan-OUT expand (the rule output carries the same
+# wildcard), temp() output, wildcard constraints, localrules, envmodules.
 wildcard_constraints:
     sample="[A-Za-z0-9_]+"
 
-localrules: report
+localrules: quantify
 
 rule quantify:
     input:
-        "raw/{sample}.fastq"
+        expand("raw/{sample}.fastq", sample=["A", "B"])
     output:
         temp("quant/{sample}.sf")
     threads: 4
@@ -16,11 +16,3 @@ rule quantify:
         "samtools/1.19"
     shell:
         "salmon quant -i index -l A -r {input} -o quant/{sample}"
-
-rule report:
-    input:
-        expand("quant/{sample}.sf", sample=["A", "B"])
-    output:
-        "results/report.txt"
-    shell:
-        "cat {input} > {output}"

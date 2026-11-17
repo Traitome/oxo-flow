@@ -5,6 +5,7 @@ pub mod snakemake;
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Source workflow format to transpile from.
@@ -157,6 +158,27 @@ pub(crate) fn render_shell(shell: &str) -> String {
     } else {
         format!("shell = \"{}\"\n", escape_toml_basic(shell))
     }
+}
+
+/// Extract the wildcard names from a path pattern (`quant/{sample}.sf`).
+///
+/// Shared by both emitters so their fan-in/fan-out classification cannot
+/// drift apart.
+pub(crate) fn wildcard_names(pattern: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut rest = pattern;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            break;
+        };
+        let name = &after[..close];
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            names.insert(name.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    names
 }
 
 /// Normalize a memory string from either DSL to the engine's `N G` / `N M` form.

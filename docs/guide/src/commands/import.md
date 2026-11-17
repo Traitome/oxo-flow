@@ -72,6 +72,12 @@ produces an unrunnable workflow, the import fails and no output file is written.
 - A single-quoted script that references a declared input variable: Nextflow
   does not interpolate single-quoted strings, so mapping the variable would
   change the command.
+- Fan-in inputs: an input wildcard that appears in **no** output of the rule
+  (e.g. `expand("quant/{sample}.sf", …)` feeding a constant
+  `results/report.txt`, or `rules.<name>.output` into a constant output).
+  Emitting a wildcard input would create one instance per sample that all
+  overwrite the same output. Use the engine's `expand_inputs` fan-in construct
+  (workflow-format reference) or hand-port the rule.
 - A process declared with `path` inputs but never invoked in a `workflow {}`
   block (the input source is unknown).
 - A process invoked more than once in the workflow block.
@@ -83,7 +89,7 @@ produces an unrunnable workflow, the import fails and no output file is written.
 | Construct | Behavior |
 |---|---|
 | `rule NAME:` | One rule per rule block; duplicate names are errors |
-| `input:` / `output:` | Quoted literal patterns, `expand("pattern/{wildcard}", …)`, and `rules.<name>.output` (single-output rules only) |
+| `input:` / `output:` | Quoted literal patterns; fan-OUT `expand("pattern/{wildcard}", …)` where the rule's output carries the same wildcard; `rules.<name>.output` (single-output rules only) |
 | `temp(…)` / `protected(…)` / `ancient(…)` | `temporary` + `temp_output`, `protected_output`, `ancient` |
 | `touch(…)` | Treated as a plain output with a warning (the engine verifies declared outputs exist) |
 | `threads:` / `priority:` / `retries:` | Rule fields |
@@ -101,8 +107,14 @@ per-rule `wildcard_constraints:`, `shadow:`, `group:`, `default_target:`,
 `handlers:`, `include:`, `subworkflow`, `module`, `use rule`, `configfile:`,
 `ruleorder:`, `onsuccess:`, `onerror:`, `directory(...)`, lambda/config/params/
 checkpoints-based dynamic input/output, unknown directives, unknown resource
-keys, duplicate rule names, and `{params.*}` / `{resources.*}` / `{rule}` /
-`{checkpoints.*}` placeholders in `shell:`.
+keys, duplicate rule names, fan-in inputs (a wildcard input with no matching
+output wildcard — use `expand_inputs` or hand-port), and `{params.*}` /
+`{resources.*}` / `{rule}` / `{checkpoints.*}` placeholders in `shell:`.
+
+For a fan-out `expand(pattern, key=[...])`, the explicit value list is **not
+materialized**: the pattern is imported, but the wildcard domain must be
+declared with `sample_pattern`, `[[sample_groups]]`, `[[pairs]]`, or
+`[[values]]` before running.
 
 Brace text the importer does not recognize (bash `${VAR}`, brace expansion,
 awk `{print $1}`) passes through unchanged.

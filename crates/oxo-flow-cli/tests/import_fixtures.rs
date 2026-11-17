@@ -5,6 +5,7 @@
 //! fixture must fail with a hard error whose text contains the marker on
 //! its `# EXPECT-ERROR:` line, and must not leave an output file behind.
 
+use oxo_flow_core::config::WorkflowConfig;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -68,6 +69,23 @@ fn supported_import_fixtures_import_and_pass_the_static_gates() {
                 "import must accept fixture {}: {stderr}",
                 source.display()
             );
+
+            // Static acceptance is not fidelity: parse the generated
+            // workflow and assert path-level invariants plus per-fixture
+            // golden substrings, so junk like `[\"A\", \"B\"])` can never
+            // pass the corpus gate again.
+            let toml = std::fs::read_to_string(&output).unwrap();
+            let config = WorkflowConfig::parse(&toml).unwrap_or_else(|error| {
+                panic!("{} generated invalid TOML: {error}", source.display())
+            });
+            let file_name = source.file_name().unwrap().to_str().unwrap();
+            assert_fixture_invariants(file_name, &toml, &config);
+            if file_name == "expand.ok.smk" {
+                assert!(
+                    stderr.contains("explicit value list is not materialized"),
+                    "expand() with explicit values must warn: {stderr}"
+                );
+            }
 
             let (ok, stdout, stderr) = run(
                 &["validate", "--json", output.to_str().unwrap()],
@@ -158,4 +176,73 @@ fn unsupported_import_fixtures_fail_with_a_named_hard_error() {
         }
     }
     assert!(checked >= 6, "expected at least 6 unsupported fixtures");
+}
+
+fn assert_fixture_invariants(file_name: &str, toml: &str, config: &WorkflowConfig) {
+    for rule in &config.rules {
+        assert!(
+            rule.shell
+                .as_deref()
+                .is_some_and(|shell| !shell.trim().is_empty()),
+            "{}: rule '{}' must have a translated shell",
+            file_name,
+            rule.name
+        );
+        for path in rule
+            .input
+            .to_vec()
+            .iter()
+            .chain(rule.output.to_vec().iter())
+        {
+            assert!(!path.is_empty(), "{}: empty path", file_name);
+            for junk in ['[', ']', '"', '=', ','] {
+                assert!(
+                    !path.contains(junk),
+                    "{}: rule '{}' path {path:?} contains parser junk {junk:?}",
+                    file_name,
+                    rule.name
+                );
+            }
+        }
+    }
+
+    let required: &[&str] = match file_name {
+        "expand.ok.smk" => &[
+            r#"input = ["raw/{sample}.fastq"]"#,
+            r#"output = ["quant/{sample}.sf"]"#,
+        ],
+        "rnaseq.ok.smk" => &[
+            r#"input = ["data/{sample}_1.fastq.gz", "data/{sample}_2.fastq.gz"]"#,
+            "{input[0]} {input[1]}",
+            "{output[0]}",
+        ],
+        "nfcore_module.ok.nf" => &[
+            r#"input = ["data/{sample}.fastq.gz"]"#,
+            r#"output = ["{sample}_fastqc.html", "{sample}_fastqc.zip"]"#,
+            "ext_args = \"\"",
+        ],
+        "rnaseq.ok.nf" => &[
+            r#"depends_on = ["trim"]"#,
+            r#"input = ["{sample}.trimmed.fastq.gz"]"#,
+            r#"output = ["{sample}.bam"]"#,
+        ],
+        other => panic!("{other} has no golden assertions"),
+    };
+    for needle in required {
+        assert!(
+            toml.contains(needle),
+            "{file_name}: generated workflow must contain {needle:?}:\n{toml}"
+        );
+    }
+
+    let forbidden: &[&str] = match file_name {
+        "expand.ok.smk" => &[r#"["A""#, r#""])"#],
+        _ => &[],
+    };
+    for needle in forbidden {
+        assert!(
+            !toml.contains(needle),
+            "{file_name}: generated workflow must not contain {needle:?}:\n{toml}"
+        );
+    }
 }

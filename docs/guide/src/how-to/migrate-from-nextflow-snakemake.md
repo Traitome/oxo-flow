@@ -124,7 +124,7 @@ The authoritative construct-by-construct tables live in
 | Area | Nextflow DSL2 | Snakemake |
 |---|---|---|
 | Unit | `process` blocks | `rule` blocks |
-| I/O | `path`/`file` channels, literal patterns, workflow wiring (call/pipe/upstream/emit) | quoted literals, single-pattern `expand`, `rules.X.output` |
+| I/O | `path`/`file` channels, literal patterns, workflow wiring (call/pipe/upstream/emit) | quoted literals, fan-OUT `expand` (output carries the same wildcard), `rules.X.output` |
 | Resources | `cpus`, `memory`, `time`, `disk`, `queue`, `maxRetries`, `scratch` | `threads`, `priority`, `retries`, `resources` (mem/time/gpu/disk) |
 | Environment | literal `conda`/`container`, `module`, `env` | `conda`/`container`/`singularity`/`envmodules`, `envvars` |
 | Script | `$task.cpus`, input variables, `meta.id`, `task.ext.args/prefix`, `def` args/prefix preludes | `{input}`/`{output}`/`{wildcards.X}`/`{threads}`/`{log}`/`{benchmark}` |
@@ -134,7 +134,9 @@ The authoritative construct-by-construct tables live in
 Everything else is a **hard error that names the construct** (parse-level errors carry a source line) — dynamic resources,
 channel operators, `include`, `params`, `run:`/`script:` bodies, lambdas,
 directory outputs, dynamic containers, indexed input tuples, unresolved
-interpolations, and unknown directives. The importer never writes a workflow
+interpolations, unknown directives, and **fan-in inputs** (a wildcard input
+with no matching output wildcard, such as `expand(...)` feeding one constant
+output). Use the engine's `expand_inputs` fan-in construct or hand-port. The importer never writes a workflow
 it could not translate, and it parses plus statically validates the generated
 TOML before returning.
 

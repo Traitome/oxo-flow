@@ -2,6 +2,7 @@
 
 use super::{
     escape_toml_basic, infer_bio_types, normalize_memory, push_types_contract, render_shell,
+    wildcard_names,
 };
 use crate::error::{OxoFlowError, Result};
 use regex::Regex;
@@ -722,6 +723,7 @@ fn parse_single_process(name: &str, process_line: usize, body: &str) -> Result<N
         proc.line,
         &script_lines,
         &input_vars,
+        proc.input_decls.len(),
         proc.script_single_quoted,
         &mut proc.script_warnings,
         &mut proc.uses_ext_args,
@@ -1656,6 +1658,33 @@ fn render_process_at(
         }
     }
 
+    // Fan-in shape: wildcard input(s) feeding a process whose outputs are all
+    // constant. Nextflow isolates each task in its own workdir, so this is
+    // valid there; in oxo-flow every instance shares the rule workdir and
+    // would overwrite the same output.
+    let input_wildcards: BTreeSet<String> = inputs
+        .iter()
+        .flat_map(|pattern| wildcard_names(pattern))
+        .collect();
+    let output_wildcards: BTreeSet<String> = outputs
+        .iter()
+        .flat_map(|output| wildcard_names(&output.pattern))
+        .collect();
+    if !outputs.is_empty() && output_wildcards.is_empty() && !input_wildcards.is_empty() {
+        let names = input_wildcards.into_iter().collect::<Vec<_>>().join(", ");
+        return Err(nextflow_error(
+            &process.name,
+            process.line,
+            format!(
+                "process consumes wildcard input(s) {{{names}}} but declares only constant \
+                 output(s). Nextflow isolates each task in its own workdir, but oxo-flow \
+                 shares the rule workdir, so every per-sample instance would overwrite the \
+                 same output. Make the output sample-specific (e.g. `${{meta.id}}.bam`) or \
+                 hand-port this rule"
+            ),
+        ));
+    }
+
     if process.script.trim().is_empty() {
         return Err(OxoFlowError::Parse {
             path: std::path::PathBuf::from("<nextflow source>"),
@@ -1825,6 +1854,7 @@ fn translate_nextflow_script(
     process_line: usize,
     script_lines: &[(usize, String)],
     input_vars: &[(usize, String)],
+    input_count: usize,
     single_quoted: bool,
     warnings: &mut Vec<String>,
     uses_ext_args: &mut bool,
@@ -1921,7 +1951,10 @@ fn translate_nextflow_script(
             l = replace_nextflow_var(&l, alias, replacement);
         }
         for (position, var) in input_vars {
-            let placeholder = if *position == 0 {
+            // `{input}` expands to ALL declared inputs, so it is only a
+            // faithful placeholder for a single-input process. Multi-input
+            // processes must reference the indexed form even for position 0.
+            let placeholder = if input_count == 1 && *position == 0 {
                 "{input}".to_string()
             } else {
                 format!("{{input[{position}]}}")
@@ -2638,7 +2671,7 @@ workflow { MAPPED(Channel.fromPath("data/*.txt")) }
         let nf = r#"
 process EMPTY {
     input: path x
-    output: "x.out"
+    output: "${x}.out"
     script: ""
 }
 workflow { EMPTY(Channel.fromPath("data/*.txt")) }

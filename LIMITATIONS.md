@@ -40,6 +40,9 @@ WDL, and no importers for those formats are currently available.
   Snakemake `run:`/`script:` bodies, lambdas, directory outputs, and unresolved
   interpolations. It never silently drops a directive or invents a path, and
   it parses plus statically validates the generated workflow before writing it.
+  Snakemake `expand()` is accepted only as a fan-OUT input whose output carries
+  the same wildcard; fan-in aggregation must use the engine's `expand_inputs`
+  construct (or a hand-port).
   The output still requires human review plus the
   `validate` → `lint` → `dry-run` gates. Semantic-equivalence testing across a
   representative corpus is still open work (see ROADMAP.md Phase 12.3), and

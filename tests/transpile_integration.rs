@@ -221,7 +221,7 @@ rule report:
     input:
         expand("trimmed/{sample}.fastq", sample=["A", "B"])
     output:
-        "results/report.txt"
+        "results/{sample}.report.txt"
     shell:
         "wc -l {input} > {output}"
     "#;
@@ -234,10 +234,6 @@ rule report:
     assert!(
         !toml_str.contains("expand("),
         "the expand() call must not leak into the generated TOML: {toml_str}"
-    );
-    assert!(
-        !toml_str.contains("results/{sample}"),
-        "sink rules must not receive fabricated outputs: {toml_str}"
     );
     let config =
         WorkflowConfig::parse(&toml_str).expect("generated toml must parse as valid workflow");
@@ -342,7 +338,7 @@ process SALMON_QUANT {
     path(index)
 
     output:
-    path("quant.sf"), emit: counts
+    path("quant/${meta.id}/quant.sf"), emit: counts
 
     script:
     """
@@ -352,7 +348,7 @@ process SALMON_QUANT {
         -1 $r1 \
         -2 $r2 \
         -p $task.cpus \
-        -o .
+        -o quant/${meta.id}
     """
 }
 workflow {
@@ -365,6 +361,10 @@ workflow {
     "#;
 
     let toml_str = transpile(nf, SourceFormat::Nextflow).expect("transpile should succeed");
+    assert!(
+        toml_str.contains("-1 {input[0]}") && toml_str.contains("-2 {input[1]}"),
+        "multi-input references must use indexed placeholders (bare {{input}} would join all          three inputs): {toml_str}"
+    );
     let config = WorkflowConfig::parse(&toml_str).expect("parsed workflow");
     assert_eq!(config.rules.len(), 1);
     assert_eq!(config.rules[0].name, "salmon_quant");
