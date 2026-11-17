@@ -4386,9 +4386,11 @@ place to catch a mistranslated path.</p>
 <p>Everything else is a <strong>hard error that names the construct</strong> (parse-level errors carry a source line) — dynamic resources,
 channel operators, <code>include</code>, <code>params</code>, <code>run:</code>/<code>script:</code> bodies, lambdas,
 directory outputs, dynamic containers, indexed input tuples, unresolved
-interpolations, unknown directives, and <strong>fan-in inputs</strong> (a wildcard input
-with no matching output wildcard, such as <code>expand(...)</code> feeding one constant
-output). Use the engine's <code>expand_inputs</code> fan-in construct or hand-port. The importer never writes a workflow
+interpolations, unknown directives, and <strong>fan-in/mixed outputs</strong> (a wildcard
+input with no matching output wildcard, such as <code>expand(...)</code> feeding one
+constant output, or a wildcard fan-out whose outputs also include a constant
+path that every instance would overwrite). Use the engine's <code>expand_inputs</code>
+fan-in construct or hand-port. The importer never writes a workflow
 it could not translate, and it parses plus statically validates the generated
 TOML before returning.</p>
 <h2 id="4-fidelity-checklist">4. Fidelity checklist<a class="headerlink" href="#4-fidelity-checklist" title="Permanent link">#</a></h2>

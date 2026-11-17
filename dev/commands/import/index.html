@@ -4290,11 +4290,13 @@ produces an unrunnable workflow, the import fails and no output file is written.
 <li>A single-quoted script that references a declared input variable: Nextflow
   does not interpolate single-quoted strings, so mapping the variable would
   change the command.</li>
-<li>Fan-in inputs: an input wildcard that appears in <strong>no</strong> output of the rule
-  (e.g. <code>expand("quant/{sample}.sf", …)</code> feeding a constant
-  <code>results/report.txt</code>, or <code>rules.&lt;name&gt;.output</code> into a constant output).
-  Emitting a wildcard input would create one instance per sample that all
-  overwrite the same output. Use the engine's <code>expand_inputs</code> fan-in construct
+<li>Fan-in and mixed outputs: a wildcard input that appears in <strong>no</strong> output of
+  the rule (e.g. <code>expand("quant/{sample}.sf", …)</code> feeding a constant
+  <code>results/report.txt</code>, or <code>rules.&lt;name&gt;.output</code> into a constant output), or a
+  wildcard fan-out whose output set mixes wildcard and constant paths (e.g.
+  <code>out/{sample}.bam</code> plus <code>reports/summary.txt</code>). Every instance would write
+  the constant output, and a wildcard input with no matching output has no
+  fan-out source. Use the engine's <code>expand_inputs</code> fan-in construct
   (workflow-format reference) or hand-port the rule.</li>
 <li>A process declared with <code>path</code> inputs but never invoked in a <code>workflow {}</code>
   block (the input source is unknown).</li>
@@ -4370,9 +4372,11 @@ per-rule <code>wildcard_constraints:</code>, <code>shadow:</code>, <code>group:<
 <code>handlers:</code>, <code>include:</code>, <code>subworkflow</code>, <code>module</code>, <code>use rule</code>, <code>configfile:</code>,
 <code>ruleorder:</code>, <code>onsuccess:</code>, <code>onerror:</code>, <code>directory(...)</code>, lambda/config/params/
 checkpoints-based dynamic input/output, unknown directives, unknown resource
-keys, duplicate rule names, fan-in inputs (a wildcard input with no matching
-output wildcard — use <code>expand_inputs</code> or hand-port), and <code>{params.*}</code> /
-<code>{resources.*}</code> / <code>{rule}</code> / <code>{checkpoints.*}</code> placeholders in <code>shell:</code>.</p>
+keys, duplicate rule names, fan-in/mixed outputs (a wildcard input with no
+matching output wildcard, or wildcard inputs alongside a constant output that
+every instance would overwrite — use <code>expand_inputs</code> or hand-port), and
+<code>{params.*}</code> / <code>{resources.*}</code> / <code>{rule}</code> / <code>{checkpoints.*}</code> placeholders in
+<code>shell:</code>.</p>
 <p>For a fan-out <code>expand(pattern, key=[...])</code>, the explicit value list is <strong>not
 materialized</strong>: the pattern is imported, but the wildcard domain must be
 declared with <code>sample_pattern</code>, <code>[[sample_groups]]</code>, <code>[[pairs]]</code>, or

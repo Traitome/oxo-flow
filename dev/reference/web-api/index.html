@@ -6431,7 +6431,7 @@ per-file cap).</p>
 </span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a>
 </span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a>{"paths": ["/data/*.fastq.gz", "/data/*.bam"], "max_depth": 2}
 </span></code></pre></div>
-Deterministic file scanning + format inference + pipeline recommendation. Returns <code>{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }</code>. Format detection uses filename extension matching — <strong>not AI</strong>.</p>
+Deterministic file scanning + format inference + pipeline recommendation. Returns <code>{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }</code>. Format detection uses filename extension matching — <strong>not AI</strong>. <code>paired_with</code> echoes the mate's client-supplied path when the request contains a mutual pair (<code>_R1</code>/<code>_R2</code> or <code>_1.</code>/<code>_2.</code> in the file name) and both files share a detected, non-unknown format; it is <code>null</code> otherwise.</p>
 <h3 id="reference-discovery">Reference Discovery<a class="headerlink" href="#reference-discovery" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>POST /api/data/reference
 </span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>Content-Type: application/json
