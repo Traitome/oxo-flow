@@ -186,6 +186,10 @@ The biological type system verifies formal format and coordination contracts acr
 | `TYPE-006` | Compression | Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required) | Re-compresses stream (`bgzip`) |
 | `TYPE-007` | Attributes | Extensible attribute contract mismatch: the consumer's declared `[types.*]` attributes (e.g. `variant_type=germline` implied by `gvcf`) are missing or hold different values on the producer side | Declares the missing `key=value` attributes on the producer output type |
 | `TYPE-UNKNOWN` | Resolution | A `types.<name>` reference on a rule input/output does not match any `[types.*]` declaration (or inline spec fails to parse) | Fixes the type name or adds the missing `[types.*]` declaration |
+| `TYPE-008` | Unverifiable edge (advisory) | A typed consumer reads from a producer that declares no `[types]` at all, so the edge cannot be checked — the contract is unknown rather than violated | Declares the producer's output type under `[rules.types].outputs` (or `[types.<name>]`) so its biological output can be verified |
+| `TYPE-009` | Unverifiable build (advisory) | The consumer names a `reference_build` while the producer omits it, so alignment compatibility cannot be checked (the build check only fires when both sides name a build) | Declares the producer's `reference_build` so its alignment against the consumer's required build can be verified |
+
+`TYPE-001` .. `TYPE-007` are proven violations: they fail `oxo-flow validate` and abort `oxo-flow run` in preflight. `TYPE-008` and `TYPE-009` are **advisory** — they report an *unverifiable* edge (a missing contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.
 
 ### Curated Scientific Preflight Catalog (`SCI-*`)
 

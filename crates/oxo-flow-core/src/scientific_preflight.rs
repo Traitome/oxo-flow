@@ -1383,7 +1383,10 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
         check_concurrency_hardware_rules(rule, shell, &shell_lower, config, &mut warnings);
     }
 
-    // Biological type contract check (TYPE-001 .. TYPE-007)
+    // Biological type contract check (TYPE-001 .. TYPE-007 are proven
+    // violations; TYPE-008 .. TYPE-009 flag unverifiable edges — a typed
+    // consumer whose producer declares no [types], or a build-incomplete
+    // pair — and surface here as advisory warnings, not failures).
     if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
         && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&config.rules)
     {
