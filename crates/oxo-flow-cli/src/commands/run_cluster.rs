@@ -16,10 +16,7 @@ use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::{ClusterProfile, WorkflowConfig};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::environment::EnvironmentResolver;
-use oxo_flow_core::executor::checkpoint::{
-    BenchmarkRecord, CheckpointState, OutputChecksumAlgorithm, compute_file_checksum,
-    expand_config_in_path, hash_file_with_algorithm,
-};
+use oxo_flow_core::executor::checkpoint::{BenchmarkRecord, CheckpointState};
 use oxo_flow_core::executor::{JobRecord, JobStatus};
 use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
@@ -38,18 +35,41 @@ use tokio::sync::Mutex;
 /// the zero-result warning), and which rules were already hashed — the
 /// same record is folded twice on the normal path (settle hook, then the
 /// post-run loop) and outputs can be hundreds of GB.
+///
+/// Hashing itself runs OFF the driver's poll loop: the settle hook is
+/// awaited inline between polls, so hashing a large output there would
+/// stall scheduling, signal handling, and the submission of dependents.
+/// Each eligible rule schedules one background task; [`Self::join_pending`]
+/// settles them before the run reports its result.
 pub(crate) struct ClusterProvenance {
     pub requested: bool,
-    pub recorded: std::sync::atomic::AtomicUsize,
-    rules_hashed: tokio::sync::Mutex<HashSet<String>>,
+    recorded: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    rules_hashed: std::sync::Mutex<HashSet<String>>,
+    pending: tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl ClusterProvenance {
     pub fn new(requested: bool) -> Self {
         Self {
             requested,
-            recorded: std::sync::atomic::AtomicUsize::new(0),
-            rules_hashed: tokio::sync::Mutex::new(HashSet::new()),
+            recorded: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            rules_hashed: std::sync::Mutex::new(HashSet::new()),
+            pending: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Checksums recorded so far. Only meaningful after [`Self::join_pending`].
+    pub fn recorded(&self) -> usize {
+        self.recorded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Await every scheduled hashing task. Called before the run reports
+    /// its result so the zero-checksum warning sees the final count.
+    pub async fn join_pending(&self) {
+        let handles: Vec<tokio::task::JoinHandle<()>> =
+            std::mem::take(&mut *self.pending.lock().await);
+        for handle in handles {
+            let _ = handle.await;
         }
     }
 }
@@ -378,67 +398,68 @@ fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
         .unwrap_or_else(|| workdir.join(".oxo-flow").join("env-cache"))
 }
 
-/// Record this rule instance's output checksums, mirroring the local
-/// executor's `--provenance` / per-rule `checksum = "…"` contract (issue
-/// #1093 F1).
+/// Schedule output-checksum recording for this rule instance, mirroring
+/// the local executor's `--provenance` / per-rule `checksum = "…"`
+/// contract (issue #1093 F1).
 ///
-/// Runs at the same settle point that persists completion, so a cluster
-/// checkpoint carries the same checksum entries a local run of the same
-/// workflow writes — `provenance verify` and the freshness gate read one
-/// shape regardless of execution path. Paths expand exactly like the
-/// local path expands them (`{config.*}` plus this instance's fan-out
-/// bindings), and outputs still carrying `{` after expansion are skipped
-/// for the same reason: only an executor with the instance context can
-/// resolve them, and a template never names a file that exists.
+/// The collection itself is [`oxo_flow_core::executor::output_checksums::collect_output_checksums`]
+/// — the same routine the local executor calls — so a cluster checkpoint
+/// carries identical entries (keys, algorithms) for the same workflow.
 ///
-/// Hashing is deduplicated per rule within one run: the record is folded
-/// twice on the normal path (settle hook, then the post-run loop) and
-/// outputs are often tens of GB.
-async fn record_output_checksums(
-    args: &ClusterRunArgs<'_>,
-    rule: &Rule,
-    rule_name: &str,
-    ck: &mut CheckpointState,
-) {
+/// It runs as a background task rather than inline at the settle point:
+/// the driver awaits its settle hook between polls, and hashing a
+/// multi-GB output there would stall scheduling, Ctrl-C handling, and the
+/// submission of dependents — while the completion verdict is already
+/// persisted by the time this is scheduled. Hashing is deduplicated per
+/// rule within one run (the record is folded twice), and the tasks are
+/// joined by [`ClusterProvenance::join_pending`] before the run reports.
+async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_name: &str) {
     {
-        let mut hashed = args.provenance.rules_hashed.lock().await;
+        let mut hashed = args
+            .provenance
+            .rules_hashed
+            .lock()
+            .expect("provenance hash set poisoned");
         if !hashed.insert(rule_name.to_string()) {
             return;
         }
     }
-    let checksum_algorithm = rule
-        .checksum
-        .as_deref()
-        .and_then(OutputChecksumAlgorithm::from_rule_spec);
     let mut wildcard_scope: HashMap<String, String> = (*args.wildcard_values).clone();
     for (k, v) in args.config.instance_bindings(rule_name) {
         wildcard_scope.insert(k, v);
     }
-    let mut recorded_here = 0usize;
-    for output in &rule.output {
-        let expanded = expand_config_in_path(output, &wildcard_scope);
-        if expanded.contains('{') {
-            continue; // per-instance wildcard: resolved only at fan-out
+    let rule = rule.clone();
+    let workdir = args.workdir.to_path_buf();
+    let checkpoint = args.checkpoint.clone();
+    let checkpoint_path = args.checkpoint_path.to_path_buf();
+    let recorded = args.provenance.recorded.clone();
+    let count = args.provenance.requested;
+    let handle = tokio::spawn(async move {
+        // File I/O off the async workers: outputs are routinely tens of GB.
+        let entries = tokio::task::spawn_blocking(move || {
+            oxo_flow_core::executor::output_checksums::collect_output_checksums(
+                &rule,
+                &workdir,
+                &wildcard_scope,
+            )
+        })
+        .await
+        .unwrap_or_default();
+        let recorded_here = entries.len();
+        if recorded_here > 0 {
+            let mut ck = checkpoint.lock().await;
+            for (path, checksum) in entries {
+                ck.record_checksum(&path, checksum);
+            }
+            if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
+                tracing::warn!("Failed to save provenance checksums: {e}");
+            }
         }
-        let output_path = args.workdir.join(&expanded);
-        if !output_path.exists() {
-            continue;
+        if count {
+            recorded.fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
         }
-        let checksum_result = if let Some(alg) = checksum_algorithm {
-            hash_file_with_algorithm(&output_path, alg)
-        } else {
-            compute_file_checksum(&output_path)
-        };
-        if let Ok(checksum) = checksum_result {
-            ck.record_checksum(&expanded, checksum);
-            recorded_here += 1;
-        }
-    }
-    if args.provenance.requested {
-        args.provenance
-            .recorded
-            .fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
-    }
+    });
+    args.provenance.pending.lock().await.push(handle);
 }
 
 /// Fold one driver-returned record into the checkpoint, mirroring the local
@@ -502,13 +523,15 @@ async fn fold_record(args: &ClusterRunArgs<'_>, record: &JobRecord) {
                 ck.record_input_manifest(&record.rule, manifest);
             }
             // Output checksums (issue #1093 F1): `--provenance` and
-            // per-rule `checksum = "…"` are recorded here — at the same
-            // settle point that persists completion — so cluster
-            // checkpoints stop diverging from local ones.
+            // per-rule `checksum = "…"` are recorded from the same settle
+            // point that persists completion, so cluster checkpoints stop
+            // diverging from local ones. Scheduled off this path — the
+            // verdict above is saved before any hashing starts, and the
+            // driver's poll loop keeps running while outputs are hashed.
             if let Some(rule) = rule
                 && (args.provenance.requested || rule.checksum.is_some())
             {
-                record_output_checksums(args, rule, &record.rule, &mut ck).await;
+                schedule_output_checksums(args, rule, &record.rule).await;
             }
         }
         JobStatus::Failed => {
@@ -708,6 +731,12 @@ pub(crate) async fn run_on_cluster(
             "{} everything is up to date — nothing to submit",
             "Cluster:".bold().cyan()
         );
+        // A run that executed nothing records nothing — and must say so,
+        // exactly like the local path does when every rule was already
+        // up to date (issue #276): the silent-empty case is what made
+        // `provenance verify` claim "--provenance was never passed" to
+        // users who had passed it (issue #1093).
+        warn_if_nothing_recorded(&args).await;
         return Ok(summary);
     }
 
@@ -940,18 +969,21 @@ pub(crate) async fn run_on_cluster(
             summary.skipped
         );
     }
-    // --provenance recorded nothing: say so loudly. The historical cluster
-    // failure mode was silent AND empty — the flag was dropped before this
-    // path, so the checkpoint held zero checksums with no warning at all
-    // (issue #1093 F1). Same wording as the local completion path
-    // (issue #276).
-    if args.provenance.requested
-        && args
-            .provenance
-            .recorded
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == 0
-    {
+    // Settle every scheduled hashing task before reporting, then speak up
+    // if nothing was recorded.
+    warn_if_nothing_recorded(&args).await;
+    Ok(summary)
+}
+
+/// The local completion path's zero-checksum warning (issue #276), shared
+/// by the cluster run's early-return and normal-exit paths.
+///
+/// The historical cluster failure mode was silent AND empty — the flag
+/// was dropped before this path, so the checkpoint held zero checksums
+/// with no warning at all (issue #1093 F1).
+async fn warn_if_nothing_recorded(args: &ClusterRunArgs<'_>) {
+    args.provenance.join_pending().await;
+    if args.provenance.requested && args.provenance.recorded() == 0 {
         eprintln!(
             "  {} --provenance recorded 0 checksums — no literal outputs completed \
              (templated or wildcard outputs are tracked per instance only after fan-out); \
@@ -959,7 +991,6 @@ pub(crate) async fn run_on_cluster(
             "⚠".yellow()
         );
     }
-    Ok(summary)
 }
 
 #[cfg(test)]
@@ -1571,6 +1602,9 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
                 tmp_dir: None,
             };
             fold_record(&args, &record).await;
+            // Checksum collection is scheduled off the settle path; settle
+            // it before the test asserts on the checkpoint.
+            provenance.join_pending().await;
         }
 
         async fn checksums(&self) -> std::collections::BTreeMap<String, String> {
