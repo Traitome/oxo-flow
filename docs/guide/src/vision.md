@@ -4,7 +4,7 @@
 >
 > oxo-flow's long-term scientific program: make bioinformatics pipelines machine-checkable artifacts that an AI can synthesize, an engine can verify before compute, and evidence systems can reproduce years later — with explicit, honest maturity labels for everything not yet shipped.
 
-This page is the narrative source for the project's scientific direction. Every claim is anchored to something that exists today (a command, a diagnostic family, a test suite) or carries an explicit maturity label from [ROADMAP Phase 12](https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md). Nothing on this page should be read as peer-reviewed scientific evidence; the manuscript track is staged, not claimed.
+This page is the narrative source for the project's scientific direction. Every claim is anchored to something that exists today (a command, a diagnostic family, a test suite) or carries an explicit maturity label from [ROADMAP Phase 12](https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md). Nothing on this page should be read as peer-reviewed scientific evidence; the bioRxiv preprint cited at the end has not been peer reviewed.
 
 ---
 
@@ -50,7 +50,7 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 **Claim.** Long genomic computations fail for four stacked reasons — system resources, data defects, algorithm parameters, biology-level surprises. A workflow engine should diagnose across those layers and apply *bounded* remediation, not just pattern-match stderr.
 
-**Shipped today.** 30+ domain diagnostic patterns with stable codes; curated scientific preflight (`SCI-*`: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in `dry-run`; `--ai-recover` diagnosis with safety-gated repair proposals; a separate seeded-failure harness (`eval/interpretation/`) that scores `report --ai` interpretation across three providers. — *Diagnosis implemented; interpretation is measured; repair application and rerun verification remain the open frontier (ROADMAP Stage 12.3 records repair at 0/10 verified — stated plainly, not hidden).*
+**Shipped today.** 31 domain diagnostic patterns with stable codes; curated scientific preflight (`SCI-*`: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in `dry-run`; `--ai-recover` diagnosis with safety-gated repair proposals; a separate seeded-failure harness (`eval/interpretation/`) that scores `report --ai` interpretation across three providers. — *Diagnosis implemented; interpretation is measured; repair application and rerun verification remain the open frontier (ROADMAP Stage 12.3 records repair at 0/10 verified — stated plainly, not hidden).*
 
 **Exit evidence.** Probabilistic fault-attribution model beyond deterministic patterns; applied-repair verified by successful reruns on a seeded fault-injection benchmark; pre-registered analysis.
 
@@ -74,13 +74,13 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 Methodological claims are nothing without measurement infrastructure:
 
-- **Field deployment.** A live TCGA immune-repertoire campaign — 11,123 RNA-seq samples across 33 cancer types (10,481 with matched genomic + chimeric BAMs; 642 genomic-only), ≈87 TB of input BAMs — runs MiXCR 4.7.0 and TRUST4 1.1.5 through `run --profile slurm` in four per-node shard workflows, with pixi-provisioned environments and native per-rule job arrays (cluster backend in production since 2026-11-16; the first full-cohort pass is still in progress). Crash-restart silent loss (#1083), run-blind cluster observability (#1085), dispatch starvation (#1089), and CPU oversubscription (#1080) were found there; the campaign mitigated them pipeline-side on v0.30.0 while the engine fixes landed on `main` with regression tests. This is operational evidence — it does not substitute for controlled benchmarks, and no full-cohort completion or cost measurement exists yet. The campaign figures come from the deployment's own operational records; they are not derived from, or reproducible from, this repository alone.
+- **Production deployments.** The cluster path is exercised by live production Slurm deployments as well as CI; crash-restart, cluster observability, dispatch-order, and CPU-oversubscription failure modes found there were fixed upstream with regression tests on `main` (#1083, #1085, #1089, #1080). This is operational evidence — it does not substitute for controlled benchmarks, and no measured throughput, cost data, or completed cohort-scale campaign exists yet. Deployment specifics are operational records and are not part of this repository.
 - **Deterministic AI evaluations.** `eval/frontier/`, `eval/gold/`, and `eval/interpretation/` score generation and interpretation quality with deterministic checks and negative controls; provider-backed runs record git SHA, gold/knowledge hashes, and per-trial metadata in capture manifests so results are auditable. The CI gate runs the deterministic harness and gold-consistency checks, not paid provider calls.
-- **Controlled benchmark campaigns.** The remaining exit evidence for publication-tier claims (matched arms, held-out intents, multiple seeds, run-level cost/failure data, human-factors study) is specified in ROADMAP Stage 12.4 — and none of it has run yet. The production cohort is the intended substrate for a future pre-registered scalability campaign.
+- **Controlled benchmark campaigns.** The remaining exit evidence for publication-tier claims (matched arms, held-out intents, multiple seeds, run-level cost/failure data, human-factors study) is specified in ROADMAP Stage 12.4 — and none of it has run yet. Production deployments are the intended substrate for a future pre-registered scalability campaign.
 
 ## 5. Verification snapshot (2026-11-17)
 
-The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17:
+The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`):
 
 - 35 CLI subcommands; 91 OpenAPI paths / 106 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
 - 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-007` covered by unit tests).
@@ -93,7 +93,7 @@ A check that contradicted a documented claim was treated as a documentation defe
 
 The honesty charter, so the above can be trusted:
 
-- No peer-reviewed claim is made; no manuscript exists yet (ROADMAP Stage 12.4: *Planned / blocked*).
+- No peer-reviewed claim is made; a bioRxiv preprint is cited on this page, but there is no journal acceptance, independent replication, or journal-ready artifact package (ROADMAP Stage 12.4: *Planned / blocked*).
 - Type contracts detect declared state mismatches; they do not prove biological correctness.
 - Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.
 - Repair proposals are experimental until independently verified by a successful rerun — today that loop closes 0/10 times without a human.

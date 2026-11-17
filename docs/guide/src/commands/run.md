@@ -762,7 +762,7 @@ the tool would fail on a path that looks valid. The rule fails **before the
 shell spawns**:
 
 ```text
-✗ rule 'trust4' failed: unresolved placeholder(s) {meta.bam_genomic} reached
+✗ rule 'align_reads' failed: unresolved placeholder(s) {meta.bam} reached
   the rendered command — … Fix: give the rule a sample-domain binding, or
   add `singleton = true` for an intentional constant-metadata read. …
 ```

@@ -176,11 +176,11 @@ scheduler answers, and prints one row per instance plus per-state counts:
 ```bash
 $ oxo-flow cluster status
 Cluster: run .oxo-flow/runs/latest
-  completed 34   running 16   pending 11070   failed 1
+  completed 12   running 3    pending 47      failed 1
   instance            job      state    elapsed    exit
-  mixcr_all_0056507f  1400_1   running  2:24:11    -
-  trust4_all_01ea7cb3 1400_2   running  0:12:02    -
-  standardize_1218    1401_1   pending  -          -
+  align_all_9c4e12  1400_1   running  2:24:11    -
+  count_all_6a7d30  1400_2   running  0:12:02    -
+  merge_1218          1401_1   pending  -          -
 ```
 
 `--json` emits the same document (`run_dir`, `counts`, `instances[]`). The

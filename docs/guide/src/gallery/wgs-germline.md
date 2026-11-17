@@ -177,7 +177,7 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
 
     Cohort size is not the only prerequisite: VariantRecalibrator also
     needs enough *variants* to train the Gaussian mixture model. A
-    full-cohort run restricted to a small interval list (or a mini-genome
+    cohort-scale run restricted to a small interval list (or a mini-genome
     reference for testing) can still starve the trainer even with 30+
     samples — in that case hard filtering is again the right fallback.
     For INDELs the analogous hard-filter thresholds are

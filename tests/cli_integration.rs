@@ -512,7 +512,7 @@ fn cli_samples_and_target_intersect() {
 
 /// The scientific preflight warns on a small-cohort VQSR pilot and a BQSR
 /// step without known-sites resources; a pilot run prints the summary with
-/// a full-cohort projection.
+/// a cohort-wide projection.
 #[test]
 fn cli_scientific_preflight_and_pilot_summary() {
     let dir = tempfile::tempdir().unwrap();
