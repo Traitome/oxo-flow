@@ -176,7 +176,7 @@ Server process environment:
 | Domain | Path | Responsibility |
 |--------|------|---------------|
 | **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
-| **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace; runs delegate to the `oxo-flow` CLI subprocess, which owns checkpointing and invalidation |
+| **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (31 error patterns), sandbox workspace; runs delegate to the `oxo-flow` CLI subprocess, which owns checkpointing and invalidation |
 | **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; generation runs the shared agent + orchestrator harness (see [Architecture → AI Subsystem](architecture.md)) over the provider fallback chain |
 | **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |
 | **chat** | `domains/chat/` | Real-time AI copilot chat and streaming; generation uses the same harness as translate, plus read-only run-diagnosis tools |
@@ -237,7 +237,7 @@ Server process environment:
 │   ├── /{id}               # Run detail with log tail
 │   ├── /{id}/status        # Real-time status (nodes, timeline, resources)
 │   ├── /{id}/dag-status    # DAG JSON + per-node live status
-│   ├── /{id}/diagnostics   # Diagnostic engine results (30+ error patterns)
+│   ├── /{id}/diagnostics   # Diagnostic engine results (31 error patterns)
 │   ├── /{id}/logs          # Execution logs
 │   ├── /{id}/results       # Output files with sizes
 │   ├── /{id}/retry         # Smart retry (failed + downstream only)

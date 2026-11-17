@@ -539,7 +539,7 @@ DAG JSON with per-node live status. Color-coded: green=completed, blue=running, 
 ```
 GET /api/runs/{id}/diagnostics
 ```
-Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of `execution.log` (seek-based tail, torn first line dropped), never the whole file.
+Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 31 deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of `execution.log` (seek-based tail, torn first line dropped), never the whole file.
 
 ### Run Detail
 ```
