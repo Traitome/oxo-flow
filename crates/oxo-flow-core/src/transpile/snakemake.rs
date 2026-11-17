@@ -672,31 +672,69 @@ fn validate_input_domains(rule: &ParsedRule, warnings: &mut Vec<String>) -> Resu
         .flatten()
         .collect();
 
-    // General fan-in shape: a wildcard input feeding a rule whose outputs are
-    // all constant. One instance per input value would overwrite the same
-    // output, whether the input came from expand(), rules.X.output, or a
-    // literal per-sample pattern.
-    if !rule.outputs.is_empty() && output_wildcards.is_empty() {
-        for path in &rule.inputs {
-            let PathSource::Literal(pattern) = &path.source else {
-                continue;
-            };
-            let wildcards = wildcard_names(pattern);
-            if !wildcards.is_empty() {
-                let names = wildcards.into_iter().collect::<Vec<_>>().join(", ");
-                return Err(line_error(
-                    path.line,
-                    format!(
-                        "fan-in input is not supported: input pattern '{pattern}' carries \
-                         wildcard(s) {{{names}}}, but rule '{}' declares only constant \
-                         output(s). Emitting one instance per input would overwrite the same \
-                         output. Use the engine's `expand_inputs` fan-in construct \
-                         (workflow-format reference) or hand-port this rule",
-                        rule.name
-                    ),
-                ));
+    // Any constant output in a rule driven by wildcard inputs is a
+    // collision hazard: every instance writes that path. This covers the
+    // all-constant fan-in shape AND the mixed wildcard/constant shape
+    // (e.g. `out/{sample}.bam` plus `reports/summary.txt`).
+    let input_wildcards: BTreeSet<String> = rule
+        .inputs
+        .iter()
+        .filter_map(|path| match &path.source {
+            PathSource::Literal(pattern) => Some(wildcard_names(pattern)),
+            PathSource::RuleOutput(_) => None,
+        })
+        .flatten()
+        .collect();
+    let constant_outputs: Vec<(&str, usize)> = rule
+        .outputs
+        .iter()
+        .filter_map(|path| match &path.source {
+            PathSource::Literal(pattern) if wildcard_names(pattern).is_empty() => {
+                Some((pattern.as_str(), path.line))
             }
-        }
+            _ => None,
+        })
+        .collect();
+    if !constant_outputs.is_empty() && !input_wildcards.is_empty() {
+        let constant_list = constant_outputs
+            .iter()
+            .map(|(pattern, _)| format!("'{pattern}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let uncovered = input_wildcards
+            .iter()
+            .filter(|wildcard| !output_wildcards.contains(*wildcard))
+            .cloned()
+            .collect::<Vec<_>>();
+        let uncovered_clause = if uncovered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; input wildcard(s) {{{}}} are not covered by any output wildcard",
+                uncovered.join(", ")
+            )
+        };
+        let line = constant_outputs
+            .first()
+            .map(|(_, line)| *line)
+            .unwrap_or(rule.line);
+        return Err(line_error(
+            line,
+            format!(
+                "mixed wildcard/constant outputs are not supported: rule '{}' declares \
+                 constant output(s) {constant_list} alongside wildcard output(s), while its \
+                 inputs carry wildcard(s) {{{}}}{uncovered_clause}. Every instance would \
+                 write the constant output(s), so they would collide. Make every output carry \
+                 the fan-out wildcard(s), or use the engine's `expand_inputs` fan-in \
+                 construct / hand-port this rule",
+                rule.name,
+                input_wildcards
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
     }
 
     for path in &rule.inputs {
@@ -1951,7 +1989,10 @@ rule report:
         let message = error.to_string();
         assert!(message.contains("fan-in"), "{message}");
         assert!(message.contains("expand_inputs"), "{message}");
-        assert!(message.contains("line 4"), "{message}");
+        assert!(
+            message.contains("line 6"),
+            "the error must point at the constant output declaration: {message}"
+        );
     }
 
     #[test]
@@ -1975,5 +2016,45 @@ rule report:
 "#;
         let error = transpile_snakemake(source).expect_err("fan-in rules.output must fail");
         assert!(error.to_string().contains("fan-in"), "{error}");
+    }
+
+    #[test]
+    fn mixed_wildcard_and_constant_outputs_are_rejected() {
+        let source = r#"
+rule mixed:
+    input:
+        "raw/{sample}.fastq"
+    output:
+        "out/{sample}.bam",
+        "reports/summary.txt"
+    shell:
+        "align {input} > {output[0]}; echo ok > {output[1]}"
+"#;
+        let error = transpile_snakemake(source).expect_err("mixed outputs must fail");
+        let message = error.to_string();
+        assert!(message.contains("mixed wildcard/constant"), "{message}");
+        assert!(message.contains("reports/summary.txt"), "{message}");
+        assert!(message.contains("line 7"), "{message}");
+        assert!(message.contains("expand_inputs"), "{message}");
+    }
+
+    #[test]
+    fn constant_outputs_without_wildcard_inputs_are_allowed() {
+        let source = r#"
+rule single:
+    input:
+        "data/static.txt"
+    output:
+        "results/summary.txt"
+    shell:
+        "wc -l {input} > {output}"
+"#;
+        let toml = transpile_snakemake(source).expect("single-instance constant output");
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(
+            config.rules[0].output,
+            vec!["results/summary.txt".to_string()].into()
+        );
     }
 }

@@ -1658,10 +1658,11 @@ fn render_process_at(
         }
     }
 
-    // Fan-in shape: wildcard input(s) feeding a process whose outputs are all
-    // constant. Nextflow isolates each task in its own workdir, so this is
-    // valid there; in oxo-flow every instance shares the rule workdir and
-    // would overwrite the same output.
+    // Any constant output in a process driven by wildcard inputs is a
+    // collision hazard: Nextflow isolates each task in its own workdir, but
+    // oxo-flow shares the rule workdir, so every instance writes the same
+    // path. This covers the all-constant fan-in shape AND mixed
+    // wildcard/constant outputs (`${{meta.id}}.bam` plus `summary.txt`).
     let input_wildcards: BTreeSet<String> = inputs
         .iter()
         .flat_map(|pattern| wildcard_names(pattern))
@@ -1670,17 +1671,44 @@ fn render_process_at(
         .iter()
         .flat_map(|output| wildcard_names(&output.pattern))
         .collect();
-    if !outputs.is_empty() && output_wildcards.is_empty() && !input_wildcards.is_empty() {
-        let names = input_wildcards.into_iter().collect::<Vec<_>>().join(", ");
+    let constant_outputs: Vec<&str> = outputs
+        .iter()
+        .filter(|output| wildcard_names(&output.pattern).is_empty())
+        .map(|output| output.pattern.as_str())
+        .collect();
+    if !constant_outputs.is_empty() && !input_wildcards.is_empty() {
+        let constant_list = constant_outputs
+            .iter()
+            .map(|pattern| format!("'{pattern}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let uncovered = input_wildcards
+            .iter()
+            .filter(|wildcard| !output_wildcards.contains(*wildcard))
+            .cloned()
+            .collect::<Vec<_>>();
+        let uncovered_clause = if uncovered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; input wildcard(s) {{{}}} are not covered by any output wildcard",
+                uncovered.join(", ")
+            )
+        };
         return Err(nextflow_error(
             &process.name,
             process.line,
             format!(
-                "process consumes wildcard input(s) {{{names}}} but declares only constant \
-                 output(s). Nextflow isolates each task in its own workdir, but oxo-flow \
-                 shares the rule workdir, so every per-sample instance would overwrite the \
-                 same output. Make the output sample-specific (e.g. `${{meta.id}}.bam`) or \
-                 hand-port this rule"
+                "process declares constant output(s) {constant_list} alongside wildcard \
+                 output(s), while its inputs carry wildcard(s) {{{}}}{uncovered_clause}. \
+                 Nextflow isolates each task in its own workdir, but oxo-flow shares the rule \
+                 workdir, so every instance would overwrite the constant output(s). Make every \
+                 output sample-specific (e.g. `${{meta.id}}.bam`) or hand-port this rule",
+                input_wildcards
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         ));
     }
@@ -3246,5 +3274,42 @@ workflow { P(Channel.fromPath("data/*.txt")) }
 "#;
         let toml = transpile_nextflow(nf).expect("a script line must not be parsed as include");
         assert!(toml.contains("include foo"), "{toml}");
+    }
+
+    #[test]
+    fn mixed_wildcard_and_constant_outputs_are_rejected() {
+        let nf = r#"
+process MIXED {
+    input: path reads
+    output:
+    tuple val(meta), path("${meta.id}.bam")
+    path("summary.txt")
+    script: "align $reads > ${meta.id}.bam; echo ok > summary.txt"
+}
+workflow { MIXED(Channel.fromPath("data/*.fastq.gz")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("mixed outputs must fail");
+        let message = error.to_string();
+        assert!(message.contains("constant output"), "{message}");
+        assert!(message.contains("summary.txt"), "{message}");
+        assert!(message.contains("hand-port"), "{message}");
+    }
+
+    #[test]
+    fn constant_outputs_without_wildcard_inputs_are_allowed() {
+        let nf = r#"
+process SINGLE {
+    input: path "data/static.txt"
+    output: path("results/summary.txt")
+    script: "wc -l data/static.txt > results/summary.txt"
+}
+"#;
+        let toml = transpile_nextflow(nf).expect("single-instance constant output");
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(
+            config.rules[0].output,
+            vec!["results/summary.txt".to_string()].into()
+        );
     }
 }
