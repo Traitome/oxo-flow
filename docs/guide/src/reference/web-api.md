@@ -433,7 +433,18 @@ Execution flags are forwarded to the CLI executor:
 - `max_jobs` defaults to **4** at this endpoint (the CLI flag itself
   defaults to 1): an omitted `max_jobs` still spawns the CLI with `-j 4`,
   which is also the value the resource estimate assumes.
-- `keep_going: true` maps to `--keep-going` (the CLI also accepts `-k`).
+- `keep_going` (boolean, optional, default `false`) maps to
+  `--keep-going` (the CLI also accepts `-k`). The default is the
+  historical abort-on-required-failure policy: when a required rule
+  fails, the engine cancels the run's in-flight jobs. With `true`,
+  already-running independent rules finish, ready independent rules keep
+  dispatching, dependents of the failure stay blocked (never executed),
+  and the run still exits non-zero. Run-only — ignored for
+  `dry_run: true` (nothing executes). Cluster (`cluster_id`) runs carry
+  the flag into the remote wrapper command the same way. Web **retry**
+  does not re-apply it: the runs row does not persist the failure policy,
+  and a retry re-executes under the default. Pass `keep_going` on a new
+  create request instead.
 - `samples` (array of strings, optional) maps to `--samples` (comma-joined).
 - `targets` (array of strings, optional) maps to `-t` per entry.
 - `include_files` (object, optional) stages **[[include]] source files**
