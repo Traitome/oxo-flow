@@ -252,6 +252,7 @@ async fn insert_run(status: &str) -> String {
                     .to_string(),
             ),
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: Some(started.clone()),
             finished_at: Some(finished),
             created_at: started,

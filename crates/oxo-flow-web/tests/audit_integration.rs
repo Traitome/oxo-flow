@@ -70,6 +70,7 @@ async fn runs_schema_accepts_backend_insert() {
             pid: None,
             workdir: None,
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),

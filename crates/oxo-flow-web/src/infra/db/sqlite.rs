@@ -77,8 +77,8 @@ pub async fn create_run_if_workdir_idle(
     run: &models::RunRow,
 ) -> Result<bool, String> {
     let result = sqlx::query(
-        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) \
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
          WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = ? AND status IN ('queued', 'running', 'paused'))",
     )
     .bind(&run.id)
@@ -92,6 +92,7 @@ pub async fn create_run_if_workdir_idle(
     .bind(run.pid)
     .bind(&run.workdir)
     .bind(&run.config_overrides)
+    .bind(&run.artifacts_incomplete)
     .bind(&run.started_at)
     .bind(&run.finished_at)
     .bind(&run.created_at)
@@ -177,6 +178,7 @@ impl SqliteBackend {
                 pid INTEGER,
                 workdir TEXT,
                 config_overrides TEXT,
+                artifacts_incomplete TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -188,8 +190,8 @@ impl SqliteBackend {
         .map_err(|e| e.to_string())?;
         sqlx::query(
             r#"INSERT INTO runs_migrated
-                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at)
-                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, started_at, finished_at, created_at
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, NULL, started_at, finished_at, created_at
                 FROM runs"#,
         )
         .execute(&mut *conn)
@@ -263,6 +265,7 @@ impl StorageBackend for SqliteBackend {
                 pid INTEGER,
                 workdir TEXT,
                 config_overrides TEXT,
+                artifacts_incomplete TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -477,6 +480,14 @@ impl StorageBackend for SqliteBackend {
         // Migration: config overrides persisted per run (JSON array of
         // KEY=VALUE strings) so retry re-executes with the same configuration.
         sqlx::query("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Migration: per-run note that the artifacts could not be fully
+        // pulled back from a remote cluster (issue #1112 / audit RB-05).
+        // Historical rows default to NULL (artifacts assumed complete).
+        sqlx::query("ALTER TABLE runs ADD COLUMN artifacts_incomplete TEXT")
             .execute(&self.pool)
             .await
             .ok();
@@ -800,6 +811,7 @@ impl StorageBackend for SqliteBackend {
             pid: run.pid,
             workdir: run.workdir.clone(),
             config_overrides: run.config_overrides.clone(),
+            artifacts_incomplete: run.artifacts_incomplete.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -810,7 +822,7 @@ impl StorageBackend for SqliteBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -823,6 +835,7 @@ impl StorageBackend for SqliteBackend {
         .bind(row.pid)
         .bind(&row.workdir)
         .bind(&row.config_overrides)
+        .bind(&row.artifacts_incomplete)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
@@ -976,6 +989,20 @@ impl StorageBackend for SqliteBackend {
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn record_artifacts_incomplete(&self, id: &str, reason: &str) -> Result<bool, String> {
+        // Deliberately status-agnostic: the artifact note rides alongside the
+        // terminal state instead of rewriting it, so a run a cancel (or a
+        // later finalize) already settled still carries the reason (issue
+        // #1112 / audit RB-05).
+        let res = sqlx::query("UPDATE runs SET artifacts_incomplete = ? WHERE id = ?")
+            .bind(reason)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -2321,6 +2348,7 @@ mod tests {
             pid: None,
             workdir: Some("/tmp/workdir".to_string()),
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),
@@ -2549,6 +2577,7 @@ mod tests {
             pid: None,
             workdir: None,
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -2594,6 +2623,7 @@ mod tests {
             pid: None,
             workdir: None,
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -2643,6 +2673,7 @@ mod tests {
                 pid: None,
                 workdir: None,
                 config_overrides: None,
+                artifacts_incomplete: None,
                 started_at: None,
                 finished_at: None,
                 created_at: String::new(),
@@ -2745,6 +2776,7 @@ mod tests {
             pid: Some(12345),
             workdir: Some("/tmp/test".into()),
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: Some("timestamp-start".into()),
             finished_at: None,
             created_at: "timestamp-created-1".into(),
@@ -2818,6 +2850,7 @@ mod workdir_guard_tests {
             pid: None,
             workdir: Some(workdir.into()),
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: None,
             finished_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),

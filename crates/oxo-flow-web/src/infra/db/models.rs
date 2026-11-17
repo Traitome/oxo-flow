@@ -46,6 +46,13 @@ pub struct RunRow {
     /// created with (`None` when the client sent none). Persisted so retry
     /// re-executes with the same configuration as the original run.
     pub config_overrides: Option<String>,
+    /// Reason the run's artifacts are incomplete (`None` = artifacts were
+    /// materialized in full). Set when a remote result pull fails: the
+    /// checkpoint the run reports on may be missing outputs, so the reason is
+    /// persisted instead of only logged, letting the UI distinguish "ran and
+    /// succeeded" from "raced a broken transfer" (issue #1112 / audit RB-05).
+    /// Independent of `status`: a `cancelled` run can still carry a note.
+    pub artifacts_incomplete: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,

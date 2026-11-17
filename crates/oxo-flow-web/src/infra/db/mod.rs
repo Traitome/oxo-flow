@@ -109,6 +109,13 @@ pub trait StorageBackend: Send + Sync {
         phase: &str,
         finished_at: &str,
     ) -> Result<bool, String>;
+    /// Record that a run's artifacts could not be fully materialized locally
+    /// (`reason` is the result-pull error). Deliberately does NOT touch the
+    /// run's status: the note is independent of the terminal state, so a run
+    /// that was already `cancelled` (or that a later path finalizes) still
+    /// carries the reason. Returns `true` when a row was updated (issue
+    /// #1112 / audit RB-05).
+    async fn record_artifacts_incomplete(&self, id: &str, reason: &str) -> Result<bool, String>;
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String>;
     async fn list_runs_cursor(
         &self,

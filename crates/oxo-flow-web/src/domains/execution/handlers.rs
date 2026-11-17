@@ -698,6 +698,7 @@ pub async fn create_run(
             // Order-preserving JSON array (serde_json Vec serialization)
             // so retry can replay the exact argv the client sent.
             config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
+            artifacts_incomplete: None,
             started_at: None,
             finished_at: None,
             created_at: now_iso(),
@@ -960,6 +961,11 @@ pub async fn get_run(
         // No `pid` — same reason as the list endpoint: the host process id
         // stays engine-internal.
         "workdir": run.workdir,
+        // Non-null when a remote result pull failed and the run's artifacts
+        // may be missing (issue #1112 / audit RB-05). `status` alone cannot
+        // express an incomplete-while-terminal run, so the reason travels
+        // alongside it.
+        "artifacts_incomplete": run.artifacts_incomplete,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "created_at": run.created_at,
@@ -1566,6 +1572,9 @@ pub async fn retry_run(
         pid: None,
         workdir: run.workdir.clone(),
         config_overrides: run.config_overrides.clone(),
+        // Retry starts a fresh run: the previous run's artifact note does not
+        // carry over (issue #1112 / audit RB-05).
+        artifacts_incomplete: None,
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
@@ -3135,6 +3144,7 @@ pub async fn resume_checkpoint(
         // spawn_background_run_with_args; the checkpointed workflow in the
         // workdir already carries the original run's baked configuration.
         config_overrides: None,
+        artifacts_incomplete: None,
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
