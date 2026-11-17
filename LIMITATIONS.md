@@ -74,12 +74,6 @@ WDL, and no importers for those formats are currently available.
   gate) content-hash files up to 64 MiB; larger files — typically BAM/CRAM
   intermediates — are tracked by size + mtime, so an in-place change that
   preserves both is not detected.
-- **The cluster path records no output checksums** — `run --profile` parses
-  but does not apply `--provenance` (nor `--keep-going`, `--retry`,
-  `--timeout`, or `--max-threads`/`--max-memory`), so cluster checkpoints
-  carry no SHA-256 output entries today and `provenance verify` has nothing
-  to verify for a cluster run (issue #1093). Record checksums on the local
-  path before submitting, or wait for the settle-hook provenance work.
 - **`sample_pattern` binds `{sample}` only** — `{read}`, `{replicate}`, or any
   other wildcard name in `sample_pattern` does not create per-read or
   per-replicate instances: every matching file collapses to the same

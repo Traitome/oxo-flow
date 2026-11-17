@@ -66,7 +66,7 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 **Claim.** Reproduction requires evidence, not timestamp conventions. Run identity should be anchored on content hashes across outputs, configuration, and protected inputs.
 
-**Shipped today.** `--provenance` records SHA-256 checksums of declared outputs into the checkpoint; configuration fingerprints, environment identities, and `protected_data_trees` drift audits ride alongside; `oxo-flow provenance verify --json` audits recorded checksums and is consumed by the web API (`GET /api/runs/{id}/provenance-verify`). Recorded checksums take precedence over `mtime`, which is demoted to a bounded fallback. — *Implemented on the local path; cluster-path checksums are tracked in issue #1093.*
+**Shipped today.** `--provenance` records SHA-256 checksums of declared outputs into the checkpoint — on both execution paths: the local executor hashes at task completion and the cluster path hashes as each job settles. Configuration fingerprints, environment identities, and `protected_data_trees` drift audits ride alongside; `oxo-flow provenance verify --json` audits recorded checksums and is consumed by the web API (`GET /api/runs/{id}/provenance-verify`). Recorded checksums take precedence over `mtime`, which is demoted to a bounded fallback.
 
 **Exit evidence.** Cross-architecture reproduction campaigns that distinguish floating-point drift from logic drift (x86 → ARM/RISC-V) — a measurement program, not a code feature.
 

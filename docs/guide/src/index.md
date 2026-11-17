@@ -46,7 +46,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
 | **AI Companion & Scientist Team** | Natural language pipeline generation, intelligent refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile |
 | **Disk-pressure & scratch safety** | Multi-stage runtime disk-pressure guard (Normal → Reclaim → Hold → Abort) with cascade reclamation, plus global `tmp_dir` scratch isolation |
-| **Cryptographic provenance** | Local run checkpoints anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback (cluster-path checksum recording is outstanding — issue #1093) |
+| **Cryptographic provenance** | Run checkpoints anchored on SHA-256 output checksums — recorded on both the local and cluster execution paths — plus configuration fingerprints and protected data tree audits (`protected_data_trees`); recorded checksums take precedence, with fragile file timestamps (`mtime`) demoted to a bounded fallback |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
 | **Reporting** | Generate structured HTML, JSON, Markdown, and PDF reports from checkpoint data — execution truth, failure diagnosis, and file checksums |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |

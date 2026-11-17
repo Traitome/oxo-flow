@@ -970,11 +970,6 @@ async fn run_command_inner(
                 "per-job walltime is set through --walltime instead",
             ),
             (
-                provenance,
-                "--provenance",
-                "record output checksums on the local path, then submit",
-            ),
-            (
                 max_threads != 0 || max_memory != 0,
                 "--max-threads/--max-memory",
                 "per-rule [resources] and the [cluster] profile drive scheduler limits",
@@ -987,6 +982,10 @@ async fn run_command_inner(
                 );
             }
         }
+        // `--provenance` reaches the cluster path (issue #1093 F1): the
+        // tracker counts this run's recorded checksums for the zero-result
+        // warning, mirroring the local completion path.
+        let cluster_provenance = crate::commands::run_cluster::ClusterProvenance::new(provenance);
         cluster_path::dispatch_cluster_run(
             cluster_profile,
             crate::commands::run_cluster::ClusterRunArgs {
@@ -1009,6 +1008,7 @@ async fn run_command_inner(
                 cache_dir: cache_dir.clone(),
                 skip_env_setup,
                 ai_recover,
+                provenance: &cluster_provenance,
                 // [engine] tmp_dir / OXO_FLOW_TMPDIR follow the job onto
                 // the cluster (issue #1013 C2) — the same resolved value
                 // the local path injects into its process envs.
