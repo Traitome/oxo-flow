@@ -5398,13 +5398,15 @@ keys matching nothing declared keep the literal spelling.</p>
 <p>On <code>run --profile</code>, several <code>run</code> flags are parsed but not applied — the
 engine warns once per flag you actually passed (full table:
 <a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>).
-<code>--provenance</code> is honored there: output checksums are recorded as each
-job settles, exactly like a local run. A required rule's failure cancels
-every in-flight job regardless of <code>--keep-going</code> — use
-<code>required = false</code> for best-effort rules. Set a per-job walltime with
-the rule's <code>time_limit</code> (or the profile's <code>walltime</code>), and leave
-resource limits to the per-rule <code>[resources]</code> block and the
-<code>[cluster]</code> profile.</p>
+<code>--provenance</code> and <code>--keep-going</code> are honored there: checksums are
+recorded as each job settles, exactly like a local run; by default a
+required rule's failure cancels every in-flight job, while <code>-k</code> lets
+already-submitted independent jobs finish (dependents of the failed
+rule stay blocked) and the run still exits non-zero — use
+<code>required = false</code> for best-effort rules. Interrupts always cancel
+every in-flight job. Set a per-job walltime with the rule's
+<code>time_limit</code> (or the profile's <code>walltime</code>), and leave resource limits
+to the per-rule <code>[resources]</code> block and the <code>[cluster]</code> profile.</p>
 </div>
 <h3 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h3>
 <p>The document carries <code>command</code>, <code>status</code>, <code>results</code> counts, and <code>resources</code>.
@@ -5933,10 +5935,12 @@ plan-time rejection, job arrays, the run directory layout, what <code>status.jso
 records, and interrupt/re-attach semantics — lives in
 <a href="../cluster/#cluster-submission-run-profile">Cluster submission</a> on the
 <a href="../cluster/"><code>cluster</code></a> page. <code>run</code> flags that are parsed but dropped on that
-path (<code>--keep-going</code>, <code>--retry</code>, <code>--timeout</code>,
+path (<code>--retry</code>, <code>--timeout</code>,
 <code>--max-threads</code>/<code>--max-memory</code>) are tabulated in
 <a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>
-(<code>--provenance</code> is honored there — checksums are recorded as jobs settle).</p>
+(<code>--provenance</code> and <code>--keep-going</code> are honored there — checksums are
+recorded as jobs settle, and <code>-k</code> keeps in-flight independents running
+past a required failure).</p>
 <p>Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured
 separately — see the <a href="../cluster/"><code>cluster</code></a> command.</p>

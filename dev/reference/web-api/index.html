@@ -6121,7 +6121,18 @@ assets are ignored.</p>
 <li><code>max_jobs</code> defaults to <strong>4</strong> at this endpoint (the CLI flag itself
   defaults to 1): an omitted <code>max_jobs</code> still spawns the CLI with <code>-j 4</code>,
   which is also the value the resource estimate assumes.</li>
-<li><code>keep_going: true</code> maps to <code>--keep-going</code> (the CLI also accepts <code>-k</code>).</li>
+<li><code>keep_going</code> (boolean, optional, default <code>false</code>) maps to
+  <code>--keep-going</code> (the CLI also accepts <code>-k</code>). The default is the
+  historical abort-on-required-failure policy: when a required rule
+  fails, the engine cancels the run's in-flight jobs. With <code>true</code>,
+  already-running independent rules finish, ready independent rules keep
+  dispatching, dependents of the failure stay blocked (never executed),
+  and the run still exits non-zero. Run-only — ignored for
+  <code>dry_run: true</code> (nothing executes). Cluster (<code>cluster_id</code>) runs carry
+  the flag into the remote wrapper command the same way. Web <strong>retry</strong>
+  does not re-apply it: the runs row does not persist the failure policy,
+  and a retry re-executes under the default. Pass <code>keep_going</code> on a new
+  create request instead.</li>
 <li><code>samples</code> (array of strings, optional) maps to <code>--samples</code> (comma-joined).</li>
 <li><code>targets</code> (array of strings, optional) maps to <code>-t</code> per entry.</li>
 <li><code>include_files</code> (object, optional) stages <strong>[[include]] source files</strong>
