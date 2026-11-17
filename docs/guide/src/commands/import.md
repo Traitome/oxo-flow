@@ -69,6 +69,9 @@ produces an unrunnable workflow, the import fails and no output file is written.
   whole inputs, not per-file tuple indexing. Split the channel or hand-port.
 - Unresolved interpolations (`${params.x}`, unknown `meta.*`, `task.ext.*`
   other than args/prefix, `Channel.*` in a script, project/runtime paths).
+- A single-quoted script that references a declared input variable: Nextflow
+  does not interpolate single-quoted strings, so mapping the variable would
+  change the command.
 - A process declared with `path` inputs but never invoked in a `workflow {}`
   block (the input source is unknown).
 - A process invoked more than once in the workflow block.
