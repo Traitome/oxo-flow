@@ -1591,6 +1591,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Driver Defaults and the [cluster] Profile Block">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-flag-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster flag surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4351,6 +4368,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Driver Defaults and the [cluster] Profile Block">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-flag-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster flag surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4875,9 +4909,17 @@ setups.</p>
 <p class="admonition-title">Set realistic time limits</p>
 <p>Generous wall-time limits prevent premature job termination but may lower scheduling priority. Profile your jobs first.</p>
 </div>
-<div class="admonition tip">
-<p class="admonition-title">Use <code>--keep-going</code> for large batches</p>
-<p>When running hundreds of samples, use <code>oxo-flow run -k</code> so that a single failure does not abort the entire run.</p>
+<div class="admonition note">
+<p class="admonition-title">Failure handling on the cluster path</p>
+<p><code>--keep-going</code> is not honored on the cluster path — the flag prints a
+warning and is dropped (see
+<a href="#cluster-flag-surface">Cluster flag surface</a>). The driver keeps
+dispatching independent jobs until the queue drains anyway: a failure
+blocks only its dependents. When a <code>required = true</code> rule fails,
+every in-flight job is cancelled and the run exits — mark salvageable
+steps <code>required = false</code> (best-effort QC, optional per-sample stages)
+so their failure neither cancels the run nor blocks unrelated
+branches, then re-queue what failed with <code>resume</code> / <code>--resume-failed</code>.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Aborted in-flight siblings are incomplete, not failed</p>
@@ -4979,6 +5021,51 @@ unvalidated</strong> — a typo reaches the scheduler as written (the same appli
 flag &gt; <code>$OXO_FLOW_CLUSTER_BACKEND</code> &gt; <code>slurm</code> (see
 <a href="#monitoring-jobs">Monitoring Jobs</a>); the profile block's <code>backend</code> key
 remains required and is validated the same strict way.</p>
+<h3 id="cluster-flag-surface">Cluster flag surface<a class="headerlink" href="#cluster-flag-surface" title="Permanent link">#</a></h3>
+<p><code>run --profile</code> does not consume every <code>run</code> flag. The flags below are
+parsed but have no effect on the cluster path — each of the first five
+prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
+<table>
+<thead>
+<tr>
+<th><code>run</code> flag</th>
+<th>Cluster-path behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--retry</code></td>
+<td>Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by <code>resume</code> / <code>--resume-failed</code>.</td>
+</tr>
+<tr>
+<td><code>--keep-going</code> / <code>-k</code></td>
+<td>Warned and dropped — the driver always dispatches independent jobs until the queue drains; only a required rule's failure cancels in-flight jobs (see <a href="#scheduling-fairness">Scheduling Fairness</a>).</td>
+</tr>
+<tr>
+<td><code>--timeout</code></td>
+<td>Warned and dropped — per-job walltime comes from the profile's <code>[cluster]</code> <code>walltime</code> key or the rule's own <code>time_limit</code>; the <code>--walltime</code> flag exists only on <code>cluster submit</code>.</td>
+</tr>
+<tr>
+<td><code>--provenance</code></td>
+<td>Warned and dropped — output checksums are currently recorded only on the local execution path.</td>
+</tr>
+<tr>
+<td><code>--max-threads</code> / <code>--max-memory</code></td>
+<td>Warned and dropped — per-rule <code>[resources]</code> and the <code>[cluster]</code> profile drive scheduler limits; <code>[resource_budget]</code> performs the pre-submit check.</td>
+</tr>
+<tr>
+<td><code>-j</code> / <code>--jobs</code></td>
+<td>Silently inapplicable — cluster concurrency is governed by <code>max_submitted</code> (the profile key or <code>--max-submitted</code>), clamped by <code>[resource_budget] max_jobs</code>.</td>
+</tr>
+<tr>
+<td><code>--skip-env-setup</code>, <code>--ai-recover</code></td>
+<td>Accepted for command-line parity (warned, issue #136): environments are prepared inside each job script, and AI recovery does not run on the cluster path.</td>
+</tr>
+</tbody>
+</table>
+<p><code>--skip-ref-build</code> is accepted on the cluster path and is a no-op there by
+construction: the reference-build step runs only on the local execution
+path, and <code>run --profile</code> never builds references itself.</p>
 <hr />
 <h2 id="scheduling-fairness">Scheduling Fairness<a class="headerlink" href="#scheduling-fairness" title="Permanent link">#</a></h2>
 <p>Cluster submission honors the same fairness contract as local execution:</p>

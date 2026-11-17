@@ -5183,6 +5183,12 @@ guessed — including <code>exit_code</code>, which stays absent for a failed jo
 real code could not be read, instead of defaulting to <code>1</code>.</p>
 <p>Outputs, the working directory, and logs are assumed to live on storage
 shared between the submitting host and the compute nodes.</p>
+<p>A few <code>run</code> flags are parsed but have no effect on this path — the command
+warns for each and proceeds (per-job walltime comes from the <code>[cluster]</code>
+<code>walltime</code> key or a rule's <code>time_limit</code>, cluster concurrency is governed by
+<code>max_submitted</code>, and failed rules are re-queued by <code>resume</code> /
+<code>--resume-failed</code> rather than retried in place). The complete table lives in
+<a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>.</p>
 <p>Interrupting a cluster run cancels its in-flight scheduler jobs: on
 Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
 every job still in the queue or running, records each interrupted rule as

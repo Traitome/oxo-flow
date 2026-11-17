@@ -5892,7 +5892,10 @@ profile lookup rules, <code>TMPDIR</code> exports on job scripts, the <code>scra
 plan-time rejection, job arrays, the run directory layout, what <code>status.json</code>
 records, and interrupt/re-attach semantics — lives in
 <a href="../cluster/#cluster-submission-run-profile">Cluster submission</a> on the
-<a href="../cluster/"><code>cluster</code></a> page.</p>
+<a href="../cluster/"><code>cluster</code></a> page. <code>run</code> flags that are parsed but dropped on that
+path (<code>--keep-going</code>, <code>--retry</code>, <code>--timeout</code>, <code>--provenance</code>,
+<code>--max-threads</code>/<code>--max-memory</code>) are tabulated in
+<a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>.</p>
 <p>Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured
 separately — see the <a href="../cluster/"><code>cluster</code></a> command.</p>
