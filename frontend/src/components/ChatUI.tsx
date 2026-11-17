@@ -71,6 +71,44 @@ interface ChatUIProps {
   onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
 }
 
+// Renders assistant content with one nicety the AI replies rely on: fenced
+// code blocks (```toml … ```) become scrollable code panes instead of raw
+// fence text. Deliberately no markdown dependency (same philosophy as the
+// subset renderer in MonitorReport.tsx) — everything outside fences stays
+// plain pre-wrap text, and the renderer is streaming-safe: an unterminated
+// fence still renders as a code block while tokens arrive.
+function ChatContent({ content }: { content: string }) {
+  const parts: Array<{ kind: 'text' | 'code'; text: string }> = [];
+  let rest = content;
+  for (;;) {
+    const start = rest.indexOf('```');
+    if (start === -1) break;
+    // Skip the language tag on the opening fence ("```toml\n").
+    const afterFence = rest.slice(start + 3).replace(/^\w*\n/, '');
+    const end = afterFence.indexOf('```');
+    if (start > 0) parts.push({ kind: 'text', text: rest.slice(0, start) });
+    if (end === -1) {
+      parts.push({ kind: 'code', text: afterFence });
+      rest = '';
+      break;
+    }
+    parts.push({ kind: 'code', text: afterFence.slice(0, end) });
+    rest = afterFence.slice(end + 3);
+  }
+  if (rest) parts.push({ kind: 'text', text: rest });
+  return (
+    <div className="chat-content">
+      {parts.map((p, i) =>
+        p.kind === 'code' ? (
+          <pre className="chat-code" key={i}>{p.text}</pre>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
   const session = usePipelineSession();
   const version = useServerVersion();
@@ -469,9 +507,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
                   ))}
                 </div>
               )}
-              {msg.content && (
-                <div className="chat-content">{msg.content}</div>
-              )}
+              {msg.content && <ChatContent content={msg.content} />}
               {/* Action buttons */}
               {msg.actions && msg.actions.length > 0 && (
                 <div className="chat-actions">
