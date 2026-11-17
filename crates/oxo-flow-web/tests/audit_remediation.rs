@@ -80,6 +80,28 @@ async fn pause_refuses_a_run_without_a_process_group() {
     );
 }
 
+/// A paused row whose process group is gone (the process exited, or was
+/// never registered) has nothing to unfreeze: resuming it used to write
+/// 'running'/'executing' unconditionally, so the UI showed a run executing
+/// with no process behind it. A conflict is the honest answer, and the row
+/// must stay 'paused'.
+#[tokio::test]
+async fn resume_refuses_a_run_without_a_process_group() {
+    common::ensure_db().await;
+    // No `process_control::register` for this id: the registry has no group.
+    seed_run("run-resume-no-pgid", "paused").await;
+
+    let (status, body) = post("/api/runs/run-resume-no-pgid/resume", json!({})).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "RUN_NOT_RESUMABLE", "{body}");
+    assert_eq!(
+        run_status("run-resume-no-pgid").await,
+        "paused",
+        "a refused resume must not flip the row to 'running'"
+    );
+}
+
 /// `from_rule` on retry is now supported (issue #1017): the engine computes
 /// the transitive-dependent closure of the named rule and invalidates their
 /// checkpoint entries, so downstream rules re-execute with the new upstream
