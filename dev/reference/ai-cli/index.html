@@ -5124,7 +5124,22 @@ skipped, so a redirected process cannot touch the user's real config. Unset
 </span></code></pre></div>
 <p><code>auto_fix</code> controls what the recovery path may do with an AI-proposed workflow
 patch. The mode gates on top of the model's own safety verdict and TOML
-validation — it never bypasses either:</p>
+validation — it never bypasses either. Independently of the mode, every patch
+is validated before it is written: it must parse as a complete workflow and
+must not drop anything the original file declared, so a partial "changed
+portions" response is refused (issue #1110) rather than written as a full
+replacement. The "must be preserved" set is read from the parsed workflow
+model, not counted by hand:</p>
+<ul>
+<li>every rule <strong>name</strong> in the original must still be present — a same-count
+  rename or rule swap is refused, not only a count drop — and the
+  <code>[[rules]]</code> / <code>[[include]]</code> / <code>[[references]]</code> <strong>counts</strong> may not shrink;</li>
+<li>the wildcard fan-out tables <code>[[values]]</code>, <code>[[sample_groups]]</code>, and
+  <code>[[pairs]]</code> may not shrink in count;</li>
+<li>no <code>[config]</code> key may disappear.</li>
+</ul>
+<p>A rejected fix leaves the workflow byte-for-byte untouched, and an accepted
+fix is written atomically with a <code>&lt;workflow&gt;.bak</code> guard beside it:</p>
 <ul>
 <li><code>ask</code> (default) — prompt y/N before writing on an interactive terminal;
   non-interactive sessions (CI, scripts) are denied with an explanation, so a
@@ -5632,8 +5647,20 @@ unchanged.</p>
    mode the generated TOML must still validate as a complete workflow before
    it is written; a patch flagged unsafe by the safety assessment is only
    displayed</li>
-<li>A repair is not described as fixed until the complete workflow validates,
-   the applied diff is reviewed, and a rerun verifies its outputs</li>
+<li><strong>A proposed fix is validated before it is written, and a rejected fix
+   leaves the workflow byte-for-byte untouched.</strong> The patch must parse as a
+   complete workflow (<code>WorkflowConfig::parse</code>) AND must not drop sections the
+   original file already had — if the response is a partial document (for
+   example a <code>[workflow]</code>-only or <code>[[rules]]</code>-only fragment) that would
+   discard the original's rules, <code>[[include]]</code> entries, or <code>[[references]]</code>,
+   the fix is rejected with a precise diagnostic and nothing is written. This
+   guards against a model returning "only the changed portions" and clobbering
+   a full pipeline</li>
+<li>An accepted fix is written atomically (temp file in the same directory,
+   then rename) and the pre-fix file is preserved twice: the session archive
+   (<code>archive_before_modify</code>) and a sibling <code>&lt;workflow&gt;.bak</code>. A repair is not
+   described as fixed until the complete workflow validates, the applied diff
+   is reviewed, and a rerun verifies its outputs</li>
 </ol>
 <p>See the CLI/AI blockers in
 <code>docs/superpowers/audits/industrial-scientific-audit-ledger.md</code>.</p>
@@ -5725,7 +5752,7 @@ workflow, merge its PR, and re-dispatch the release.</p>
 <tr>
 <td>Phase 3</td>
 <td>AI error recovery (<code>--ai-recover</code>)</td>
-<td>Prototype / blocked by partial-file replacement and unverified rerun</td>
+<td>Prototype / partial-file replacement refused and fix written atomically with a <code>.bak</code> guard (#1110); rerun still unverified</td>
 </tr>
 <tr>
 <td>Phase 4</td>
