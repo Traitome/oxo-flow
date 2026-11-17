@@ -22,8 +22,8 @@ process FASTQC {
     tuple val(meta), path(reads)
 
     output:
-    tuple val(meta), path("*.html"), emit: html
-    tuple val(meta), path("*.zip") , emit: zip
+    tuple val(meta), path("${meta.id}_fastqc.html"), emit: html
+    tuple val(meta), path("${meta.id}_fastqc.zip") , emit: zip
     path  "versions.yml"           , emit: versions
 
     when:
@@ -44,6 +44,7 @@ process FASTQC {
     END_VERSIONS
     """
 }
+workflow { FASTQC(Channel.fromPath("data/*.fastq.gz")) }
     "#;
 
     let toml_str = transpile(nf_fastqc, SourceFormat::Nextflow).expect("transpile should succeed");
@@ -81,12 +82,15 @@ process BWA_MEM {
     tuple val(meta2), path(index)
 
     output:
-    tuple val(meta), path("*.bam"), emit: bam
+    tuple val(meta), path("${meta.id}.sorted.bam"), emit: bam
 
     script:
     """
     bwa mem -t $task.cpus $index $reads | samtools sort -@ $task.cpus -o ${meta.id}.sorted.bam -
     """
+}
+workflow {
+    BWA_MEM(Channel.fromPath("data/*.fastq.gz"), Channel.fromPath("refs/*.fa"))
 }
     "#;
 
@@ -111,7 +115,7 @@ process FASTQC {
     input:
     tuple val(meta), path(reads)
     output:
-    tuple val(meta), path("*.zip"), emit: zip
+    tuple val(meta), path("${meta.id}.zip"), emit: zip
     script:
     """
     fastqc --threads $task.cpus $reads
@@ -124,11 +128,15 @@ process SAMTOOLS_SORT {
     input:
     tuple val(meta), path(bam)
     output:
-    tuple val(meta), path("*.sorted.bam"), emit: bam
+    tuple val(meta), path("${meta.id}.sorted.bam"), emit: bam
     script:
     """
     samtools sort -@ $task.cpus -o ${prefix}.sorted.bam $bam
     """
+}
+workflow {
+    FASTQC(Channel.fromPath("data/*.fastq.gz"))
+    SAMTOOLS_SORT(Channel.fromPath("data/*.bam"))
 }
     "#;
 
@@ -182,7 +190,7 @@ rule bwa_mem:
     assert!(toml_str.contains("name = \"fastqc\""));
     assert!(toml_str.contains("name = \"bwa_mem\""));
     assert!(toml_str.contains("threads = 8"));
-    assert!(toml_str.contains("memory = \"16G\""));
+    assert!(toml_str.contains("memory = \"16000M\""));
     assert!(toml_str.contains("time_limit = \"2h\""));
     assert!(toml_str.contains("docker = \"biocontainers/bwa:0.7.17\""));
 
@@ -213,7 +221,7 @@ rule report:
     input:
         expand("trimmed/{sample}.fastq", sample=["A", "B"])
     output:
-        "results/report.txt"
+        "results/{sample}.report.txt"
     shell:
         "wc -l {input} > {output}"
     "#;
@@ -227,21 +235,19 @@ rule report:
         !toml_str.contains("expand("),
         "the expand() call must not leak into the generated TOML: {toml_str}"
     );
-    assert!(
-        !toml_str.contains("results/{sample}"),
-        "sink rules must not receive fabricated outputs: {toml_str}"
-    );
     let config =
         WorkflowConfig::parse(&toml_str).expect("generated toml must parse as valid workflow");
-    assert_eq!(config.rules.len(), 3);
-    assert!(
-        config.rules[0].output.is_empty(),
-        "rule all must stay a sink rule without fabricated outputs"
+    assert_eq!(
+        config.rules.len(),
+        2,
+        "the target-only rule all must be dropped, leaving two runnable rules"
     );
+    assert_eq!(config.rules[0].name, "trim");
     assert!(
-        config.rules[1].temporary,
+        config.rules[0].temporary,
         "temp() output must set the tombstone flag"
     );
+    assert_eq!(config.rules[1].name, "report");
 }
 
 #[test]
@@ -287,7 +293,7 @@ process STAR_ALIGN {
     path(index)
 
     output:
-    tuple val(meta), path("*Aligned.sortedByCoord.out.bam"), emit: bam
+    tuple val(meta), path("${meta.id}Aligned.sortedByCoord.out.bam"), emit: bam
 
     script:
     """
@@ -297,6 +303,9 @@ process STAR_ALIGN {
         --runThreadN $task.cpus \
         --outSAMtype BAM SortedByCoordinate
     """
+}
+workflow {
+    STAR_ALIGN(Channel.fromPath("data/*.fastq.gz"), Channel.fromPath("refs/*.fa"))
 }
     "#;
 
@@ -324,26 +333,38 @@ process SALMON_QUANT {
     memory '12 GB'
 
     input:
-    tuple val(meta), path(reads)
+    path(r1)
+    path(r2)
     path(index)
 
     output:
-    tuple val(meta), path("quant.sf"), emit: counts
+    path("quant/${meta.id}/quant.sf"), emit: counts
 
     script:
     """
     salmon quant \
         -i $index \
         -l A \
-        -1 ${reads[0]} \
-        -2 ${reads[1]} \
+        -1 $r1 \
+        -2 $r2 \
         -p $task.cpus \
-        -o .
+        -o quant/${meta.id}
     """
+}
+workflow {
+    SALMON_QUANT(
+        Channel.fromPath("data/*_R1.fastq.gz"),
+        Channel.fromPath("data/*_R2.fastq.gz"),
+        Channel.fromPath("refs/*.fa")
+    )
 }
     "#;
 
     let toml_str = transpile(nf, SourceFormat::Nextflow).expect("transpile should succeed");
+    assert!(
+        toml_str.contains("-1 {input[0]}") && toml_str.contains("-2 {input[1]}"),
+        "multi-input references must use indexed placeholders (bare {{input}} would join all          three inputs): {toml_str}"
+    );
     let config = WorkflowConfig::parse(&toml_str).expect("parsed workflow");
     assert_eq!(config.rules.len(), 1);
     assert_eq!(config.rules[0].name, "salmon_quant");

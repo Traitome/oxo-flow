@@ -58,7 +58,7 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 **Claim.** A new engine cannot ask the field to abandon nf-core modules and community Snakemake rules; it must ingest them — and the translation should itself be an analysis artifact (typed, reviewed, diffable), not a lossy copy-paste.
 
-**Shipped today.** `oxo-flow import` transpiles Nextflow DSL2 and Snakemake definitions to `.oxoflow` (prototype-grade; complex channel logic and embedded code are not fully convertible and always require review plus the static gates — see [LIMITATIONS](https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md)). — *Prototype.*
+**Shipped today.** `oxo-flow import` translates a deterministic Nextflow DSL2 / Snakemake subset to `.oxoflow`; every construct outside the documented subset is a hard error that names the construct, and the generated workflow is parsed and statically validated before it is written. Coverage is prototype-grade — complex channel logic and embedded code require review plus the static gates (see [LIMITATIONS](https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md)). — *Prototype.*
 
 **Exit evidence.** Representative-corpus coverage, semantic-equivalence tests, unsupported-construct reporting, round-trip review (ROADMAP Stage 12.3).
 
