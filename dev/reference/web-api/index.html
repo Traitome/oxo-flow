@@ -6388,6 +6388,12 @@ ignored) and resumes it. On <strong>resume</strong>, a <code>from_rule</code> fi
 <code>400 UNSUPPORTED_FIELD</code> — a paused run continues in place, so re-running from a
 specific rule has no meaning (see Smart Retry above: cancel the run and retry
 it instead). A terminal run in either endpoint returns <code>409 RUN_NOT_ACTIVE</code>.</p>
+<p>Both endpoints signal the run's live process group, so a row with no
+registered group is refused with <code>409</code> rather than flipped in the DB:
+<strong>pause</strong> answers <code>409 NO_PROCESS_GROUP</code> (a queued run has nothing to freeze)
+and <strong>resume</strong> answers <code>409 RUN_NOT_RESUMABLE</code> (a paused run whose process has
+exited has nothing to unfreeze — writing <code>running</code> would show it executing
+with nothing behind it). In both cases the stored status is left unchanged.</p>
 <h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>GET /api/runs/{id}/logs
 </span></code></pre></div>
