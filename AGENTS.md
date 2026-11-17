@@ -96,7 +96,7 @@ cd frontend && npm run build   # Outputs to crates/oxo-flow-web/static/
 The web crate uses a domain-driven modular monolith with 9 domains:
 
 - `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting
-- `domains/execution/` — Run lifecycle, diagnostics engine (30+ patterns), retry logic
+- `domains/execution/` — Run lifecycle, diagnostics engine (31 patterns), retry logic
 - `domains/ai/` — AI copilot prompts, service orchestration, handlers, agents
 - `domains/auth/` — Authentication, OAuth stubs, license endpoints
 - `domains/collaboration/` — Pipeline fork, share, import

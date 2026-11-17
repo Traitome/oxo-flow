@@ -136,7 +136,7 @@ Once the server is running, the following REST endpoints are available. The full
 | `GET` | `/api/runs/{id}` | Run detail |
 | `GET` | `/api/runs/{id}/status` | Real-time status (nodes, timeline, resources) |
 | `GET` | `/api/runs/{id}/dag-status` | DAG JSON + per-node live status |
-| `GET` | `/api/runs/{id}/diagnostics` | Diagnostic engine results (30+ error patterns) |
+| `GET` | `/api/runs/{id}/diagnostics` | Diagnostic engine results (31 error patterns) |
 | `GET` | `/api/runs/{id}/logs` | Execution logs |
 | `GET` | `/api/runs/{id}/results` | Output files and QC metrics |
 | `POST` | `/api/runs/{id}/retry` | Smart retry (failed + downstream only) |

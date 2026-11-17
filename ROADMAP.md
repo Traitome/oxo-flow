@@ -223,7 +223,7 @@ memory = "32G"
 ### Milestone 2.4: Virtual Environment Support
 - [x] Python venv creation and activation
 - [x] pip requirements.txt installation
-- [x] Poetry/uv support
+- [ ] Poetry/uv support (not implemented — venv + `pip install -r requirements.txt` is the full Python venv surface)
 
 ---
 
@@ -246,7 +246,7 @@ memory = "32G"
 - [x] Checkpointing and resume from failure
 - [x] File timestamp-based re-execution (like Make)
 - [x] Benchmark collection (time, memory, CPU usage per rule)
-- [x] Shadow directories for isolation
+- [ ] Shadow directories for isolation (never implemented; removed from scope)
 - [x] Temporary file management
 
 ---
@@ -263,8 +263,8 @@ qualification requires a separate evidence and governance program.
 - [x] Report builder pattern for composable reports
 
 ### Milestone 4.2: Report Components
-- [x] QC metrics panels (coverage, quality scores)
-- [x] Variant summary tables
+- [x] Generic QC content types (`QcStatus`/`QcIndicatorGroup`) with a MultiQC-JSON rollup adapter (rule-specific coverage/quality panels remain open)
+- [ ] Variant summary tables (no variant-specific section generator; generic table/metadata sections ship today)
 - [x] Execution provenance section
 - [x] Key-value metadata sections
 
@@ -283,7 +283,7 @@ qualification requires a separate evidence and governance program.
 - [x] Workflow CRUD endpoints (list, get, validate, create)
 - [x] Run management (start, status)
 - [x] Report retrieval
-- [x] Environment management endpoints
+- [x] Environment management endpoints (removed in the v0.8 legacy-handler refactor; environment info now flows through run/report and cluster endpoints)
 
 ### Milestone 5.2: Web UI
 - [x] DAG visualization endpoint
@@ -354,7 +354,7 @@ framework extensibility, code quality, and documentation.
 ### Milestone 9.1: Core Framework Enhancements (Completed)
 - [x] `GpuSpec` with model, memory, compute capability fields (Expert 1.8, 21.3)
 - [x] `ResourceHint` for resource estimation and dynamic scheduling (Expert 2.1)
-- [x] `format_hint` on Rule for file format awareness (Expert 2.3, 5.1)
+- [x] `format_hint` on Rule parsed and schema-documented — parsed-but-inert: the engine performs no format-specific I/O and `lint` W038 flags every use (Expert 2.3, 5.1)
 - [x] `pipe` flag on Rule for streaming/FIFO support (Expert 1.3)
 - [x] `checksum` on Rule for output integrity verification (Expert 1.7, 15.6)
 - [x] `rule_metadata` for arbitrary domain metadata (Expert 2.9)
@@ -404,7 +404,7 @@ framework extensibility, code quality, and documentation.
 - [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)
 - [ ] FHIR/HL7 report output format (Expert 30.6)
 - [ ] Multi-tenancy (Phase 10 provides directory separation, but no OS-level tenant boundary; per-user resource quotas remain open)
-- [ ] Job arrays for cluster backends (Expert 13.6)
+- [x] Job arrays for cluster backends (Expert 13.6) — SLURM/PBS/SGE/LSF array submission plus k8s/AWS/GCP array specs
 - [ ] Node feature matching for HPC scheduling (Expert 13.4)
 - [ ] Spot/preemptible instance support (Expert 14.10)
 
@@ -443,7 +443,7 @@ credential scrubbing, or protection from untrusted workflow authors.
 - [x] Real-time log streaming from backend to UI
 - [x] Interactive task control (Pause/Stop/Checkpoint Resume)
 - [x] Automated sample discovery from folders via Regex
-- [x] Notification system (Email, Webhook)
+- [x] Notification system (Webhook: Slack/Discord/custom endpoints, HMAC-SHA256 signatures; email is not implemented)
 
 ---
 
@@ -479,7 +479,7 @@ credential scrubbing, or protection from untrusted workflow authors.
 - [x] `oxo+https://` import/export protocol
 - [x] HPC submission backend (SLURM, PBS)
 - [x] Three-mode deployment (personal/team/hpc)
-- [x] Full API coverage: 50+ endpoints across 8 domains
+- [x] Full API coverage: 100+ OpenAPI-documented operations across 9 domains
 - [x] Test suite expanded substantially; exact pass status must be recorded for the evaluated commit because this historical checklist is not current CI evidence
 
 ---

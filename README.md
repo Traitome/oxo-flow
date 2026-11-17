@@ -53,7 +53,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
  │ Multi-backend LLMs    │   │ Static DAG Engine     │   │ Axum REST API (100+)  │
  │ Embedded Bio-KBs      │◄─►│ Wildcard Expansion    │◄─►│ SSE Realtime Bus      │
  │ Agent Orchestrator    │   │ Checkpoint/Provenance │   │ SQLite / PostgreSQL   │
- │ Scientist Team Loop   │   │ 8 Environment Backends│   │ Diagnostics (30+)     │
+ │ Scientist Team Loop   │   │ 8 Environment Backends│   │ Diagnostics (31)     │
  └───────────────────────┘   └───────────┬───────────┘   └───────────────────────┘
                                          │
                                          ▼
@@ -103,7 +103,7 @@ See [AGENTS.md](AGENTS.md) for the contributor/agent context and [`docs/guide/sr
 | **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data + domain QC parser + `--r-data` TSV | Via MultiQC | Via Nextflow Tower / MultiQC |
 | **Cluster backends** | SLURM, PBS, SGE, LSF, k8s, AWS Batch, GCP Batch | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting; no OS-level tenant boundary yet | No built-in web auth/rate limiting | No built-in web auth/rate limiting (Tower adds commercial auth) |
-| **AI Companion** | Architectural citizen — unified agent, 30+ domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
+| **AI Companion** | Architectural citizen — unified agent, 31 domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
 | **Testing** | Rust unit/integration suites, schema-drift checks, and deterministic AI-eval harness + gold gates in CI; provider-backed benchmark runs record git SHA and content hashes per capture | pytest-based | Spock / varied |
 
 Comparison statements describe architectural defaults, not measured benchmarks; performance and generation quality are evaluated separately in the `eval/` harnesses.
@@ -128,8 +128,8 @@ The trade-off is stated honestly: dynamic DSLs remain unmatched for free-form pr
 
 Four design bets anchor the research program. Each is labeled by maturity: what ships today, and what evidence is still missing (details and exit criteria in the [Vision](docs/guide/src/vision.md) page and [ROADMAP Phase 12](ROADMAP.md#phase-12-research-program-toward-industrial-and-publication-grade-workflow-science)):
 
-1. **BioTypes — biological semantics on DAG edges.** Files crossing DAG edges carry contracts (format, sort order, reference build, index, read groups). Shipped: `[types.*]` declarations checked statically by `validate`/preflight; `TYPE-001`–`TYPE-007` diagnostics carry remediation hints and synthesize ready-to-run coercion commands where the fix is mechanical (e.g. `samtools sort` for a sort-order mismatch). Outstanding: broad truth-set validation.
-2. **Autonomous self-healing runtime.** Shipped: 31 domain diagnostic patterns, curated `SCI-*` scientific preflight (VQSR cohort size, Mutect2 tumor-only pitfalls, …), `--ai-recover` safety-gated repair proposals, and a seeded-failure interpretation benchmark (`report --ai`, `eval/interpretation/`, three providers). Outstanding: applied-repair verified by successful reruns — today that loop closes 0/10 times without a human, and the roadmap says so.
+1. **BioTypes — biological semantics on DAG edges.** Files crossing DAG edges carry contracts (format, sort order, reference build, index, read groups). Shipped: `[types.*]` declarations checked statically by `validate`/preflight; `TYPE-001`–`TYPE-009` diagnostics (`TYPE-008`/`TYPE-009` advisory) carry remediation hints and synthesize ready-to-run coercion commands where the fix is mechanical (e.g. `samtools sort` for a sort-order mismatch). Outstanding: broad truth-set validation.
+2. **Autonomous self-healing runtime.** Shipped: 31 domain diagnostic patterns, 51 curated `SCI-*` scientific preflight rules (VQSR cohort size, Mutect2 tumor-only pitfalls, …), `--ai-recover` safety-gated repair proposals, and a seeded-failure interpretation benchmark (`report --ai`, `eval/interpretation/`, three providers: GLM, DeepSeek, Qwen). Outstanding: applied-repair verified by successful reruns — in the current fault-injection simulation that loop closes 0/10 times without a human, and the roadmap says so.
 3. **Universal ecosystem transpiler.** Shipped: `oxo-flow import` for a deterministic Nextflow DSL2 / Snakemake subset — anything outside the documented subset is a hard error that names the construct, never a silent mistranslation (see [`import`](docs/guide/src/commands/import.md) and [LIMITATIONS.md](LIMITATIONS.md)). Coverage is still prototype-grade; outstanding: corpus-wide semantic-equivalence testing.
 4. **Cryptographic provenance.** Shipped: `--provenance` SHA-256 output checksums on both the local and cluster run paths, config fingerprints, environment identities, and `protected_data_trees` drift audits, auditable via `oxo-flow provenance verify --json` and the web API. Outstanding: cross-architecture reproduction measurement.
 
