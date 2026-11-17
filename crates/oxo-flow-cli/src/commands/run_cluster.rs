@@ -16,13 +16,43 @@ use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::{ClusterProfile, WorkflowConfig};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::environment::EnvironmentResolver;
-use oxo_flow_core::executor::checkpoint::{BenchmarkRecord, CheckpointState};
+use oxo_flow_core::executor::checkpoint::{
+    BenchmarkRecord, CheckpointState, OutputChecksumAlgorithm, compute_file_checksum,
+    expand_config_in_path, hash_file_with_algorithm,
+};
 use oxo_flow_core::executor::{JobRecord, JobStatus};
+use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// `--provenance` bookkeeping for the cluster path (issue #1093 F1).
+///
+/// The local executor records output checksums as each rule completes; a
+/// cluster checkpoint used to record none because the flag never reached
+/// this path. [`fold_record`] now mirrors that recording at its settle
+/// point, and this tracker carries what the fold needs to know about the
+/// run: whether checksums were requested, how many were recorded (drives
+/// the zero-result warning), and which rules were already hashed — the
+/// same record is folded twice on the normal path (settle hook, then the
+/// post-run loop) and outputs can be hundreds of GB.
+pub(crate) struct ClusterProvenance {
+    pub requested: bool,
+    pub recorded: std::sync::atomic::AtomicUsize,
+    rules_hashed: tokio::sync::Mutex<HashSet<String>>,
+}
+
+impl ClusterProvenance {
+    pub fn new(requested: bool) -> Self {
+        Self {
+            requested,
+            recorded: std::sync::atomic::AtomicUsize::new(0),
+            rules_hashed: tokio::sync::Mutex::new(HashSet::new()),
+        }
+    }
+}
 
 /// Everything the cluster path needs from `run_command`'s scope.
 pub(crate) struct ClusterRunArgs<'a> {
@@ -57,6 +87,10 @@ pub(crate) struct ClusterRunArgs<'a> {
     /// has no AI recovery. A request is announced at submit time, never
     /// silently accepted.
     pub ai_recover: bool,
+    /// `--provenance` / per-rule `checksum = "…"`: recorded by
+    /// [`fold_record`] for every completed rule, mirroring the local
+    /// executor (issue #1093 F1).
+    pub provenance: &'a ClusterProvenance,
     /// Resolved run scratch directory (`[engine] tmp_dir` /
     /// `OXO_FLOW_TMPDIR`, issues #907 + #1013 C2): exported as
     /// `TMPDIR`/`TMP`/`TEMP` into every cluster job shell, matching the
@@ -344,6 +378,69 @@ fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
         .unwrap_or_else(|| workdir.join(".oxo-flow").join("env-cache"))
 }
 
+/// Record this rule instance's output checksums, mirroring the local
+/// executor's `--provenance` / per-rule `checksum = "…"` contract (issue
+/// #1093 F1).
+///
+/// Runs at the same settle point that persists completion, so a cluster
+/// checkpoint carries the same checksum entries a local run of the same
+/// workflow writes — `provenance verify` and the freshness gate read one
+/// shape regardless of execution path. Paths expand exactly like the
+/// local path expands them (`{config.*}` plus this instance's fan-out
+/// bindings), and outputs still carrying `{` after expansion are skipped
+/// for the same reason: only an executor with the instance context can
+/// resolve them, and a template never names a file that exists.
+///
+/// Hashing is deduplicated per rule within one run: the record is folded
+/// twice on the normal path (settle hook, then the post-run loop) and
+/// outputs are often tens of GB.
+async fn record_output_checksums(
+    args: &ClusterRunArgs<'_>,
+    rule: &Rule,
+    rule_name: &str,
+    ck: &mut CheckpointState,
+) {
+    {
+        let mut hashed = args.provenance.rules_hashed.lock().await;
+        if !hashed.insert(rule_name.to_string()) {
+            return;
+        }
+    }
+    let checksum_algorithm = rule
+        .checksum
+        .as_deref()
+        .and_then(OutputChecksumAlgorithm::from_rule_spec);
+    let mut wildcard_scope: HashMap<String, String> = (*args.wildcard_values).clone();
+    for (k, v) in args.config.instance_bindings(rule_name) {
+        wildcard_scope.insert(k, v);
+    }
+    let mut recorded_here = 0usize;
+    for output in &rule.output {
+        let expanded = expand_config_in_path(output, &wildcard_scope);
+        if expanded.contains('{') {
+            continue; // per-instance wildcard: resolved only at fan-out
+        }
+        let output_path = args.workdir.join(&expanded);
+        if !output_path.exists() {
+            continue;
+        }
+        let checksum_result = if let Some(alg) = checksum_algorithm {
+            hash_file_with_algorithm(&output_path, alg)
+        } else {
+            compute_file_checksum(&output_path)
+        };
+        if let Ok(checksum) = checksum_result {
+            ck.record_checksum(&expanded, checksum);
+            recorded_here += 1;
+        }
+    }
+    if args.provenance.requested {
+        args.provenance
+            .recorded
+            .fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Fold one driver-returned record into the checkpoint, mirroring the local
 /// loop's bookkeeping so `status`, `resume`, and re-runs cannot tell the two
 /// execution paths apart.
@@ -403,6 +500,15 @@ async fn fold_record(args: &ClusterRunArgs<'_>, record: &JobRecord) {
                     )
             {
                 ck.record_input_manifest(&record.rule, manifest);
+            }
+            // Output checksums (issue #1093 F1): `--provenance` and
+            // per-rule `checksum = "…"` are recorded here — at the same
+            // settle point that persists completion — so cluster
+            // checkpoints stop diverging from local ones.
+            if let Some(rule) = rule
+                && (args.provenance.requested || rule.checksum.is_some())
+            {
+                record_output_checksums(args, rule, &record.rule, &mut ck).await;
             }
         }
         JobStatus::Failed => {
@@ -832,6 +938,25 @@ pub(crate) async fn run_on_cluster(
             summary.succeeded,
             summary.failed,
             summary.skipped
+        );
+    }
+    // --provenance recorded nothing: say so loudly. The historical cluster
+    // failure mode was silent AND empty — the flag was dropped before this
+    // path, so the checkpoint held zero checksums with no warning at all
+    // (issue #1093 F1). Same wording as the local completion path
+    // (issue #276).
+    if args.provenance.requested
+        && args
+            .provenance
+            .recorded
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 0
+    {
+        eprintln!(
+            "  {} --provenance recorded 0 checksums — no literal outputs completed \
+             (templated or wildcard outputs are tracked per instance only after fan-out); \
+             'provenance verify' will find nothing to check",
+            "⚠".yellow()
         );
     }
     Ok(summary)
@@ -1353,6 +1478,203 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
         assert!(
             msg.contains("max_memory = 'lots'"),
             "the message must name the bad value: {msg}"
+        );
+    }
+
+    // ── issue #1093 F1: cluster-path provenance recording ──────────────
+
+    use super::ClusterProvenance;
+    use super::ClusterRunArgs;
+    use super::fold_record;
+    use oxo_flow_core::executor::{JobRecord, JobStatus};
+
+    /// A workflow directory with the given TOML, its parsed/expanded
+    /// config, DAG, and a fresh checkpoint — everything [`fold_record`]
+    /// needs except the provenance tracker, which each test drives.
+    struct FoldFixture {
+        _dir: tempfile::TempDir,
+        workdir: std::path::PathBuf,
+        config: WorkflowConfig,
+        dag: WorkflowDag,
+        order: Vec<String>,
+        checkpoint: std::sync::Arc<tokio::sync::Mutex<CheckpointState>>,
+        checkpoint_path: std::path::PathBuf,
+        wildcard_values: HashMap<String, String>,
+    }
+
+    impl FoldFixture {
+        fn new(toml: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let workdir = dir.path().to_path_buf();
+            let path = workdir.join("wf.oxoflow");
+            std::fs::write(&path, toml).unwrap();
+            let mut config = WorkflowConfig::from_file(&path).unwrap();
+            config.apply_defaults();
+            config.expand_wildcards().unwrap();
+            let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+            let order = dag.execution_order().unwrap();
+            let checkpoint_path = workdir.join(".oxo-flow").join("checkpoint.json");
+            std::fs::create_dir_all(checkpoint_path.parent().unwrap()).unwrap();
+            Self {
+                _dir: dir,
+                workdir,
+                config,
+                dag,
+                order,
+                checkpoint: std::sync::Arc::new(tokio::sync::Mutex::new(CheckpointState::new())),
+                checkpoint_path,
+                wildcard_values: HashMap::new(),
+            }
+        }
+
+        /// Fold one Success record for `rule` through the real
+        /// [`fold_record`] path.
+        async fn fold_success(&self, provenance: &ClusterProvenance, rule: &str) {
+            let now = chrono::Utc::now();
+            let record = JobRecord {
+                rule: rule.to_string(),
+                status: JobStatus::Success,
+                enqueued_at: Some(now),
+                started_at: Some(now),
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                skip_reason: None,
+                max_rss_mb: None,
+                cpu_seconds: None,
+                caption: None,
+                signal: None,
+            };
+            let sensitive_keys = std::collections::HashSet::new();
+            let force_rules = std::collections::HashSet::new();
+            let args = ClusterRunArgs {
+                config: &self.config,
+                dag: &self.dag,
+                order: &self.order,
+                checkpoint: &self.checkpoint,
+                checkpoint_path: &self.checkpoint_path,
+                workdir: &self.workdir,
+                wildcard_values: &self.wildcard_values,
+                sensitive_keys: &sensitive_keys,
+                sensitive_values: &[],
+                force_rules: &force_rules,
+                max_submitted: None,
+                rerun: false,
+                resume_failed: false,
+                cache_dir: None,
+                skip_env_setup: false,
+                ai_recover: false,
+                provenance,
+                tmp_dir: None,
+            };
+            fold_record(&args, &record).await;
+        }
+
+        async fn checksums(&self) -> std::collections::BTreeMap<String, String> {
+            self.checkpoint.lock().await.checksums.clone()
+        }
+    }
+
+    const ONE_RULE_WORKFLOW: &str = "[workflow]\nname = \"prov\"\n[[rules]]\nname = \"emit\"\n\
+                                     output = [\"out.txt\"]\nshell = \"true\"\n";
+
+    #[tokio::test]
+    async fn cluster_provenance_records_literal_output_checksums() {
+        // Issue #1093 F1: `--provenance` used to be dropped on the cluster
+        // path, leaving the checkpoint with zero checksums where the local
+        // executor records one per literal output.
+        let f = FoldFixture::new(ONE_RULE_WORKFLOW);
+        std::fs::write(f.workdir.join("out.txt"), "hello").unwrap();
+        let prov = ClusterProvenance::new(true);
+        f.fold_success(&prov, "emit").await;
+        let checksums = f.checksums().await;
+        let recorded = checksums.get("out.txt").expect("out.txt must be recorded");
+        assert!(
+            recorded.starts_with("sha256:"),
+            "the default algorithm must be sha256: {recorded}"
+        );
+        assert_eq!(
+            prov.recorded.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the zero-warning counter must count this run's checksums"
+        );
+    }
+
+    #[tokio::test]
+    async fn cluster_provenance_hashes_each_rule_once_despite_double_fold() {
+        // The same record is folded twice on the normal path (settle hook,
+        // then the post-run loop); the second fold must not re-hash —
+        // outputs are routinely tens of GB.
+        let f = FoldFixture::new(ONE_RULE_WORKFLOW);
+        std::fs::write(f.workdir.join("out.txt"), "hello").unwrap();
+        let prov = ClusterProvenance::new(true);
+        f.fold_success(&prov, "emit").await;
+        f.fold_success(&prov, "emit").await;
+        assert_eq!(
+            prov.recorded.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the second fold must be a no-op, not a second hash"
+        );
+        assert_eq!(f.checksums().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cluster_rule_checksum_records_without_the_flag() {
+        // Per-rule `checksum = "md5"` opts a rule into recorded integrity
+        // even without --provenance — the same contract the local executor
+        // applies (issue #1013 E6), recomputed with the declared algorithm.
+        let toml = "[workflow]\nname = \"prov\"\n[[rules]]\nname = \"emit\"\n\
+                    output = [\"out.txt\"]\nchecksum = \"md5\"\nshell = \"true\"\n";
+        let f = FoldFixture::new(toml);
+        std::fs::write(f.workdir.join("out.txt"), "hello").unwrap();
+        let prov = ClusterProvenance::new(false);
+        f.fold_success(&prov, "emit").await;
+        let checksums = f.checksums().await;
+        assert!(
+            checksums["out.txt"].starts_with("md5:"),
+            "the rule's declared algorithm must be used: {checksums:?}"
+        );
+        assert_eq!(
+            prov.recorded.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "without --provenance the zero-warning counter stays untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn cluster_provenance_skips_absent_outputs() {
+        // No file on disk → nothing recorded, and the zero-warning counter
+        // stays 0 so the completion path can speak up.
+        let f = FoldFixture::new(ONE_RULE_WORKFLOW);
+        let prov = ClusterProvenance::new(true);
+        f.fold_success(&prov, "emit").await;
+        assert!(f.checksums().await.is_empty());
+        assert_eq!(prov.recorded.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn cluster_provenance_records_fanned_out_instance_outputs() {
+        // Per-instance outputs are keyed by their expanded path, exactly
+        // like the local executor records them — never by the template.
+        let toml = "[workflow]\nname = \"prov\"\n[[sample_groups]]\nname = \"batch\"\n\
+                    samples = [\"S1\", \"S2\"]\n[[rules]]\nname = \"align\"\n\
+                    output = [\"aln/{sample}.bam\"]\nshell = \"true\"\n";
+        let f = FoldFixture::new(toml);
+        std::fs::create_dir_all(f.workdir.join("aln")).unwrap();
+        std::fs::write(f.workdir.join("aln/S1.bam"), "bam").unwrap();
+        let prov = ClusterProvenance::new(true);
+        f.fold_success(&prov, "align_batch_S1").await;
+        let checksums = f.checksums().await;
+        assert!(
+            checksums.contains_key("aln/S1.bam"),
+            "the instance's expanded path must be the key: {checksums:?}"
+        );
+        assert!(
+            !checksums.keys().any(|k| k.contains('{')),
+            "template keys must never be recorded: {checksums:?}"
         );
     }
 }

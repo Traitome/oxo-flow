@@ -592,3 +592,94 @@ shell = "mkdir -p out && echo started > out/done.txt && { [ -f FAST ] || sleep 1
         "the restarted run must complete the rule"
     );
 }
+
+/// Issue #1093 F1: `--provenance` reaches the cluster path. From identical
+/// workflow and inputs, the cluster checkpoint records exactly the output
+/// checksums a local run records — same keys (expanded paths), same hashes.
+#[test]
+fn cluster_and_local_agree_on_provenance_checksums() {
+    let cluster_dir = tempfile::tempdir().unwrap();
+    let local_dir = tempfile::tempdir().unwrap();
+    setup(cluster_dir.path(), Some(CLUSTER_PROFILE));
+    setup(local_dir.path(), Some(CLUSTER_PROFILE));
+
+    let cluster_out = run(cluster_dir.path(), &["--profile", "slurm", "--provenance"]);
+    assert!(
+        cluster_out.status.success(),
+        "cluster run failed:\n{}",
+        String::from_utf8_lossy(&cluster_out.stderr)
+    );
+    let local_out = run(local_dir.path(), &["--provenance"]);
+    assert!(
+        local_out.status.success(),
+        "local run failed:\n{}",
+        String::from_utf8_lossy(&local_out.stderr)
+    );
+
+    let cluster_ck = checkpoint_checksums(cluster_dir.path());
+    let local_ck = checkpoint_checksums(local_dir.path());
+    assert_eq!(
+        cluster_ck, local_ck,
+        "cluster and local checkpoints must record identical checksums"
+    );
+    assert_eq!(
+        cluster_ck.as_object().unwrap().len(),
+        4,
+        "one checksum per completed output: {cluster_ck}"
+    );
+    for key in ["aln/S1.bam", "aln/S2.bam", "stats/S1.txt", "stats/S2.txt"] {
+        let value = cluster_ck[key].as_str().unwrap_or_default();
+        assert!(
+            value.starts_with("sha256:"),
+            "{key} must carry the default algorithm: {value}"
+        );
+    }
+    // The zero-checksum warning is for runs that recorded nothing; this one
+    // recorded four.
+    let stderr = String::from_utf8_lossy(&cluster_out.stderr);
+    assert!(
+        !stderr.contains("recorded 0 checksums"),
+        "the warning must not fire when checksums were recorded:\n{stderr}"
+    );
+
+    // Recording checksums must not disturb the skip bookkeeping: a second
+    // run from the same state is still a no-op.
+    let second = run(cluster_dir.path(), &["--profile", "slurm", "--provenance"]);
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("nothing to submit"),
+        "the run after recording checksums must still be a no-op:\n{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+}
+
+/// Without `--provenance` (and without per-rule `checksum`), the cluster
+/// path must not pay hashing cost nor invent checksum entries.
+#[test]
+fn cluster_run_without_provenance_records_no_checksums() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+
+    let out = run(dir.path(), &["--profile", "slurm"]);
+    assert!(
+        out.status.success(),
+        "cluster run failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let checksums = checkpoint_checksums(dir.path());
+    assert!(
+        checksums.as_object().unwrap().is_empty(),
+        "no --provenance, no per-rule checksum: {checksums}"
+    );
+}
+
+/// The checkpoint's checksum map, or an empty object when the field is
+/// absent.
+fn checkpoint_checksums(dir: &Path) -> serde_json::Value {
+    let ck: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join(".oxo-flow/checkpoint.json")).expect("no checkpoint"),
+    )
+    .unwrap();
+    ck.get("checksums")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}))
+}
