@@ -13,8 +13,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BioFormat, BioTypeSpec, CompressionKind, IndexKind, SortOrder, TypeViolation,
-    coercion_rule_for_compression, coercion_rule_for_index, normalize_reference_build,
+    BioFormat, BioTypeSpec, CompressionKind, IndexKind, ReadGroupContract, SortOrder,
+    TypeViolation, coercion_rule_for_index,
 };
 
 /// Bounded byte budget for header introspection: 64 KiB is sufficient to capture
@@ -61,125 +61,60 @@ pub struct IntrospectedBioType {
 }
 
 impl IntrospectedBioType {
-    /// Verify whether this introspected file satisfies an expected `BioTypeSpec`.
-    pub fn satisfies_spec(&self, expected: &BioTypeSpec) -> Result<(), Vec<TypeViolation>> {
-        let mut violations = Vec::new();
-
-        // 1. Format check (TYPE-001)
-        if self.format != expected.format && expected.format != BioFormat::Generic {
-            violations.push(TypeViolation {
-                code: "TYPE-001".to_string(),
-                message: format!(
-                    "biological format mismatch: file on disk is {}, but rule requires {}",
-                    self.format, expected.format
-                ),
-                suggestion: Some(format!(
-                    "convert {} to {} before pipeline execution",
-                    self.format, expected.format
-                )),
-                coercion_rule: None,
-            });
-        }
-
-        // 2. Sort order check (TYPE-002)
-        if let Some(expected_order) = expected.sort_order
-            && expected_order != SortOrder::Unsorted
-            && expected_order != SortOrder::Unknown
-        {
-            let current_order = self.sort_order.unwrap_or(SortOrder::Unsorted);
-            if !current_order.satisfies(expected_order) {
-                violations.push(TypeViolation {
-                    code: "TYPE-002".to_string(),
-                    message: format!(
-                        "sort order mismatch: file header declares {}, but rule requires {}",
-                        current_order, expected_order
-                    ),
-                    suggestion: Some(format!(
-                        "sort alignments by {} using samtools sort",
-                        expected_order
-                    )),
-                    coercion_rule: Some("samtools sort -o {output} {input}".to_string()),
-                });
-            }
-        }
-
-        // 3. Reference build compatibility (TYPE-004)
-        if let (Some(my_build), Some(expected_build)) =
-            (&self.reference_build, &expected.reference_build)
-        {
-            let norm_my = normalize_reference_build(my_build);
-            let norm_expected = normalize_reference_build(expected_build);
-            if norm_my != norm_expected {
-                violations.push(TypeViolation {
-                    code: "TYPE-004".to_string(),
-                    message: format!(
-                        "reference build conflict: file header references '{}' ({}), but rule requires '{}' ({})",
-                        my_build, norm_my, expected_build, norm_expected
-                    ),
-                    suggestion: Some(
-                        "realign reads against matching reference genome build or perform coordinate liftover"
-                            .to_string(),
-                    ),
-                    coercion_rule: None,
-                });
-            }
-        }
-
-        // 4. Read group contract (TYPE-005)
-        if let Some(expected_rg) = &expected.read_groups
-            && expected_rg.required
-        {
-            let has_required_rg = if self.read_groups.is_empty() {
-                false
-            } else if expected_rg.fields.is_empty() {
-                true
-            } else {
-                self.read_groups.iter().any(|rg| {
-                    expected_rg
-                        .fields
-                        .iter()
-                        .all(|field| rg.contains_key(field.as_str()))
-                })
-            };
-
-            if !has_required_rg {
-                violations.push(TypeViolation {
-                    code: "TYPE-005".to_string(),
-                    message: "missing read group contract: rule requires valid @RG header tags, but file header lacks them"
-                        .to_string(),
-                    suggestion: Some(
-                        "inject read groups with gatk AddOrReplaceReadGroups or samtools addreplacerg"
-                            .to_string(),
-                    ),
-                    coercion_rule: Some(
-                        "gatk AddOrReplaceReadGroups -I {input} -O {output} -RGID 1 -RGLB lib1 -RGPL ILLUMINA -RGPU unit1 -RGSM sample"
-                            .to_string(),
-                    ),
-                });
-            }
-        }
-
-        // 5. Compression stream check (TYPE-006)
-        if let Some(expected_comp) = expected.compression
-            && expected_comp != CompressionKind::None
-            && !self.compression.satisfies(expected_comp)
-        {
-            violations.push(TypeViolation {
-                code: "TYPE-006".to_string(),
-                message: format!(
-                    "compression mismatch: rule requires {}, but file is {}",
-                    expected_comp, self.compression
-                ),
-                suggestion: Some(format!("compress file with {}", expected_comp)),
-                coercion_rule: coercion_rule_for_compression(expected_comp).map(str::to_string),
-            });
-        }
-
-        if violations.is_empty() {
-            Ok(())
+    /// Project the observed header onto a [`BioTypeSpec`] snapshot in the
+    /// declared-contract domain [`BioTypeSpec::is_subtype_of`] consumes, so a
+    /// single compatibility lattice governs both call sites (issue #1107
+    /// item 3). Fields that header introspection cannot observe are neutralized
+    /// to the expected values so they never report here:
+    ///
+    /// - `index`: companion-ness is a filesystem property, checked by
+    ///   [`introspect_path_with_spec`], so the snapshot mirrors the expectation.
+    /// - `attributes`: extensible metadata is not a header-observable property.
+    /// - `read_groups`: the observed `@RG` records are collapsed to the single
+    ///   record covering the most expected fields, which reproduces the
+    ///   "some observed read group satisfies the contract" semantics exactly.
+    fn to_spec_snapshot(&self, expected: &BioTypeSpec) -> BioTypeSpec {
+        let read_groups = if self.read_groups.is_empty() {
+            None
         } else {
-            Err(violations)
+            let required_fields: &[String] = expected
+                .read_groups
+                .as_ref()
+                .map(|rg| rg.fields.as_slice())
+                .unwrap_or(&[]);
+            let best = self.read_groups.iter().max_by_key(|rg| {
+                required_fields
+                    .iter()
+                    .filter(|field| rg.contains_key(field.as_str()))
+                    .count()
+            });
+            Some(ReadGroupContract {
+                required: true,
+                fields: best
+                    .map(|rg| rg.keys().cloned().collect())
+                    .unwrap_or_default(),
+            })
+        };
+
+        BioTypeSpec {
+            format: self.format,
+            sort_order: self.sort_order,
+            index: expected.index,
+            reference_build: self.reference_build.clone(),
+            compression: Some(self.compression),
+            read_groups,
+            attributes: expected.attributes.clone(),
         }
+    }
+
+    /// Verify whether this introspected file satisfies an expected `BioTypeSpec`.
+    ///
+    /// Delegates to [`BioTypeSpec::is_subtype_of`] so the intra-DAG checker and
+    /// header introspection share one compatibility definition. The returned
+    /// violations therefore use the shared wording ("producer emits"), not a
+    /// file-specific variant.
+    pub fn satisfies_spec(&self, expected: &BioTypeSpec) -> Result<(), Vec<TypeViolation>> {
+        self.to_spec_snapshot(expected).is_subtype_of(expected)
     }
 }
 

@@ -10,6 +10,23 @@ use super::{
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
 
+/// Advisory (non-blocking) BioType diagnostic codes.
+///
+/// These fire on dataflow edges where a contract *cannot be checked* (rather
+/// than is known to be violated): a typed consumer whose upstream producer
+/// declares no `[types]` (TYPE-008), or a consumer that names a reference build
+/// against a producer that omits one (TYPE-009). Every bridge that maps a
+/// [`TypeViolation`] into a user-facing actionable diagnostic must keep
+/// advisory codes non-fatal — see `crate::format` and
+/// `crate::scientific_preflight`. This is the single source of truth so the
+/// two bridges cannot drift.
+pub const ADVISORY_TYPE_CODES: [&str; 2] = ["TYPE-008", "TYPE-009"];
+
+/// Returns true when `code` is an advisory (non-fatal) BioType diagnostic.
+pub fn is_advisory_type_code(code: &str) -> bool {
+    ADVISORY_TYPE_CODES.contains(&code)
+}
+
 /// Diagnostic record capturing a compile-time biological type conflict between DAG rules.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeDiagnostic {
@@ -296,7 +313,40 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
             let Some(producer_rule) = rule_map.get(producer_name.as_str()) else {
                 continue;
             };
+            // A typed consumer reading from a producer that declares no
+            // `[types]` cannot be verified: the producer's biological output is
+            // unknown, so the edge silently passes today. Report it as an
+            // advisory (TYPE-008) finding instead of accepting (issue #1107
+            // item 1). Advisory codes never fail the admission gate.
             let Some(producer_types) = &producer_rule.types else {
+                diagnostics.push(TypeDiagnostic {
+                    producer_rule: producer_name.clone(),
+                    consumer_rule: consumer_name.clone(),
+                    producer_channel: if producer_rule.output.is_empty() {
+                        "<untyped>".to_string()
+                    } else {
+                        producer_rule.output.join(", ")
+                    },
+                    consumer_channel: if consumer_types.inputs.is_empty() {
+                        "<untyped>".to_string()
+                    } else {
+                        consumer_types
+                            .inputs
+                            .keys()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    },
+                    violation: TypeViolation {
+                        code: "TYPE-008".to_string(),
+                        message: "unverifiable biological contract: consumer declares types but the upstream producer declares none, so this dataflow edge cannot be checked".to_string(),
+                        suggestion: Some(
+                            "declare the producer's output type under [rules.types].outputs (or [types.<name>]) so its biological output can be verified against the consumer contract"
+                                .to_string(),
+                        ),
+                        coercion_rule: None,
+                    },
+                });
                 continue;
             };
 
@@ -363,6 +413,37 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                                 });
                             }
                         }
+
+                        // The consumer names a reference build but the producer
+                        // omits it, so the build cannot be checked: TYPE-004 only
+                        // fires when BOTH sides name a build, which lets this
+                        // incomplete pair pass silently (issue #1107 item 2).
+                        // Report it as an advisory (TYPE-009) finding.
+                        if let (Ok(p_spec), Ok(c_spec)) = (
+                            resolve_type_spec(out_type_name, config),
+                            resolve_type_spec(in_type_name, config),
+                        ) && let Some(expected_build) = &c_spec.reference_build
+                            && p_spec.reference_build.is_none()
+                        {
+                            diagnostics.push(TypeDiagnostic {
+                                producer_rule: producer_name.clone(),
+                                consumer_rule: consumer_name.clone(),
+                                producer_channel: out_ch.clone(),
+                                consumer_channel: in_ch.clone(),
+                                violation: TypeViolation {
+                                    code: "TYPE-009".to_string(),
+                                    message: format!(
+                                        "reference build unverifiable: consumer requires build '{}', but the upstream producer declares no reference build, so alignment compatibility cannot be checked",
+                                        expected_build
+                                    ),
+                                    suggestion: Some(
+                                        "declare the producer's reference_build so its alignment against the consumer's required build can be verified"
+                                            .to_string(),
+                                    ),
+                                    coercion_rule: None,
+                                },
+                            });
+                        }
                     }
                 }
             }
@@ -375,12 +456,19 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
 /// Validate declared biological contracts across a workflow DAG.
 ///
 /// Returns an empty success when the workflow declares no BioTypes. This is
-/// the shared admission gate for CLI preflight and web run creation.
+/// the shared admission gate for CLI preflight and web run creation, so only
+/// *fatal* findings fail it: advisory unverifiable-edge codes (TYPE-008/009)
+/// are dropped here because an unverifiable edge is not a proven violation.
+/// Callers that surface every finding (the format bridge, scientific
+/// preflight) still see the advisory diagnostics via [`check_workflow_types`].
 pub fn validate_workflow_types(
     config: &WorkflowConfig,
     dag: &WorkflowDag,
 ) -> Result<(), Vec<TypeDiagnostic>> {
-    let diagnostics = check_workflow_types(config, dag);
+    let diagnostics: Vec<TypeDiagnostic> = check_workflow_types(config, dag)
+        .into_iter()
+        .filter(|d| !is_advisory_type_code(&d.violation.code))
+        .collect();
     if diagnostics.is_empty() {
         Ok(())
     } else {

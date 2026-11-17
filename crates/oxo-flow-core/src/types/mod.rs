@@ -15,9 +15,14 @@ pub mod inspect;
 #[cfg(test)]
 mod inspect_tests;
 #[cfg(test)]
+mod negative_tests;
+#[cfg(test)]
 mod tests;
 
-pub use checker::{TypeDiagnostic, check_workflow_types, validate_workflow_types};
+pub use checker::{
+    ADVISORY_TYPE_CODES, TypeDiagnostic, check_workflow_types, is_advisory_type_code,
+    validate_workflow_types,
+};
 pub use inspect::{
     IntrospectError, IntrospectedBioType, introspect_bytes, introspect_file,
     introspect_path_with_spec,
@@ -393,8 +398,9 @@ pub struct RuleTypesSpec {
 /// Specific violation identified during biological subtyping check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeViolation {
-    /// Diagnostic identifier (`TYPE-001` .. `TYPE-007`, or `TYPE-UNKNOWN`
-    /// when a referenced type name cannot be resolved).
+    /// Diagnostic identifier (`TYPE-001` .. `TYPE-009`, or `TYPE-UNKNOWN`
+    /// when a referenced type name cannot be resolved). `TYPE-008` / `TYPE-009`
+    /// are advisory unverifiable-edge codes — see [`is_advisory_type_code`].
     pub code: String,
     /// Clear explanation of the semantic mismatch.
     pub message: String,
