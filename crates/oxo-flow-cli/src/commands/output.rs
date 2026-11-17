@@ -310,7 +310,24 @@ fn resolve_report_workflow(
     let mut discovered_checkpoint_path: Option<PathBuf> = None;
 
     let workflow = match workflow {
-        Some(path) => path,
+        Some(path) => {
+            // A checkpoint passed as the workflow argument fails later as a
+            // baffling raw TOML parse error (tx-ubuntu user-sim finding).
+            // Name the actual mistake and the flags that carry both inputs.
+            if path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("checkpoint.json"))
+            {
+                anyhow::bail!(
+                    "{} is a checkpoint, not a workflow — pass the workflow file \
+                     (e.g. `oxo-flow report workflow.oxoflow`) and the checkpoint \
+                     with `--checkpoint {}` (or let discovery find it).",
+                    path.display(),
+                    path.display()
+                );
+            }
+            path
+        }
         None => {
             let discovery_dir = discovery_dir
                 .as_ref()

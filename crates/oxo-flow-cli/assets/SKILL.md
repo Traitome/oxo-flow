@@ -92,7 +92,7 @@ ends with a **Done when** condition — do not proceed without it.
 
 - `oxo-flow status` (or `cluster status`) to completion.
 - On failure: read structured diagnostics, diagnose, fix, re-run the static
-  gates, then resume — `oxo-flow resume` / `run --resume-failed`
+  gates, then resume — `oxo-flow resume <checkpoint>` (or `run --resume-failed`)
   (checkpoint avoids recompute). Optional AI recovery:
   `run --ai-recover --ai-max-retries 3`.
 - Retry budget: max 3 correction loops, then escalate to the human.

@@ -515,7 +515,10 @@ wrapped child processes (`conda run`, `pixi run`, venv activation) and
 tools honoring `TMPDIR` all land in the scratch volume. The directory must
 exist on the shared filesystem the nodes see; it is created on the submit
 host at run start (the same fail-fast mkdir the local path performs) and
-the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there.
+the `OXO_FLOW_TMPDIR` override stays verbatim-absolute there. The
+standalone `cluster submit` path honors the same two sources and exports
+them into its generated scripts too — the two submission paths cannot
+drift.
 
 Like `localrule = true` and `checkpoint = true`, the `scratch = true`
 directive is local-executor-only: workflows whose runnable rules declare it
@@ -640,7 +643,7 @@ own (pre-existing) signal handling.
 What remains out of scope is *re-attaching*: a driver that died without a
 signal (crash, OOM) cannot adopt the scheduler job ids of a previous
 process. Those jobs keep running under the scheduler; a subsequent
-`resume` / `--resume-failed` re-queues their rules from the checkpoint's
+`resume` (checkpoint path argument) or `run --resume-failed` re-queues their rules from the checkpoint's
 RUNNING entries rather than reusing the live job ids — verdicts the driver
 had already observed settling were folded into the checkpoint, so their work
 is not repeated. Until a

@@ -1397,14 +1397,43 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
 /// over every row — reading the first row alone (as this did) always
 /// reported no memory at all.
 fn parse_sacct(text: &str) -> Option<TerminalRecord> {
-    let rows: Vec<Vec<&str>> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("JobID") && !l.starts_with('-'))
-        .map(accounting_columns)
-        .collect();
+    // Column meanings come from the header row when the store echoes one
+    // (real `sacct --format=…` prints the requested names); without a
+    // header the fixed `--format` order — State,ExitCode,Elapsed,MaxRSS,
+    // TotalCPU at 1..5 — is the fallback. Assuming the requested order
+    // outright broke against stores that print their own fixed layout: the
+    // tx-ubuntu mock scheduler emits JobID,Elapsed,State,ExitCode,MaxRSS
+    // regardless of the request, so no state ever matched and every
+    // finished job stayed Unknown in `cluster status` even though the
+    // accounting overlay ran.
+    let mut layout = [1usize, 2, 3, 4, 5]; // state, exit, elapsed, maxrss, cpu
+    let mut rows: Vec<Vec<&str>> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('-') {
+            continue;
+        }
+        let cells = accounting_columns(trimmed);
+        if cells.len() > 1 && cells[0].eq_ignore_ascii_case("JobID") {
+            // Header row: derive the column layout from the names actually
+            // present; a name outside the known set keeps its positional
+            // fallback slot.
+            for (i, name) in cells.iter().enumerate() {
+                match name.trim().to_ascii_lowercase().as_str() {
+                    "state" => layout[0] = i,
+                    "exitcode" => layout[1] = i,
+                    "elapsed" => layout[2] = i,
+                    "maxrss" => layout[3] = i,
+                    "totalcpu" => layout[4] = i,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        rows.push(cells);
+    }
     let allocation = rows.first()?;
-    let state = allocation.get(1)?.trim();
+    let state = allocation.get(layout[0])?.trim();
     // The same state vocabulary the live poller maps in `parse_status_line`:
     // a job must not settle as Failed through one path and Unknown through
     // the other depending on whether squeue still had it.
@@ -1419,18 +1448,22 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
     };
     let max_rss_mb = rows
         .iter()
-        .filter_map(|r| r.get(4).copied().and_then(parse_rss_mb))
+        .filter_map(|r| r.get(layout[3]).copied().and_then(parse_rss_mb))
         .max();
     // TotalCPU is likewise per-step; the allocation row leaves it blank.
     let cpu_seconds = rows
         .iter()
-        .filter_map(|r| r.get(5).copied().and_then(parse_accounting_duration_secs))
+        .filter_map(|r| {
+            r.get(layout[4])
+                .copied()
+                .and_then(parse_accounting_duration_secs)
+        })
         .max();
     Some(TerminalRecord {
         status,
-        exit_code: allocation.get(2).copied().and_then(parse_exit_code),
+        exit_code: allocation.get(layout[1]).copied().and_then(parse_exit_code),
         elapsed_secs: allocation
-            .get(3)
+            .get(layout[2])
             .copied()
             .and_then(parse_accounting_duration_secs),
         max_rss_mb,
@@ -2214,6 +2247,27 @@ mod accounting_tests {
                 elapsed_secs: Some(5),
                 max_rss_mb: Some(1),
                 cpu_seconds: Some(4),
+            })
+        );
+    }
+
+    #[test]
+    fn sacct_layout_comes_from_the_header_row() {
+        // The tx-ubuntu mock scheduler prints its own fixed column order —
+        // JobID,Elapsed,State,ExitCode,MaxRSS — regardless of the requested
+        // `--format`. Positional parsing read Elapsed as the state, matched
+        // nothing, and left every finished job Unknown in `cluster status`.
+        // Verbatim rows from that store.
+        let text = "       JobID    Elapsed      State ExitCode    MaxRSS\n\
+4813        00:01:22  COMPLETED      0:0    128.2M\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Slurm, text),
+            Some(TerminalRecord {
+                status: BackendJobStatus::Completed,
+                exit_code: Some(0),
+                elapsed_secs: Some(82),
+                max_rss_mb: Some(128),
+                cpu_seconds: None,
             })
         );
     }

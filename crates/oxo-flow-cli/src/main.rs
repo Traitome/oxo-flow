@@ -1114,7 +1114,8 @@ pub enum ConfigAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ClusterAction {
-    /// Generate and submit job scripts for a workflow to the cluster.
+    /// Generate job scripts for a workflow (writes them and stops — you or
+    /// a submit wrapper hand them to the scheduler).
     Submit {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,

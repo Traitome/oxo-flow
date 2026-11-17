@@ -73,6 +73,29 @@ pub fn scheduled_resources(rule: &Rule) -> (u32, u64) {
     )
 }
 
+/// Prefix the run's scratch-directory exports (#907) onto a cluster job
+/// shell command (#1013 C2). Shared by the run driver
+/// ([`ScheduledPlan::build_with_scratch`]) and the standalone
+/// `cluster submit` script renderer so the two paths cannot drift — the
+/// tx-ubuntu user-sim caught `cluster submit` scripts silently missing the
+/// exports.
+pub fn with_tmp_dir_exports(cmd: &str, tmp_dir: &Path) -> String {
+    let quoted = crate::environment::escape_for_sh_single_quote(&tmp_dir.display().to_string());
+    let exports = format!("export TMPDIR='{q}' TMP='{q}' TEMP='{q}' && ", q = quoted);
+    match cmd.split_once(" && ") {
+        // The run driver's shell_cmd opens with the `cd '<workdir>'` guard
+        // from build_rule — splice after it so a failed cd still aborts
+        // before the scratch redirection.
+        Some((head, tail)) if head.starts_with("cd ") => {
+            format!("{head} && {exports}{tail}")
+        }
+        // Standalone `cluster submit` rendering carries no guard yet (the
+        // backend pins the working directory separately) — the exports lead
+        // the command.
+        _ => format!("{exports}{cmd}"),
+    }
+}
+
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendJobStatus {
@@ -291,15 +314,8 @@ impl ScheduledPlan {
     ) -> Result<Self> {
         let mut plan = Self::build(config, dag, workdir, env_resolver, wildcard_values)?;
         if let Some(tmp) = tmp_dir {
-            let quoted = crate::environment::escape_for_sh_single_quote(&tmp.display().to_string());
-            let exports = format!("export TMPDIR='{q}' TMP='{q}' TEMP='{q}' && ", q = quoted);
             for rule in plan.rules.values_mut() {
-                // Every shell_cmd carries the `cd '<workdir>' && ` guard
-                // from build_rule — prefix the exports right after it so a
-                // failed cd still aborts before the scratch redirection.
-                rule.shell_cmd = rule
-                    .shell_cmd
-                    .replacen(" && ", &format!(" && {exports}"), 1);
+                rule.shell_cmd = with_tmp_dir_exports(&rule.shell_cmd, tmp);
             }
         }
         Ok(plan)
@@ -487,6 +503,34 @@ mod tests {
             !plain.rules["preprocess"].shell_cmd.contains("TMPDIR"),
             "no-scratch build must leave the ambient environment untouched: {}",
             plain.rules["preprocess"].shell_cmd
+        );
+    }
+
+    #[test]
+    fn with_tmp_dir_exports_leads_unchanged_commands() {
+        // The standalone `cluster submit` renderer carries no `cd` guard
+        // (the backend pins the working directory separately), so the
+        // exports lead the command — and a command whose own body contains
+        // `&&` must never have the exports spliced into the middle of it.
+        let out = with_tmp_dir_exports(
+            "conda run python train.py --seed 1 && python eval.py",
+            std::path::Path::new("/scratch/oxo"),
+        );
+        assert!(
+            out.starts_with(
+                "export TMPDIR='/scratch/oxo' TMP='/scratch/oxo' TEMP='/scratch/oxo' && "
+            ),
+            "exports must lead a command without a cd guard: {out}"
+        );
+        assert!(
+            out.ends_with("conda run python train.py --seed 1 && python eval.py"),
+            "the command body must survive verbatim: {out}"
+        );
+        // A guarded command keeps the splice after the cd.
+        let guarded = with_tmp_dir_exports("cd '/wf' && make", std::path::Path::new("/s"));
+        assert_eq!(
+            guarded,
+            "cd '/wf' && export TMPDIR='/s' TMP='/s' TEMP='/s' && make"
         );
     }
 

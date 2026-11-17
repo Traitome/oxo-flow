@@ -395,8 +395,9 @@ On clusters, the scheduler enforces resources based on the generated directives.
     never cancels either way — mark salvageable steps `required = false`
     (best-effort QC, optional per-sample stages) when their failure
     should leave the exit code at 0: the failure is recorded, the run
-    exits 0 with the failures listed, and `resume` / `--resume-failed`
-    re-queues what failed.
+    exits 0 with the failures listed, and re-running with `resume` (the
+    standalone command that takes a checkpoint path) or `run
+    --resume-failed` re-queues what failed.
 
 !!! note "Aborted in-flight siblings are incomplete, not failed"
     When a run aborts, rules still in flight are killed and recorded as
@@ -532,7 +533,7 @@ prints a warning and the run proceeds (`-j` is dropped silently):
 
 | `run` flag | Cluster-path behavior |
 |---|---|
-| `--retry` | Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by `resume` / `--resume-failed`. |
+| `--retry` | Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by `resume` (checkpoint path argument) or `run --resume-failed`. |
 | `--timeout` | Warned and dropped — per-job walltime comes from the profile's `[cluster]` `walltime` key or the rule's own `time_limit`; the `--walltime` flag exists only on `cluster submit`. |
 | `--max-threads` / `--max-memory` | Warned and dropped — per-rule `[resources]` and the `[cluster]` profile drive scheduler limits; `[resource_budget]` performs the pre-submit check. |
 | `-j` / `--jobs` | Silently inapplicable — cluster concurrency is governed by `max_submitted` (the profile key or `--max-submitted`), clamped by `[resource_budget] max_jobs`. |
