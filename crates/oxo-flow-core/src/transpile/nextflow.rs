@@ -392,7 +392,10 @@ fn reject_include_directives(source: &str) -> Result<()> {
         if trimmed.starts_with("//") || trimmed.starts_with('#') {
             continue;
         }
-        if trimmed.starts_with("include ") || trimmed.starts_with("includeConfig ") {
+        let is_include = trimmed.starts_with("include {")
+            || trimmed.starts_with("include{")
+            || trimmed.starts_with("includeConfig ");
+        if is_include {
             return Err(nextflow_error(
                 "<workflow>",
                 index + 1,
@@ -1142,7 +1145,7 @@ fn collect_input_decl(
              hand-port this rule",
         ));
     }
-    if line.starts_with("env(") || line.starts_with("env ") {
+    if line.contains("env(") {
         return Err(nextflow_error(
             process,
             line_no,
@@ -3193,5 +3196,22 @@ workflow { P(Channel.fromPath("data/*.txt")) }
             toml.contains("output = [\"data/{sample}.txt.bam\", \"data/{sample}.txt.bai\"]"),
             "{toml}"
         );
+    }
+
+    #[test]
+    fn include_word_inside_a_script_body_is_not_a_directive() {
+        let nf = r#"
+process P {
+    input: path x
+    output: "${x}.out"
+    script: """
+    include foo
+    run $x > ${x}.out
+    """
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("a script line must not be parsed as include");
+        assert!(toml.contains("include foo"), "{toml}");
     }
 }
