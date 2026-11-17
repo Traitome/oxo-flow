@@ -42,7 +42,7 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 **Claim.** Path-text matching is the wrong substrate for pipeline correctness. Files flowing between stages should carry biological contracts — format, sort order, index accompaniment, reference build, read groups, extensible attributes — that the compiler checks statically.
 
-**Shipped today.** The optional `[types.*]` system: named contracts referenced by rules, checked in `oxo-flow validate` and in run preflight. Violations produce `TYPE-001`–`TYPE-007` diagnostics with remediation hints; where the fix is mechanical the diagnostic synthesizes the command (e.g. `samtools sort` for a queryname-sorted BAM feeding a coordinate-indexed consumer; `samtools index` for a missing companion index). — *Implemented; broad truth-set validation outstanding.*
+**Shipped today.** The optional `[types.*]` system: named contracts referenced by rules, checked in `oxo-flow validate` and in run preflight. Violations produce `TYPE-001`–`TYPE-007` diagnostics with remediation hints (plus advisory `TYPE-008`/`TYPE-009` for unverifiable edges — a typed consumer fed by an untyped producer, or a build-incomplete pair); where the fix is mechanical the diagnostic synthesizes the command (e.g. `samtools sort` for a queryname-sorted BAM feeding a coordinate-indexed consumer; `samtools index` for a missing companion index). — *Implemented; broad truth-set validation outstanding.*
 
 **Exit evidence.** False-positive analysis against a representative corpus of real pipelines; literature-backed rule review (ROADMAP Stage 12.2).
 
@@ -83,7 +83,7 @@ Methodological claims are nothing without measurement infrastructure:
 The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`):
 
 - 35 CLI subcommands; 91 OpenAPI paths / 106 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
-- 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-007` covered by unit tests).
+- 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-009` covered by unit tests; `TYPE-008`/`TYPE-009` are advisory unverifiable-edge codes).
 - 33 prebuilt cluster and re-entry integration tests passing on a Linux host.
 - Live `[engine] dispatch_order` (local execution), run-aware `cluster status --json` / `cluster logs`, interrupted-rule re-queue, `provenance verify`, and the strict-placeholder gate exercised on a mock-Slurm Linux host.
 
