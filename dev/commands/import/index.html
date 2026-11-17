@@ -1201,6 +1201,8 @@
       
         
       
+        
+      
     
     
     
@@ -1508,6 +1510,34 @@
     
   
     Conditional Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/migrate-from-nextflow-snakemake/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrate from Nextflow/Snakemake
   
 
     
@@ -2242,22 +2272,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-is-extracted" class="md-nav__link">
+  <a href="#what-is-translated" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What is extracted
+        What is translated
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="What is extracted">
+    <nav class="md-nav" aria-label="What is translated">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#nextflow" class="md-nav__link">
+  <a href="#nextflow-dsl2" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Nextflow
+        Nextflow DSL2
       
     </span>
   </a>
@@ -2285,17 +2315,6 @@
     <span class="md-ellipsis">
       
         Nextflow wiring forms
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-is-not-extracted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is not extracted
       
     </span>
   </a>
@@ -4026,22 +4045,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-is-extracted" class="md-nav__link">
+  <a href="#what-is-translated" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What is extracted
+        What is translated
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="What is extracted">
+    <nav class="md-nav" aria-label="What is translated">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#nextflow" class="md-nav__link">
+  <a href="#nextflow-dsl2" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Nextflow
+        Nextflow DSL2
       
     </span>
   </a>
@@ -4069,17 +4088,6 @@
     <span class="md-ellipsis">
       
         Nextflow wiring forms
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-is-not-extracted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is not extracted
       
     </span>
   </a>
@@ -4145,59 +4153,232 @@
 
 
 <h1 id="oxo-flow-import">oxo-flow import<a class="headerlink" href="#oxo-flow-import" title="Permanent link">#</a></h1>
-<p>Transpile external Nextflow DSL2 and Snakemake pipelines into native <code>.oxoflow</code> workflows.</p>
+<blockquote>
+<p><strong>Migrating a whole pipeline? Start here:</strong> <a href="../../how-to/migrate-from-nextflow-snakemake/">Migrating from Nextflow or Snakemake</a> walks the decision tree, the gate sequence, and the fidelity checklist. This page is the command reference.</p>
+</blockquote>
+<p>Transpile a <strong>supported deterministic subset</strong> of Nextflow DSL2 or Snakemake
+into a native <code>.oxoflow</code> workflow.</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow import [OPTIONS] &lt;SOURCE&gt;
 </span></code></pre></div>
 <h2 id="description">Description<a class="headerlink" href="#description" title="Permanent link">#</a></h2>
-<p>The <code>import</code> command transpiles Nextflow DSL2 process definitions and
-Snakemake rules into <code>.oxoflow</code> pipelines. It is a <strong>best-effort translator</strong>,
-not a full language implementation. For Nextflow, every construct it cannot
-map faithfully is reported as a warning on stderr or rejected with a clear
-error. Snakemake support is narrower (rules, I/O, threads/resources,
-conda/container, and shell bodies); an unsupported directive such as
-<code>script:</code> or <code>run:</code> can be rejected by the generated-TOML parse/validate
-gate rather than translated. In neither case does it silently emit a
-workflow with an invented command or file path.</p>
-<h2 id="what-is-extracted">What is extracted<a class="headerlink" href="#what-is-extracted" title="Permanent link">#</a></h2>
-<h3 id="nextflow">Nextflow<a class="headerlink" href="#nextflow" title="Permanent link">#</a></h3>
+<p><code>oxo-flow import</code> extracts process/rule definitions, resource directives,
+environments, literal I/O patterns, and shell bodies into <code>.oxoflow</code>. It is a
+<strong>deterministic translator, not an interpreter</strong>: there is no semantic parity
+with the source engine, and every construct outside the documented subset is a
+hard error that names the construct (parse-level errors carry a source line). The importer never invents a path, drops
+a semantic directive, or writes a workflow it could not translate.</p>
+<p>Before returning, the generated TOML is parsed and statically validated by the
+engine (<code>WorkflowConfig::parse</code> + <code>validate_format</code>). If the emitter ever
+produces an unrunnable workflow, the import fails and no output file is written.</p>
+<h2 id="what-is-translated">What is translated<a class="headerlink" href="#what-is-translated" title="Permanent link">#</a></h2>
+<h3 id="nextflow-dsl2">Nextflow DSL2<a class="headerlink" href="#nextflow-dsl2" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>process NAME { … }</code></td>
+<td>One rule per process (name lowercased)</td>
+</tr>
+<tr>
+<td><code>cpus</code> / <code>memory</code> / <code>time</code></td>
+<td><code>resources.threads</code> / <code>resources.memory</code> / <code>resources.time_limit</code>; unparseable or dynamic values are errors</td>
+</tr>
+<tr>
+<td><code>disk</code> / <code>queue</code></td>
+<td><code>resources.disk</code> / <code>resources.partition</code></td>
+</tr>
+<tr>
+<td><code>scratch true</code></td>
+<td><code>scratch = true</code></td>
+</tr>
+<tr>
+<td><code>maxRetries N</code></td>
+<td><code>retries = N</code></td>
+</tr>
+<tr>
+<td><code>errorStrategy 'terminate'</code> / <code>'retry'</code></td>
+<td>Accepted; <code>ignore</code> / <code>finish</code> are errors</td>
+</tr>
+<tr>
+<td><code>conda</code> / <code>container</code></td>
+<td><code>environment</code> (literal specs only; dynamic values are errors)</td>
+</tr>
+<tr>
+<td><code>module</code></td>
+<td><code>environment.modules</code> (HPC modules)</td>
+</tr>
+<tr>
+<td><code>env NAME, "value"</code> / <code>env 'NAME=value'</code></td>
+<td><code>envvars</code></td>
+</tr>
+<tr>
+<td><code>tag</code></td>
+<td>Ignored (cosmetic)</td>
+</tr>
+<tr>
+<td><code>label</code> / <code>publishDir</code></td>
+<td>Warning: resource settings from <code>nextflow.config</code> and output publishing are not imported</td>
+</tr>
+<tr>
+<td><code>when: task.ext.when == null \|\| task.ext.when</code></td>
+<td>Accepted with a warning (the rule runs unconditionally); any other <code>when</code> is an error</td>
+</tr>
+<tr>
+<td><code>stub:</code></td>
+<td>Ignored with a warning (test-only body)</td>
+</tr>
+<tr>
+<td><code>input: path/file</code> channels</td>
+<td>Literal patterns or workflow-supplied variables; <code>val</code>/<code>tuple val</code> metadata is ignored</td>
+</tr>
+<tr>
+<td><code>output: path/file</code></td>
+<td><strong>Every</strong> path expression on the declaration, including tuple members; <code>emit:</code> labels are kept</td>
+</tr>
+<tr>
+<td><code>script:</code> / <code>shell:</code></td>
+<td>Double-quoted, triple-quoted, and single-quoted bodies</td>
+</tr>
+<tr>
+<td><code>$task.cpus</code></td>
+<td><code>{threads}</code></td>
+</tr>
+<tr>
+<td><code>$task.ext.args</code> / <code>def args = task.ext.args ?: ''</code></td>
+<td><code>{config.ext_args}</code>, with <code>[config] ext_args = ""</code> emitted</td>
+</tr>
+<tr>
+<td><code>$task.ext.prefix</code> / <code>def prefix = task.ext.prefix ?: "${meta.id}"</code> / <code>${meta.id}</code></td>
+<td><code>{sample}</code></td>
+</tr>
+<tr>
+<td>Declared input variables (<code>$reads</code>, <code>${reads}</code>)</td>
+<td><code>{input}</code> / <code>{input[N]}</code> by declaration position</td>
+</tr>
+<tr>
+<td><code>versions.yml</code> output</td>
+<td>Skipped (the engine records versions separately)</td>
+</tr>
+<tr>
+<td>Workflow wiring</td>
+<td>Call, pipe, channel-variable, upstream-output, and upstream-emit forms (table below)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Hard errors (no output written):</strong></p>
 <ul>
-<li>Rule names (<code>process NAME</code> → lowercased rule name)</li>
-<li><code>cpus</code> → <code>resources.threads</code>, <code>memory</code> (<code>GB</code>/<code>MB</code> canonicalized) →
-  <code>resources.memory</code>, <code>time</code> → <code>resources.time_limit</code>; a process without
-  <code>cpus</code> inherits <code>[defaults] threads</code></li>
-<li><code>conda</code> / <code>container</code> directives → <code>environment</code></li>
-<li>The <code>script:</code> or <code>shell:</code> body, in both inline quoted form
-  (<code>script: "wc -l &lt; ${x}"</code>) and triple-quoted multi-line form
-  (<code>script: """ ... """</code>), including <code>'''…'''</code> bodies</li>
-<li>Declared <code>path</code>/<code>file</code> input variables, and <code>${var}</code> / <code>$var</code> references to
-  them inside the script → oxo-flow placeholders (<code>{input}</code>, <code>{input[N]}</code>)</li>
-<li><code>$task.cpus</code> → <code>{threads}</code>, <code>${meta.id}</code> / <code>${prefix}</code> → <code>{sample}</code></li>
-<li>A direct <code>Channel.fromPath("data/*.txt")</code> (or a <code>name = Channel.fromPath(…)</code>
-  variable) feeding a process → the real wildcard input
-  <code>data/{sample}.txt</code>, a matching <code>sample_pattern</code>, and input-derived outputs
-  (<code>output: "${x}.count"</code> → <code>data/{sample}.txt.count</code>). Both invocation forms
-  are supported — the call form <code>COUNT(Channel.fromPath("data/*.txt"))</code> and
-  the canonical pipe form <code>Channel.fromPath("data/*.txt") | COUNT</code> — and
-  produce identical TOML.</li>
-<li>Process wiring in the documented forms (see
-  <a href="#nextflow-wiring-forms">Nextflow wiring forms</a>): a downstream input fed by
-  an upstream output is mapped to the upstream's output pattern and gets a
-  <code>depends_on</code> edge.</li>
-<li>BioType contracts only when inference actually recognizes the tool/files
-  (<code>[types.fastq]</code>, <code>[types.bam_coord]</code>, <code>[types.vcf_indexed]</code> are emitted
-  <strong>only</strong> when a rule's inferred contract references them). A wired input
-  inherits the type of the upstream output it consumes, so a derived
-  intermediate never re-inherits the source file's type.</li>
+<li><code>include</code> / <code>includeConfig</code> (the include graph is not followed; concatenate
+  the files or import each module).</li>
+<li>Dynamic <code>cpus</code>/<code>memory</code>/<code>time</code>/<code>container</code>/<code>conda</code>, <code>errorStrategy
+  'ignore'|'finish'</code>, <code>maxForks</code>, <code>cache</code>, <code>storeDir</code>, <code>beforeScript</code>,
+  <code>afterScript</code>, <code>resourceLimits</code>, <code>machineType</code>, <code>accelerator</code>,
+  <code>clusterOptions</code>, <code>penv</code>, <code>exec:</code>, and unknown process directives.</li>
+<li><code>stdin</code> and <code>env(...)</code> inputs.</li>
+<li>A bare output glob (<code>path("*.bam")</code>): the produced filename is unknown, and
+  guessing would mistranslate the pipeline. Use an input-anchored expression
+  (<code>${reads}.bam</code>, <code>${meta.id}.bam</code>) or a concrete filename.</li>
+<li>Indexed input references (<code>${reads[0]}</code>, <code>$reads[0]</code>): oxo-flow exposes
+  whole inputs, not per-file tuple indexing. Split the channel or hand-port.</li>
+<li>Unresolved interpolations (<code>${params.x}</code>, unknown <code>meta.*</code>, <code>task.ext.*</code>
+  other than args/prefix, <code>Channel.*</code> in a script, project/runtime paths).</li>
+<li>A single-quoted script that references a declared input variable: Nextflow
+  does not interpolate single-quoted strings, so mapping the variable would
+  change the command.</li>
+<li>Fan-in inputs: an input wildcard that appears in <strong>no</strong> output of the rule
+  (e.g. <code>expand("quant/{sample}.sf", …)</code> feeding a constant
+  <code>results/report.txt</code>, or <code>rules.&lt;name&gt;.output</code> into a constant output).
+  Emitting a wildcard input would create one instance per sample that all
+  overwrite the same output. Use the engine's <code>expand_inputs</code> fan-in construct
+  (workflow-format reference) or hand-port the rule.</li>
+<li>A process declared with <code>path</code> inputs but never invoked in a <code>workflow {}</code>
+  block (the input source is unknown).</li>
+<li>A process invoked more than once in the workflow block.</li>
+<li>Input globs with more than one <code>*</code> or character classes, and multi-output
+  <code>PROC.out</code> selections without <code>.out.&lt;emit&gt;</code>.</li>
 </ul>
 <h3 id="snakemake">Snakemake<a class="headerlink" href="#snakemake" title="Permanent link">#</a></h3>
-<ul>
-<li>Rule names, <code>threads</code>, <code>resources.mem_mb</code> / <code>resources.time</code></li>
-<li><code>conda:</code> / <code>container:</code> directives → <code>environment</code></li>
-<li>Literal input/output patterns (including <code>expand(...)</code> patterns and
-  <code>temp()</code> / <code>protected()</code> markers)</li>
-<li>The <code>shell:</code> body</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rule NAME:</code></td>
+<td>One rule per rule block; duplicate names are errors</td>
+</tr>
+<tr>
+<td><code>input:</code> / <code>output:</code></td>
+<td>Quoted literal patterns; fan-OUT <code>expand("pattern/{wildcard}", …)</code> where the rule's output carries the same wildcard; <code>rules.&lt;name&gt;.output</code> (single-output rules only)</td>
+</tr>
+<tr>
+<td><code>temp(…)</code> / <code>protected(…)</code> / <code>ancient(…)</code></td>
+<td><code>temporary</code> + <code>temp_output</code>, <code>protected_output</code>, <code>ancient</code></td>
+</tr>
+<tr>
+<td><code>touch(…)</code></td>
+<td>Treated as a plain output with a warning (the engine verifies declared outputs exist)</td>
+</tr>
+<tr>
+<td><code>threads:</code> / <code>priority:</code> / <code>retries:</code></td>
+<td>Rule fields</td>
+</tr>
+<tr>
+<td><code>resources: mem_mb, mem_gb, time/runtime, gpu, disk_mb</code></td>
+<td><code>resources</code> (exact MB; other resource keys are errors)</td>
+</tr>
+<tr>
+<td><code>conda:</code> / <code>container:</code> / <code>singularity:</code> / <code>envmodules:</code></td>
+<td><code>environment</code>; container wins over conda (warning); combining <code>envmodules</code> with conda/container is an error</td>
+</tr>
+<tr>
+<td><code>log:</code> / <code>benchmark:</code></td>
+<td>Rule <code>log</code> / <code>benchmark</code> fields; <code>{log}</code> / <code>{benchmark}</code> placeholders are translated</td>
+</tr>
+<tr>
+<td><code>envvars:</code></td>
+<td><code>envvars</code></td>
+</tr>
+<tr>
+<td><code>localrules:</code> / global <code>wildcard_constraints:</code></td>
+<td>Rule flags / <code>[wildcard_constraints]</code></td>
+</tr>
+<tr>
+<td><code>shell:</code></td>
+<td>Single-line and triple-quoted bodies</td>
+</tr>
+<tr>
+<td><code>{input}</code> / <code>{input.name}</code> / <code>{output.name}</code> / <code>{wildcards.X}</code> / <code>{threads}</code></td>
+<td>Engine placeholders (<code>{input[N]}</code> by declared position)</td>
+</tr>
+<tr>
+<td><code>rule all</code> (target-only sink)</td>
+<td>Dropped with a warning; an oxo-flow rule with no command would be rejected by <code>validate</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Hard errors (no output written):</strong> <code>params:</code>, <code>run:</code>, <code>script:</code>, <code>notebook:</code>,
+per-rule <code>wildcard_constraints:</code>, <code>shadow:</code>, <code>group:</code>, <code>default_target:</code>,
+<code>handlers:</code>, <code>include:</code>, <code>subworkflow</code>, <code>module</code>, <code>use rule</code>, <code>configfile:</code>,
+<code>ruleorder:</code>, <code>onsuccess:</code>, <code>onerror:</code>, <code>directory(...)</code>, lambda/config/params/
+checkpoints-based dynamic input/output, unknown directives, unknown resource
+keys, duplicate rule names, fan-in inputs (a wildcard input with no matching
+output wildcard — use <code>expand_inputs</code> or hand-port), and <code>{params.*}</code> /
+<code>{resources.*}</code> / <code>{rule}</code> / <code>{checkpoints.*}</code> placeholders in <code>shell:</code>.</p>
+<p>For a fan-out <code>expand(pattern, key=[...])</code>, the explicit value list is <strong>not
+materialized</strong>: the pattern is imported, but the wildcard domain must be
+declared with <code>sample_pattern</code>, <code>[[sample_groups]]</code>, <code>[[pairs]]</code>, or
+<code>[[values]]</code> before running.</p>
+<p>Brace text the importer does not recognize (bash <code>${VAR}</code>, brace expansion,
+awk <code>{print $1}</code>) passes through unchanged.</p>
 <h2 id="nextflow-wiring-forms">Nextflow wiring forms<a class="headerlink" href="#nextflow-wiring-forms" title="Permanent link">#</a></h2>
 <p>The importer resolves a process's input channels, in the order the process
 declares them, from exactly these forms:</p>
@@ -4248,44 +4429,23 @@ declares them, from exactly these forms:</p>
 </tbody>
 </table>
 <p>Wiring is positional: argument <em>i</em> feeds the process's <em>i</em>-th declared <code>path</code>
-input, and the argument count must match the declaration count.</p>
-<p><strong>Loud-abort contract.</strong> Any wiring expression outside the table above aborts
-the import with an error naming the construct — for example a channel
-operator chain (<code>Channel.fromPath(…).map { … } | COUNT</code>), an unbound channel
-variable, a chained pipe (<code>Channel.fromPath(…) | A | B</code>), a multi-output
-<code>PROC.out</code> with no <code>.out.&lt;emit&gt;</code> selector, a reference to an undefined
-upstream process, or an argument/declaration count mismatch. The importer
-never falls back to a fabricated path or type and never writes an output file
-on this path. Resolve the channel in the source or import that rule by hand.</p>
-<h2 id="what-is-not-extracted">What is not extracted<a class="headerlink" href="#what-is-not-extracted" title="Permanent link">#</a></h2>
-<ul>
-<li><strong>Nextflow workflow-local variables</strong> (<code>def args = task.ext.args ?: ''</code>):
-  the <code>def</code> prelude is stripped so bash does not receive <code>def: command not
-  found</code>, and the import prints a warning naming the variable. References to
-  it remain as shell text and may expand to nothing at run time.</li>
-<li><strong>Nextflow channel operators and expressions</strong> (<code>params.*</code>, <code>task.ext.*</code>,
-  <code>Channel.map</code>/<code>join</code>/<code>combine</code>, ternaries, closures): unsupported
-  interpolations are left verbatim and warned about by name. Wiring
-  expressions using these operators abort the import (see above) rather than
-  being guessed.</li>
-<li><strong>Multiple-wildcard globs</strong> (<code>Channel.fromFilePairs("data/*_{1,2}.fastq.gz")</code>)
-  and character-class globs: only the first <code>*</code> maps to <code>{sample}</code>; the import
-  warns loudly. Such a channel used as a wiring source aborts instead.</li>
-<li><strong>Output expressions that reference unknown variables</strong> (e.g.
-  <code>"${params.outdir}/x.txt"</code>): the output is omitted with a warning rather
-  than fabricated.</li>
-<li><strong>Processes with no <code>script:</code>/<code>shell:</code> body</strong>: the import fails with a clear
-  message instead of writing <code>shell = ""</code> (such a rule would be skipped at run
-  time; <code>validate</code> reports it as error <code>E022</code>).</li>
-</ul>
+input, and the argument count must match the declaration count. Any other
+wiring expression aborts the import with the construct named.</p>
 <h2 id="after-importing">After importing<a class="headerlink" href="#after-importing" title="Permanent link">#</a></h2>
-<p>Always run <code>oxo-flow validate</code> and <code>oxo-flow lint</code> on the generated workflow,
-then <code>oxo-flow dry-run</code> to confirm the DAG and command preview. Because the
-translation is best-effort, expect to edit the result — the import warnings
-are the checklist of what needs manual attention.</p>
-<p>When <code>--from</code> is omitted, <code>oxo-flow import</code> auto-detects the source format from the
-file extension (<code>.nf</code> for Nextflow, <code>Snakefile</code> or <code>.smk</code> for Snakemake) or through
-content inspection.</p>
+<p>The import warnings are the migration checklist. Always run the static gates
+in order:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>validate<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>oxo-flow<span class="w"> </span>lint<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
+</span></code></pre></div>
+<p><code>validate</code> checks the workflow contract and BioTypes, <code>lint</code> reports best
+practices, and <code>dry-run</code> previews the resolved commands and missing inputs.
+None of them executes a tool or proves scientific equivalence — see
+<a href="../../how-to/migrate-from-nextflow-snakemake/">Migrating from Nextflow or Snakemake</a>
+for the full checklist.</p>
+<p>When <code>--from</code> is omitted, <code>oxo-flow import</code> auto-detects the source format from
+the file extension (<code>.nf</code> for Nextflow, <code>Snakefile</code> or <code>.smk</code> for Snakemake) or
+through content inspection.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
 <thead>
@@ -4305,20 +4465,23 @@ content inspection.</p>
 </tr>
 <tr>
 <td><code>-o, --output &lt;OUTPUT&gt;</code></td>
-<td>Output <code>.oxoflow</code> file (prints to stdout if omitted)</td>
+<td>Output <code>.oxoflow</code> file (prints to stdout if omitted). Existing files are never overwritten</td>
 </tr>
 </tbody>
 </table>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<p>Transpile a Nextflow module and print to stdout:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>modules/fastqc.nf
-</span></code></pre></div></p>
-<p>Transpile a Snakemake pipeline directly to a <code>.oxoflow</code> workflow file:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>-o<span class="w"> </span>workflow.oxoflow
-</span></code></pre></div></p>
-<p>Transpile with explicit format specification:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>custom_pipeline.txt<span class="w"> </span>--from<span class="w"> </span>nextflow<span class="w"> </span>-o<span class="w"> </span>pipeline.oxoflow
-</span></code></pre></div></p>
+<p>Transpile a Nextflow pipeline and print to stdout:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>main.nf
+</span></code></pre></div>
+<p>Transpile a Snakemake pipeline to a file:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>-o<span class="w"> </span>workflow.oxoflow
+</span></code></pre></div>
+<p>Transpile with an explicit format:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>custom_pipeline.txt<span class="w"> </span>--from<span class="w"> </span>nextflow<span class="w"> </span>-o<span class="w"> </span>pipeline.oxoflow
+</span></code></pre></div>
+<blockquote>
+<p><strong>Next:</strong> <a href="../../how-to/migrate-from-nextflow-snakemake/">Migrating a whole pipeline from Nextflow or Snakemake</a></p>
+</blockquote>
 
 
 

@@ -1375,6 +1375,8 @@
       
         
       
+        
+      
     
     
     
@@ -1682,6 +1684,34 @@
     
   
     Conditional Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how-to/migrate-from-nextflow-snakemake/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrate from Nextflow/Snakemake
   
 
     
@@ -4229,7 +4259,7 @@
 <p><strong>Exit evidence.</strong> Probabilistic fault-attribution model beyond deterministic patterns; applied-repair verified by successful reruns on a seeded fault-injection benchmark; pre-registered analysis.</p>
 <h3 id="33-universal-ecosystem-transpiler">3.3 Universal ecosystem transpiler<a class="headerlink" href="#33-universal-ecosystem-transpiler" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> A new engine cannot ask the field to abandon nf-core modules and community Snakemake rules; it must ingest them — and the translation should itself be an analysis artifact (typed, reviewed, diffable), not a lossy copy-paste.</p>
-<p><strong>Shipped today.</strong> <code>oxo-flow import</code> transpiles Nextflow DSL2 and Snakemake definitions to <code>.oxoflow</code> (prototype-grade; complex channel logic and embedded code are not fully convertible and always require review plus the static gates — see <a href="https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md">LIMITATIONS</a>). — <em>Prototype.</em></p>
+<p><strong>Shipped today.</strong> <code>oxo-flow import</code> translates a deterministic Nextflow DSL2 / Snakemake subset to <code>.oxoflow</code>; every construct outside the documented subset is a hard error that names the construct, and the generated workflow is parsed and statically validated before it is written. Coverage is prototype-grade — complex channel logic and embedded code require review plus the static gates (see <a href="https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md">LIMITATIONS</a>). — <em>Prototype.</em></p>
 <p><strong>Exit evidence.</strong> Representative-corpus coverage, semantic-equivalence tests, unsupported-construct reporting, round-trip review (ROADMAP Stage 12.3).</p>
 <h3 id="34-cryptographic-provenance">3.4 Cryptographic provenance<a class="headerlink" href="#34-cryptographic-provenance" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> Reproduction requires evidence, not timestamp conventions. Run identity should be anchored on content hashes across outputs, configuration, and protected inputs.</p>
