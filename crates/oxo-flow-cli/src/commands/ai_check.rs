@@ -26,6 +26,17 @@ pub async fn analyze_workflow(
         provider.model().unwrap_or_else(|| "default".into())
     );
 
+    // Session archival is part of the "everything archived" contract: the
+    // analysis must leave a session record behind even when the provider
+    // call fails, so the session is created before the call and failed
+    // explicitly on the error path.
+    let mut session = crate::commands::ai_session::AiCommandSession::begin(
+        command,
+        &workflow_path.display().to_string(),
+        provider,
+    )
+    .with_workflow(workflow_path);
+
     let mut system = build_analysis_prompt();
 
     // User-defined skills explicitly activated via [ai] skills.
@@ -70,9 +81,17 @@ pub async fn analyze_workflow(
 
     use oxo_flow_ai::types::Message;
     let messages = vec![Message::system(&system), Message::user(&user)];
-    let response = provider
-        .chat_with_tools_overflow_safe(&messages, &[])
-        .await?;
+    let response = match provider.chat_with_tools_overflow_safe(&messages, &[]).await {
+        Ok(response) => response,
+        // The session must record the failure before the error propagates —
+        // a provider timeout/network error is exactly the run you want to
+        // find in the archive afterwards.
+        Err(e) => {
+            session.fail(&e.to_string());
+            return Err(e.into());
+        }
+    };
+    session.record_usage(&response.usage);
     let response_text = response.content.unwrap_or_default();
 
     // Record token usage for observability
@@ -118,6 +137,8 @@ pub async fn analyze_workflow(
     } else {
         eprintln!("\n{} No issues found.", "✓".green());
     }
+
+    session.complete(0.9);
 
     Ok(())
 }

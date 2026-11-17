@@ -407,6 +407,20 @@ name = "blast"
 shell = "blastn -db {config.database} -evalue {config.threshold} -query {input} -out {output}"
 ```
 
+A `{config.<key>}` reference to a key that is defined nowhere — the
+`[config]` section, a CLI override, or the engine-injected keys above — is
+an **E005 error**. `run` and `dry-run` hard-fail at plan time, before the
+DAG is built: `workflow references undefined config variables — fix before
+running: …`, listing each offending rule and field. The scan covers shell
+commands, script paths, input/output paths, `log`, `benchmark`,
+`output_pattern`, lifecycle hooks, and `when` conditions. This gate is
+separate from the execution-time placeholder gate (`[engine]
+strict_placeholders`) and is **not** softened by `strict_placeholders =
+false` or `OXO_FLOW_STRICT_PLACEHOLDERS=0` — an undefined key has no value
+to warn about, so the run aborts before any rule is planned. `validate` and
+`lint` report the same problem as the static E005 diagnostic, which is why
+the documented validate → dry-run → run path catches it first.
+
 ### CLI
 
 ```bash

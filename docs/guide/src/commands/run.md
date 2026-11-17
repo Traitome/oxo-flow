@@ -808,6 +808,29 @@ diagnosis as
 [W041](../reference/glossary.md#diagnostic-codes) — a rule that references
 the sample domain without a binding source.
 
+### Undefined config variables fail at plan time
+
+Independent of the runtime gate above, `run` and `dry-run` hard-fail
+**before any rule is planned** when a rule references a `{config.<key>}`
+that is defined nowhere — not in `[config]`, not supplied on the CLI, and
+not one of the engine-injected keys (`samples_list`, `paired_pairs_count`,
+…). The scan covers shell commands, script paths, input/output paths,
+`log`, `benchmark`, `output_pattern`, lifecycle hooks, and `when`
+conditions:
+
+```text
+Error: workflow references undefined config variables — fix before running:
+  rule 'align_reads': shell command references undefined config variable
+  'refence' (define 'refence' in the [config] section)
+```
+
+This plan-time gate is **not** controlled by `[engine] strict_placeholders`
+or `OXO_FLOW_STRICT_PLACEHOLDERS=0` — those switches only soften the
+execution-time rendered-command scan above. An undefined key has no value
+to warn about, so the run aborts before the DAG is built. `validate` and
+`lint` surface the same problem as the static E005 diagnostic, so the
+documented validate → dry-run → run path catches it first.
+
 ### Execute a published bundle
 
 ```bash

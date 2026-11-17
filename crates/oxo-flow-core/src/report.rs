@@ -1665,7 +1665,18 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
                     }
                 },
             );
-            rows.push(vec![(*name).clone(), "success".into(), wall, "-".into()]);
+            // Succeeded rules DO carry their recorded exit code in the
+            // checkpoint (`record_run` persists `exit_code = Some(0)` on the
+            // normal shell path), so the column shows it instead of a
+            // hardcoded "-". A rule without a run record (e.g. a legacy
+            // checkpoint) or without a recorded code keeps the honest "-".
+            let exit = cp
+                .rule_runs
+                .get(*name)
+                .and_then(|r| r.exit_code)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".into());
+            rows.push(vec![(*name).clone(), "success".into(), wall, exit]);
         }
         for name in &failed {
             let exit = cp
