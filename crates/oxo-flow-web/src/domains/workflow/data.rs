@@ -80,6 +80,8 @@ pub fn analyze_files(
         });
     }
 
+    let files = pair_files(files);
+
     let paired_end = files.iter().any(|f| {
         f.path.contains("_R1")
             || f.path.contains("_R2")
@@ -126,6 +128,60 @@ pub fn analyze_files(
         },
         suggested_workflow: suggested,
     })
+}
+
+/// Return the expected mate path for a recognised paired-end naming
+/// convention: `_R1`/`_R2` (any suffix such as `_001` is preserved) or
+/// `_1.`/`_2.` immediately before the extension.
+fn mate_path(path: &str) -> Option<String> {
+    for (marker, mate) in [
+        ("_R1", "_R2"),
+        ("_R2", "_R1"),
+        ("_1.", "_2."),
+        ("_2.", "_1."),
+    ] {
+        if let Some(index) = path.rfind(marker) {
+            return Some(format!(
+                "{}{mate}{}",
+                &path[..index],
+                &path[index + marker.len()..]
+            ));
+        }
+    }
+    None
+}
+
+/// Fill `FileInfo::paired_with` for mates present in the same request.
+///
+/// A mate is recorded only when its path is one of the analysed inputs and
+/// its detected format matches — a `_R1.fastq.gz` is not paired with a
+/// `_R2.bam`. The recorded value is the client-supplied path text, matching
+/// `FileInfo::path`.
+fn pair_files(files: Vec<FileInfo>) -> Vec<FileInfo> {
+    let mates: Vec<Option<String>> = {
+        let present: std::collections::HashMap<&str, &str> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.format.as_str()))
+            .collect();
+        files
+            .iter()
+            .map(|file| {
+                mate_path(&file.path).filter(|mate| {
+                    present
+                        .get(mate.as_str())
+                        .is_some_and(|format| *format == file.format.as_str())
+                })
+            })
+            .collect()
+    };
+    files
+        .into_iter()
+        .zip(mates)
+        .map(|(file, paired_with)| FileInfo {
+            paired_with,
+            ..file
+        })
+        .collect()
 }
 
 /// Discover reference genome components for a given genome build.
@@ -200,6 +256,42 @@ mod tests {
         assert!(result.files[0].format.contains("FASTQ"));
         assert!(result.files[0].format_confidence > 0.9);
         assert!(result.summary.paired_end_detected);
+    }
+
+    #[test]
+    fn paired_with_links_r1_r2_mates() {
+        let r1 = "/data/s1_R1.fastq.gz".to_string();
+        let r2 = "/data/s1_R2.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn paired_with_links_underscore_one_two_mates() {
+        let r1 = "/data/s1_1.fastq.gz".to_string();
+        let r2 = "/data/s1_2.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn unpaired_r1_records_no_mate() {
+        let result = analyze_files(&["/data/s1_R1.fastq.gz".into()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+    }
+
+    #[test]
+    fn paired_with_requires_the_same_detected_format() {
+        let result = analyze_files(
+            &["/data/s1_R1.fastq.gz".into(), "/data/s1_R2.bam".into()],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
     }
 
     #[test]
