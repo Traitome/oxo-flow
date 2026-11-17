@@ -11,6 +11,16 @@
 # REMOVE this entry and bump sqlx as soon as a sqlx release carries
 # the fix — do not let the ignore accrete.
 #
+# RUSTSEC-2026-0543 (chrono 0.4.45) ignored
+# 2026-11-17 with justification: chrono is flagged `unmaintained` — all
+# versions, and there is no safe upgrade ("Solution: No safe upgrade is
+# available!"). It is not a vulnerability advisory, so there is nothing to
+# fix by bumping; chrono remains the de-facto Rust date/time crate and the
+# workspace has ~118 `chrono::` use sites across oxo-flow-core/-ai plus a
+# dev-dependency. Migrating to jiff/time is a deliberate, separately scoped
+# refactor; until then the advisory is carried with this justification.
+# Mirrored in deny.toml ([advisories] ignore) — keep the two in step.
+#
 # No other advisory ignores remain (#876): the AWS legacy TLS stack
 # (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101 / h2 0.3) was removed
 # from the s3-storage feature graph by declaring aws-sdk-s3 with
@@ -25,6 +35,7 @@
 # known.
 ignore = [
     "RUSTSEC-2026-0459",
+    "RUSTSEC-2026-0543",
 ]
 
 # Report unmaintained crate warnings as informational (not errors)
