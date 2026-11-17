@@ -135,27 +135,33 @@ pub fn validate_pipeline_toml(toml_content: &str) -> ValidationReport {
         ));
     }
 
-    // Check 5: Resource consistency
+    // Check 5: Resource consistency. `effective_threads()` reads both the
+    // modern `[rules.resources] threads` and the deprecated rule-level
+    // shorthand — checking only the shorthand silently skipped every rule
+    // that used the preferred form.
     for rule in &parsed.rules {
-        if let Some(t) = rule.threads {
-            if t == 0 {
-                warnings.push(format!("Rule '{}' has threads=0", rule.name));
-            } else if t > 64 {
-                warnings.push(format!(
-                    "Rule '{}' has unusually high threads={}",
-                    rule.name, t
-                ));
-            }
+        let threads = rule.effective_threads();
+        if threads == 0 {
+            warnings.push(format!("Rule '{}' has threads=0", rule.name));
+        } else if threads > 64 {
+            warnings.push(format!(
+                "Rule '{}' has unusually high threads={}",
+                rule.name, threads
+            ));
         }
     }
 
-    // Check 6: Environment specifications
+    // Check 6: Environment specifications — every declared backend counts,
+    // including mamba, HPC modules, and env_group references.
     for rule in &parsed.rules {
         let env_set = rule.environment.conda.is_some()
+            || rule.environment.mamba.is_some()
             || rule.environment.pixi.is_some()
             || rule.environment.docker.is_some()
             || rule.environment.singularity.is_some()
-            || rule.environment.venv.is_some();
+            || rule.environment.venv.is_some()
+            || !rule.environment.modules.is_empty()
+            || rule.env_group.is_some();
         if !env_set {
             warnings.push(format!(
                 "Rule '{}' has no environment specification",
@@ -281,6 +287,92 @@ depends_on = ["step_a"]
     fn test_validate_invalid_toml() {
         let report = validate_pipeline_toml("not valid toml {{{{");
         assert!(!report.valid);
+    }
+
+    #[test]
+    fn resource_check_reads_the_resources_block_not_only_the_shorthand() {
+        // The modern `[rules.resources] threads` syntax must be checked too:
+        // reading only the deprecated shorthand silently skipped every rule
+        // that used the preferred form.
+        let toml = r#"
+[workflow]
+name = "resource-check"
+version = "1.0"
+
+[[rules]]
+name = "zero"
+output = ["a.txt"]
+shell = "echo a"
+
+[rules.resources]
+threads = 0
+
+[[rules]]
+name = "high"
+output = ["b.txt"]
+shell = "echo b"
+
+[rules.resources]
+threads = 128
+"#;
+        let report = validate_pipeline_toml(toml);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("'zero'") && w.contains("threads=0")),
+            "resources.threads = 0 must warn: {:?}",
+            report.warnings
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("'high'") && w.contains("threads=128")),
+            "resources.threads = 128 must warn: {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn every_environment_backend_counts_as_a_declared_environment() {
+        // mamba, HPC modules, and env_group are first-class backends; a rule
+        // declaring one must not be told it has no environment at all.
+        let toml = r#"
+[workflow]
+name = "env-check"
+version = "1.0"
+
+[env_groups.qc]
+conda = "envs/qc.yaml"
+
+[[rules]]
+name = "with_mamba"
+output = ["a.txt"]
+shell = "echo a"
+environment = { mamba = "envs/tools.yaml" }
+
+[[rules]]
+name = "with_modules"
+output = ["b.txt"]
+shell = "echo b"
+environment = { modules = ["gcc/11.2"] }
+
+[[rules]]
+name = "with_group"
+output = ["c.txt"]
+shell = "echo c"
+env_group = "qc"
+"#;
+        let report = validate_pipeline_toml(toml);
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|w| w.contains("no environment specification")),
+            "declared mamba/modules/env_group must count: {:?}",
+            report.warnings
+        );
     }
 
     #[test]

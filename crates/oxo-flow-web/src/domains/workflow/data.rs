@@ -67,10 +67,6 @@ pub fn analyze_files(
 
         formats.insert(format_name.clone());
 
-        // Detect paired-end naming conventions
-        let is_r1 = filename.contains("_R1") || filename.contains("_1.");
-        let is_r2 = filename.contains("_R2") || filename.contains("_2.");
-
         // Extract sample name (everything before the first underscore)
         let sample_name = filename.split('_').next().map(|s| s.to_string());
 
@@ -82,9 +78,6 @@ pub fn analyze_files(
             paired_with: None,
             sample_name,
         });
-
-        // Suppress unused warning
-        let _ = (is_r1, is_r2);
     }
 
     let paired_end = files.iter().any(|f| {

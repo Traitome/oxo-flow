@@ -229,16 +229,25 @@ pub fn build_dag_json(toml_content: &str) -> Result<serde_json::Value, String> {
         .topological_order()
         .map_err(|e| format!("Topological sort error: {e}"))?;
 
-    let nodes: Vec<serde_json::Value> = config.rules.iter().map(|r| {
-        let idx = dag_nodes.iter().position(|n| n.name == r.name);
-        let level = idx.unwrap_or(0);
-        serde_json::json!({
-            "id": r.name,
-            "label": format!("{} ({}t, {}GB)", r.name, r.threads.unwrap_or(1), r.memory.as_deref().unwrap_or("8")),
-            "color": "lightgray",
-            "level": level,
+    let nodes: Vec<serde_json::Value> = config
+        .rules
+        .iter()
+        .map(|r| {
+            let idx = dag_nodes.iter().position(|n| n.name == r.name);
+            let level = idx.unwrap_or(0);
+            serde_json::json!({
+                "id": r.name,
+                "label": format!(
+                    "{} ({}t, {})",
+                    r.name,
+                    r.effective_threads(),
+                    r.effective_memory().unwrap_or("8GB")
+                ),
+                "color": "lightgray",
+                "level": level,
+            })
         })
-    }).collect();
+        .collect();
 
     let edges: Vec<serde_json::Value> = config
         .rules
