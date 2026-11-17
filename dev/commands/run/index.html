@@ -6003,7 +6003,7 @@ that survived rendering — <code>{sample}</code>, <code>{group}</code>, <code>{
 no value bound to it, so the shell would receive the literal brace text and
 the tool would fail on a path that looks valid. The rule fails <strong>before the
 shell spawns</strong>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>✗ rule 'trust4' failed: unresolved placeholder(s) {meta.bam_genomic} reached
+<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>✗ rule 'align_reads' failed: unresolved placeholder(s) {meta.bam} reached
 </span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>  the rendered command — … Fix: give the rule a sample-domain binding, or
 </span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>  add `singleton = true` for an intentional constant-metadata read. …
 </span></code></pre></div>

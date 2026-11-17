@@ -4363,7 +4363,7 @@
 
 
 <h1 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">#</a></h1>
-<p><strong>oxo-flow</strong> is a Rust-native bioinformatics pipeline engine for verifiable, AI-native science. It compiles declarative TOML workflows into a static Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.</p>
+<p><strong>oxo-flow</strong> is a Rust-native bioinformatics pipeline engine for verifiable, AI-native science. It compiles declarative TOML workflows into a static Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary, with no Python or JVM runtime for the engine itself. Bioinformatics tools, containers, and environment managers remain explicit external dependencies.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Define your workflow in TOML</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>cat<span class="w"> </span>pipeline.oxoflow
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -4405,11 +4405,11 @@ and community submissions.</p>
 <tbody>
 <tr>
 <td><strong>DAG engine</strong></td>
-<td>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups</td>
+<td>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution of independent rules</td>
 </tr>
 <tr>
 <td><strong>AI Companion &amp; Scientist Team</strong></td>
-<td>Natural language pipeline generation, intelligent refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile</td>
+<td>Engine-validated pipeline generation and refinement, domain diagnostic patterns, experimental repair proposals, and a multi-agent review profile</td>
 </tr>
 <tr>
 <td><strong>Disk-pressure &amp; scratch safety</strong></td>
@@ -4417,7 +4417,7 @@ and community submissions.</p>
 </tr>
 <tr>
 <td><strong>Cryptographic provenance</strong></td>
-<td>Run checkpoints anchored on SHA-256 output checksums — recorded on both the local and cluster execution paths — plus configuration fingerprints and protected data tree audits (<code>protected_data_trees</code>); recorded checksums take precedence, with fragile file timestamps (<code>mtime</code>) demoted to a bounded fallback</td>
+<td>With <code>--provenance</code>, run checkpoints record SHA-256 output checksums on both the local and cluster execution paths, plus configuration fingerprints and protected data tree audits (<code>protected_data_trees</code>); recorded checksums take precedence, with fragile file timestamps (<code>mtime</code>) demoted to a bounded fallback</td>
 </tr>
 <tr>
 <td><strong>Environment management</strong></td>
@@ -4437,11 +4437,11 @@ and community submissions.</p>
 </tr>
 <tr>
 <td><strong>Container packaging</strong></td>
-<td>Package entire workflows into Docker or Singularity images for portable, reproducible execution</td>
+<td>Bundle workflows with their environment files and container references (<code>publish</code> / <code>pull</code>) for portable execution; building and verifying the images themselves remain external</td>
 </tr>
 <tr>
 <td><strong>Cluster backends</strong></td>
-<td>Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling; <code>run --profile</code> folds terminal verdicts into the checkpoint as jobs settle and re-queues interrupted rules on restart, <code>cluster status --json</code> / <code>cluster logs</code> map scheduler ids back to rule instances, and <code>[engine] dispatch_order = "sample"</code> orders equal-priority ties by sample so a sample's stages run adjacent</td>
+<td>Submit jobs to SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, and GCP Batch clusters with resource-aware scheduling; <code>run --profile</code> folds terminal verdicts into the checkpoint as jobs settle and re-queues interrupted rules on restart, <code>cluster status --json</code> / <code>cluster logs</code> map scheduler ids back to rule instances, and <code>[engine] dispatch_order = "sample"</code> orders equal-priority ties by sample so a sample's stages run adjacent (priority aging still applies)</td>
 </tr>
 <tr>
 <td><strong>Wildcard expansion</strong></td>
@@ -4454,25 +4454,29 @@ and community submissions.</p>
 <p>oxo-flow rethinks bioinformatics workflow orchestration from the ground up:</p>
 <ol>
 <li><strong>DAG as pure declarative data, not imperative code</strong> — <code>.oxoflow</code> TOML is strictly validated before any compute begins (known-key whitelist enforced at parse time, drift-gated against the shipped JSON Schema), eliminating runtime side-effects and arbitrary code execution at parse time.</li>
-<li><strong>Cryptographic determinism over file timestamps</strong> — Change detection anchored on SHA-256 output checksums and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old <code>mtime</code> heuristics as the freshness signal. Checksums prove declared state, not biological or bitwise equivalence.</li>
+<li><strong>Cryptographic determinism over file timestamps</strong> — Change detection records SHA-256 output checksums with <code>--provenance</code> and content-addressable environment hashing; recorded checksums take precedence, replacing fragile 40-year-old <code>mtime</code> heuristics as the freshness signal. Checksums prove declared state, not biological or bitwise equivalence.</li>
 <li><strong>Physical resource boundaries as first-class constraints</strong> — Built-in multi-stage runtime disk-pressure protection and scratch volume isolation (<code>tmp_dir</code>) prevent catastrophic out-of-disk failures on long-running pipelines.</li>
 <li><strong>Environment isolation</strong> — 8 per-rule backends (conda, mamba, pixi, docker, singularity, venv, system, HPC modules) reduce tool-version conflicts; this is not a complete host or tenant boundary.</li>
 <li><strong>Rust-native compiled performance &amp; safety</strong> — Compiled native binary with no embedded Python or JVM runtime, <code>#![forbid(unsafe_code)]</code>, and fast startup; bioinformatics tools, containers, and environment managers remain explicit external dependencies.</li>
-<li><strong>AI as an architectural citizen</strong> — Grounded on deterministic engine APIs with structured <code>{code, message, detail, suggestion}</code> error contracts, unified validation feedback loops, and 30+ domain diagnostic patterns.</li>
+<li><strong>AI as an architectural citizen</strong> — Grounded on deterministic engine APIs with structured <code>{code, message, detail, suggestion}</code> error contracts, unified validation feedback loops, and 31 domain diagnostic patterns. Generation output is engine-validated; diagnosis is model-authored and advisory; repair remains experimental.</li>
 </ol>
 <hr />
 <h2 id="why-a-new-engine-for-the-ai-era">Why a new engine for the AI era?<a class="headerlink" href="#why-a-new-engine-for-the-ai-era" title="Permanent link">#</a></h2>
-<p>The dominant workflow engines were designed for humans writing code by hand. Snakemake embeds arbitrary Python and Nextflow wires data through Groovy channel operators — expressive for humans, but in both the DAG is whatever the script computes at runtime, so nothing can fully verify it before compute starts. oxo-flow declares the entire workflow as schema-validated TOML data and compiles a static DAG first: the same shape an LLM can emit, a schema can reject, and an engine can verify before a single CPU-hour is spent. That is what makes the machine contract possible — stable <code>E</code>/<code>W</code>/<code>SCI-*</code>/<code>TYPE-*</code> diagnostic codes, <code>--json</code> on every gate, and AI-generated pipelines that must pass the engine's own validate/dry-run gates before they can run.</p>
+<p>The dominant workflow engines were designed for humans writing code by hand. Snakemake embeds arbitrary Python and Nextflow wires data through Groovy channel operators — expressive for humans, but in both the DAG is whatever the script computes at runtime, so fully verifying it means executing the script itself. oxo-flow declares the entire workflow as schema-validated TOML data and compiles a static DAG first: the same shape an LLM can emit, a schema can reject, and an engine can verify before a single CPU-hour is spent. That is what makes the machine contract possible — stable <code>E</code>/<code>W</code>/<code>SCI-*</code>/<code>TYPE-*</code> diagnostic codes, <code>--json</code> on every gate, and AI-generated pipelines that must pass the engine's own validate/dry-run gates before they can run.</p>
 <p>The trade-off is stated honestly: dynamic DSLs remain unmatched for free-form programmatic logic, and ecosystem gravity (nf-core modules, community Snakemake rules) is real. oxo-flow bets on the verifiability side for cohort-scale production runs and offers <code>oxo-flow import</code> for existing Nextflow/Snakemake work (prototype-grade — see <a href="https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md">LIMITATIONS</a>).</p>
-<p>The scientific agenda behind this bet rests on four methodological pillars — <strong>BioTypes</strong> (biological type contracts on DAG edges, checked statically with <code>TYPE-*</code> diagnostics, remediation hints, and synthesized coercion commands where mechanical), an <strong>autonomous self-healing runtime</strong> (30+ diagnostic patterns, <code>SCI-*</code> scientific preflight, <code>--ai-recover</code> safety-gated repair proposals, and a seeded-failure <code>report --ai</code> interpretation benchmark), a <strong>universal ecosystem transpiler</strong> (Nextflow/Snakemake import, prototype-grade), and <strong>cryptographic provenance</strong> (SHA-256 output checksums, config fingerprints, protected-data audits). Each is anchored to shipped functionality and carries an explicit maturity label in the <a href="vision/">Vision</a> page and <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">ROADMAP Phase 12</a>.</p>
-<div class="admonition tip">
-<p class="admonition-title">Field-hardened, not just CI-green</p>
-<p>The cluster path is exercised by a live production campaign: 11,123 TCGA RNA-seq samples across 33 cancer types (10,481 with matched genomic + chimeric BAMs), ≈87 TB of input BAMs, profiled with MiXCR 4.7.0 + TRUST4 1.1.5 on Slurm via <code>run --profile</code> and pixi environments (cluster backend in production since 2026-11-16; the first full-cohort pass is still in progress). Crash-restart silent loss (#1083), run-blind <code>cluster status</code>/<code>logs</code> (#1085), phase-wise dispatch starvation (#1089), and local CPU oversubscription (#1080) were found there; the campaign mitigated them pipeline-side on v0.30.0, and the engine fixes landed upstream with regression tests.</p>
+<p>The research program behind this bet is organized around four design bets — <strong>BioTypes</strong> (biological type contracts on DAG edges, checked statically with <code>TYPE-*</code> diagnostics, remediation hints, and synthesized coercion commands where mechanical), an <strong>autonomous self-healing runtime</strong> (31 diagnostic patterns, <code>SCI-*</code> scientific preflight, <code>--ai-recover</code> safety-gated repair proposals, and a seeded-failure <code>report --ai</code> interpretation benchmark), a <strong>universal ecosystem transpiler</strong> (Nextflow/Snakemake import, prototype-grade), and <strong>cryptographic provenance</strong> (SHA-256 output checksums, config fingerprints, protected-data audits). Each is anchored to shipped functionality and carries an explicit maturity label in the <a href="vision/">Vision</a> page and <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">ROADMAP Phase 12</a>. None of these bets is established science — the labels distinguish what ships from what still needs evidence.</p>
+<div class="admonition note">
+<p class="admonition-title">Exercised beyond CI</p>
+<p>The cluster path is exercised by live production Slurm deployments as well as CI. Engineering fixes for failure modes observed there ship with regression tests on <code>main</code>; this is operational evidence, not a controlled benchmark.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Maturity &amp; evidence</p>
+<p>Nothing on this page is peer-reviewed evidence. Generation is engine-validated; diagnosis is model-authored and advisory; repair is experimental; provenance records declared-output checksums plus configuration and environment fingerprints — not bitwise reproducibility across architectures. Per-capability maturity labels and exit criteria live in the <a href="vision/">Vision</a> page and <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">ROADMAP Phase 12</a>.</p>
 </div>
 <hr />
 <h2 id="who-is-this-for">Who Is This For?<a class="headerlink" href="#who-is-this-for" title="Permanent link">#</a></h2>
-<p><strong>Bioinformaticians</strong> who build and maintain analysis pipelines — oxo-flow gives you a fast workflow engine with clear error messages, explicit reproducibility controls, and no external runtime dependency.</p>
-<p><strong>Research laboratories and core facilities</strong> running genomics workflows — the reporting system produces structured, auditable reports (engine version, workflow checksum, checkpoint provenance), and container packaging ensures reproducibility across environments.</p>
+<p><strong>Bioinformaticians</strong> who build and maintain analysis pipelines — oxo-flow gives you a fast workflow engine with clear error messages, explicit reproducibility controls, and no Python or JVM runtime dependency for the engine itself.</p>
+<p><strong>Research laboratories and core facilities</strong> running genomics workflows — the reporting system records execution evidence (engine version, workflow checksum, checkpoint provenance), and container/environment references make the software stack explicit and portable.</p>
 <p><strong>Researchers</strong> who need reproducible science — the engine records execution evidence and supports pinned environments, but identical biological results still require controlled inputs, references, software, commands, hardware, and external services.</p>
 <p><strong>Core facility staff</strong> managing multi-sample, multi-assay workloads — the DAG engine and cluster backends handle parallelism and resource scheduling automatically.</p>
 <hr />
