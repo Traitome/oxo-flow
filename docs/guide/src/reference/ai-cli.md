@@ -605,15 +605,15 @@ whether it is auto-updated or manually curated:
 {
   "sources": {
     "bioconda_tools": {
-      "count": 6525,
+      "count": 6688,
       "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6200,
+      "excluded": 6225,
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-09-16T08:21:13Z",
+      "generated_at": "2026-11-16T10:44:43Z",
       "auto": true
     }
   },
-  "generated_at": "2026-09-16T08:21:13Z"
+  "generated_at": "2026-11-16T11:04:56Z"
 }
 ```
 

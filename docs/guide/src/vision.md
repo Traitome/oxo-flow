@@ -1,0 +1,104 @@
+# Vision: Verifiable, AI-Native Scientific Workflows
+
+> **Working thesis** — *Formal biological typing and autonomous self-healing for verifiable, AI-native scientific workflows.*
+>
+> oxo-flow's long-term scientific program: make bioinformatics pipelines machine-checkable artifacts that an AI can synthesize, an engine can verify before compute, and evidence systems can reproduce years later — with explicit, honest maturity labels for everything not yet shipped.
+
+This page is the narrative source for the project's scientific direction. Every claim is anchored to something that exists today (a command, a diagnostic family, a test suite) or carries an explicit maturity label from [ROADMAP Phase 12](https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md). Nothing on this page should be read as peer-reviewed scientific evidence; the manuscript track is staged, not claimed.
+
+---
+
+## 1. The problem: script-driven pipelines meet AI-generated code
+
+The dominant workflow engines were designed for humans writing code by hand. Snakemake embeds arbitrary Python; Nextflow wires data through Groovy channel operators (`.mix()`, `.combine()`, closures). That expressiveness is a genuine strength for human authors — and it becomes a liability when the author is a model:
+
+- **Unknowable graphs.** In both systems the DAG is whatever the script computes at runtime. Nothing can fully verify dependencies, resource needs, or data contracts before the first job starts — so an LLM hallucination surfaces as a 3 a.m. failure on node 400, not as a rejected file.
+- **Generation difficulty.** Channel-operator reasoning and Turing-complete embedded code give models room to invent deadlocks, races, and non-deterministic wiring that only manifest at runtime.
+- **Opaque repair loops.** Runtime failures surface as deep stack traces; neither engine ships a structured, machine-readable failure taxonomy a repair agent can act on deterministically.
+
+| Dimension | Nextflow (Groovy DSL2) | Snakemake (Python-embedded) | oxo-flow (declarative TOML + Rust) |
+|---|---|---|---|
+| **LLM generation difficulty** | High — closures and channel operators, runtime deadlocks possible | Medium–high — embedded Python, hidden side effects | Low — schema-validated key-value data, hard syntax boundary |
+| **Static verification before compute** | Hard — graph is whatever Groovy evaluates at runtime | Hard — input/output sets require executing Python | Native — static DAG compiled and checked (`validate` → `dry-run` → `lint`) before any job starts |
+| **Machine-readable failure contract** | Runtime stack traces | Python tracebacks | Stable `E`/`W`/`SCI-*`/`TYPE-*` codes, `--json` on every gate, structured `{code, message, detail, suggestion}` errors |
+
+The table is an architectural comparison, not a benchmark; measured generation quality and cost live in the deterministic `eval/frontier/` harness.
+
+The point is not that dynamic DSLs are bad — they remain unmatched for free-form programmatic logic, and the nf-core / Snakemake ecosystem's accumulated domain knowledge is a real moat we address separately (see innovation 3). The point is a deliberate bet: **for AI-authored, cohort-scale production pipelines, verifiability matters more than expressiveness**, and the ecosystem lacks an engine designed around that bet.
+
+## 2. The path: from script-driven to semantic-driven
+
+Three moves turn that bet into an architecture:
+
+1. **Collapse the input side.** Humans (and agents) stop hand-maintaining pipeline code. Natural language and normalized protocols enter `oxo-flow template --ai` or the web copilot, run the shared `PipelineGenAgent` through an orchestrator, and the output must pass the engine's own schema/validate gates before it can ever execute. Generation is engine-validated, not trust-me.
+2. **Standardize the intermediate representation.** A `.oxoflow` file is not configuration sugar — it is a deterministic, schema-gated intermediate representation of the pipeline: pure declarative data from which the static DAG, the environment plan, and the evidence record are all derived. One IR, four surfaces (CLI, Web Studio, VS Code IDE, desktop), zero shadow APIs.
+3. **Raise the output side.** The engine, not the user, carries correctness and resilience: biological type contracts across DAG edges, curated scientific preflight rules, structured diagnostics, checkpoint/provenance evidence, and — as the research agenda matures — bounded autonomous repair.
+
+## 3. Four methodological innovations
+
+Each innovation states the claim, what ships today, and what evidence is still required. Maturity labels follow ROADMAP Phase 12.
+
+### 3.1 BioTypes — biological semantics on DAG edges
+
+**Claim.** Path-text matching is the wrong substrate for pipeline correctness. Files flowing between stages should carry biological contracts — format, sort order, index accompaniment, reference build, read groups, extensible attributes — that the compiler checks statically.
+
+**Shipped today.** The optional `[types.*]` system: named contracts referenced by rules, checked in `oxo-flow validate` and in run preflight. Violations produce `TYPE-001`–`TYPE-007` diagnostics with remediation hints; where the fix is mechanical the diagnostic synthesizes the command (e.g. `samtools sort` for a queryname-sorted BAM feeding a coordinate-indexed consumer; `samtools index` for a missing companion index). — *Implemented; broad truth-set validation outstanding.*
+
+**Exit evidence.** False-positive analysis against a representative corpus of real pipelines; literature-backed rule review (ROADMAP Stage 12.2).
+
+### 3.2 Autonomous self-healing runtime
+
+**Claim.** Long genomic computations fail for four stacked reasons — system resources, data defects, algorithm parameters, biology-level surprises. A workflow engine should diagnose across those layers and apply *bounded* remediation, not just pattern-match stderr.
+
+**Shipped today.** 30+ domain diagnostic patterns with stable codes; curated scientific preflight (`SCI-*`: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in `dry-run`; `--ai-recover` diagnosis with safety-gated repair proposals; a separate seeded-failure harness (`eval/interpretation/`) that scores `report --ai` interpretation across three providers. — *Diagnosis implemented; interpretation is measured; repair application and rerun verification remain the open frontier (ROADMAP Stage 12.3 records repair at 0/10 verified — stated plainly, not hidden).*
+
+**Exit evidence.** Probabilistic fault-attribution model beyond deterministic patterns; applied-repair verified by successful reruns on a seeded fault-injection benchmark; pre-registered analysis.
+
+### 3.3 Universal ecosystem transpiler
+
+**Claim.** A new engine cannot ask the field to abandon nf-core modules and community Snakemake rules; it must ingest them — and the translation should itself be an analysis artifact (typed, reviewed, diffable), not a lossy copy-paste.
+
+**Shipped today.** `oxo-flow import` transpiles Nextflow DSL2 and Snakemake definitions to `.oxoflow` (prototype-grade; complex channel logic and embedded code are not fully convertible and always require review plus the static gates — see [LIMITATIONS](https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md)). — *Prototype.*
+
+**Exit evidence.** Representative-corpus coverage, semantic-equivalence tests, unsupported-construct reporting, round-trip review (ROADMAP Stage 12.3).
+
+### 3.4 Cryptographic provenance
+
+**Claim.** Reproduction requires evidence, not timestamp conventions. Run identity should be anchored on content hashes across outputs, configuration, and protected inputs.
+
+**Shipped today.** `--provenance` records SHA-256 checksums of declared outputs into the checkpoint; configuration fingerprints, environment identities, and `protected_data_trees` drift audits ride alongside; `oxo-flow provenance verify --json` audits recorded checksums and is consumed by the web API (`GET /api/runs/{id}/provenance-verify`). Recorded checksums take precedence over `mtime`, which is demoted to a bounded fallback. — *Implemented on the local path; cluster-path checksums are tracked in issue #1093.*
+
+**Exit evidence.** Cross-architecture reproduction campaigns that distinguish floating-point drift from logic drift (x86 → ARM/RISC-V) — a measurement program, not a code feature.
+
+## 4. The empirical program
+
+Methodological claims are nothing without measurement infrastructure:
+
+- **Field deployment.** A live TCGA immune-repertoire campaign — 11,123 RNA-seq samples across 33 cancer types (10,481 with matched genomic + chimeric BAMs; 642 genomic-only), ≈87 TB of input BAMs — runs MiXCR 4.7.0 and TRUST4 1.1.5 through `run --profile slurm` in four per-node shard workflows, with pixi-provisioned environments and native per-rule job arrays (cluster backend in production since 2026-11-16; the first full-cohort pass is still in progress). Crash-restart silent loss (#1083), run-blind cluster observability (#1085), dispatch starvation (#1089), and CPU oversubscription (#1080) were found there; the campaign mitigated them pipeline-side on v0.30.0 while the engine fixes landed on `main` with regression tests. This is operational evidence — it does not substitute for controlled benchmarks, and no full-cohort completion or cost measurement exists yet. The campaign figures come from the deployment's own operational records; they are not derived from, or reproducible from, this repository alone.
+- **Deterministic AI evaluations.** `eval/frontier/`, `eval/gold/`, and `eval/interpretation/` score generation and interpretation quality with deterministic checks and negative controls; provider-backed runs record git SHA, gold/knowledge hashes, and per-trial metadata in capture manifests so results are auditable. The CI gate runs the deterministic harness and gold-consistency checks, not paid provider calls.
+- **Controlled benchmark campaigns.** The remaining exit evidence for publication-tier claims (matched arms, held-out intents, multiple seeds, run-level cost/failure data, human-factors study) is specified in ROADMAP Stage 12.4 — and none of it has run yet. The production cohort is the intended substrate for a future pre-registered scalability campaign.
+
+## 5. Verification snapshot (2026-11-17)
+
+The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17:
+
+- 35 CLI subcommands; 91 OpenAPI paths / 106 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
+- 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-007` covered by unit tests).
+- 33 prebuilt cluster and re-entry integration tests passing on a Linux host.
+- Live `[engine] dispatch_order` (local execution), run-aware `cluster status --json` / `cluster logs`, interrupted-rule re-queue, `provenance verify`, and the strict-placeholder gate exercised on a mock-Slurm Linux host.
+
+A check that contradicted a documented claim was treated as a documentation defect and corrected on this page and in the command reference.
+
+## 6. What we do not claim
+
+The honesty charter, so the above can be trusted:
+
+- No peer-reviewed claim is made; no manuscript exists yet (ROADMAP Stage 12.4: *Planned / blocked*).
+- Type contracts detect declared state mismatches; they do not prove biological correctness.
+- Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.
+- Repair proposals are experimental until independently verified by a successful rerun — today that loop closes 0/10 times without a human.
+- PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1).
+
+## Citing
+
+> **Shixiang Wang**, *oxo-flow: compiled, memory-safe bioinformatics workflow orchestration*, bioRxiv, 2026, [https://doi.org/10.64898/2026.06.11.731578](https://doi.org/10.64898/2026.06.11.731578)

@@ -74,6 +74,17 @@ keys matching nothing declared keep the literal spelling.
 | `--quiet` | — | — | Suppress informational output — progress rendering, DAG listings, and per-rule completion lines are omitted; errors, warnings, and machine-readable output (`--json`) are unaffected |
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
+!!! note "Flags the cluster driver does not honor"
+    On `run --profile`, several `run` flags are parsed but not applied — the
+    engine warns once per flag you actually passed (full table:
+    [Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface)).
+    Cluster checkpoints therefore carry **no output checksums** today (issue
+    #1093), and a required rule's failure cancels every in-flight job
+    regardless of `--keep-going` — use `required = false` for best-effort
+    rules. Set a per-job walltime with the rule's `time_limit` (or the
+    profile's `walltime`), and leave resource limits to the per-rule
+    `[resources]` block and the `[cluster]` profile.
+
 ### JSON output
 
 The document carries `command`, `status`, `results` counts, and `resources`.

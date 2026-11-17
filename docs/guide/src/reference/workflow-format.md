@@ -1823,7 +1823,7 @@ distinct from fan-out names. Only single-brace `{token}` forms from the table ab
 Brace groups (`{ echo hi; }`), brace expansion (`{1..10}`, `{a,b}`), and
 awk bodies (`{print $1}`) stay shell text. Every executing rule's rendered
 command is scanned for survivors; see
-[Placeholder validation](run.md#placeholder-validation-strict-by-default).
+[Placeholder validation](../commands/run.md#placeholder-validation-strict-by-default).
 
 **Container memory follows the same policy** — docker/singularity rules
 get the declared memory as their `--memory` cgroup limit, clamped to the
@@ -2472,7 +2472,7 @@ PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
   one-row metadata table is an unambiguous **constant read** and resolves
   even without a domain. With no sample-like binding and more than one
   row, the token stays **literal** and the execution-time
-  [placeholder gate](run.md#placeholder-validation-strict-by-default)
+  [placeholder gate](../commands/run.md#placeholder-validation-strict-by-default)
   rejects the rule (even when it declares `singleton = true`); use
   `{config.<key>}` for a workflow-level constant. `lint` reports the
   unbound-domain case as [W041](../reference/glossary.md#diagnostic-codes)
@@ -2843,8 +2843,9 @@ are checked statically before any compute: a producer whose output violates
 a consumer's declared type fails `oxo-flow validate` (error) and aborts
 `oxo-flow run` in preflight with a `[TYPE-0xx]` diagnostic (see
 [TYPE-001..007](diagnostics-engine.md#biological-subtyping-violations-type-) —
-each includes an automated coercion hint such as `samtools view -b` or
-`samtools sort`).
+diagnostics carry remediation hints, and where the fix is mechanical they
+synthesize the command (such as `samtools view -b` or `samtools sort`);
+TYPE-004 and TYPE-007 carry suggestions only).
 
 ### Named type declarations
 
@@ -3452,10 +3453,13 @@ sample, and so on.
 
 With `"sample"`, instances sort by the fan-out binding they were expanded
 from (the sample, group, pair or `[[values]]` value), then by the rule's
-declaration order in the file. All ready stages of one sample are
-dispatched before the next sample's, so a per-sample pipeline drains
-sample by sample and its first per-sample result appears when sample 1
-finishes rather than at the end of the slowest global phase.
+declaration order in the file. Among rules whose effective priorities are
+equal, all ready stages of one sample are dispatched before the next
+sample's, which keeps each sample's stages adjacent and avoids a full
+global phase per rule. Priority aging still applies: a ready-but-unsubmitted
+producer that has waited a round accrues +1 and can run before a
+newly-ready consumer from another sample, so per-sample drain is
+best-effort, not guaranteed.
 
 ```toml
 [engine]

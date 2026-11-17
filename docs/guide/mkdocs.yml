@@ -122,6 +122,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - Vision: vision.md
   - AI Agent Skill: SKILL.md
   - Community: https://oxo-flow-community.github.io/
   - Tutorials:

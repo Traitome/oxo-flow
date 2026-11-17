@@ -1,6 +1,7 @@
 cff-version: 1.2.0
 message: "If you use oxo-flow in your research, please cite it as below."
-title: "oxo-flow: A Rust-native bioinformatics pipeline engine"
+title: "oxo-flow: compiled, memory-safe bioinformatics workflow orchestration"
+doi: "10.64898/2026.06.11.731578"
 type: software
 authors:
   - family-names: Wang
@@ -24,7 +25,8 @@ abstract: >-
   oxo-flow is a Rust-native bioinformatics pipeline engine built from first
   principles for performance, reproducibility controls, and clinical-review
   rigor. It provides DAG-based workflow execution, multi-environment
-  support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
+  support (conda, mamba, pixi, docker, singularity, venv, system, modules),
+  resource-aware scheduling,
   reporting designed for clinical review, and a REST API web interface.
   Clinical qualification is a separate evidence and governance process.
   The core engine, CLI, and AI crates are Apache-2.0; the web crate is

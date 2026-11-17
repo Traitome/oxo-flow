@@ -33,8 +33,13 @@ WDL, and no importers for those formats are currently available.
 
 - **No native CWL/WDL import** — There is no built-in importer for Common
   Workflow Language or Workflow Description Language files.
-- **No native Nextflow/Snakemake import** — There is no automatic conversion
-  from Nextflow or Snakemake workflow definitions.
+- **Nextflow/Snakemake import is best-effort, not semantic parity** —
+  `oxo-flow import` transpiles Nextflow DSL2 and Snakemake definitions into
+  `.oxoflow`, but the translation is prototype-grade: complex channel
+  operators, embedded Python/Groovy logic, and dynamic constructs are not
+  fully convertible, and the output always requires human review plus the
+  `validate`/`dry-run` gates. Semantic-equivalence testing across a
+  representative corpus is still open work (see ROADMAP.md Phase 12.3).
 - **No built-in cloud object storage streaming** — oxo-flow supports
   `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
   but data is fully downloaded before execution rather than streamed.
@@ -69,6 +74,12 @@ WDL, and no importers for those formats are currently available.
   gate) content-hash files up to 64 MiB; larger files — typically BAM/CRAM
   intermediates — are tracked by size + mtime, so an in-place change that
   preserves both is not detected.
+- **The cluster path records no output checksums** — `run --profile` parses
+  but does not apply `--provenance` (nor `--keep-going`, `--retry`,
+  `--timeout`, or `--max-threads`/`--max-memory`), so cluster checkpoints
+  carry no SHA-256 output entries today and `provenance verify` has nothing
+  to verify for a cluster run (issue #1093). Record checksums on the local
+  path before submitting, or wait for the settle-hook provenance work.
 - **`sample_pattern` binds `{sample}` only** — `{read}`, `{replicate}`, or any
   other wildcard name in `sample_pattern` does not create per-read or
   per-replicate instances: every matching file collapses to the same

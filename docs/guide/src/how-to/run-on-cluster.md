@@ -391,7 +391,8 @@ On clusters, the scheduler enforces resources based on the generated directives.
     every in-flight job is cancelled and the run exits — mark salvageable
     steps `required = false` (best-effort QC, optional per-sample stages)
     so their failure neither cancels the run nor blocks unrelated
-    branches, then re-queue what failed with `resume` / `--resume-failed`.
+    branches: the failure is recorded, the run exits 0 with the failures
+    listed, and `resume` / `--resume-failed` re-queues what failed.
 
 !!! note "Aborted in-flight siblings are incomplete, not failed"
     When a run aborts, rules still in flight are killed and recorded as
@@ -598,10 +599,13 @@ shell = "merge out/{sample}/align.bam out/{sample}/qc.txt > out/{sample}/merge.t
 Both producers read the same sample independently, and `merge` joins
 them. Under the default `"rule"` mode the ready list is
 `align_S1, align_S2, qc_S1, qc_S2, …`; under `"sample"` it is
-`align_S1, qc_S1, align_S2, qc_S2, …`, and once sample 1's producers
-finish, `merge_S1` jumps ahead of the remaining sample-2 producers at
-the next free slot. Per-sample results therefore appear as each sample
-completes, with the same total work and the same `max_submitted` cap.
+`align_S1, qc_S1, align_S2, qc_S2, …`. Priority aging remains the
+primary key: a sample-2 producer that has waited a round accrues +1
+and can run before sample 1's newly-ready `merge_S1`. Sample mode
+therefore keeps each sample's stages adjacent among equal-priority
+ties and reduces phase-wise batching, but per-sample drain is
+best-effort, not guaranteed. Total work and the `max_submitted` cap
+are unchanged.
 
 The setting is only a tie-break over *currently ready* rules: it never
 reorders dependencies, and it does not delay sample 2's independent
