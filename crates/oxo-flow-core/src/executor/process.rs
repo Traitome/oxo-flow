@@ -3817,7 +3817,7 @@ fn build_execution_command_inner(
 /// shell and the tooling it invokes need to function; `LC_*` is handled
 /// separately by dynamic prefix so a new locale variable needs no edit
 /// here.
-const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
+pub(crate) const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
 
 /// Escape hatch for ambient variables a workflow legitimately needs
 /// (issue #1108): a comma-separated list of names, each re-admitted from
@@ -3846,7 +3846,11 @@ fn parse_env_passthrough(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn env_passthrough_names() -> Vec<String> {
+/// The operator's `OXO_FLOW_ENV_PASSTHROUGH` names, as `Vec<String>`.
+/// `pub(crate)` so the cluster script generators reuse the exact same list
+/// instead of retyping it (issue #1108, RB-15; invariant "Reuse, never
+/// retype").
+pub(crate) fn env_passthrough_names() -> Vec<String> {
     parse_env_passthrough(std::env::var(ENV_PASSTHROUGH_ENV).ok().as_deref())
 }
 
@@ -3857,7 +3861,7 @@ fn env_passthrough_names() -> Vec<String> {
 ///
 /// 1. the ambient allowlist ([`RULE_ENV_ALLOWLIST`] plus every `LC_*`),
 /// 2. any [`ENV_PASSTHROUGH_ENV`] names the operator opted in, and
-/// 3. the declared `envs` map last, so a rule's own `envspec`/`envvars`
+/// 3. the declared `envs` map last, so a rule's own `envvars`
 ///    (and the sensitive-value + `TMPDIR`/`TMP`/`TEMP` injection layered
 ///    onto it by the caller) always wins over the ambient allowlist.
 ///

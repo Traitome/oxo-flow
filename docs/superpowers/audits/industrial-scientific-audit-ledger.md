@@ -478,7 +478,8 @@ URLs, MCP tokens, and proxy credentials without declaring them.
 
 Evidence:
 
-- `crates/oxo-flow-core/src/executor/process.rs:3223`
+- `crates/oxo-flow-core/src/executor/process.rs:3836` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/cluster.rs` `generate_{slurm,pbs,sge,lsf}_script` (HPC job scripts; isolated behind the shared allowlist in the same fix)
 
 Required exit evidence:
 

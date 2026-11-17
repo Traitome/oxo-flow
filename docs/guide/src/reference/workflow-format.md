@@ -3557,6 +3557,17 @@ Notes:
   stay hidden. Engine tooling commands (conda/pixi/venv env setup,
   teardown, and `env_verify`) spawn through a different path and keep the
   ambient environment.
+- **HPC job scripts apply the same allowlist (issue #1108, RB-15).**
+  `oxo-flow cluster submit` wraps the rule command — and the array
+  dispatch line — in an explicit `env -i` prefix admitting only the
+  allowlisted names and the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, so
+  SLURM/PBS/SGE/LSF jobs do not inherit the submitting shell's environment
+  through the schedulers' export-by-default behavior (`--export=ALL`,
+  `-V`, `-env`). See
+  [the run command reference](../commands/run.md#hpc-cluster-submissions).
+  Container and cloud backends (docker, singularity, Kubernetes, AWS
+  Batch, GCP Batch) do **not** yet route through the shared policy — they
+  are clean only because they forward no ambient environment.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from
