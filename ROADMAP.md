@@ -72,15 +72,10 @@ against code, users, and domain truth sets.
 ### Design Principles
 
 1. **DAG is the fundamental abstraction** — Every bioinformatics workflow is a directed acyclic graph of tasks. The engine must natively construct, validate, optimize, and execute DAGs with maximum parallelism.
-
 2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task must run in its own isolated environment (conda, mamba, pixi, docker, singularity, venv, modules, system).
-
 3. **Reproducibility through determinism** — Given the same inputs, configuration, and environment specifications, the pipeline must produce identical outputs. Lock files, checksums, and container pinning ensure this.
-
 4. **Inverse design** — Start from what the user needs (clinical report) and work backward to determine what data, tools, and steps are required. The engine supports both forward (input→output) and reverse (output→input) dependency resolution.
-
 5. **Performance through Rust** — Zero-cost abstractions, fearless concurrency, and efficient memory management make Rust ideal for orchestrating thousands of concurrent bioinformatics tasks.
-
 6. **Clinical rigor by design** — Reports must be accurate, traceable, and auditable. Every step should log its provenance, inputs, outputs, software versions, and execution environment. Clinical qualification requires separate evidence and is not implied by these design goals.
 
 ### System Architecture
@@ -546,9 +541,9 @@ Maturity labels used below:
 | Study | Maturity | Remaining exit evidence |
 | :--- | :--- | :--- |
 | AI synthesis and fault-injection benchmark | Simulation only | Matched Arms A/B/C, held-out intents, multiple seeds, run-level data, and pre-registered analysis |
-| Cohort and hardware scalability | Operational field evidence only; no controlled benchmark | Operational evidence now exists: a live production campaign (11,123 TCGA RNA-seq samples, 33 cancer types, ≈87 TB of BAMs) runs MiXCR 4.7.0 + TRUST4 1.1.5 on Slurm through `run --profile` in four per-node shard workflows with pixi environments (cluster backend in production since 2026-11-16; first full-cohort pass in progress). Crash-restart (#1083), cluster observability (#1085), dispatch-order (#1089), and CPU-oversubscription (#1080) findings were addressed with regression tests on `main`. Still required: a completed cohort pass, measured throughput/cost data, and pre-registered scalability campaigns on named hardware |
+| Cohort and hardware scalability | Operational field evidence only; no controlled benchmark | The cluster path is exercised by live production Slurm deployments. Crash-restart (#1083), cluster observability (#1085), dispatch-order (#1089), and CPU-oversubscription (#1080) findings were addressed with regression tests on `main`. Still required: a completed production campaign, measured throughput/cost data, and pre-registered scalability campaigns on named hardware |
 | Human-factors study | Simulation only | Ethics approval, real participants, randomized task order, and complete SUS/TLX analysis |
-| Manuscript and artifact package | Planned / blocked | No submission, acceptance, independent replication, or journal-ready package exists |
+| Manuscript and artifact package | Planned / blocked | No journal submission, acceptance, independent replication, or journal-ready package exists; a bioRxiv preprint is cited in the README |
 
 ---
 

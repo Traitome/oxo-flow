@@ -2006,7 +2006,7 @@ shell = "echo hi > {output}"
         );
     }
 
-    /// The true case: the recorded full-cohort manifest vs the subset
+    /// The true case: the recorded cohort-wide manifest vs the subset
     /// manifest, under the subset config — identical overlap, set
     /// reproduced by re-expansion → sample-selection-driven.
     #[test]

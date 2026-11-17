@@ -458,9 +458,9 @@ plus per-state counts:
 ```bash
 $ oxo-flow cluster status
 Cluster: run .oxo-flow/runs/latest
-  completed 34   running 16   pending 11070   failed 1
+  completed 12   running 3    pending 47      failed 1
   instance            job      state    elapsed    exit
-  mixcr_all_0056507f  1400_1   running  2:24:11    -
+  align_all_9c4e12  1400_1   running  2:24:11    -
 ```
 
 `--json` emits the same document for dashboards. For logs,

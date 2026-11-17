@@ -739,7 +739,7 @@ fn cli_run_missing_profile_exits_nonzero_and_lists_profiles() {
 /// must NOT re-run (and overwrite the cohort table) when a later
 /// `--samples S2` run changes the selection: the engine-injected list is
 /// documented as non-invalidating. The run skips gather with a WARNING and
-/// the counts file keeps the full-cohort content.
+/// the counts file keeps the cohort-wide content.
 #[test]
 fn cli_samples_subset_does_not_overwrite_gather_output() {
     let dir = tempfile::tempdir().unwrap();
