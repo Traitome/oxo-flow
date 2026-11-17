@@ -4921,7 +4921,7 @@ via the rule's output files.</p>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <h3 id="basic-output">Basic Output<a class="headerlink" href="#basic-output" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>oxo-flow v0.31.0 — Rust-native bioinformatics pipeline engine
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>oxo-flow v0.32.0 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>Cluster: Generating slurm job scripts for 5 rule instances
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  ✓ cluster_scripts/fastqc.sh
 </span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  ✓ cluster_scripts/trim_reads.sh
@@ -4933,7 +4933,7 @@ via the rule's output files.</p>
 </span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>  Submit with: sbatch cluster_scripts/*.sh
 </span></code></pre></div>
 <h3 id="with-dependencies-output">With Dependencies Output<a class="headerlink" href="#with-dependencies-output" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow v0.31.0 — Rust-native bioinformatics pipeline engine
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow v0.32.0 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>Cluster: Generating slurm job scripts for 5 rule instances
 </span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>  ✓ cluster_scripts/fastqc.sh
 </span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>  ✓ cluster_scripts/trim_reads.sh
@@ -5158,7 +5158,10 @@ wrapped child processes (<code>conda run</code>, <code>pixi run</code>, venv act
 tools honoring <code>TMPDIR</code> all land in the scratch volume. The directory must
 exist on the shared filesystem the nodes see; it is created on the submit
 host at run start (the same fail-fast mkdir the local path performs) and
-the <code>OXO_FLOW_TMPDIR</code> override stays verbatim-absolute there.</p>
+the <code>OXO_FLOW_TMPDIR</code> override stays verbatim-absolute there. The
+standalone <code>cluster submit</code> path honors the same two sources and exports
+them into its generated scripts too — the two submission paths cannot
+drift.</p>
 <p>Like <code>localrule = true</code> and <code>checkpoint = true</code>, the <code>scratch = true</code>
 directive is local-executor-only: workflows whose runnable rules declare it
 are <strong>rejected at plan time</strong> on the cluster path (naming every offender)
@@ -5261,7 +5264,7 @@ own (pre-existing) signal handling.</p>
 <p>What remains out of scope is <em>re-attaching</em>: a driver that died without a
 signal (crash, OOM) cannot adopt the scheduler job ids of a previous
 process. Those jobs keep running under the scheduler; a subsequent
-<code>resume</code> / <code>--resume-failed</code> re-queues their rules from the checkpoint's
+<code>resume</code> (checkpoint path argument) or <code>run --resume-failed</code> re-queues their rules from the checkpoint's
 RUNNING entries rather than reusing the live job ids — verdicts the driver
 had already observed settling were folded into the checkpoint, so their work
 is not repeated. Until a

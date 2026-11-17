@@ -4980,8 +4980,9 @@ every in-flight job regardless of <code>-k</code>. A <code>required = false</cod
 never cancels either way — mark salvageable steps <code>required = false</code>
 (best-effort QC, optional per-sample stages) when their failure
 should leave the exit code at 0: the failure is recorded, the run
-exits 0 with the failures listed, and <code>resume</code> / <code>--resume-failed</code>
-re-queues what failed.</p>
+exits 0 with the failures listed, and re-running with <code>resume</code> (the
+standalone command that takes a checkpoint path) or <code>run
+--resume-failed</code> re-queues what failed.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Aborted in-flight siblings are incomplete, not failed</p>
@@ -5100,7 +5101,7 @@ prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 <tbody>
 <tr>
 <td><code>--retry</code></td>
-<td>Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by <code>resume</code> / <code>--resume-failed</code>.</td>
+<td>Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by <code>resume</code> (checkpoint path argument) or <code>run --resume-failed</code>.</td>
 </tr>
 <tr>
 <td><code>--timeout</code></td>

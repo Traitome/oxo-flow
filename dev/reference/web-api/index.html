@@ -5806,7 +5806,7 @@
 <h2 id="api-design-conventions">API Design Conventions<a class="headerlink" href="#api-design-conventions" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Envelope</strong>: success responses are bare JSON objects/arrays; errors are <code>{ code, message, detail, suggestion }</code> — <code>detail</code> and <code>suggestion</code> are always present and are <code>null</code> when the error carries no extra context</li>
-<li><strong>Errors</strong>: <code>{ code: "E001", message, detail, suggestion }</code> — the <code>code</code> value uses the engine's <a href="../glossary/#diagnostic-codes">diagnostic codes</a></li>
+<li><strong>Errors</strong>: the <code>code</code> value is a stable semantic string per failure class (<code>AUTH_REQUIRED</code>, <code>NOT_FOUND</code>, <code>RUN_RATE_LIMITED</code>, <code>AI_TIMEOUT</code>, …). Engine <a href="../glossary/#diagnostic-codes">diagnostic codes</a> (<code>E0xx</code>) surface inside <code>message</code> (e.g. a parse failure reported as <code>RUN_ERROR</code> carries <code>E017: unknown key …</code> in its message), not as the envelope <code>code</code></li>
 <li><strong>Lists</strong>: <code>GET /api/runs</code> returns a cursor-paginated envelope <code>{ items, next_cursor, total }</code> (limit ≤ 500, <code>status</code>/<code>q</code> filters); other list endpoints return bare arrays (≤ 100 items)</li>
 <li><strong>Versioning</strong>: <code>/api/</code> prefix for all endpoints</li>
 <li><strong>Authentication</strong>: in team/hpc mode, protected endpoints accept an <code>Authorization: Bearer &lt;token&gt;</code> session token or an <code>X-API-Key</code> header. The generated OpenAPI spec at <code>GET /api/openapi.json</code> declares both <code>bearerAuth</code> and <code>apiKey</code> security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.</li>
@@ -5835,13 +5835,19 @@ answers the same structured <code>429 RATE_LIMITED</code> (the countdown is in
 <code>detail</code>; the login handler's error tuple cannot attach a <code>Retry-After</code>
 header) before any credential check runs. Per-account keying means a
 sprayed username cannot lock out other accounts; a successful login
-resets the counter; <code>OXO_FLOW_DISABLE_RATE_LIMIT=1</code> disables both
-limiters (tests/dev only).</p>
+resets the counter; <code>OXO_FLOW_DISABLE_RATE_LIMIT=1</code> disables every
+limiter — the API limiter, the login brute-force guard, and the dedicated
+run-creation limiter (#213) (tests/dev only).</p>
 <p>Malformed input is answered in the same envelope, never axum's bare-text
 rejection: a query string that does not fit the endpoint's parameters gets
 <code>400 INVALID_QUERY</code>, and a JSON body that does not deserialize against the
 endpoint's schema gets <code>400 INVALID_BODY</code> — both carry axum's parse message
-in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <code>suggestion</code>.</p>
+in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <code>suggestion</code>. A body
+that deserializes but fails a handler-level required-field check answers an
+endpoint-specific code instead (e.g. <code>POST /api/runs</code> without
+<code>toml_content</code> gets <code>400 MISSING</code>). Clients should rely on the four-field
+envelope and treat <code>code</code> as informative; the endpoint-specific sections
+below name the codes each route can return.</p>
 <hr />
 <h2 id="starting-the-server">Starting the Server<a class="headerlink" href="#starting-the-server" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Mode 1: Personal (default) — SQLite, no auth, localhost</span>
@@ -5870,7 +5876,7 @@ Returns status, version, mode, uptime, component health (database, filesystem, s
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">"components"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">"engine"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.31.0"</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.32.0"</span><span class="p">,</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/usr/local/bin/oxo-flow"</span><span class="p">,</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">"version_mismatch"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">}</span>
@@ -6549,8 +6555,12 @@ expires it answers <code>504 {code: "AI_TIMEOUT"}</code> with the standard
 Use <code>POST /api/ai/translate/stream</code> for generations expected to run longer:
 the SSE route is not capped by this total budget.</p>
 <p><code>GET /api/ai/config</code> stays public for anonymous feature discoverability:
-anonymous callers (and non-admin callers outside personal mode) receive only
-<code>{provider: "", model: null, api_url: null, is_configured}</code>. Presenting a
+non-admin callers outside personal mode (team/hpc) — including anonymous
+callers — receive only
+<code>{provider: "", model: null, api_url: null, is_configured}</code>. Personal mode
+has no sign-in at all (loopback, single local user), so its callers always
+receive the unmasked payload — the exception the SPA settings page relies
+on. Presenting a
 valid credential opts the request into normal authentication, so an admin
 sees the configured provider, model, and URL (never the API key); an invalid
 credential is rejected with <code>401</code> rather than silently downgraded to the

@@ -7118,7 +7118,7 @@ and includes without a contract behave exactly as before.</p>
 <tr>
 <td><code>repo</code> + <code>ref</code></td>
 <td>String pair</td>
-<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.31.0"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;@&lt;hash&gt;</code> (the hash disambiguates confusable repo/ref pairs; <code>OXO_FLOW_MODULE_CACHE</code> overrides the cache root) — versioned modules, reproducible composition. The checkout's resolved HEAD SHA is recorded per include in the checkpoint (<code>include_resolutions</code>) and listed in the run report's Provenance section, proving which module content a run/resume pair actually used (branch/tag pins re-fetch on every activation)</td>
+<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.32.0"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;@&lt;hash&gt;</code> (the hash disambiguates confusable repo/ref pairs; <code>OXO_FLOW_MODULE_CACHE</code> overrides the cache root) — versioned modules, reproducible composition. The checkout's resolved HEAD SHA is recorded per include in the checkpoint (<code>include_resolutions</code>) and listed in the run report's Provenance section, proving which module content a run/resume pair actually used (branch/tag pins re-fetch on every activation)</td>
 </tr>
 </tbody>
 </table>
@@ -7222,7 +7222,7 @@ had written them:</p>
 <td>String</td>
 <td>No</td>
 <td>—</td>
-<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.31.0"</code>)</td>
+<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.32.0"</code>)</td>
 </tr>
 <tr>
 <td><code>format_version</code></td>
@@ -7460,6 +7460,19 @@ paths, and <code>when</code> conditions:</p>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"blast"</span>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"blastn -db {config.database} -evalue {config.threshold} -query {input} -out {output}"</span>
 </span></code></pre></div>
+<p>A <code>{config.&lt;key&gt;}</code> reference to a key that is defined nowhere — the
+<code>[config]</code> section, a CLI override, or the engine-injected keys above — is
+an <strong>E005 error</strong>. <code>run</code> and <code>dry-run</code> hard-fail at plan time, before the
+DAG is built: <code>workflow references undefined config variables — fix before
+running: …</code>, listing each offending rule and field. The scan covers shell
+commands, script paths, input/output paths, <code>log</code>, <code>benchmark</code>,
+<code>output_pattern</code>, lifecycle hooks, and <code>when</code> conditions. This gate is
+separate from the execution-time placeholder gate (<code>[engine]
+strict_placeholders</code>) and is <strong>not</strong> softened by <code>strict_placeholders =
+false</code> or <code>OXO_FLOW_STRICT_PLACEHOLDERS=0</code> — an undefined key has no value
+to warn about, so the run aborts before any rule is planned. <code>validate</code> and
+<code>lint</code> report the same problem as the static E005 diagnostic, which is why
+the documented validate → dry-run → run path catches it first.</p>
 <h3 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Provide a required value (direct flag form)</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--database<span class="w"> </span>refs/nt
