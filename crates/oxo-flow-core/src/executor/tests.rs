@@ -4164,10 +4164,12 @@ async fn tmp_dir_env_reaches_rule_shell() {
     let _ = tokio::fs::remove_dir_all(&workdir).await;
 }
 
-/// Without `[engine] tmp_dir` the ambient environment passes through
-/// untouched — no TMPDIR/TMP/TEMP keys are injected (issue #907).
+/// Without `[engine] tmp_dir` no TMPDIR/TMP/TEMP keys are injected (issue
+/// #907). Since #1108 rule shells run under a cleared-environment allowlist,
+/// so an ambient `TMPDIR` is not passed through either — all three read
+/// unset when nothing is configured.
 #[tokio::test]
-async fn tmp_dir_absent_leaves_env_untouched() {
+async fn tmp_dir_absent_injects_no_temp_vars() {
     let workdir = std::env::temp_dir().join(format!("oxo-tmpdir-off-{}", std::process::id()));
     let _ = tokio::fs::remove_dir_all(&workdir).await;
     std::fs::create_dir_all(&workdir).unwrap();
@@ -4186,20 +4188,15 @@ async fn tmp_dir_absent_leaves_env_untouched() {
     let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
     assert_eq!(record.status, JobStatus::Success);
     let dump = std::fs::read_to_string(workdir.join("envdump.txt")).unwrap();
-    for var in ["TMP", "TEMP"] {
+    // #1108: the ambient environment is cleared and only the allowlist is
+    // re-admitted, so even an ambient TMPDIR (macOS/libc sets one) must NOT
+    // reach the shell.
+    for var in ["TMPDIR", "TMP", "TEMP"] {
         assert!(
             dump.contains(&format!("{var}=unset")),
             "{var} must not be injected when tmp_dir is unset: {dump}"
         );
     }
-    // TMPDIR may legitimately inherit the ambient value (macOS/libc sets
-    // it); the assertion is that the engine did not OVERWRITE it — the
-    // inherited value is whatever the test process itself sees.
-    let ambient = std::env::var("TMPDIR").unwrap_or_default();
-    assert!(
-        dump.contains(&format!("TMPDIR={ambient}")),
-        "TMPDIR must pass through ambient value untouched: {dump}"
-    );
 
     let _ = tokio::fs::remove_dir_all(&workdir).await;
 }

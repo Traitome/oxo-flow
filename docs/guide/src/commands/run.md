@@ -1538,6 +1538,35 @@ Known boundaries:
   cleaned by their rules; outputs declared by rules are always accounted
   for by the ladder.
 
+### Rule execution environment (issue #1108)
+
+Rule shells, `pre_exec` hooks, rule-level `on_success`/`on_failure` hooks,
+and workflow-level `on_complete`/`on_error` hooks run under a **cleared
+environment**: the child starts from an empty environment plus a fixed
+allowlist, never the engine's ambient environment. The allowlist is the
+rule's own declared `envvars` (applied last, so they win), `PATH`, `HOME`,
+`LANG`, every `LC_*` variable, and the `TMPDIR`/`TMP`/`TEMP` triple from
+`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`. This prevents a rule that declares
+no environment from reading the engine's API keys and cloud credentials
+out of its own process environment.
+
+A workflow that genuinely needs an ambient variable opts it back in per
+invocation:
+
+```bash
+OXO_FLOW_ENV_PASSTHROUGH=SLURM_JOB_ID,USER oxo-flow run workflow.oxoflow
+```
+
+The value is a comma-separated name list (whitespace around each name is
+trimmed; empty entries ignored); only the names listed are re-admitted —
+everything else stays hidden. It is an environment variable rather than an
+`[engine]` key because the need is host/invocation-specific (a variable
+present on one cluster but not another), mirroring `OXO_FLOW_TMPDIR`.
+
+Engine tooling commands (conda/pixi/venv environment setup, teardown, and
+`env_verify`) spawn through a different code path and keep the ambient
+environment, so tool discovery and proxy settings still work.
+
 ### Protected data trees (`protected_data_trees`)
 
 Vendor-delivered inputs (a sequencer drop, a reference bundle) must not
