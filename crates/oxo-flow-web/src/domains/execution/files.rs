@@ -61,6 +61,53 @@ fn staged_upload_path(dest: &FsPath) -> PathBuf {
     dest.with_file_name(name)
 }
 
+/// Whether `name` is a staged-upload temp (`<name>.<seq>.<pid>.tmp`), the
+/// sibling shape [`staged_upload_path`] hands the upload handler. A process
+/// killed between `File::create` and the final `rename`/`remove_file` leaves
+/// one behind; it is engine scratch, never a user upload, so the file listing
+/// and run staging must both skip it — otherwise the user is shown a phantom
+/// input and it is mirrored into every run directory (issue #1161).
+///
+/// The shape is deliberately narrow (a base name, then two all-digit
+/// components) so a genuine `sample.tmp` upload is still listed.
+pub(crate) fn is_staged_upload_tmp(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let mut parts = stem.rsplit('.');
+    let (Some(pid), Some(seq), Some(base)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !base.is_empty()
+        && !seq.is_empty()
+        && seq.bytes().all(|b| b.is_ascii_digit())
+        && !pid.is_empty()
+        && pid.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Best-effort removal of staged-upload temps in `dir` left by a process that
+/// no longer exists. Temps stamped with the current PID are skipped — they may
+/// belong to an upload still streaming in this process. Returns the number
+/// removed. Errors are swallowed: this is tidying, not a correctness gate.
+pub(crate) fn prune_staged_upload_temps(dir: &FsPath) -> usize {
+    let own_pid = format!(".{}.tmp", std::process::id());
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for item in rd.flatten() {
+        let name = item.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_staged_upload_tmp(name) || name.ends_with(&own_pid) {
+            continue;
+        }
+        if std::fs::remove_file(item.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Filenames that must never be downloadable (secrets often end up in
 /// workdirs next to results).
 fn is_blocked_name(name: &str) -> bool {
@@ -934,6 +981,10 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
         )
         .into_response();
     };
+    // Clear staged temps orphaned by a previous process before walking the
+    // tree, so a crashed upload neither appears in this listing nor (via
+    // `stage_user_inputs`) reaches a run directory (issue #1161).
+    prune_staged_upload_temps(&root);
     let mut out: Vec<serde_json::Value> = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
@@ -947,8 +998,15 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
                 stack.push(path);
                 continue;
             }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // A staged temp is engine scratch, not a user upload.
+            if is_staged_upload_tmp(name) {
+                continue;
+            }
             out.push(serde_json::json!({
-                "name": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                "name": name,
                 "path": path.strip_prefix(&root).unwrap_or(&path).to_string_lossy(),
                 "size_bytes": meta.len(),
             }));
@@ -964,6 +1022,48 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #1161: the staged-upload temp shape is recognised, a real
+    /// upload that merely ends in `.tmp` is not.
+    #[test]
+    fn staged_upload_tmp_shape_is_narrow() {
+        assert!(is_staged_upload_tmp("sample.bam.3.4242.tmp"));
+        assert!(is_staged_upload_tmp("meta.tsv.0.1.tmp"));
+        assert!(
+            !is_staged_upload_tmp("notes.tmp"),
+            "real upload, not scratch"
+        );
+        assert!(!is_staged_upload_tmp("sample.bam.tmp"), "no seq/pid stamp");
+        assert!(
+            !is_staged_upload_tmp("sample.bam.x.4242.tmp"),
+            "seq not numeric"
+        );
+        assert!(!is_staged_upload_tmp("sample.bam.3.tmp"), "pid missing");
+        assert!(!is_staged_upload_tmp(".3.4242.tmp"), "empty base name");
+        assert!(!is_staged_upload_tmp("sample.bam"));
+    }
+
+    /// Issue #1161: temps stamped with a dead process are swept; the current
+    /// process's own in-flight temps are left alone.
+    #[test]
+    fn prune_staged_upload_temps_spares_live_process_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let orphan = dir.path().join("sample.bam.1.999999.tmp");
+        std::fs::write(&orphan, "partial").unwrap();
+        let live = dir
+            .path()
+            .join(format!("sample.bam.2.{}.tmp", std::process::id()));
+        std::fs::write(&live, "streaming").unwrap();
+        let real = dir.path().join("sample.bam");
+        std::fs::write(&real, "data").unwrap();
+
+        let removed = prune_staged_upload_temps(dir.path());
+
+        assert_eq!(removed, 1, "only the orphaned temp is removed");
+        assert!(!orphan.exists());
+        assert!(live.exists(), "this process's own temp must survive");
+        assert!(real.exists(), "a real upload is never touched");
+    }
 
     /// A directory whose name is not visible ASCII (CJK, em-dash, ...) must
     /// produce a fallback header, not a panicked handler (audit #643).

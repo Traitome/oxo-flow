@@ -209,6 +209,16 @@ pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
             if !meta.is_file() {
                 continue; // never follow symlinks out of the inputs tree
             }
+            // A staged-upload temp a killed process left behind is engine
+            // scratch, not an input; mirroring it would hand every run a
+            // phantom file (issue #1161).
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(crate::domains::execution::files::is_staged_upload_tmp)
+            {
+                continue;
+            }
             let Ok(rel) = path.strip_prefix(&root) else {
                 continue;
             };
@@ -418,6 +428,46 @@ mod tests {
         assert_eq!(second, 0, "existing files are not re-copied");
         assert!(run_dir.join("meta.tsv").is_file());
         assert!(run_dir.join("data/raw.txt").is_file());
+    }
+
+    #[test]
+    fn stage_user_inputs_skips_staged_upload_temps() {
+        // Issue #1161: a process killed between creating its staging temp and
+        // renaming it over the destination leaves `<name>.<seq>.<pid>.tmp`
+        // beside the upload. Mirroring it would give every run a phantom
+        // input whose name no user ever chose.
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::write("workspace/users/alice/inputs/meta.tsv", "a\n").unwrap();
+        // The orphan shape the upload handler produces, plus a genuine upload
+        // that merely happens to end in `.tmp` — the latter must survive.
+        std::fs::write(
+            "workspace/users/alice/inputs/meta.tsv.7.999999.tmp",
+            "partial",
+        )
+        .unwrap();
+        std::fs::write("workspace/users/alice/inputs/notes.tmp", "keep").unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let copied = stage_user_inputs("alice", &run_dir).unwrap();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert_eq!(copied, 2, "only the real uploads are staged");
+        assert!(run_dir.join("meta.tsv").is_file());
+        assert!(
+            run_dir.join("notes.tmp").is_file(),
+            "a real upload ending in .tmp is not engine scratch"
+        );
+        assert!(
+            !run_dir.join("meta.tsv.7.999999.tmp").exists(),
+            "the orphaned staging temp must not be mirrored"
+        );
     }
 
     #[test]
