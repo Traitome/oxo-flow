@@ -6245,7 +6245,8 @@ Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, like
 <h3 id="run-detail">Run Detail<a class="headerlink" href="#run-detail" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}
 </span></code></pre></div>
-The full run row: <code>{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. <code>workflow_name</code> and <code>duration_secs</code> are the same values list items carry (<code>duration_secs</code> is the elapsed time between <code>started_at</code> and <code>finished_at</code>, <code>null</code> until the run finishes). (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.) <code>dry_run</code> mirrors the creation request (<code>true</code> for preview runs spawned by <code>dry_run: true</code>) and appears in both the list and detail responses — legacy rows created before the column existed read as <code>false</code>.</p>
+The full run row: <code>{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, artifacts_incomplete, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. <code>workflow_name</code> and <code>duration_secs</code> are the same values list items carry (<code>duration_secs</code> is the elapsed time between <code>started_at</code> and <code>finished_at</code>, <code>null</code> until the run finishes). (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.) <code>dry_run</code> mirrors the creation request (<code>true</code> for preview runs spawned by <code>dry_run: true</code>) and appears in both the list and detail responses — legacy rows created before the column existed read as <code>false</code>.</p>
+<p><code>artifacts_incomplete</code> (also on list items) is non-null only when a cluster run's result pull failed: the remote execution finished but its outputs could not be transferred back, so the local workdir — the source for the run's logs, preview and report — is missing or stale. It carries the pull error text (including the remote exit code). Such a run is <strong>never</strong> reported as <code>completed</code>: it is failed through the same non-success path a non-zero remote exit uses, so <code>status</code> reads <code>failed</code> with <code>phase</code> <code>failed</code> and the reason is both logged and persisted here for the UI (issue #1112 / audit RB-05).</p>
 <h3 id="run-preview">Run Preview<a class="headerlink" href="#run-preview" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/preview
 </span></code></pre></div>
@@ -6881,7 +6882,11 @@ private <code>0600</code> temp file for the SSH invocation, so either form works
 the remote host (tar over stdio — no rsync), launches it detached (own
 session via <code>setsid</code>, with <code>nohup</code> fallback) so the launch call returns
 while the workflow keeps running, and pulls the results back on completion
-so every downstream endpoint (logs, files, report) works unchanged.
+so every downstream endpoint (logs, files, report) works unchanged. If that
+pull fails, the run is <strong>not</strong> finalized as a success — it is failed with the
+pull error and the run row records <code>artifacts_incomplete</code> (see
+<a href="#run-detail">Run Detail</a>), because the local workdir the downstream
+endpoints read may be missing or stale (issue #1112 / audit RB-05).
 Cancel kills the wrapper's recorded process group, so the remote CLI and
 rule subprocesses stop rather than being orphaned. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
