@@ -4630,8 +4630,21 @@ their declared limit:</p>
 <td>A <code>types.&lt;name&gt;</code> reference on a rule input/output does not match any <code>[types.*]</code> declaration (or inline spec fails to parse)</td>
 <td>Fixes the type name or adds the missing <code>[types.*]</code> declaration</td>
 </tr>
+<tr>
+<td><code>TYPE-008</code></td>
+<td>Unverifiable edge (advisory)</td>
+<td>A typed consumer reads from a producer that declares no <code>[types]</code> at all, so the edge cannot be checked — the contract is unknown rather than violated</td>
+<td>Declares the producer's output type under <code>[rules.types].outputs</code> (or <code>[types.&lt;name&gt;]</code>) so its biological output can be verified</td>
+</tr>
+<tr>
+<td><code>TYPE-009</code></td>
+<td>Unverifiable build (advisory)</td>
+<td>The consumer names a <code>reference_build</code> while the producer omits it, so alignment compatibility cannot be checked (the build check only fires when both sides name a build)</td>
+<td>Declares the producer's <code>reference_build</code> so its alignment against the consumer's required build can be verified</td>
+</tr>
 </tbody>
 </table>
+<p><code>TYPE-001</code> .. <code>TYPE-007</code> are proven violations: they fail <code>oxo-flow validate</code> and abort <code>oxo-flow run</code> in preflight. <code>TYPE-008</code> and <code>TYPE-009</code> are <strong>advisory</strong> — they report an <em>unverifiable</em> edge (a missing contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.</p>
 <h3 id="curated-scientific-preflight-catalog-sci-">Curated Scientific Preflight Catalog (<code>SCI-*</code>)<a class="headerlink" href="#curated-scientific-preflight-catalog-sci-" title="Permanent link">#</a></h3>
 <p>Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.</p>
 <h4 id="1-germline-somatic-variant-calling">1. Germline &amp; Somatic Variant Calling<a class="headerlink" href="#1-germline-somatic-variant-calling" title="Permanent link">#</a></h4>
