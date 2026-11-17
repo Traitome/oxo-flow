@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(deprecated)] // Legacy handlers preserved for backward compat; removed v0.10.0
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring

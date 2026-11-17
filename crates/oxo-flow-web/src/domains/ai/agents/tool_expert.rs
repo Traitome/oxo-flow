@@ -10,13 +10,6 @@ pub fn recommend_tools(intent: &str, data_findings: &[DataFinding]) -> Vec<ToolR
     let intent_lower = intent.to_lowercase();
     let mut recommendations = Vec::new();
 
-    // Detect read length for splice-aware aligners
-    let _read_len = data_findings
-        .iter()
-        .find(|f| f.field == "read_type")
-        .and_then(|f| f.value.as_str())
-        .unwrap_or("unknown");
-
     let paired_end = data_findings
         .iter()
         .find(|f| f.field == "paired_end")
@@ -64,7 +57,6 @@ pub fn recommend_tools(intent: &str, data_findings: &[DataFinding]) -> Vec<ToolR
         });
 
         // Alignment step
-        let _aligner = "STAR";
         let mut star_params = serde_json::json!({
             "--genomeDir": "/data/references/{genome}/star",
             "--readFilesCommand": "zcat",

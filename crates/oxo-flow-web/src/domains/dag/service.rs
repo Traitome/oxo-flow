@@ -698,16 +698,26 @@ mod tests {
 
     #[test]
     fn update_rule_null_patch_key_removes_field() {
+        // The rule starts with the deprecated shorthand `threads = 4`; a
+        // null patch must remove it, so the effective count falls back to
+        // the `resources.threads` default (1). Asserting the effective
+        // value makes the test meaningful — checking `threads.is_none()`
+        // against a fixture that never set it passed vacuously.
+        let toml = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"\nshell = \"echo s1\"\nthreads = 4\n";
         let cmd = DagEditCommand {
             source: "dag_editor".into(),
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "s1", "patch": {"threads": null, "shell": "x"}}),
         };
-        let r = execute_edit(TEST_TOML, "patch-null", &cmd).unwrap();
+        let r = execute_edit(toml, "patch-null", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let s1 = config.rules.iter().find(|r| r.name == "s1").unwrap();
         assert_eq!(s1.shell.as_deref(), Some("x"));
-        assert!(s1.threads.is_none(), "null patch key must remove the field");
+        assert_eq!(
+            s1.effective_threads(),
+            1,
+            "null patch key must remove the shorthand field"
+        );
     }
 
     #[test]

@@ -145,8 +145,8 @@ pub enum IssueSeverity {
 
 /// Registry of AI plugins.
 ///
-/// Scaffolding: as of v0.24.1 nothing in oxo-flow constructs this registry
-/// or reads its fields — the agent's tool set is [`crate::tools::ToolRegistry`]
+/// Scaffolding: nothing in oxo-flow constructs this registry or reads its
+/// fields — the agent's tool set is [`crate::tools::ToolRegistry`]
 /// and knowledge injection is built from [`crate::knowledge`]. Kept as the
 /// compile-time contract for a future dynamic-loading design; per #965 the
 /// doc must not claim config-file registration that doesn't exist.
