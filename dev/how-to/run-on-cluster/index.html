@@ -4958,7 +4958,10 @@ re-queues what failed.</p>
 <p>When a run aborts, rules still in flight are killed and recorded as
 <strong>incomplete</strong> (neither completed nor failed) — <code>resume</code> re-runs them
 from their checkpoint, so no output is silently trusted from a killed
-job.</p>
+job. A run stopped by SIGINT/SIGTERM/SIGHUP exits <code>128 + signum</code>
+(130/143/129) and <code>--json</code> reports status <code>"failed"</code>, even when every
+interrupted rule is <code>required = false</code> — an interrupt is never
+reported as a completed run.</p>
 </div>
 <div class="admonition tip">
 <p class="admonition-title">Check resource availability</p>

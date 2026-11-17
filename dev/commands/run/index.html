@@ -5413,8 +5413,8 @@ to the per-rule <code>[resources]</code> block and the <code>[cluster]</code> pr
 It is emitted on <strong>every</strong> exit path — completed, failed, and aborted
 (preflight failures, budget breaches, cluster runs, plain-failure aborts) —
 so <code>--json</code> consumers never get zero bytes. <code>status</code> is <code>"completed"</code> only
-when the run finished with zero required failures; every other exit is
-<code>"failed"</code>.</p>
+when the run finished with zero required failures and was not interrupted;
+every other exit is <code>"failed"</code>.</p>
 <p>Human progress and result output on stderr is <strong>not</strong> suppressed — this flag
 appends the summary, it does not switch the run to machine-only mode.</p>
 <p><code>resources</code> lists every benchmarked rule (<code>rule</code>, <code>status</code>,
@@ -6777,6 +6777,10 @@ the config surface.</p>
 <tr>
 <td><code>1</code></td>
 <td>Run failure — a <code>required</code> rule failed (a plain <code>--keep-going</code> failure summary still exits non-zero; only <code>required = false</code> failures leave the exit code at 0)</td>
+</tr>
+<tr>
+<td><code>130</code> / <code>143</code> / <code>129</code></td>
+<td>Interrupted — SIGINT / SIGTERM / SIGHUP stopped the run. In-flight rules are recorded as interrupted and <code>--json</code> reports status <code>"failed"</code>; this holds on the local and <code>run --profile</code> cluster paths, and even when every interrupted rule is <code>required = false</code> (an interrupt is never reported as success)</td>
 </tr>
 </tbody>
 </table>
