@@ -248,7 +248,7 @@ into that table (comments preserved); everything else is replaced wholesale.
   "source": "dag_editor",
   "operation": "update_workflow",
   "payload": {
-    "patch": {"workflow": {"name": "renamed", "version": "0.30.1", "description": "d"}}
+    "patch": {"workflow": {"name": "renamed", "version": "0.31.0", "description": "d"}}
   }
 }
 ```
