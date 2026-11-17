@@ -17,6 +17,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use std::io::Read as _;
 use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
@@ -40,6 +41,25 @@ const MAX_ZIP_ENTRIES: usize = 4096;
 const MAX_ZIP_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Text preview truncation.
 const PREVIEW_MAX_BYTES: usize = 100 * 1024;
+
+/// Monotonic counter making every staged upload filename unique within this
+/// process (combined with the PID, unique on the machine).
+static STAGED_UPLOAD_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// `dest` → `dest.<seq>.<pid>.tmp`: a sibling staged name in the destination
+/// directory, so every concurrent upload (and every retried re-upload) gets
+/// its own temp file and no two writers can clobber or remove each other's
+/// (same discipline as the checkpoint stager). Staging beside `dest` keeps
+/// the final `rename` on one filesystem, where it replaces atomically.
+fn staged_upload_path(dest: &FsPath) -> PathBuf {
+    let seq = STAGED_UPLOAD_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "upload".into());
+    name.push(format!(".{seq}.{}.tmp", std::process::id()));
+    dest.with_file_name(name)
+}
 
 /// Filenames that must never be downloadable (secrets often end up in
 /// workdirs next to results).
@@ -797,11 +817,16 @@ pub async fn upload_files(
         }
 
         // Chunked write: large fastqs must never be buffered in memory.
+        // Stream into a sibling temp file, then rename over `dest` only once
+        // the size cap and the full read have both succeeded — a failed
+        // re-upload (oversize, aborted stream) must not destroy the
+        // previously-good file still living at `dest` (audit ledger RB-08).
+        let tmp = staged_upload_path(&dest);
         let mut written: u64 = 0;
-        let mut file = match tokio::fs::File::create(&dest).await {
+        let mut file = match tokio::fs::File::create(&tmp).await {
             Ok(f) => f,
             Err(e) => {
-                tracing::error!("Failed to create file {dest:?}: {e}");
+                tracing::error!("Failed to create temp upload file {tmp:?}: {e}");
                 return err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "IO_ERROR",
@@ -821,6 +846,8 @@ pub async fn upload_files(
                         break;
                     }
                     if file.write_all(&chunk).await.is_err() {
+                        drop(file);
+                        let _ = tokio::fs::remove_file(&tmp).await;
                         return err(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "IO_ERROR",
@@ -839,7 +866,7 @@ pub async fn upload_files(
         let _ = file.flush().await;
         drop(file);
         if over {
-            let _ = tokio::fs::remove_file(&dest).await;
+            let _ = tokio::fs::remove_file(&tmp).await;
             return err(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "FILE_TOO_LARGE",
@@ -848,12 +875,26 @@ pub async fn upload_files(
             .into_response();
         }
         if let Some(e) = read_error {
-            // Never report success for a partial file.
-            let _ = tokio::fs::remove_file(&dest).await;
+            // Never report success for a partial file, and never replace the
+            // good file already at `dest` with that partial.
+            let _ = tokio::fs::remove_file(&tmp).await;
             return err(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "UPLOAD_READ_ERROR",
                 format!("Upload aborted after {written} bytes: {e}"),
+            )
+            .into_response();
+        }
+        // Validation passed: swap the temp in atomically. On the same
+        // filesystem `rename` replaces `dest` in one step, so readers never
+        // observe a truncated file.
+        if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+            tracing::error!("Failed to move temp upload {tmp:?} onto {dest:?}: {e}");
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "IO_ERROR",
+                "Failed to finalize upload".into(),
             )
             .into_response();
         }
