@@ -12,6 +12,10 @@ pub struct DiagnoseResult {
     pub fix_action: String,
     pub modified_toml: Option<String>,
     pub safe_to_auto_apply: bool,
+    /// ID of the archived AI session for this diagnosis. The before-fix
+    /// workflow archive (`apply_fix` → `archive_before_modify`) carries the
+    /// same id, so the session record and the snapshot stay linked.
+    pub session_id: String,
 }
 
 /// Parse the model's safety verdict from the mandated output line
@@ -155,6 +159,15 @@ pub async fn diagnose_failure(
         provider.model().unwrap_or_else(|| "default".into())
     );
 
+    // Session archival is part of the "everything archived" contract: the
+    // recovery diagnosis must leave a session record even when the provider
+    // call fails, so the session is created before the call and failed
+    // explicitly on the error path (preserving the `?`-equivalent
+    // propagation the caller retries on).
+    let mut session =
+        crate::commands::ai_session::AiCommandSession::begin("recover", failed_rule, provider)
+            .with_workflow(workflow_path);
+
     let system = build_diagnose_prompt();
     let toml_content =
         std::fs::read_to_string(workflow_path).unwrap_or_else(|_| "(unable to read)".into());
@@ -177,7 +190,14 @@ pub async fn diagnose_failure(
 
     use oxo_flow_ai::types::Message;
     let messages = vec![Message::system(&system), Message::user(&user)];
-    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let response = match provider.chat_with_tools(&messages, &[]).await {
+        Ok(response) => response,
+        Err(e) => {
+            session.fail(&e.to_string());
+            return Err(e.into());
+        }
+    };
+    session.record_usage(&response.usage);
     let response_text = response.content.unwrap_or_default();
 
     // Record token usage
@@ -194,6 +214,11 @@ pub async fn diagnose_failure(
 
     // Extract modified TOML
     let modified_toml = extract_toml_block(&response_text);
+
+    // Capture the session id before `complete` consumes the tracker, so the
+    // caller can link the before-fix workflow archive to this session.
+    let session_id = session.session().id.clone();
+    session.complete(0.9);
 
     eprintln!(
         "\n{}\n{}",
@@ -229,6 +254,7 @@ pub async fn diagnose_failure(
         fix_action: fix_action.unwrap_or_else(|| "Manual review needed".into()),
         modified_toml,
         safe_to_auto_apply: safe,
+        session_id,
     })
 }
 

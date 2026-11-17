@@ -967,6 +967,12 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
             }
         }
     }
+    // Two rules may reference the same missing file (or one rule may list an
+    // input twice): dedupe preserving first-occurrence order, matching
+    // dry-run's deduped `missing_inputs` JSON field so the machine surfaces
+    // agree (dry-run builds its list through a BTreeSet instead).
+    let mut seen = std::collections::HashSet::new();
+    missing.retain(|path| seen.insert(path.clone()));
     missing
 }
 
@@ -1118,6 +1124,38 @@ shell = "true"
             "config-routed generated input and existing config-routed input must pass; \
              only the genuinely missing file may be flagged; the when-gated-off rule's \
              missing sidecar must stay silent (issue #493): {missing:?}"
+        );
+    }
+
+    #[test]
+    fn missing_inputs_dedupes_paths_shared_across_rules() {
+        use super::collect_missing_inputs;
+        // The same absent file referenced by two rules (and twice within one
+        // rule) must appear once in the `validate --json` missing_inputs list —
+        // the same dedup contract dry-run's JSON field already follows.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "t"
+
+[[rules]]
+name = "a"
+input = ["absent.txt", "absent.txt"]
+output = ["a.done"]
+shell = "true"
+
+[[rules]]
+name = "b"
+input = ["absent.txt"]
+output = ["b.done"]
+shell = "true"
+"#;
+        let cfg = oxo_flow_core::config::WorkflowConfig::parse(toml).unwrap();
+        let missing = collect_missing_inputs(&cfg, dir.path());
+        assert_eq!(
+            missing,
+            vec!["absent.txt".to_string()],
+            "shared missing inputs must be deduped: {missing:?}"
         );
     }
 

@@ -586,10 +586,33 @@ pub fn handle_config(action: ConfigAction) -> Result<()> {
             }
 
             eprintln!("\n{}", "Config Variables:".bold());
-            if config.config.is_empty() {
+            // Derived fan-out keys (samples_list, pairs_list,
+            // paired_pairs_*, samples_<group>) land in `config.config` at
+            // parse time and used to be listed as if the user declared them.
+            // Reuse the shared engine-injected registry (config_impact) to
+            // split them into their own section — never retype the list.
+            let group_names: Vec<&str> = config
+                .sample_groups
+                .iter()
+                .map(|g| g.name.as_str())
+                .collect();
+            let (declared, derived): (Vec<(&String, &toml::Value)>, _) =
+                config.config.iter().partition(|(k, _)| {
+                    !oxo_flow_core::config_impact::is_engine_injected_key_with(k, &group_names)
+                });
+            if declared.is_empty() {
                 eprintln!("  (none)");
             } else {
-                for (k, v) in &config.config {
+                for (k, v) in &declared {
+                    eprintln!("  {} = {}", k, v);
+                }
+            }
+            if !derived.is_empty() {
+                eprintln!(
+                    "\n{}",
+                    "Derived Variables (engine-injected from sample/pair declarations):".bold()
+                );
+                for (k, v) in &derived {
                     eprintln!("  {} = {}", k, v);
                 }
             }

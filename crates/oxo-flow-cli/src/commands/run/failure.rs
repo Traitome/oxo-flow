@@ -348,7 +348,8 @@ pub(crate) async fn handle_run_failure_abort(
                                         "  AI fix not auto-applied: auto_fix = \"ask\" needs \
                                                  confirmation, but this session is not \
                                                  interactive. Review the suggestion manually or \
-                                                 set auto_fix = \"always\"."
+                                                 set [ai] auto_fix = \"always\" in the workflow \
+                                                 file (or .oxo-flow/ai.toml)."
                                     ));
                                     false
                                 } else {
@@ -366,7 +367,7 @@ pub(crate) async fn handle_run_failure_abort(
                             && let Err(e) = crate::commands::ai_recover::apply_fix(
                                 ctx.workflow,
                                 toml,
-                                "recovery",
+                                &diag.session_id,
                             )
                         {
                             narrate_console_line(format_args!("  Failed to apply AI fix: {e}"));

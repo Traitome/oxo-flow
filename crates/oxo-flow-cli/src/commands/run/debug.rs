@@ -63,12 +63,42 @@ logical errors. Output format per rule:
         );
 
         println!("{}", "  Analyzing commands...".bold().cyan());
-        match provider.chat(&system, &user).await {
+        // Session archival is part of the "everything archived" contract:
+        // both outcomes — analysis and provider failure — must leave a
+        // session record behind. On a provider failure the command still
+        // falls through to the deterministic rule dump below (existing
+        // behavior); the session records the failure before the fallthrough.
+        let mut session = crate::commands::ai_session::AiCommandSession::begin(
+            "debug",
+            &workflow.display().to_string(),
+            &provider,
+        )
+        .with_workflow(&workflow);
+        // `provider.chat` hides the usage record behind a bare String, so the
+        // session calls the message-level API directly — same transcript,
+        // plus the token counts the archive needs. An empty reply keeps the
+        // old `chat` semantics (EmptyResponse → fall through).
+        use oxo_flow_ai::types::Message;
+        let messages = vec![Message::system(&system), Message::user(&user)];
+        match provider.chat_with_tools(&messages, &[]).await {
             Ok(response) => {
-                println!("\n{}\n{response}", "AI Analysis".bold().green().underline());
-                return Ok(());
+                session.record_usage(&response.usage);
+                match response.content {
+                    Some(text) if !text.trim().is_empty() => {
+                        println!("\n{}\n{text}", "AI Analysis".bold().green().underline());
+                        session.complete(0.9);
+                        return Ok(());
+                    }
+                    _ => {
+                        session.fail("empty response");
+                        eprintln!("  AI analysis failed: empty response");
+                    }
+                }
             }
-            Err(e) => eprintln!("  AI analysis failed: {e}"),
+            Err(e) => {
+                session.fail(&e.to_string());
+                eprintln!("  AI analysis failed: {e}");
+            }
         }
     }
 
