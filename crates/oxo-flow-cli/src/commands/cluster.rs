@@ -461,6 +461,24 @@ fn default_run_dir() -> Option<PathBuf> {
     latest.is_dir().then_some(latest)
 }
 
+/// Resolve the directory the run-aware `cluster status` view reads.
+///
+/// `default` is the caller's single [`default_run_dir`] probe. Re-deriving
+/// it here (as the old guard did, then again for the value) lets the newest
+/// run directory disappear between the two calls — a concurrent run
+/// rotating `runs/latest`, a cleanup — and the `expect` on the second
+/// result turned that race into a panic in a status command. Both inputs
+/// absent is a caller bug with an actionable operator message, not a crash.
+fn resolve_run_aware_dir(run_dir: Option<PathBuf>, default: Option<PathBuf>) -> Result<PathBuf> {
+    run_dir.or(default).ok_or_else(|| {
+        anyhow::anyhow!(
+            "run-aware cluster status needs a run directory, but none was given and \
+             .oxo-flow/runs does not exist — pass --run-dir <DIR>, or --all for the raw \
+             scheduler view"
+        )
+    })
+}
+
 /// The workdir a run directory belongs to (`<workdir>/.oxo-flow/runs/<stamp>`).
 fn run_workdir(run_dir: &Path) -> Option<PathBuf> {
     let canonical = run_dir.canonicalize().ok()?;
@@ -997,12 +1015,12 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
             // Run-aware mode (issue #1085): an explicit `--run-dir`, or the
             // workflow's newest run directory when one exists. `--all` and
             // checkouts that never hosted a cluster run keep the raw
-            // scheduler view.
-            if !all && (run_dir.is_some() || default_run_dir().is_some()) {
-                let dir = run_dir
-                    .clone()
-                    .or_else(default_run_dir)
-                    .expect("run-aware mode implies a directory");
+            // scheduler view. Probe the default ONCE: the old guard probed
+            // it and then re-derived it for the value, so a run directory
+            // rotating in between reached an `expect` with `None`.
+            let default_dir = if all { None } else { default_run_dir() };
+            if !all && (run_dir.is_some() || default_dir.is_some()) {
+                let dir = resolve_run_aware_dir(run_dir.clone(), default_dir)?;
                 let mut instances = load_run_instances(&dir)?;
                 if !job_ids.is_empty() {
                     instances.retain(|instance| {
@@ -1229,11 +1247,12 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     },
                 );
                 for id in &unknown {
-                    if let Some(record) = executor.terminal_status(id).await {
-                        let entry = report
-                            .iter_mut()
-                            .find(|(rid, _)| rid == id)
-                            .expect("report came from the same id list");
+                    if let Some(record) = executor.terminal_status(id).await
+                        && let Some(entry) = report.iter_mut().find(|(rid, _)| rid == id)
+                    {
+                        // `id` came from `report`, so the find cannot miss;
+                        // a skipped overlay is the safe answer if it ever
+                        // does, never a panic in a status command.
                         entry.1 = record.status;
                     }
                 }
@@ -1445,8 +1464,8 @@ mod tests {
     use super::{
         cluster_command, first_log_source, generate_submit_wrapper, instance_tsv,
         load_run_instances, overlay_scheduler_states, query_my_jobs, query_status,
-        read_captured_logs, resolve_backend_with, run_workdir, state_counts, status_line,
-        tail_lines,
+        read_captured_logs, resolve_backend_with, resolve_run_aware_dir, run_workdir, state_counts,
+        status_line, tail_lines,
     };
     use crate::ClusterAction;
     use oxo_flow_core::backend::BackendJobStatus;
@@ -1470,6 +1489,37 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    /// The run-aware directory is resolved from the caller's single
+    /// `default_run_dir()` probe; an absent pair is a normal, actionable
+    /// error — never the panic the old double-probe guard could reach when
+    /// `runs/latest` disappeared between the guard and the use.
+    #[test]
+    fn resolve_run_aware_dir_prefers_explicit_and_errors_when_absent() {
+        let explicit = PathBuf::from("/runs/explicit");
+        let default = PathBuf::from("/runs/latest");
+
+        // An explicit --run-dir wins; the default is only the fallback.
+        assert_eq!(
+            resolve_run_aware_dir(Some(explicit.clone()), Some(default.clone())).unwrap(),
+            explicit
+        );
+        assert_eq!(
+            resolve_run_aware_dir(Some(explicit.clone()), None).unwrap(),
+            explicit
+        );
+        // No explicit directory: the probed default stands in.
+        assert_eq!(
+            resolve_run_aware_dir(None, Some(default.clone())).unwrap(),
+            default
+        );
+        // Neither: an error naming the fix, not a panic.
+        let message = resolve_run_aware_dir(None, None).unwrap_err().to_string();
+        assert!(
+            message.contains("--run-dir") && message.contains(".oxo-flow/runs"),
+            "the error must name the inputs and the escape hatch: {message}"
+        );
     }
 
     fn localrule_workflow_file(dir: &std::path::Path) -> PathBuf {
