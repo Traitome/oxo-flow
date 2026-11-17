@@ -300,7 +300,13 @@ team_profile = "compact"    # "compact" | "full"
 
 `auto_fix` controls what the recovery path may do with an AI-proposed workflow
 patch. The mode gates on top of the model's own safety verdict and TOML
-validation — it never bypasses either:
+validation — it never bypasses either. Independently of the mode, every patch
+is validated before it is written: it must parse as a complete workflow and
+must not drop `[[rules]]`, `[[include]]`, or `[[references]]` sections that the
+original file already had, so a partial "changed portions" response is refused
+(issue #1110) rather than written as a full replacement. A rejected fix leaves
+the workflow byte-for-byte untouched, and an accepted fix is written
+atomically with a `<workflow>.bak` guard beside it:
 
 - `ask` (default) — prompt y/N before writing on an interactive terminal;
   non-interactive sessions (CI, scripts) are denied with an explanation, so a
@@ -585,8 +591,20 @@ oxo-flow run workflow.oxoflow --ai-recover
    mode the generated TOML must still validate as a complete workflow before
    it is written; a patch flagged unsafe by the safety assessment is only
    displayed
-5. A repair is not described as fixed until the complete workflow validates,
-   the applied diff is reviewed, and a rerun verifies its outputs
+5. **A proposed fix is validated before it is written, and a rejected fix
+   leaves the workflow byte-for-byte untouched.** The patch must parse as a
+   complete workflow (`WorkflowConfig::parse`) AND must not drop sections the
+   original file already had — if the response is a partial document (for
+   example a `[workflow]`-only or `[[rules]]`-only fragment) that would
+   discard the original's rules, `[[include]]` entries, or `[[references]]`,
+   the fix is rejected with a precise diagnostic and nothing is written. This
+   guards against a model returning "only the changed portions" and clobbering
+   a full pipeline
+6. An accepted fix is written atomically (temp file in the same directory,
+   then rename) and the pre-fix file is preserved twice: the session archive
+   (`archive_before_modify`) and a sibling `<workflow>.bak`. A repair is not
+   described as fixed until the complete workflow validates, the applied diff
+   is reviewed, and a rerun verifies its outputs
 
 See the CLI/AI blockers in
 `docs/superpowers/audits/industrial-scientific-audit-ledger.md`.
@@ -684,7 +702,7 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 |-------|----------|--------|
 | Phase 1 | AI template generation | Implemented but unproven |
 | Phase 2 | AI dry-run + validate analysis | Implemented but unproven |
-| Phase 3 | AI error recovery (`--ai-recover`) | Prototype / blocked by partial-file replacement and unverified rerun |
+| Phase 3 | AI error recovery (`--ai-recover`) | Prototype / partial-file replacement refused and fix written atomically with a `.bak` guard (#1110); rerun still unverified |
 | Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | Prototype / workflow-scoped policy is not fully enforced |
 | Phase 5 | MCP/Skill ecosystem | Prototype / security trust-boundary work remains |
 | Phase 6 | Workflow explanation (`ai explain`) | Implemented but unproven |
