@@ -152,6 +152,7 @@ impl StorageBackend for PostgresBackend {
                 pid BIGINT,
                 workdir TEXT,
                 config_overrides TEXT,
+                artifacts_incomplete TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL
@@ -324,6 +325,14 @@ impl StorageBackend for PostgresBackend {
             .execute(&mut *tx)
             .await
             .map_err(|e| format!("PG migration config_overrides: {e}"))?;
+
+        // Per-run note that the artifacts could not be fully pulled back from
+        // a remote cluster (issue #1112 / audit RB-05). Historical rows
+        // default to NULL (artifacts assumed complete).
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS artifacts_incomplete TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration artifacts_incomplete: {e}"))?;
 
         // Vocabulary migration (parity with the SQLite init): legacy
         // executors wrote `success` for completed runs; the canonical
@@ -607,6 +616,7 @@ impl StorageBackend for PostgresBackend {
             pid: run.pid,
             workdir: run.workdir.clone(),
             config_overrides: run.config_overrides.clone(),
+            artifacts_incomplete: run.artifacts_incomplete.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -617,7 +627,7 @@ impl StorageBackend for PostgresBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -630,6 +640,7 @@ impl StorageBackend for PostgresBackend {
         .bind(row.pid)
         .bind(&row.workdir)
         .bind(&row.config_overrides)
+        .bind(&row.artifacts_incomplete)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
@@ -642,9 +653,9 @@ impl StorageBackend for PostgresBackend {
 
     async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
         let result = sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
-             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 \
-             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = $15 AND status IN ('queued', 'running', 'paused'))",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15 \
+             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = $16 AND status IN ('queued', 'running', 'paused'))",
         )
         .bind(&run.id)
         .bind(&run.user_id)
@@ -657,6 +668,7 @@ impl StorageBackend for PostgresBackend {
         .bind(run.pid)
         .bind(&run.workdir)
         .bind(&run.config_overrides)
+        .bind(&run.artifacts_incomplete)
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
@@ -803,6 +815,20 @@ impl StorageBackend for PostgresBackend {
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn record_artifacts_incomplete(&self, id: &str, reason: &str) -> Result<bool, String> {
+        // Deliberately status-agnostic: the artifact note rides alongside the
+        // terminal state instead of rewriting it, so a run a cancel (or a
+        // later finalize) already settled still carries the reason (issue
+        // #1112 / audit RB-05).
+        let res = sqlx::query("UPDATE runs SET artifacts_incomplete = $1 WHERE id = $2")
+            .bind(reason)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -1899,6 +1925,7 @@ mod tests {
             pid: None,
             workdir: Some("/tmp/smoke-run".to_string()),
             config_overrides: Some(r#"["threads=4"]"#.to_string()),
+            artifacts_incomplete: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),

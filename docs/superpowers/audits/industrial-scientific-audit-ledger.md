@@ -231,9 +231,9 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-17) — result-pull failure is fixed; archive extraction and cancellation hardening remain Prototype
 
-A failed result pull is logged while the remote exit code is still used to finalize the run. Archive extraction trusts the remote tar stream, and cancellation relies on an in-memory registry and wrapper-only process targeting.
+A failed result pull used to be logged while the remote exit code was still used to finalize the run. That is fixed (issue #1112): when the pull fails the run is failed through the shared non-success path (`mark_failed`) with the pull error as its reason, and the run row records the reason in `artifacts_incomplete` so downstream consumers can distinguish "ran and succeeded" from "raced a broken transfer". Archive extraction still trusts the remote tar stream, and cancellation still relies on an in-memory registry and wrapper-only process targeting.
 
 Evidence:
 
@@ -245,9 +245,9 @@ Evidence:
 
 Required exit evidence:
 
-- Pull and extraction integrity checks must pass before a run can become `completed`.
-- Malicious path traversal in an archive is rejected.
-- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs.
+- Pull and extraction integrity checks must pass before a run can become `completed`. [DONE for the pull (a failed pull can no longer finalize as `completed`); extraction integrity check remains open.]
+- Malicious path traversal in an archive is rejected. [OPEN — not addressed by #1112.]
+- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs. [OPEN — not addressed by #1112.]
 
 ### RB-06: Scheduler and cluster outcomes are not scientifically reliable
 
@@ -508,7 +508,7 @@ Required exit evidence:
 | CL-01 | P1 | Post-submit failures could orphan accepted jobs before local job registration. | Implemented but unproven | Best-effort cancel covers the registration window; success must not be claimed when cleanup itself fails. |
 | CL-02 | P1 | Cluster artifacts and commands could expose sensitive values. | Implemented but unproven | Artifact permissions tightened and command logging masked; scheduler/container secret artifacts remain RB-12. |
 | CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Planned / blocked | See RB-06. |
-| CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Planned / blocked | See RB-05. |
+| CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Pull fixed (#1112); extraction open | A failed result pull now fails the run and records `artifacts_incomplete`; archive path-traversal rejection remains. See RB-05. |
 | CL-05 | P2 | Cloud backend tests are mostly mock and CLI-wrapper tests. | Prototype | Live cloud campaigns are required before cloud-native claims. |
 
 ### 5.3 Web, API, Auth, and Storage
@@ -520,7 +520,7 @@ Required exit evidence:
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Planned / blocked | RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Planned / blocked | RB-08. |
-| WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Planned / blocked | RB-05. |
+| WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
 | WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Planned / blocked | RB-06. |
 | WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Planned / blocked | Direct TOML routes through the core checker, but the checker false-accepts (RB-04A) and resolved admission remains RB-04. |
 | WEB-09 | P1 | Quotas are racy and process-local. | Planned / blocked | RB-09. |

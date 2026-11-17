@@ -253,7 +253,11 @@ pub fn extract_dry_run_preview(log: &str) -> Option<serde_json::Value> {
 }
 
 /// Map a subprocess exit status to the run status vocabulary.
-fn final_status_from_exit(success: bool) -> &'static str {
+///
+/// The single definition of "did this exit code succeed" — shared by the
+/// local finalizer and the remote pull decision, so a cluster run's
+/// terminal status can never drift from a local one's (issue #1112).
+pub(crate) fn final_status_from_exit(success: bool) -> &'static str {
     if success { "completed" } else { "failed" }
 }
 

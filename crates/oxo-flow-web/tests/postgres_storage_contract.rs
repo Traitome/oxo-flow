@@ -249,6 +249,7 @@ async fn storage_backend_contract_round_trips_on_postgres() {
         pid: None,
         workdir: Some(format!("/tmp/oxo-pg-contract-{suffix}")),
         config_overrides: None,
+        artifacts_incomplete: None,
         started_at: None,
         finished_at: None,
         created_at: timestamp.clone(),

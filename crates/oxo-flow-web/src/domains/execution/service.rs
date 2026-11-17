@@ -340,6 +340,10 @@ pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
         "phase": r.phase,
         "dry_run": r.dry_run,
         "workdir": r.workdir,
+        // Non-null when a remote result pull failed and the run's artifacts
+        // may be missing (issue #1112 / audit RB-05): `status` alone cannot
+        // express an incomplete-while-terminal run.
+        "artifacts_incomplete": r.artifacts_incomplete,
         "started_at": r.started_at,
         "finished_at": r.finished_at,
         "created_at": r.created_at,
@@ -1183,6 +1187,7 @@ mod run_list_item_tests {
             pid: Some(4242),
             workdir: None,
             config_overrides: None,
+            artifacts_incomplete: None,
             started_at: Some("2026-01-01T00:00:00Z".into()),
             finished_at: Some("2026-01-01T00:01:10Z".into()),
             created_at: "2026-01-01T00:00:00Z".into(),

@@ -539,7 +539,9 @@ Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_ca
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. `workflow_name` and `duration_secs` are the same values list items carry (`duration_secs` is the elapsed time between `started_at` and `finished_at`, `null` until the run finishes). (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
+The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, artifacts_incomplete, started_at, finished_at, created_at }` — the identity other run endpoints key off. `workflow_name` and `duration_secs` are the same values list items carry (`duration_secs` is the elapsed time between `started_at` and `finished_at`, `null` until the run finishes). (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
+
+`artifacts_incomplete` (also on list items) is non-null only when a cluster run's result pull failed: the remote execution finished but its outputs could not be transferred back, so the local workdir — the source for the run's logs, preview and report — is missing or stale. It carries the pull error text (including the remote exit code). Such a run is **never** reported as `completed`: it is failed through the same non-success path a non-zero remote exit uses, so `status` reads `failed` with `phase` `failed` and the reason is both logged and persisted here for the UI (issue #1112 / audit RB-05).
 
 ### Run Preview
 ```
@@ -1247,7 +1249,11 @@ private `0600` temp file for the SSH invocation, so either form works.
 the remote host (tar over stdio — no rsync), launches it detached (own
 session via `setsid`, with `nohup` fallback) so the launch call returns
 while the workflow keeps running, and pulls the results back on completion
-so every downstream endpoint (logs, files, report) works unchanged.
+so every downstream endpoint (logs, files, report) works unchanged. If that
+pull fails, the run is **not** finalized as a success — it is failed with the
+pull error and the run row records `artifacts_incomplete` (see
+[Run Detail](#run-detail)), because the local workdir the downstream
+endpoints read may be missing or stale (issue #1112 / audit RB-05).
 Cancel kills the wrapper's recorded process group, so the remote CLI and
 rule subprocesses stop rather than being orphaned. See
 [Run on a cluster](../how-to/run-on-cluster.md).

@@ -350,6 +350,46 @@ fn parse_poll_stdout(stdout: &str) -> Option<PollOutcome> {
     None
 }
 
+/// Terminal handling for a remote run whose `.exit-code` is known and whose
+/// result pull has been attempted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RemoteFinalize {
+    /// Artifacts landed locally in full: hand the recorded exit code to the
+    /// shared finalizer (which reports `completed` iff the code is 0).
+    Finalize,
+    /// The result pull failed, so the local workdir — the source for the
+    /// run's logs, preview and report — is missing or stale. The run must
+    /// NOT be finalized as success; the carried text is both the failure
+    /// reason and the persisted artifact-incomplete note.
+    FailArtifactsIncomplete(String),
+}
+
+/// Decide how a just-finished remote run reaches its terminal state.
+///
+/// Pure and unit-tested on purpose: audit RB-05 is the invariant that a
+/// failed result pull must never let a run be reported as completed — the
+/// local workdir is what every log/report endpoint reads, so a broken
+/// transfer means the run's artifacts are incomplete and `status` alone
+/// would lie. Kept separate from the SSH plumbing so the decision can be
+/// pinned without standing up a fake cluster.
+///
+/// A clean pull yields [`RemoteFinalize::Finalize`] regardless of the exit
+/// code: the shared finalizer (`final_status_from_exit`) is the single place
+/// that maps code → `completed`/`failed`, so a non-zero remote exit still
+/// stays a failure.
+fn decide_remote_finalize(
+    run_id: &str,
+    exit_code: i32,
+    pull_result: &std::io::Result<()>,
+) -> RemoteFinalize {
+    match pull_result {
+        Ok(()) => RemoteFinalize::Finalize,
+        Err(e) => RemoteFinalize::FailArtifactsIncomplete(format!(
+            "pulling results for {run_id} failed (remote exit code {exit_code}): {e}"
+        )),
+    }
+}
+
 /// Run-launch parameters staged by `POST /api/runs`: the local staging
 /// directory plus the CLI flag set forwarded to the remote wrapper script.
 /// Retry is local-only and never builds one of these (see the retry handler's
@@ -545,16 +585,39 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
                 Some(PollOutcome::Exited(code)) => {
                     // 4. pull results back so the local file layer serves
                     //    them like any other run.
-                    if let Err(e) = pull_directory(&cluster, &remote_dir, &local_workdir).await {
-                        tracing::warn!("pulling results for {run_id} failed: {e}");
+                    let pull_result = pull_directory(&cluster, &remote_dir, &local_workdir).await;
+                    match decide_remote_finalize(&run_id, code, &pull_result) {
+                        RemoteFinalize::Finalize => {
+                            crate::executor::finalize_run(
+                                &run_id,
+                                Some(code),
+                                &local_workdir.join("execution.log"),
+                            )
+                            .await;
+                            unregister_remote(&run_id);
+                        }
+                        RemoteFinalize::FailArtifactsIncomplete(reason) => {
+                            // Persist the reason first (issue #1112 / audit
+                            // RB-05), then fail the run through the shared
+                            // non-success path. The note is written BEFORE
+                            // the terminal transition on purpose:
+                            // `record_artifacts_incomplete` does not touch
+                            // `status`, so ordering here only matters if the
+                            // terminal write short-circuits (row already
+                            // cancelled) — in which case the persisted
+                            // reason is exactly what explains the missing
+                            // artifacts.
+                            if let Some(b) = crate::infra::db::global_backend()
+                                && let Err(e) =
+                                    b.record_artifacts_incomplete(&run_id, &reason).await
+                            {
+                                tracing::error!(
+                                    "failed to record incomplete-artifacts note for {run_id}: {e}"
+                                );
+                            }
+                            mark_failed(&run_id, &reason).await;
+                        }
                     }
-                    crate::executor::finalize_run(
-                        &run_id,
-                        Some(code),
-                        &local_workdir.join("execution.log"),
-                    )
-                    .await;
-                    unregister_remote(&run_id);
                     return;
                 }
                 None => {
@@ -817,5 +880,53 @@ mod tests {
             "stderr must never contaminate the exit-code stream"
         );
         assert!(output.for_log().contains("Warning: Identity file"));
+    }
+
+    /// Audit RB-05 regression: a failed result pull must NOT finalize the
+    /// run — the local workdir feeds every log/preview/report endpoint, so
+    /// the run's artifacts are incomplete and must be reported as such.
+    #[test]
+    fn failed_pull_never_finalizes_as_success() {
+        // Arrange
+        let err = std::io::Error::other("pulling results failed");
+
+        // Act
+        let decision = decide_remote_finalize("run-1", 0, &Err(err));
+
+        // Assert — even a zero remote exit code cannot be finalized, and the
+        // pull error text is surfaced in the reason.
+        match decision {
+            RemoteFinalize::FailArtifactsIncomplete(reason) => {
+                assert!(reason.contains("run-1"), "got: {reason}");
+                assert!(reason.contains("pulling results"), "got: {reason}");
+                assert!(reason.contains("pulling results failed"), "got: {reason}");
+            }
+            RemoteFinalize::Finalize => panic!("a failed pull must not be finalized"),
+        }
+    }
+
+    /// The positive path is untouched: a clean pull hands the exit code to
+    /// the shared finalizer, which owns the success/failure mapping.
+    #[test]
+    fn clean_pull_finalizes_with_the_recorded_exit_code() {
+        assert_eq!(
+            decide_remote_finalize("run-1", 0, &Ok(())),
+            RemoteFinalize::Finalize
+        );
+    }
+
+    /// Reuse-not-retype: a non-zero remote exit code stays a failure. The
+    /// pull decision still Finalizes (the transfer worked), and the shared
+    /// finalizer maps the code to `failed` — pinned here against that
+    /// single definition, so a code cannot diverge between the local and
+    /// remote paths.
+    #[test]
+    fn nonzero_remote_exit_stays_a_failure_after_a_clean_pull() {
+        // Arrange / Act
+        let decision = decide_remote_finalize("run-1", 7, &Ok(()));
+
+        // Assert
+        assert_eq!(decision, RemoteFinalize::Finalize);
+        assert_eq!(crate::executor::final_status_from_exit(7 == 0), "failed");
     }
 }
