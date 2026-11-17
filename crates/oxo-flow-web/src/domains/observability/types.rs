@@ -145,6 +145,10 @@ pub struct FileInfo {
     pub size: u64,
     pub format: String,
     pub format_confidence: f64,
+    /// The mate's path as supplied in the same `/api/data/analyze` request,
+    /// when a mutual `_R1`/`_R2` or `_1.`/`_2.` mate is present in the file
+    /// name and both files share the same detected (non-unknown) format;
+    /// `null` otherwise.
     pub paired_with: Option<String>,
     pub sample_name: Option<String>,
 }

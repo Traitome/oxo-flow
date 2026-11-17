@@ -27,7 +27,8 @@ static FORMAT_MAP: &[(&str, &str)] = &[
     (".txt", "Text"),
 ];
 
-/// Analyze files at given paths.
+/// The format label for extensions outside [`FORMAT_MAP`].
+const UNKNOWN_FORMAT: &str = "unknown";
 ///
 /// Detects formats via extension matching, identifies paired-end naming
 /// patterns, and suggests an appropriate workflow template.
@@ -63,7 +64,7 @@ pub fn analyze_files(
             .iter()
             .find(|(ext, _)| filename.ends_with(ext))
             .map(|(_, name)| (name.to_string(), 0.95))
-            .unwrap_or_else(|| ("unknown".to_string(), 0.0));
+            .unwrap_or_else(|| (UNKNOWN_FORMAT.to_string(), 0.0));
 
         formats.insert(format_name.clone());
 
@@ -80,12 +81,12 @@ pub fn analyze_files(
         });
     }
 
-    let paired_end = files.iter().any(|f| {
-        f.path.contains("_R1")
-            || f.path.contains("_R2")
-            || f.path.contains("_1.")
-            || f.path.contains("_2.")
-    });
+    let files = pair_files(files);
+
+    // Derived from the same naming vocabulary as pairing (AGENTS.md: don't
+    // mirror semantics — share them). Format/companion checks are pairing's
+    // job; this flag only answers "do these names use a paired-end convention".
+    let paired_end = files.iter().any(|f| mate_path(&f.path).is_some());
 
     let total_size: u64 = files.iter().map(|f| f.size).sum();
 
@@ -126,6 +127,87 @@ pub fn analyze_files(
         },
         suggested_workflow: suggested,
     })
+}
+
+/// Return the expected mate path for a recognised paired-end naming
+/// convention **in the file name**: `_R1`/`_R2` (a following suffix such as
+/// `_001` is preserved; a digit immediately after the marker means the token
+/// is not an R1/R2 marker — `_R10` is not `_R1`) or `_1.`/`_2.` anywhere in
+/// the file name. Directory components are never interpreted.
+fn mate_path(path: &str) -> Option<String> {
+    let file_name = std::path::Path::new(path).file_name()?.to_str()?;
+    let (marker, mate) = [
+        ("_R1", "_R2"),
+        ("_R2", "_R1"),
+        ("_1.", "_2."),
+        ("_2.", "_1."),
+    ]
+    .into_iter()
+    .find(|(marker, _)| {
+        let Some(index) = file_name.rfind(marker) else {
+            return false;
+        };
+        // `_R10` (a digit follows the marker) is a sample-name token, not an
+        // R1 marker; `_R1foo` still matches. The `_1.`/`_2.` forms carry
+        // their separator, so any suffix is allowed (`_1.trimmed.fastq.gz`).
+        if marker.starts_with("_R") {
+            let next = file_name[index + marker.len()..].chars().next();
+            return next.is_none_or(|c| !c.is_ascii_digit());
+        }
+        true
+    })?;
+    let index = file_name.rfind(marker)?;
+    let mate_name = format!(
+        "{}{mate}{}",
+        &file_name[..index],
+        &file_name[index + marker.len()..]
+    );
+    // `strip_suffix` rather than byte arithmetic: `Path::file_name()` ignores
+    // trailing separators, so a path ending in `/` or `\` would otherwise
+    // slice at a non-boundary (and panic on multi-byte names). Such a path is
+    // malformed for a file input; no mate is the safe answer.
+    let prefix = path.strip_suffix(file_name)?;
+    Some(format!("{prefix}{mate_name}"))
+}
+
+/// Fill `FileInfo::paired_with` for mates present in the same request.
+///
+/// A mate is recorded only when its path is one of the analysed inputs, its
+/// detected format matches and is not `unknown` (a `_R1.fastq.gz` is not
+/// paired with a `_R2.bam`), and the claim is mutual — the mate must resolve
+/// back to this file. The recorded value is the client-supplied path text,
+/// matching `FileInfo::path`.
+fn pair_files(files: Vec<FileInfo>) -> Vec<FileInfo> {
+    let mates: Vec<Option<String>> = {
+        let present: std::collections::HashMap<&str, &str> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.format.as_str()))
+            .collect();
+        files
+            .iter()
+            .map(|file| {
+                if file.format == UNKNOWN_FORMAT {
+                    return None;
+                }
+                let mate = mate_path(&file.path)?;
+                let mate_format = present.get(mate.as_str())?;
+                if *mate_format != file.format.as_str() {
+                    return None;
+                }
+                // Asymmetric names (`a_R1_R2.fastq.gz`) can propose a mate
+                // that does not claim us back; never publish such a pairing.
+                (mate_path(&mate).as_deref() == Some(file.path.as_str())).then_some(mate)
+            })
+            .collect()
+    };
+    files
+        .into_iter()
+        .zip(mates)
+        .map(|(file, paired_with)| FileInfo {
+            paired_with,
+            ..file
+        })
+        .collect()
 }
 
 /// Discover reference genome components for a given genome build.
@@ -200,6 +282,153 @@ mod tests {
         assert!(result.files[0].format.contains("FASTQ"));
         assert!(result.files[0].format_confidence > 0.9);
         assert!(result.summary.paired_end_detected);
+    }
+
+    #[test]
+    fn paired_with_links_r1_r2_mates() {
+        let r1 = "/data/s1_R1.fastq.gz".to_string();
+        let r2 = "/data/s1_R2.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn paired_with_links_underscore_one_two_mates() {
+        let r1 = "/data/s1_1.fastq.gz".to_string();
+        let r2 = "/data/s1_2.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn unpaired_r1_records_no_mate() {
+        let result = analyze_files(&["/data/s1_R1.fastq.gz".into()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+    }
+
+    #[test]
+    fn paired_with_requires_the_same_detected_format() {
+        let result = analyze_files(
+            &["/data/s1_R1.fastq.gz".into(), "/data/s1_R2.bam".into()],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
+    }
+
+    #[test]
+    fn r10_names_are_not_r1_r2_mates() {
+        let result = analyze_files(
+            &[
+                "/data/sample_R10.fastq.gz".into(),
+                "/data/sample_R20.fastq.gz".into(),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
+    }
+
+    #[test]
+    fn r1_suffix_is_preserved_in_the_mate() {
+        let r1 = "/data/s1_R1_001.fastq.gz".to_string();
+        let r2 = "/data/s1_R2_001.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn directory_markers_are_not_pairing_markers() {
+        let result = analyze_files(
+            &[
+                "/d/old_R1/reads.fastq.gz".into(),
+                "/d/old_R2/reads.fastq.gz".into(),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
+        assert!(!result.summary.paired_end_detected);
+    }
+
+    #[test]
+    fn asymmetric_pair_names_are_not_published() {
+        // `a_R1_R2` proposes `a_R2_R2`, which does not claim it back.
+        let result = analyze_files(
+            &["/d/a_R1_R2.fastq.gz".into(), "/d/a_R2_R2.fastq.gz".into()],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
+    }
+
+    #[test]
+    fn unknown_formats_are_not_paired() {
+        let result =
+            analyze_files(&["/d/s_R1.xyz".into(), "/d/s_R2.xyz".into()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
+        assert!(
+            result.summary.paired_end_detected,
+            "the naming convention is still reported even when the format is unknown"
+        );
+    }
+
+    #[test]
+    fn underscore_one_two_marker_anywhere_in_the_file_name_pairs() {
+        let r1 = "/d/s_1.trimmed.fastq.gz".to_string();
+        let r2 = "/d/s_2.trimmed.fastq.gz".to_string();
+        let result = analyze_files(&[r1.clone(), r2.clone()], None, None).unwrap();
+        assert_eq!(result.files[0].paired_with.as_deref(), Some(r2.as_str()));
+        assert_eq!(result.files[1].paired_with.as_deref(), Some(r1.as_str()));
+    }
+
+    #[test]
+    fn scoped_mode_echoes_only_the_client_mate_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("s_R1.fastq.gz"), b"x").unwrap();
+        std::fs::write(dir.path().join("s_R2.fastq.gz"), b"x").unwrap();
+        let result = analyze_files(
+            &["s_R1.fastq.gz".into(), "s_R2.fastq.gz".into()],
+            None,
+            Some(dir.path()),
+        )
+        .unwrap();
+        let mate = result.files[0].paired_with.as_deref().unwrap();
+        assert_eq!(mate, "s_R2.fastq.gz");
+        assert!(
+            !mate.contains(dir.path().to_str().unwrap()),
+            "the mate must stay client-relative, never a server path"
+        );
+    }
+
+    #[test]
+    fn trailing_separator_paths_do_not_panic_or_pair() {
+        // `Path::file_name()` ignores a trailing separator, so byte arithmetic
+        // would slice at a non-boundary for a multi-byte file name. A file
+        // input must not end in a separator; no pairing is the safe result.
+        let result = analyze_files(
+            &[
+                "/数据/数据_R1.fastq.gz/".into(),
+                "/数据/数据_R2.fastq.gz/".into(),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
     }
 
     #[test]

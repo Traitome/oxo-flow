@@ -764,7 +764,7 @@ Content-Type: application/json
 
 {"paths": ["/data/*.fastq.gz", "/data/*.bam"], "max_depth": 2}
 ```
-Deterministic file scanning + format inference + pipeline recommendation. Returns `{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }`. Format detection uses filename extension matching — **not AI**.
+Deterministic file scanning + format inference + pipeline recommendation. Returns `{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }`. Format detection uses filename extension matching — **not AI**. `paired_with` echoes the mate's client-supplied path when the request contains a mutual pair (`_R1`/`_R2` or `_1.`/`_2.` in the file name) and both files share a detected, non-unknown format; it is `null` otherwise.
 
 ### Reference Discovery
 ```
