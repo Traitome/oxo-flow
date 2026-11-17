@@ -967,7 +967,7 @@ async fn run_command_inner(
             (
                 timeout_secs > 0,
                 "--timeout",
-                "per-job walltime is set through -w/--walltime instead",
+                "per-job walltime is set through --walltime instead",
             ),
             (
                 provenance,

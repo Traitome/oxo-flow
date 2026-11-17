@@ -519,14 +519,14 @@ remains required and is validated the same strict way.
 ### Cluster flag surface
 
 `run --profile` does not consume every `run` flag. The flags below are
-parsed but have no effect on the cluster path — the command prints a
-warning for each and proceeds:
+parsed but have no effect on the cluster path — each of the first five
+prints a warning and the run proceeds (`-j` is dropped silently):
 
 | `run` flag | Cluster-path behavior |
 |---|---|
 | `--retry` | Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by `resume` / `--resume-failed`. |
 | `--keep-going` / `-k` | Warned and dropped — the driver always dispatches independent jobs until the queue drains; only a required rule's failure cancels in-flight jobs (see [Scheduling Fairness](#scheduling-fairness)). |
-| `--timeout` | Warned and dropped — per-job walltime comes from the profile's `[cluster]` `walltime` key or the rule's own `time_limit`; the `-w/--walltime` flag exists only on `cluster submit`. |
+| `--timeout` | Warned and dropped — per-job walltime comes from the profile's `[cluster]` `walltime` key or the rule's own `time_limit`; the `--walltime` flag exists only on `cluster submit`. |
 | `--provenance` | Warned and dropped — output checksums are currently recorded only on the local execution path. |
 | `--max-threads` / `--max-memory` | Warned and dropped — per-rule `[resources]` and the `[cluster]` profile drive scheduler limits; `[resource_budget]` performs the pre-submit check. |
 | `-j` / `--jobs` | Silently inapplicable — cluster concurrency is governed by `max_submitted` (the profile key or `--max-submitted`), clamped by `[resource_budget] max_jobs`. |
