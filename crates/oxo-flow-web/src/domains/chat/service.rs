@@ -290,7 +290,16 @@ pub async fn process_chat(
 
     // Phase 5: Build response
     let pipeline_id = uuid::Uuid::new_v4().to_string();
-    let parsed = workflow_svc::parse_pipeline(&toml_content, None).ok();
+    let parsed = match workflow_svc::parse_pipeline(&toml_content, None) {
+        Ok(p) => Some(p),
+        // Validation already passed above, so this should be unreachable;
+        // a silent drop would omit parsed metadata from the response with
+        // no diagnostic for debugging.
+        Err(e) => {
+            tracing::warn!("chat pipeline parse failed after successful validation: {e}");
+            None
+        }
+    };
 
     let response = serde_json::json!({
         "mode": ChatMode::Pipeline.as_str(),

@@ -151,6 +151,28 @@ impl SqliteBackend {
         chrono::Utc::now().to_rfc3339()
     }
 
+    /// Idempotent column migration: add `column` to `table` if missing.
+    ///
+    /// The duplicate-column error from a re-run migration is the expected
+    /// no-op and stays silent; any other failure (locked DB, disk error) is
+    /// logged — swallowing it would make a genuinely failed migration
+    /// indistinguishable from the no-op and silently skip the upgrade.
+    async fn add_column_if_missing(&self, table: &str, column: &str) {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column}");
+        if let Err(e) = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&self.pool)
+            .await
+        {
+            let is_duplicate = e
+                .as_database_error()
+                .map(|d| d.message().contains("duplicate column name"))
+                .unwrap_or(false);
+            if !is_duplicate {
+                tracing::warn!("schema migration: failed to add {table}.{column}: {e}");
+            }
+        }
+    }
+
     /// Rebuild the legacy `runs` table (where `pipeline_id` is NOT NULL)
     /// with the current nullable schema, normalizing invalid '' values.
     /// SQLite cannot relax a NOT NULL constraint in place. Individual
@@ -456,41 +478,26 @@ impl StorageBackend for SqliteBackend {
             "workdir TEXT",
             "created_at TEXT NOT NULL DEFAULT ''",
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE runs ADD COLUMN {col}"
-            )))
-            .execute(&self.pool)
-            .await
-            .ok();
+            self.add_column_if_missing("runs", col).await;
         }
 
         // Migration: workflow_name for ad-hoc runs (nullable)
-        sqlx::query("ALTER TABLE runs ADD COLUMN workflow_name TEXT")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("runs", "workflow_name").await;
 
         // Migration: dry_run flag for plan-only runs (issue #907 P3-14) —
         // historical rows default to 0 (not a dry run).
-        sqlx::query("ALTER TABLE runs ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("runs", "dry_run INTEGER NOT NULL DEFAULT 0")
+            .await;
 
         // Migration: config overrides persisted per run (JSON array of
         // KEY=VALUE strings) so retry re-executes with the same configuration.
-        sqlx::query("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("runs", "config_overrides").await;
 
         // Migration: per-run note that the artifacts could not be fully
         // pulled back from a remote cluster (issue #1112 / audit RB-05).
         // Historical rows default to NULL (artifacts assumed complete).
-        sqlx::query("ALTER TABLE runs ADD COLUMN artifacts_incomplete TEXT")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("runs", "artifacts_incomplete")
+            .await;
 
         // Migration: legacy DBs have `pipeline_id TEXT NOT NULL` (ad-hoc runs
         // have no saved pipeline, so the column must be nullable). SQLite
@@ -517,35 +524,31 @@ impl StorageBackend for SqliteBackend {
             );
         }
         // Migration: add usage_count to templates if missing
-        sqlx::query("ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("templates", "usage_count INTEGER NOT NULL DEFAULT 0")
+            .await;
 
         // Migration: webhook signature scheme. Defaults to the legacy
         // keyed-sha256 so v0.10 consumers keep verifying after upgrade;
         // the UI can opt into hmac-sha256 explicitly.
-        sqlx::query(
-            "ALTER TABLE webhook_config ADD COLUMN signature_scheme TEXT NOT NULL DEFAULT 'sha256-keyed'",
+        self.add_column_if_missing(
+            "webhook_config",
+            "signature_scheme TEXT NOT NULL DEFAULT 'sha256-keyed'",
         )
-        .execute(&self.pool)
-        .await
-        .ok();
+        .await;
 
         // Migration (issue #79 P1-06): user password hashes for DB-created
         // accounts. Idempotent — safe to run on every init.
-        sqlx::query("ALTER TABLE users ADD COLUMN password_hash TEXT")
-            .execute(&self.pool)
-            .await
-            .ok();
+        self.add_column_if_missing("users", "password_hash").await;
 
         // Vocabulary migration: legacy executors wrote `success` for completed
         // runs; the canonical terminal set is completed|failed|cancelled.
         // Idempotent — safe to run on every init.
-        sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
+        if let Err(e) = sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
             .execute(&self.pool)
             .await
-            .ok();
+        {
+            tracing::warn!("schema migration: status vocabulary update failed: {e}");
+        }
 
         // Seed admin + default users if users table is empty. `default` is
         // the pseudo-user for personal-mode runs (runs.user_id is a

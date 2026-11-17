@@ -368,7 +368,19 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
     // S006 "unknown section" warnings can ever reach a user (issue #470).
     // S001–S005 are unreachable post-parse; their checks stay in
     // verify_schema as the schema-check contract.
-    let raw_content = std::fs::read_to_string(&workflow).ok();
+    let raw_content = match std::fs::read_to_string(&workflow) {
+        Ok(content) => Some(content),
+        Err(e) => {
+            // The schema pass (S001–S006) and secret scanning both run on
+            // the raw text; silently skipping them would degrade `lint`
+            // output without explanation.
+            tracing::warn!(
+                "Could not re-read {} for schema/secret checks: {e}",
+                workflow.display()
+            );
+            None
+        }
+    };
     let schema_diags = raw_content
         .as_deref()
         .map(oxo_flow_core::format::verify_schema)
