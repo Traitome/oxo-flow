@@ -448,9 +448,10 @@ async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_
     let checkpoint_path = args.checkpoint_path.to_path_buf();
     let recorded = args.provenance.recorded.clone();
     let count = args.provenance.requested;
+    let rule_name = rule_name.to_string();
     let handle = tokio::spawn(async move {
         // File I/O off the async workers: outputs are routinely tens of GB.
-        let entries = tokio::task::spawn_blocking(move || {
+        let entries = match tokio::task::spawn_blocking(move || {
             oxo_flow_core::executor::output_checksums::collect_output_checksums(
                 &rule,
                 &workdir,
@@ -458,7 +459,21 @@ async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_
             )
         })
         .await
-        .unwrap_or_default();
+        {
+            Ok(entries) => entries,
+            Err(e) => {
+                // A panicked collector must not disappear into a silent
+                // default: the operator needs to know which rule lost its
+                // provenance evidence. The completion verdict is already
+                // saved and hashing is best-effort, so the run continues.
+                tracing::warn!(
+                    rule = %rule_name,
+                    error = %e,
+                    "output checksum collection failed — checksums for this rule were not recorded"
+                );
+                Vec::new()
+            }
+        };
         let recorded_here = entries.len();
         if recorded_here > 0 {
             let mut ck = checkpoint.lock().await;
