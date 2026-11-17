@@ -33,13 +33,17 @@ WDL, and no importers for those formats are currently available.
 
 - **No native CWL/WDL import** — There is no built-in importer for Common
   Workflow Language or Workflow Description Language files.
-- **Nextflow/Snakemake import is best-effort, not semantic parity** —
-  `oxo-flow import` transpiles Nextflow DSL2 and Snakemake definitions into
-  `.oxoflow`, but the translation is prototype-grade: complex channel
-  operators, embedded Python/Groovy logic, and dynamic constructs are not
-  fully convertible, and the output always requires human review plus the
-  `validate`/`dry-run` gates. Semantic-equivalence testing across a
-  representative corpus is still open work (see ROADMAP.md Phase 12.3).
+- **Nextflow/Snakemake import covers a deterministic subset, not semantic
+  parity** — `oxo-flow import` translates the supported constructs in
+  `docs/guide/src/commands/import.md` and **hard-fails with a source line** on
+  everything else: channel operators, `params`, `include`, dynamic resources,
+  Snakemake `run:`/`script:` bodies, lambdas, directory outputs, and unresolved
+  interpolations. It never silently drops a directive or invents a path, and
+  it parses plus statically validates the generated workflow before writing it.
+  The output still requires human review plus the
+  `validate` → `lint` → `dry-run` gates. Semantic-equivalence testing across a
+  representative corpus is still open work (see ROADMAP.md Phase 12.3), and
+  `nextflow.config` profiles/labels/`publishDir` behavior is not imported.
 - **No built-in cloud object storage streaming** — oxo-flow supports
   `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
   but data is fully downloaded before execution rather than streamed.

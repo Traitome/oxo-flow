@@ -1,9 +1,20 @@
 //! Snakemake transpiler for converting Snakemake rules into oxo-flow workflows.
+//!
+//! The supported subset is deliberately narrow, and every construct outside
+//! it is a hard error that names the source line. Emitting a workflow with a
+//! silently dropped directive, an invented path, or a shell placeholder that
+//! only fails at run time is worse than refusing the import.
 
-use super::{infer_bio_types, normalize_memory, push_types_contract};
+use super::{
+    escape_toml_basic, infer_bio_types, normalize_memory, push_types_contract, render_shell,
+};
 use crate::error::{OxoFlowError, Result};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Extracted intermediate representation of a Snakemake rule.
+///
+/// Kept as the public parsing view for API compatibility; the emitter uses
+/// the richer internal `ParsedRule` representation.
 #[derive(Debug, Clone, Default)]
 pub struct SnakemakeRule {
     pub name: String,
@@ -20,34 +31,1046 @@ pub struct SnakemakeRule {
     pub protected_outputs: Vec<String>,
 }
 
+/// Parsed rules, non-fatal warnings, and global wildcard constraints.
+type ParsedSnakemake = (Vec<ParsedRule>, Vec<String>, BTreeMap<String, String>);
+
+/// One file declaration on an `input:`/`output:` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PathSource {
+    /// A literal path/pattern from the source.
+    Literal(String),
+    /// `rules.<name>.output` — resolved to that rule's single output.
+    RuleOutput(String),
+}
+
+#[derive(Debug, Clone)]
+struct DeclaredPath {
+    name: Option<String>,
+    source: PathSource,
+    temp: bool,
+    protected: bool,
+    ancient: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParsedRule {
+    name: String,
+    line: usize,
+    inputs: Vec<DeclaredPath>,
+    outputs: Vec<DeclaredPath>,
+    threads: Option<u32>,
+    memory: Option<String>,
+    time: Option<String>,
+    conda: Option<String>,
+    container: Option<String>,
+    modules: Vec<String>,
+    shell: String,
+    temporary: bool,
+    temp_outputs: Vec<String>,
+    protected_outputs: Vec<String>,
+    ancient: Vec<String>,
+    log: Option<String>,
+    benchmark: Option<String>,
+    priority: i32,
+    retries: Option<u32>,
+    gpu: Option<u32>,
+    disk: Option<String>,
+    envvars: BTreeMap<String, String>,
+    depends_on: Vec<String>,
+    localrule: bool,
+    /// `rule all`-style sink: no outputs and no command; dropped from output.
+    sink: bool,
+}
+
 /// Transpile Snakemake source code into an oxo-flow TOML pipeline.
 pub fn transpile_snakemake(source: &str) -> Result<String> {
-    let rules = parse_snakemake_rules(source)?;
+    transpile_snakemake_with_warnings(source).map(|(toml, _)| toml)
+}
+
+/// Transpile Snakemake source code, returning the TOML and every non-fatal
+/// translation warning (currently only sink-rule and marker downgrades).
+pub fn transpile_snakemake_with_warnings(source: &str) -> Result<(String, Vec<String>)> {
+    let (rules, mut warnings, wildcard_constraints) = parse_snakemake(source)?;
     if rules.is_empty() {
-        return Err(OxoFlowError::Config {
-            message: "no Snakemake rule definitions found in source".into(),
+        return Err(config_error(
+            "no Snakemake rule definitions found in source",
+        ));
+    }
+    let (toml, emit_warnings) = emit_workflow(&rules, &wildcard_constraints)?;
+    warnings.extend(emit_warnings);
+    Ok((toml, warnings))
+}
+
+/// Parse all rules and return the legacy public view.
+pub fn parse_snakemake_rules(source: &str) -> Result<Vec<SnakemakeRule>> {
+    let (rules, _, _) = parse_snakemake(source)?;
+    Ok(rules
+        .into_iter()
+        .map(|rule| SnakemakeRule {
+            name: rule.name,
+            inputs: rule
+                .inputs
+                .iter()
+                .map(|path| match &path.source {
+                    PathSource::Literal(value) => value.clone(),
+                    PathSource::RuleOutput(upstream) => format!("rules.{upstream}.output"),
+                })
+                .collect(),
+            outputs: rule
+                .outputs
+                .iter()
+                .map(|path| match &path.source {
+                    PathSource::Literal(value) => value.clone(),
+                    PathSource::RuleOutput(upstream) => format!("rules.{upstream}.output"),
+                })
+                .collect(),
+            threads: rule.threads,
+            memory: rule.memory,
+            time: rule.time,
+            conda: rule.conda,
+            container: rule.container,
+            shell: rule.shell,
+            temporary: rule.temporary,
+            temp_outputs: rule.temp_outputs,
+            protected_outputs: rule.protected_outputs,
+        })
+        .collect())
+}
+
+fn config_error(message: impl Into<String>) -> OxoFlowError {
+    OxoFlowError::Config {
+        message: message.into(),
+    }
+}
+
+fn line_error(line: usize, message: impl Into<String>) -> OxoFlowError {
+    OxoFlowError::Parse {
+        path: std::path::PathBuf::from("<snakemake source>"),
+        message: format!("line {line}: {}", message.into()),
+    }
+}
+
+/// Parse the source, hard-failing on every unsupported construct.
+fn parse_snakemake(source: &str) -> Result<ParsedSnakemake> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut rules: Vec<ParsedRule> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut localrules: BTreeSet<String> = BTreeSet::new();
+    let mut wildcard_constraints: BTreeMap<String, String> = BTreeMap::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let raw = lines[i];
+        let trimmed = strip_comment(raw).trim().to_string();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        let line_no = i + 1;
+
+        if let Some(rest) = trimmed.strip_prefix("rule ") {
+            let Some(name) = rest.strip_suffix(':').map(str::trim) else {
+                return Err(line_error(
+                    line_no,
+                    format!("expected `rule <name>:` but found `{trimmed}`"),
+                ));
+            };
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(line_error(
+                    line_no,
+                    format!(
+                        "rule name `{name}` is not a plain identifier — the importer requires \
+                         alphanumeric/underscore names to emit a rule"
+                    ),
+                ));
+            }
+            let (rule, next) = parse_rule(&lines, i, name, line_no, &mut warnings)?;
+            rules.push(rule);
+            i = next;
+            continue;
+        }
+        if trimmed.starts_with("checkpoint ") {
+            return Err(line_error(
+                line_no,
+                "Snakemake checkpoints are dynamic and cannot be translated — replace the \
+                 checkpoint with a regular rule or import the pipeline by hand",
+            ));
+        }
+        if let Some(rest) = trimmed.strip_prefix("localrules:") {
+            for name in split_list(rest) {
+                if !name.is_empty() {
+                    localrules.insert(name);
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("wildcard_constraints:") {
+            // Both the inline form and the indented block form are supported.
+            let mut parse_pairs = |text: &str, line: usize| -> Result<()> {
+                for part in split_list(text) {
+                    let Some((name, value)) = part.split_once('=') else {
+                        return Err(line_error(
+                            line,
+                            format!(
+                                "cannot parse wildcard constraint `{part}` — expected \
+                                 `<wildcard>=<regex>`"
+                            ),
+                        ));
+                    };
+                    wildcard_constraints.insert(
+                        name.trim().to_string(),
+                        value.trim().trim_matches(['"', '\'']).to_string(),
+                    );
+                }
+                Ok(())
+            };
+            parse_pairs(rest, line_no)?;
+            let mut j = i + 1;
+            while j < lines.len() {
+                let next = strip_comment(lines[j]).trim().to_string();
+                if next.is_empty() {
+                    j += 1;
+                    continue;
+                }
+                if !lines[j].starts_with(char::is_whitespace) {
+                    break;
+                }
+                parse_pairs(&next, j + 1)?;
+                j += 1;
+            }
+            i = j;
+            continue;
+        }
+        if trimmed.starts_with("include:")
+            || trimmed.starts_with("subworkflow ")
+            || trimmed.starts_with("module ")
+            || trimmed.starts_with("use rule ")
+            || trimmed.starts_with("configfile:")
+            || trimmed.starts_with("ruleorder:")
+            || trimmed.starts_with("onsuccess:")
+            || trimmed.starts_with("onerror:")
+            || trimmed.starts_with("onerror:")
+        {
+            return Err(line_error(
+                line_no,
+                format!(
+                    "`{}` is a global Snakemake directive that changes which rules run; the \
+                     importer cannot expand it safely — inline the included rules or import \
+                     the pipeline by hand",
+                    trimmed
+                ),
+            ));
+        }
+
+        return Err(line_error(
+            line_no,
+            format!(
+                "unsupported top-level construct `{trimmed}` — the importer only translates \
+                 `rule`, `localrules`, and `wildcard_constraints` blocks"
+            ),
+        ));
+    }
+
+    if rules.is_empty() {
+        return Ok((rules, warnings, wildcard_constraints));
+    }
+
+    let mut names = BTreeSet::new();
+    for rule in &rules {
+        if !names.insert(rule.name.clone()) {
+            return Err(line_error(
+                rule.line,
+                format!(
+                    "duplicate rule name '{}' — rule names must be unique",
+                    rule.name
+                ),
+            ));
+        }
+    }
+    for rule in &mut rules {
+        if localrules.contains(&rule.name) {
+            rule.localrule = true;
+        }
+    }
+    resolve_rule_outputs(&mut rules)?;
+    Ok((rules, warnings, wildcard_constraints))
+}
+
+/// Resolve `rules.X.output` references to the upstream rule's single output
+/// and add the dependency edge.
+fn resolve_rule_outputs(rules: &mut [ParsedRule]) -> Result<()> {
+    let outputs: BTreeMap<String, Vec<String>> = rules
+        .iter()
+        .map(|rule| {
+            let paths = rule
+                .outputs
+                .iter()
+                .filter_map(|path| match &path.source {
+                    PathSource::Literal(value) => Some(value.clone()),
+                    PathSource::RuleOutput(_) => None,
+                })
+                .collect();
+            (rule.name.clone(), paths)
+        })
+        .collect();
+
+    for rule in rules.iter_mut() {
+        let mut deps = Vec::new();
+        for path in &mut rule.inputs {
+            let upstream = match &path.source {
+                PathSource::RuleOutput(upstream) => upstream.clone(),
+                PathSource::Literal(_) => continue,
+            };
+            let upstream_outputs = outputs.get(&upstream).ok_or_else(|| {
+                line_error(
+                    rule.line,
+                    format!(
+                        "input references `rules.{upstream}.output`, but no rule named \
+                         '{upstream}' is defined in this source"
+                    ),
+                )
+            })?;
+            match upstream_outputs.as_slice() {
+                [] => {
+                    return Err(line_error(
+                        rule.line,
+                        format!(
+                            "input references `rules.{upstream}.output`, but rule '{upstream}' \
+                             declares no output the importer can map"
+                        ),
+                    ));
+                }
+                [single] => {
+                    path.source = PathSource::Literal(single.clone());
+                    if !deps.contains(&upstream) {
+                        deps.push(upstream.clone());
+                    }
+                }
+                _ => {
+                    return Err(line_error(
+                        rule.line,
+                        format!(
+                            "input references `rules.{upstream}.output`, but rule '{upstream}' \
+                             declares {} outputs — select one with `rules.{upstream}.output.<name>` \
+                             (named output selection is not supported; import this rule by hand)",
+                            upstream_outputs.len()
+                        ),
+                    ));
+                }
+            }
+        }
+        rule.depends_on = deps;
+    }
+    Ok(())
+}
+
+/// Parse one `rule NAME:` block starting at `start` (0-based line index).
+fn parse_rule(
+    lines: &[&str],
+    start: usize,
+    name: &str,
+    line_no: usize,
+    warnings: &mut Vec<String>,
+) -> Result<(ParsedRule, usize)> {
+    let mut rule = ParsedRule {
+        name: name.to_string(),
+        line: line_no,
+        ..Default::default()
+    };
+    let mut i = start + 1;
+    let mut directive: Option<String> = None;
+    let mut body_indent: Option<usize> = None;
+
+    while i < lines.len() {
+        let raw = lines[i];
+        let trimmed = strip_comment(raw).trim().to_string();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        // A new top-level construct ends this rule.
+        if !raw.starts_with(char::is_whitespace)
+            && (trimmed.starts_with("rule ")
+                || trimmed.starts_with("checkpoint ")
+                || trimmed.starts_with("include:")
+                || trimmed.starts_with("localrules:")
+                || trimmed.starts_with("wildcard_constraints:")
+                || trimmed.starts_with("configfile:")
+                || trimmed.starts_with("subworkflow ")
+                || trimmed.starts_with("module ")
+                || trimmed.starts_with("use rule ")
+                || trimmed.starts_with("ruleorder:")
+                || trimmed.starts_with("onsuccess:")
+                || trimmed.starts_with("onerror:"))
+        {
+            break;
+        }
+        let current_line = i + 1;
+
+        let indent = raw.len() - raw.trim_start().len();
+        let at_directive_indent = body_indent.is_none_or(|base| indent <= base);
+        let directive_name = at_directive_indent
+            .then(|| trimmed.split_once(':').map(|(head, _)| head.trim()))
+            .flatten()
+            .filter(|head| {
+                !head.is_empty() && head.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+
+        if let Some(head) = directive_name {
+            body_indent.get_or_insert(indent);
+            let rest = trimmed
+                .split_once(':')
+                .map(|(_, tail)| tail.trim())
+                .unwrap_or("");
+            match head {
+                "input" | "output" => {
+                    directive = Some(head.to_string());
+                    parse_path_line(&mut rule, head == "input", rest, current_line, warnings)?;
+                }
+                "threads" => {
+                    directive = None;
+                    rule.threads = Some(parse_u32(rest, current_line, "threads")?);
+                }
+                "resources" => {
+                    directive = Some("resources".into());
+                    parse_resources(rest, &mut rule, current_line)?;
+                }
+                "conda" => {
+                    directive = Some("conda".into());
+                    if !rest.is_empty() {
+                        rule.conda = Some(unquote(rest).to_string());
+                        directive = None;
+                    }
+                }
+                "container" | "singularity" => {
+                    directive = Some("container".into());
+                    if !rest.is_empty() {
+                        let value = unquote(rest)
+                            .trim_start_matches("docker://")
+                            .trim_start_matches("shub://")
+                            .to_string();
+                        rule.container = Some(value);
+                        directive = None;
+                    }
+                }
+                "envmodules" => {
+                    if rest.is_empty() {
+                        directive = Some("envmodules".into());
+                    } else {
+                        directive = None;
+                        rule.modules.extend(parse_modules(rest));
+                    }
+                }
+                "shell" => {
+                    directive = Some("shell".into());
+                    let (shell, next) = collect_shell(lines, i, rest, current_line)?;
+                    rule.shell = shell;
+                    i = next;
+                    continue;
+                }
+                "log" => {
+                    directive = Some("log".into());
+                    if !rest.is_empty() {
+                        rule.log = Some(unquote(rest).to_string());
+                        directive = None;
+                    }
+                }
+                "benchmark" => {
+                    directive = Some("benchmark".into());
+                    if !rest.is_empty() {
+                        rule.benchmark = Some(unquote(rest).to_string());
+                        directive = None;
+                        warnings.push(format!(
+                            "line {current_line}: `benchmark:` becomes a declared path, but \
+                             oxo-flow does not auto-populate benchmark files — the rule's \
+                             command must write it"
+                        ));
+                    }
+                }
+                "priority" => {
+                    directive = None;
+                    rule.priority = rest.parse::<i32>().map_err(|_| {
+                        line_error(
+                            current_line,
+                            format!("priority must be an integer, found `{rest}`"),
+                        )
+                    })?;
+                }
+                "retries" => {
+                    directive = None;
+                    rule.retries = Some(parse_u32(rest, current_line, "retries")?);
+                }
+                // Constructs that change what runs or how: hard errors.
+                "params"
+                | "run"
+                | "script"
+                | "notebook"
+                | "wildcard_constraints"
+                | "shadow"
+                | "group"
+                | "default_target"
+                | "handlers"
+                | "envvars_unsupported" => {
+                    return Err(line_error(
+                        current_line,
+                        format!(
+                            "Snakemake `{head}:` is not supported by the importer — it changes \
+                             the command or rule behavior in a way the deterministic subset \
+                             cannot preserve. Rewrite the rule with literal input/output paths \
+                             and a `shell:` body, or hand-port this rule"
+                        ),
+                    ));
+                }
+                "envvars" => {
+                    directive = Some("envvars".into());
+                    parse_envvars(rest, &mut rule, current_line)?;
+                }
+                other => {
+                    return Err(line_error(
+                        current_line,
+                        format!(
+                            "unsupported Snakemake directive `{other}:` — the importer refuses \
+                             to drop it silently; remove it or hand-port this rule"
+                        ),
+                    ));
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Continuation line of the current directive.
+        if let Some(ref dir) = directive {
+            match dir.as_str() {
+                "input" | "output" => {
+                    parse_path_line(&mut rule, dir == "input", &trimmed, current_line, warnings)?;
+                }
+                "resources" => parse_resources(&trimmed, &mut rule, current_line)?,
+                "conda" => {
+                    rule.conda = Some(unquote(&trimmed).to_string());
+                    directive = None;
+                }
+                "container" => {
+                    let value = unquote(&trimmed)
+                        .trim_start_matches("docker://")
+                        .trim_start_matches("shub://")
+                        .to_string();
+                    rule.container = Some(value);
+                    directive = None;
+                }
+                "log" => {
+                    rule.log = Some(unquote(&trimmed).to_string());
+                    directive = None;
+                }
+                "benchmark" => {
+                    rule.benchmark = Some(unquote(&trimmed).to_string());
+                    directive = None;
+                    warnings.push(format!(
+                        "line {current_line}: `benchmark:` becomes a declared path, but \
+                         oxo-flow does not auto-populate benchmark files — the rule's command \
+                         must write it"
+                    ));
+                }
+                "envvars" => parse_envvars(&trimmed, &mut rule, current_line)?,
+                "envmodules" => rule.modules.extend(parse_modules(&trimmed)),
+                _ => {
+                    return Err(line_error(
+                        current_line,
+                        format!("unexpected continuation line `{trimmed}`"),
+                    ));
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        return Err(line_error(
+            current_line,
+            format!(
+                "unsupported rule-body construct `{trimmed}` — the importer only supports \
+                 input/output, threads, resources, conda/container/envmodules, log/benchmark, \
+                 priority, retries, envvars, and shell"
+            ),
+        ));
+    }
+
+    // Sink rules (`rule all`) are targets, not processing rules; an oxo-flow
+    // rule with no command is rejected by validate (E022), so dropping the
+    // sink is the only honest translation.
+    if rule.shell.trim().is_empty() {
+        if rule.outputs.is_empty() && !rule.inputs.is_empty() {
+            rule.sink = true;
+            warnings.push(format!(
+                "rule '{}' (line {line_no}) is a target-only/sink rule with no command — \
+                 dropped from the generated workflow; its inputs still define the DAG leaves",
+                rule.name
+            ));
+        } else {
+            return Err(line_error(
+                line_no,
+                format!(
+                    "rule '{}' has no shell/run/script body the importer can translate — \
+                     refusing to emit a rule that would be skipped at run time",
+                    rule.name
+                ),
+            ));
+        }
+    }
+
+    for path in &rule.outputs {
+        let PathSource::Literal(value) = &path.source else {
+            continue;
+        };
+        if path.temp {
+            rule.temporary = true;
+            rule.temp_outputs.push(value.clone());
+        }
+        if path.protected {
+            rule.protected_outputs.push(value.clone());
+        }
+    }
+    for path in &rule.inputs {
+        if path.ancient
+            && let PathSource::Literal(value) = &path.source
+        {
+            rule.ancient.push(value.clone());
+        }
+    }
+
+    Ok((rule, i))
+}
+
+fn parse_u32(value: &str, line: usize, field: &str) -> Result<u32> {
+    value.parse::<u32>().map_err(|_| {
+        line_error(
+            line,
+            format!(
+                "{field} must be an integer literal, found `{value}` — dynamic {field} \
+                 expressions are not supported"
+            ),
+        )
+    })
+}
+
+/// Parse one input/output declaration (possibly a continuation line).
+fn parse_path_line(
+    rule: &mut ParsedRule,
+    input: bool,
+    text: &str,
+    line: usize,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    for item in split_top_level(text) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let (name, value) = match item.split_once('=') {
+            Some((name, value)) => (Some(name.trim().to_string()), value.trim()),
+            None => (None, item),
+        };
+        let mut path = parse_path_value(value, line)?;
+        path.name = name;
+        // `touch()` only asserts the file exists; mapping it to a regular
+        // output preserves that contract and `validate` still checks it.
+        if value.trim_start().starts_with("touch(") {
+            warnings.push(format!(
+                "line {line}: `touch(...)` marker on '{}' treated as a plain output — the \
+                 engine verifies declared outputs exist, which matches touch()'s contract",
+                rule.name
+            ));
+        }
+        if input {
+            rule.inputs.push(path);
+        } else {
+            rule.outputs.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn parse_path_value(value: &str, line: usize) -> Result<DeclaredPath> {
+    let value = value.trim();
+    let (mut inner, mut temp, mut protected, mut ancient) = (value, false, false, false);
+
+    loop {
+        if let Some(rest) = inner.strip_prefix("temp(") {
+            temp = true;
+            inner = rest.strip_suffix(')').unwrap_or(rest).trim();
+            continue;
+        }
+        if let Some(rest) = inner.strip_prefix("protected(") {
+            protected = true;
+            inner = rest.strip_suffix(')').unwrap_or(rest).trim();
+            continue;
+        }
+        if let Some(rest) = inner.strip_prefix("ancient(") {
+            ancient = true;
+            inner = rest.strip_suffix(')').unwrap_or(rest).trim();
+            continue;
+        }
+        if let Some(rest) = inner.strip_prefix("touch(") {
+            inner = rest.strip_suffix(')').unwrap_or(rest).trim();
+            continue;
+        }
+        break;
+    }
+
+    if let Some(rest) = inner.strip_prefix("directory(") {
+        let _ = rest;
+        return Err(line_error(
+            line,
+            "Snakemake `directory(...)` outputs/inputs are not supported — the engine has no \
+             directory-artifact contract; list the concrete files instead",
+        ));
+    }
+    if let Some(rest) = inner.strip_prefix("rules.") {
+        let Some((upstream, selector)) = rest.split_once(".output") else {
+            return Err(line_error(
+                line,
+                format!(
+                    "unsupported dynamic input/output `{value}` — only `rules.<name>.output` is \
+                     supported"
+                ),
+            ));
+        };
+        if !selector.trim().is_empty() {
+            return Err(line_error(
+                line,
+                format!(
+                    "named output selection `rules.{upstream}.output{selector}` is not \
+                     supported — reference the rule's single output (`rules.{upstream}.output`) \
+                     or hand-port this rule"
+                ),
+            ));
+        }
+        return Ok(DeclaredPath {
+            name: None,
+            source: PathSource::RuleOutput(upstream.to_string()),
+            temp,
+            protected: false,
+            ancient: false,
         });
+    }
+    if let Some(rest) = inner.strip_prefix("expand(") {
+        let pattern = expand_pattern(rest).ok_or_else(|| {
+            line_error(
+                line,
+                format!(
+                    "cannot parse `{value}` — expand() must contain one quoted path pattern \
+                     with a wildcard, e.g. expand(\"data/{{sample}}.txt\", sample=SAMPLES)"
+                ),
+            )
+        })?;
+        if !pattern.contains('{') {
+            return Err(line_error(
+                line,
+                format!(
+                    "expand() pattern '{pattern}' has no wildcard — the importer cannot tell \
+                     which values it produces; use a literal path"
+                ),
+            ));
+        }
+        return Ok(DeclaredPath {
+            name: None,
+            source: PathSource::Literal(pattern),
+            temp,
+            protected,
+            ancient,
+        });
+    }
+    if inner.starts_with("lambda")
+        || inner.starts_with("config[")
+        || inner.starts_with("config.")
+        || inner.starts_with("params.")
+        || inner.starts_with("wildcards.")
+        || inner.starts_with("checkpoints.")
+        || inner.starts_with("unpack(")
+        || inner.starts_with("collect(")
+        || inner.starts_with("lookup(")
+    {
+        return Err(line_error(
+            line,
+            format!(
+                "dynamic input/output `{value}` depends on Snakemake's runtime objects \
+                 (config/params/wildcards/checkpoints/lambda) — the importer cannot resolve it \
+                 deterministically; replace it with a literal pattern or import by hand"
+            ),
+        ));
+    }
+    let was_quoted = inner.starts_with('"') || inner.starts_with('\'');
+    let literal = unquote(inner);
+    if literal.is_empty()
+        || (!was_quoted
+            && literal
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+    {
+        return Err(line_error(
+            line,
+            format!(
+                "input/output entry `{value}` is not a quoted path — the importer only accepts \
+                 quoted literal patterns, expand(...), temp(...), protected(...), ancient(...), \
+                 and rules.<name>.output"
+            ),
+        ));
+    }
+    Ok(DeclaredPath {
+        name: None,
+        source: PathSource::Literal(literal.to_string()),
+        temp,
+        protected,
+        ancient,
+    })
+}
+
+/// Extract the single quoted pattern from `expand(...)`'s contents.
+fn expand_pattern(mut inner: &str) -> Option<String> {
+    inner = inner.strip_suffix(')').unwrap_or(inner).trim();
+    let quote = inner.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let rest = &inner[quote.len_utf8()..];
+    let end = rest.find(quote)?;
+    let pattern = &rest[..end];
+    let tail = rest[end + quote.len_utf8()..].trim();
+    // Anything after the first pattern other than the keyword arguments is
+    // an expand() form (a list of patterns) we cannot map faithfully.
+    if !tail.is_empty() && !tail.starts_with(',') {
+        return None;
+    }
+    Some(pattern.to_string())
+}
+
+fn parse_resources(text: &str, rule: &mut ParsedRule, line: usize) -> Result<()> {
+    for part in split_top_level(text) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = part.split_once('=') else {
+            return Err(line_error(
+                line,
+                format!("cannot parse resource `{part}` — expected `<name>=<value>`"),
+            ));
+        };
+        let key = key.trim();
+        let value = unquote(value.trim());
+        match key {
+            "mem_mb" => {
+                let mb = value.parse::<u64>().map_err(|_| {
+                    line_error(
+                        line,
+                        format!("resources.mem_mb must be an integer, found `{value}`"),
+                    )
+                })?;
+                rule.memory = Some(format!("{mb}M"));
+            }
+            "mem_gb" => {
+                let gb = value.parse::<u64>().map_err(|_| {
+                    line_error(
+                        line,
+                        format!("resources.mem_gb must be an integer, found `{value}`"),
+                    )
+                })?;
+                rule.memory = Some(format!("{gb}G"));
+            }
+            "time" | "runtime" => rule.time = Some(value.to_string()),
+            "gpu" => {
+                rule.gpu = Some(value.parse::<u32>().map_err(|_| {
+                    line_error(
+                        line,
+                        format!("resources.gpu must be an integer, found `{value}`"),
+                    )
+                })?);
+            }
+            "disk_mb" => {
+                let mb = value.parse::<u64>().map_err(|_| {
+                    line_error(
+                        line,
+                        format!("resources.disk_mb must be an integer, found `{value}`"),
+                    )
+                })?;
+                rule.disk = Some(format!("{mb}M"));
+            }
+            other => {
+                return Err(line_error(
+                    line,
+                    format!(
+                        "unsupported Snakemake resource `{other}` — the importer cannot honor \
+                         it (known: mem_mb, mem_gb, time/runtime, gpu, disk_mb); remove it or \
+                         hand-port this rule"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse simple `NAME: "value"` envvar assignments (Snakemake 7+ `envvars:`).
+fn parse_envvars(text: &str, rule: &mut ParsedRule, line: usize) -> Result<()> {
+    for part in split_top_level(text) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = part.split_once(':') else {
+            return Err(line_error(
+                line,
+                format!("cannot parse envvars entry `{part}` — expected `<NAME>: <value>`"),
+            ));
+        };
+        rule.envvars
+            .insert(name.trim().to_string(), unquote(value.trim()).to_string());
+    }
+    Ok(())
+}
+
+/// Collect a `shell:` body, including multi-line triple-quoted forms.
+fn collect_shell(
+    lines: &[&str],
+    start: usize,
+    first: &str,
+    line: usize,
+) -> Result<(String, usize)> {
+    let first = first.trim();
+    // `shell:` with the body on the following line(s) is the common
+    // Snakemake style; skip blank/comment lines to the first body line.
+    if first.is_empty() {
+        let mut j = start + 1;
+        while j < lines.len() && strip_comment(lines[j]).trim().is_empty() {
+            j += 1;
+        }
+        if j >= lines.len() {
+            return Err(line_error(
+                line + 1,
+                "shell: has no body — a Snakemake shell directive must be a quoted string",
+            ));
+        }
+        return collect_shell(lines, j, strip_comment(lines[j]).trim(), j + 1);
+    }
+    let (delim, prefix) = if first.starts_with("\"\"\"") {
+        ("\"\"\"", "\"\"\"")
+    } else if first.starts_with("'''") {
+        ("'''", "'''")
+    } else if first.starts_with('"') {
+        ("\"", "\"")
+    } else if first.starts_with('\'') {
+        ("'", "'")
+    } else if first.is_empty() {
+        return Err(line_error(
+            line,
+            "shell: has no body — a Snakemake shell directive must be a quoted string",
+        ));
+    } else {
+        return Err(line_error(
+            line,
+            format!("shell: body must be a quoted string, found `{first}`"),
+        ));
+    };
+
+    if delim.len() == 1 {
+        let rest = &first[prefix.len()..];
+        let Some(end) = find_unescaped(rest, delim.chars().next().unwrap()) else {
+            return Err(line_error(
+                line,
+                "unterminated shell string — use triple quotes for multi-line bodies",
+            ));
+        };
+        let body = rest[..end].replace("\\\"", "\"").replace("\\'", "'");
+        return Ok((body, start + 1));
+    }
+
+    let after = &first[prefix.len()..];
+    if let Some(end) = after.find(delim) {
+        return Ok((after[..end].to_string(), start + 1));
+    }
+    let mut body = String::new();
+    if !after.trim().is_empty() {
+        body.push_str(after);
+        body.push('\n');
+    }
+    let mut j = start + 1;
+    while j < lines.len() {
+        let trimmed = lines[j].trim();
+        if let Some(end) = trimmed.find(delim) {
+            body.push_str(&trimmed[..end]);
+            return Ok((body.trim().to_string(), j + 1));
+        }
+        body.push_str(lines[j]);
+        body.push('\n');
+        j += 1;
+    }
+    Err(line_error(
+        line,
+        "unterminated triple-quoted shell body — the importer cannot find its end",
+    ))
+}
+
+fn find_unescaped(text: &str, needle: char) -> Option<usize> {
+    let mut escaped = false;
+    for (idx, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == needle {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Emit the generated workflow and translate shell placeholders.
+fn emit_workflow(
+    rules: &[ParsedRule],
+    wildcard_constraints: &BTreeMap<String, String>,
+) -> Result<(String, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let active: Vec<&ParsedRule> = rules.iter().filter(|rule| !rule.sink).collect();
+    if active.is_empty() {
+        return Err(config_error(
+            "the source contains only sink rules — there is no command to translate",
+        ));
     }
 
     let mut toml = String::new();
     toml.push_str("[workflow]\n");
-    let wf_name = rules
+    let wf_name = active
         .first()
-        .map(|r| r.name.to_lowercase())
+        .map(|rule| rule.name.to_lowercase())
         .unwrap_or_else(|| "imported_pipeline".into());
-    toml.push_str(&format!("name = \"{wf_name}_pipeline\"\n"));
+    toml.push_str(&format!(
+        "name = \"{}_pipeline\"\n",
+        escape_toml_basic(&wf_name)
+    ));
     toml.push_str("version = \"0.1.0\"\n\n");
-
     toml.push_str("[defaults]\nthreads = 1\n\n");
+    if !wildcard_constraints.is_empty() {
+        toml.push_str("[wildcard_constraints]\n");
+        for (name, regex) in wildcard_constraints {
+            toml.push_str(&format!(
+                "\"{}\" = \"{}\"\n",
+                escape_toml_basic(name),
+                escape_toml_basic(regex)
+            ));
+        }
+        toml.push('\n');
+    }
 
-    // Only emit the catalog entries an inferred contract actually uses: a
-    // rule whose type inference misses must not inherit a fabricated
-    // `[types.*]` catalog unrelated to the source workflow.
-    let inferred: Vec<(Option<&'static str>, Option<&'static str>)> = rules
+    let inferred: Vec<(Option<&'static str>, Option<&'static str>)> = active
         .iter()
-        .map(|r| infer_bio_types(&r.name, &r.inputs, &r.outputs))
+        .map(|rule| {
+            let inputs = literal_paths(&rule.inputs);
+            let outputs = literal_paths(&rule.outputs);
+            infer_bio_types(&rule.name, &inputs, &outputs)
+        })
         .collect();
-    let mut used_types = std::collections::BTreeSet::new();
+    let mut used_types = BTreeSet::new();
     for (in_type, out_type) in &inferred {
         used_types.extend(in_type.iter().chain(out_type.iter()).copied());
     }
@@ -65,466 +1088,620 @@ pub fn transpile_snakemake(source: &str) -> Result<String> {
         );
     }
 
-    for (index, r) in rules.iter().enumerate() {
+    for (index, rule) in active.iter().enumerate() {
+        let shell = translate_shell(rule)?;
         toml.push_str("[[rules]]\n");
-        toml.push_str(&format!("name = \"{}\"\n", r.name));
+        toml.push_str(&format!("name = \"{}\"\n", escape_toml_basic(&rule.name)));
+        if !rule.depends_on.is_empty() {
+            let deps = rule
+                .depends_on
+                .iter()
+                .map(|dep| format!("\"{}\"", escape_toml_basic(dep)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("depends_on = [{deps}]\n"));
+        }
 
-        // Canonical resource form (W025): `threads`/`memory` belong under
-        // `resources`, never at rule level. A rule without `threads:`
-        // inherits `[defaults] threads = 1` instead of restating it.
         let mut res_fields = Vec::new();
-        if let Some(threads) = r.threads {
+        if let Some(threads) = rule.threads {
             res_fields.push(format!("threads = {threads}"));
         }
-        if let Some(mem) = &r.memory {
-            let norm_mem = normalize_memory(mem);
-            res_fields.push(format!("memory = \"{norm_mem}\""));
+        if let Some(memory) = &rule.memory {
+            res_fields.push(format!(
+                "memory = \"{}\"",
+                escape_toml_basic(&normalize_memory(memory))
+            ));
         }
-        if let Some(time) = &r.time {
-            res_fields.push(format!("time_limit = \"{time}\""));
+        if let Some(time) = &rule.time {
+            res_fields.push(format!("time_limit = \"{}\"", escape_toml_basic(time)));
+        }
+        if let Some(gpu) = rule.gpu {
+            res_fields.push(format!("gpu = {gpu}"));
+        }
+        if let Some(disk) = &rule.disk {
+            res_fields.push(format!("disk = \"{}\"", escape_toml_basic(disk)));
         }
         if !res_fields.is_empty() {
             toml.push_str(&format!("resources = {{ {} }}\n", res_fields.join(", ")));
         }
 
-        if let Some(container) = &r.container {
-            toml.push_str(&format!("environment = {{ docker = \"{container}\" }}\n"));
-        } else if let Some(conda) = &r.conda {
-            toml.push_str(&format!("environment = {{ conda = \"{conda}\" }}\n"));
+        if let Some(container) = &rule.container {
+            if rule.conda.is_some() {
+                warnings.push(format!(
+                    "rule '{}' declares both container: and conda: — the container wins \
+                     (matching Snakemake's runtime choice); the conda fallback is not emitted",
+                    rule.name
+                ));
+            }
+            if !rule.modules.is_empty() {
+                return Err(line_error(
+                    rule.line,
+                    format!(
+                        "rule '{}' declares both container: and envmodules: — the importer \
+                         cannot represent both faithfully; keep one backend",
+                        rule.name
+                    ),
+                ));
+            }
+            toml.push_str(&format!(
+                "environment = {{ docker = \"{}\" }}\n",
+                escape_toml_basic(container)
+            ));
+        } else if let Some(conda) = &rule.conda {
+            if !rule.modules.is_empty() {
+                return Err(line_error(
+                    rule.line,
+                    format!(
+                        "rule '{}' declares both conda: and envmodules: — keep one environment \
+                         backend",
+                        rule.name
+                    ),
+                ));
+            }
+            toml.push_str(&format!(
+                "environment = {{ conda = \"{}\" }}\n",
+                escape_toml_basic(conda)
+            ));
+        } else if !rule.modules.is_empty() {
+            let modules = rule
+                .modules
+                .iter()
+                .map(|module| format!("\"{}\"", escape_toml_basic(module)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("environment = {{ modules = [{modules}] }}\n"));
         }
 
-        if r.temporary {
+        let envvars: Vec<(String, String)> = rule
+            .envvars
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        if !envvars.is_empty() {
+            let entries = envvars
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "\"{}\" = \"{}\"",
+                        escape_toml_basic(key),
+                        escape_toml_basic(value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("envvars = {{ {entries} }}\n"));
+        }
+
+        if let Some(log) = &rule.log {
+            toml.push_str(&format!("log = \"{}\"\n", escape_toml_basic(log)));
+        }
+        if let Some(benchmark) = &rule.benchmark {
+            toml.push_str(&format!(
+                "benchmark = \"{}\"\n",
+                escape_toml_basic(benchmark)
+            ));
+        }
+        if rule.priority != 0 {
+            toml.push_str(&format!("priority = {}\n", rule.priority));
+        }
+        if let Some(retries) = rule.retries {
+            toml.push_str(&format!("retries = {retries}\n"));
+        }
+        if rule.localrule {
+            toml.push_str("localrule = true\n");
+        }
+        if rule.temporary {
             toml.push_str("temporary = true\n");
         }
-        if !r.temp_outputs.is_empty() {
-            let t_str = r
-                .temp_outputs
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(", ");
-            toml.push_str(&format!("temp_output = [{t_str}]\n"));
+        if !rule.temp_outputs.is_empty() {
+            toml.push_str(&format!(
+                "temp_output = [{}]\n",
+                quote_list(&rule.temp_outputs)
+            ));
         }
-        if !r.protected_outputs.is_empty() {
-            let p_str = r
-                .protected_outputs
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(", ");
-            toml.push_str(&format!("protected_output = [{p_str}]\n"));
+        if !rule.protected_outputs.is_empty() {
+            toml.push_str(&format!(
+                "protected_output = [{}]\n",
+                quote_list(&rule.protected_outputs)
+            ));
+        }
+        if !rule.ancient.is_empty() {
+            toml.push_str(&format!("ancient = [{}]\n", quote_list(&rule.ancient)));
         }
 
-        // Snakemake sink rules (`rule all` aggregating final targets) have no
-        // output, and pure-source rules may have no input; oxo-flow validates
-        // both shapes, so emit the keys only when present instead of
-        // fabricating {sample}-templated placeholders that fail E003.
-        if !r.inputs.is_empty() {
-            let in_str = r
-                .inputs
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(", ");
-            toml.push_str(&format!("input = [{in_str}]\n"));
+        let inputs = literal_paths(&rule.inputs);
+        if !inputs.is_empty() {
+            toml.push_str(&format!("input = [{}]\n", quote_list(&inputs)));
         }
-
-        if !r.outputs.is_empty() {
-            let out_str = r
-                .outputs
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(", ");
-            toml.push_str(&format!("output = [{out_str}]\n"));
+        let outputs = literal_paths(&rule.outputs);
+        if !outputs.is_empty() {
+            toml.push_str(&format!("output = [{}]\n", quote_list(&outputs)));
         }
+        toml.push_str(&render_shell(&shell));
 
-        // Shell script
-        let cleaned_shell = r.shell.trim();
-        if !cleaned_shell.is_empty() {
-            if cleaned_shell.contains('\n') {
-                toml.push_str("shell = '''\n");
-                toml.push_str(cleaned_shell);
-                toml.push_str("\n'''\n");
-            } else {
-                let escaped = cleaned_shell.replace("\"", "\\\"");
-                toml.push_str(&format!("shell = \"{escaped}\"\n"));
-            }
-        }
-
-        // Inferred biological types
         let (in_type, out_type) = inferred[index];
         push_types_contract(
             &mut toml,
-            in_type.zip(r.inputs.first().map(String::as_str)),
-            out_type.zip(r.outputs.first().map(String::as_str)),
+            in_type.and_then(|ty| inputs.first().map(|channel| (channel.as_str(), ty))),
+            out_type.and_then(|ty| outputs.first().map(|channel| (channel.as_str(), ty))),
         );
         toml.push('\n');
     }
-    Ok(toml)
+
+    Ok((toml, warnings))
 }
 
-/// Parse all `rule <name>:` blocks from Snakemake source.
-pub fn parse_snakemake_rules(source: &str) -> Result<Vec<SnakemakeRule>> {
-    let mut rules = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("rule ") && trimmed.ends_with(':') {
-            let name = trimmed
-                .trim_start_matches("rule ")
-                .trim_end_matches(':')
-                .trim()
-                .to_string();
-
-            let mut rule = SnakemakeRule {
-                name,
-                ..Default::default()
-            };
-
-            i += 1;
-            let mut current_directive: Option<String> = None;
-            let mut shell_lines = Vec::new();
-            let mut in_triple_shell = false;
-
-            while i < lines.len() {
-                let next_line = lines[i];
-                let next_trimmed = next_line.trim();
-
-                // Check if a new top-level rule starts. Skipped while inside
-                // a triple-quoted shell: a Snakefile line like
-                // `rule book:` inside a heredoc is shell text, and breaking
-                // on it silently truncated the rule mid-body.
-                if !in_triple_shell
-                    && (next_line.starts_with("rule ") || next_line.starts_with("checkpoint "))
-                    && next_trimmed.ends_with(':')
-                {
-                    break;
-                }
-
-                if in_triple_shell {
-                    if next_trimmed.contains("\"\"\"") || next_trimmed.contains("'''") {
-                        let end_part = next_trimmed.split("\"\"\"").next().unwrap_or(next_trimmed);
-                        let end_part = end_part.split("'''").next().unwrap_or(end_part);
-                        if !end_part.trim().is_empty() {
-                            shell_lines.push(end_part);
-                        }
-                        in_triple_shell = false;
-                    } else {
-                        shell_lines.push(next_line);
-                    }
-                    i += 1;
-                    continue;
-                }
-
-                if next_trimmed.starts_with("input:") {
-                    current_directive = Some("input".into());
-                    let content = next_trimmed.trim_start_matches("input:").trim();
-                    extract_paths_from_line(content, &mut rule.inputs);
-                } else if next_trimmed.starts_with("output:") {
-                    current_directive = Some("output".into());
-                    let content = next_trimmed.trim_start_matches("output:").trim();
-                    if content.contains("temp(") {
-                        rule.temporary = true;
-                    }
-                    extract_output_paths(
-                        content,
-                        &mut rule.outputs,
-                        &mut rule.temp_outputs,
-                        &mut rule.protected_outputs,
-                    );
-                } else if next_trimmed.starts_with("threads:") {
-                    current_directive = None;
-                    let val = next_trimmed.trim_start_matches("threads:").trim();
-                    if let Ok(t) = val.parse::<u32>() {
-                        rule.threads = Some(t);
-                    }
-                } else if next_trimmed.starts_with("conda:") {
-                    let val = next_trimmed
-                        .trim_start_matches("conda:")
-                        .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'');
-                    if val.is_empty() {
-                        current_directive = Some("conda".into());
-                    } else {
-                        rule.conda = Some(val.to_string());
-                        current_directive = None;
-                    }
-                } else if next_trimmed.starts_with("container:")
-                    || next_trimmed.starts_with("singularity:")
-                {
-                    let val = next_trimmed
-                        .trim_start_matches("container:")
-                        .trim_start_matches("singularity:")
-                        .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'');
-                    if val.is_empty() {
-                        current_directive = Some("container".into());
-                    } else {
-                        let clean = val
-                            .trim_start_matches("docker://")
-                            .trim_start_matches("shub://");
-                        rule.container = Some(clean.to_string());
-                        current_directive = None;
-                    }
-                } else if next_trimmed.starts_with("resources:") {
-                    current_directive = Some("resources".into());
-                    let content = next_trimmed.trim_start_matches("resources:").trim();
-                    parse_resources_line(content, &mut rule);
-                } else if next_trimmed.starts_with("shell:") {
-                    current_directive = Some("shell".into());
-                    let content = next_trimmed.trim_start_matches("shell:").trim();
-                    if content.contains("\"\"\"") || content.contains("'''") {
-                        in_triple_shell = true;
-                        let after = if content.contains("\"\"\"") {
-                            content.split_once("\"\"\"").map(|x| x.1).unwrap_or("")
-                        } else {
-                            content.split_once("'''").map(|x| x.1).unwrap_or("")
-                        };
-                        if !after.trim().is_empty() {
-                            shell_lines.push(after);
-                        }
-                    } else if !content.is_empty() {
-                        shell_lines.push(content.trim_matches('"').trim_matches('\''));
-                    }
-                } else if !next_trimmed.is_empty() {
-                    // Continuation line of current directive
-                    if let Some(ref dir) = current_directive {
-                        match dir.as_str() {
-                            "input" => extract_paths_from_line(next_trimmed, &mut rule.inputs),
-                            "output" => {
-                                if next_trimmed.contains("temp(") {
-                                    rule.temporary = true;
-                                }
-                                extract_output_paths(
-                                    next_trimmed,
-                                    &mut rule.outputs,
-                                    &mut rule.temp_outputs,
-                                    &mut rule.protected_outputs,
-                                );
-                            }
-                            "resources" => parse_resources_line(next_trimmed, &mut rule),
-                            "conda" => {
-                                let val = next_trimmed.trim_matches('"').trim_matches('\'');
-                                if !val.is_empty() {
-                                    rule.conda = Some(val.to_string());
-                                    current_directive = None;
-                                }
-                            }
-                            "container" => {
-                                let val = next_trimmed
-                                    .trim_matches('"')
-                                    .trim_matches('\'')
-                                    .trim_start_matches("docker://")
-                                    .trim_start_matches("shub://");
-                                if !val.is_empty() {
-                                    rule.container = Some(val.to_string());
-                                    current_directive = None;
-                                }
-                            }
-                            "shell" => {
-                                if next_trimmed == "\"\"\"" || next_trimmed == "'''" {
-                                    in_triple_shell = true;
-                                } else if next_trimmed.starts_with("\"\"\"")
-                                    || next_trimmed.starts_with("'''")
-                                {
-                                    in_triple_shell = true;
-                                    let sub = next_trimmed
-                                        .trim_start_matches("\"\"\"")
-                                        .trim_start_matches("'''");
-                                    if !sub.is_empty() {
-                                        shell_lines.push(sub);
-                                    }
-                                } else {
-                                    shell_lines.push(next_line);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                i += 1;
-            }
-
-            let raw_shell = shell_lines.join("\n");
-            rule.shell = translate_snakemake_shell(&raw_shell);
-            rules.push(rule);
-        } else {
-            i += 1;
-        }
-    }
-
-    Ok(rules)
+fn literal_paths(paths: &[DeclaredPath]) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|path| match &path.source {
+            PathSource::Literal(value) => Some(value.clone()),
+            PathSource::RuleOutput(_) => None,
+        })
+        .collect()
 }
 
-/// Snakemake `expand("pattern/{wildcard}", values=[...])` carries the path
-/// pattern in its quoted arguments. Extract those patterns and remove the
-/// whole call before comma tokenization, whose argument separators would
-/// otherwise splice tokens mid-string and corrupt the generated TOML.
-fn strip_expand_calls(line: &str, collected: &mut Vec<String>) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(pos) = rest.find("expand(") {
-        result.push_str(&rest[..pos]);
-        let after_open = &rest[pos + "expand(".len()..];
-        let mut depth = 1usize;
-        let mut close = None;
-        for (idx, ch) in after_open.char_indices() {
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close = Some(idx);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(close) = close else {
-            result.push_str("expand(");
-            result.push_str(after_open);
+fn quote_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", escape_toml_basic(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Translate Snakemake shell placeholders into engine placeholders.
+///
+/// Only recognized Snakemake namespaces are touched; bash `${VAR}`, brace
+/// expansion, and awk `{print ...}` text pass through unchanged.
+fn translate_shell(rule: &ParsedRule) -> Result<String> {
+    let input_names: BTreeMap<&str, usize> = rule
+        .inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, path)| path.name.as_deref().map(|name| (name, index)))
+        .collect();
+    let output_names: BTreeMap<&str, usize> = rule
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, path)| path.name.as_deref().map(|name| (name, index)))
+        .collect();
+
+    let mut out = String::with_capacity(rule.shell.len());
+    let mut rest = rule.shell.as_str();
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
             rest = "";
             break;
         };
-        let inner = &after_open[..close];
-        let mut chars = inner.char_indices();
-        while let Some((start, ch)) = chars.next() {
-            if ch != '"' && ch != '\'' {
-                continue;
+        let token = &after[..close];
+        match translate_token(token, &input_names, &output_names, rule)? {
+            Some(replacement) => out.push_str(&replacement),
+            None => {
+                out.push('{');
+                out.push_str(token);
+                out.push('}');
             }
-            let Some(stop) = inner[start + ch.len_utf8()..].find(ch) else {
-                break;
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn translate_token(
+    token: &str,
+    input_names: &BTreeMap<&str, usize>,
+    output_names: &BTreeMap<&str, usize>,
+    rule: &ParsedRule,
+) -> Result<Option<String>> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let (head, tail) = token
+        .split_once('.')
+        .map_or((token, None), |(head, tail)| (head, Some(tail)));
+    match head {
+        "input" | "output" => {
+            let names = if head == "input" {
+                input_names
+            } else {
+                output_names
             };
-            let pattern = &inner[start + ch.len_utf8()..start + ch.len_utf8() + stop];
-            if pattern.contains('/') || pattern.contains('{') || pattern.contains('.') {
-                collected.push(pattern.to_string());
+            let Some(tail) = tail else {
+                return Ok(Some(format!("{{{head}}}")));
+            };
+            if tail.chars().all(|c| c.is_ascii_digit()) {
+                return Ok(Some(format!("{{{head}[{tail}]}}")));
             }
-            let closing = start + ch.len_utf8() + stop;
-            for (idx, _) in chars.by_ref() {
-                if idx > closing {
-                    break;
-                }
-            }
+            let Some(index) = names.get(tail) else {
+                return Err(line_error(
+                    rule.line,
+                    format!(
+                        "rule '{}' shell references `{{{head}.{tail}}}`, but no {head} is named \
+                         '{tail}' — name the {head} explicitly or use positional `{{{head}}}`",
+                        rule.name
+                    ),
+                ));
+            };
+            Ok(Some(if *index == 0 {
+                format!("{{{head}}}")
+            } else {
+                format!("{{{head}[{index}]}}")
+            }))
         }
-        rest = &after_open[close + 1..];
+        "wildcards" => match tail {
+            Some(name) if !name.is_empty() => Ok(Some(format!("{{{name}}}"))),
+            _ => Err(line_error(
+                rule.line,
+                format!(
+                    "rule '{}' shell references `{{wildcards}}` without a wildcard name — \
+                     use `{{wildcards.<name>}}`",
+                    rule.name
+                ),
+            )),
+        },
+        "threads" if tail.is_none() => Ok(Some("{threads}".into())),
+        "log" => {
+            if rule.log.is_none() {
+                return Err(line_error(
+                    rule.line,
+                    format!(
+                        "rule '{}' shell references `{{log}}`, but the rule declares no log: \
+                         path",
+                        rule.name
+                    ),
+                ));
+            }
+            Ok(Some("{log}".into()))
+        }
+        "benchmark" => {
+            if rule.benchmark.is_none() {
+                return Err(line_error(
+                    rule.line,
+                    format!(
+                        "rule '{}' shell references `{{benchmark}}`, but the rule declares no \
+                         benchmark: path",
+                        rule.name
+                    ),
+                ));
+            }
+            Ok(Some("{benchmark}".into()))
+        }
+        "params" | "resources" | "rule" | "snakemake" | "checkpoints" => Err(line_error(
+            rule.line,
+            format!(
+                "rule '{}' shell references `{{{token}}}`, which depends on Snakemake's \
+                     runtime object model — the importer cannot resolve it. Inline the value, \
+                     switch to an engine placeholder ({{config.*}}, {{input}}, {{output}}), or \
+                     hand-port this rule",
+                rule.name
+            ),
+        )),
+        _ => {
+            // Unknown brace text belongs to the shell (awk, brace expansion).
+            Ok(None)
+        }
     }
-    result.push_str(rest);
-    result
 }
 
-fn extract_paths_from_line(line: &str, target: &mut Vec<String>) {
-    let line = strip_expand_calls(line, target);
-    for token in line.split(',') {
-        let part = token.trim();
-        if part.is_empty() {
+fn split_top_level(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
             continue;
         }
-        let val = if let Some((_, rhs)) = part.split_once('=') {
-            rhs.trim()
-        } else {
-            part
-        };
-        let clean = val
-            .trim_start_matches("temp(")
-            .trim_start_matches("protected(")
-            .trim_end_matches(')')
-            .trim_matches('"')
-            .trim_matches('\'')
-            .trim_matches('[');
-        if !clean.is_empty() && (clean.contains('/') || clean.contains('{') || clean.contains('.'))
-        {
-            target.push(clean.to_string());
-        }
-    }
-}
-
-fn parse_resources_line(line: &str, rule: &mut SnakemakeRule) {
-    for part in line.split(',') {
-        let trimmed = part.trim();
-        if let Some((k, v)) = trimmed.split_once('=') {
-            let key = k.trim();
-            let val = v.trim().trim_matches('"').trim_matches('\'');
-            if key == "mem_mb" {
-                if let Ok(mb) = val.parse::<u64>() {
-                    let gb = mb.div_ceil(1024);
-                    rule.memory = Some(format!("{gb}GB"));
-                }
-            } else if key == "time" || key == "runtime" {
-                rule.time = Some(val.to_string());
+        if let Some(q) = quote {
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
             }
-        }
-    }
-}
-
-fn extract_output_paths(
-    line: &str,
-    outputs: &mut Vec<String>,
-    temp: &mut Vec<String>,
-    prot: &mut Vec<String>,
-) {
-    let is_temp_call = line.contains("temp(");
-    let mut expand_patterns = Vec::new();
-    let line = strip_expand_calls(line, &mut expand_patterns);
-    for pattern in &expand_patterns {
-        outputs.push(pattern.clone());
-        if is_temp_call {
-            temp.push(pattern.clone());
-        }
-    }
-    for token in line.split(',') {
-        let part = token.trim();
-        if part.is_empty() {
             continue;
         }
-        let is_temp = part.contains("temp(");
-        let is_prot = part.contains("protected(");
-        let val = if let Some((_, rhs)) = part.split_once('=') {
-            rhs.trim()
-        } else {
-            part
-        };
-        let clean = val
-            .trim_start_matches("temp(")
-            .trim_start_matches("protected(")
-            .trim_end_matches(')')
-            .trim_matches(['"', '\''])
-            .trim_matches('[');
-        if !clean.is_empty() && (clean.contains('/') || clean.contains('{') || clean.contains('.'))
-        {
-            outputs.push(clean.to_string());
-            if is_temp {
-                temp.push(clean.to_string());
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&text[start..idx]);
+                start = idx + 1;
             }
-            if is_prot {
-                prot.push(clean.to_string());
-            }
+            _ => {}
         }
     }
+    parts.push(&text[start..]);
+    parts
 }
 
-fn translate_snakemake_shell(shell: &str) -> String {
-    let mut s = shell.trim().to_string();
-    let is_triple_dq = s.starts_with("\"\"\"") && s.ends_with("\"\"\"");
-    let is_triple_sq = s.starts_with("'''") && s.ends_with("'''");
-    if (is_triple_dq || is_triple_sq) && s.len() >= 6 {
-        s = s[3..s.len() - 3].trim().to_string();
-    } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-        s = s[1..s.len() - 1].trim().to_string();
+/// Parse an `envmodules:` list (`"a/1.0", "b/2.0"` or `"a/1.0 b/2.0"`).
+fn parse_modules(text: &str) -> Vec<String> {
+    unquote(text)
+        .split([',', ' '])
+        .map(str::trim)
+        .map(unquote)
+        .filter(|module| !module.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn split_list(text: &str) -> Vec<String> {
+    text.split([',', ' '])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '#' => return &line[..idx],
+            _ => {}
+        }
     }
-    s = s.replace("{wildcards.sample}", "{sample}");
-    s = s.replace("{input.reads}", "{input}");
-    s = s.replace("{input.r1}", "{input[0]}");
-    s = s.replace("{input.r2}", "{input[1]}");
-    s = s.replace("{output.bam}", "{output[0]}");
-    s = s.replace("{output.bai}", "{output[1]}");
-    s.trim().to_string()
+    line
+}
+
+fn unquote(value: &str) -> &str {
+    value.trim().trim_matches('"').trim_matches('\'').trim()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::WorkflowConfig;
+
+    #[test]
+    fn supported_fields_map_exactly() {
+        let source = r#"
+wildcard_constraints:
+    sample="[A-Za-z0-9_]+"
+
+localrules: qc
+
+rule qc:
+    input:
+        "raw/{sample}.fastq"
+    output:
+        "qc/{sample}.txt"
+    threads: 4
+    resources:
+        mem_mb=8000,
+        runtime="2h",
+        gpu=1,
+        disk_mb=1024
+    log:
+        "logs/{sample}.log"
+    benchmark:
+        "bench/{sample}.tsv"
+    priority: 7
+    retries: 2
+    envvars:
+        FOO: "bar"
+    envmodules:
+        "fastqc/0.12.1"
+    shell:
+        "fastqc {input} > {output} 2> {log}"
+"#;
+        let (toml, warnings) =
+            transpile_snakemake_with_warnings(source).expect("supported fields must transpile");
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.contains("benchmark:")),
+            "only the benchmark warning is expected: {warnings:?}"
+        );
+        let config = WorkflowConfig::parse(&toml).expect("generated TOML must parse");
+        assert_eq!(
+            config
+                .wildcard_constraints
+                .get("sample")
+                .map(String::as_str),
+            Some("[A-Za-z0-9_]+")
+        );
+        let rule = &config.rules[0];
+        assert_eq!(rule.name, "qc");
+        assert_eq!(rule.resources.threads, 4);
+        assert_eq!(rule.resources.memory.as_deref(), Some("8000M"));
+        assert_eq!(rule.resources.time_limit.as_deref(), Some("2h"));
+        assert_eq!(rule.resources.gpu, Some(1));
+        assert_eq!(rule.resources.disk.as_deref(), Some("1024M"));
+        assert_eq!(rule.log.as_deref(), Some("logs/{sample}.log"));
+        assert_eq!(rule.benchmark.as_deref(), Some("bench/{sample}.tsv"));
+        assert_eq!(rule.priority, 7);
+        assert_eq!(rule.retries, 2);
+        assert!(rule.localrule);
+        assert_eq!(rule.envvars.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(rule.environment.modules, vec!["fastqc/0.12.1".to_string()]);
+    }
+
+    #[test]
+    fn unsupported_constructs_are_named_hard_errors() {
+        let cases = [
+            (
+                "rule x:\n    input:\n        \"a/{s}.txt\"\n    params:\n        p=1\n    output:\n        \"b/{s}.txt\"\n    shell:\n        \"cp {input} {output}\"\n",
+                "params:",
+            ),
+            (
+                "rule x:\n    input:\n        \"a/{s}.txt\"\n    output:\n        \"b/{s}.txt\"\n    run:\n        pass\n",
+                "run:",
+            ),
+            (
+                "rule x:\n    input:\n        \"a/{s}.txt\"\n    output:\n        \"b/{s}.txt\"\n    script:\n        \"scripts/x.py\"\n",
+                "script:",
+            ),
+            ("include: \"rules/other.smk\"\n", "include:"),
+            (
+                "rule x:\n    input:\n        \"a/{s}.txt\"\n    output:\n        directory(\"out\")\n    shell:\n        \"cp {input} out\"\n",
+                "directory",
+            ),
+            (
+                "rule x:\n    input:\n        lambda w: f\"a/{w.s}.txt\"\n    output:\n        \"b/{s}.txt\"\n    shell:\n        \"cp {input} {output}\"\n",
+                "lambda",
+            ),
+            (
+                "rule x:\n    input:\n        \"a/{s}.txt\"\n    output:\n        \"b/{s}.txt\"\n    shadow: \"minimal\"\n    shell:\n        \"cp {input} {output}\"\n",
+                "shadow",
+            ),
+        ];
+        for (source, marker) in cases {
+            let error = transpile_snakemake(source)
+                .expect_err("unsupported construct must fail the import");
+            let message = error.to_string();
+            assert!(
+                message.contains(marker),
+                "error must name `{marker}`: {message}"
+            );
+            assert!(
+                message.contains("line "),
+                "error must carry a line: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn rules_output_reference_resolves_to_the_path_and_dependency() {
+        let source = r#"
+rule upstream:
+    output:
+        "out/{sample}.bam"
+    shell:
+        "make {output}"
+
+rule downstream:
+    input:
+        rules.upstream.output
+    output:
+        "out/{sample}.bai"
+    shell:
+        "index {input} {output}"
+"#;
+        let toml = transpile_snakemake(source).expect("rules.output must resolve");
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        assert_eq!(config.rules[1].depends_on, vec!["upstream".to_string()]);
+        assert_eq!(
+            config.rules[1].input,
+            vec!["out/{sample}.bam".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn named_placeholders_map_and_unknown_names_are_errors() {
+        let source = r#"
+rule pair:
+    input:
+        r1="raw/{sample}_1.fastq",
+        r2="raw/{sample}_2.fastq"
+    output:
+        bam="out/{sample}.bam"
+    shell:
+        "tool {input.r1} {input.r2} {output.bam}"
+"#;
+        let toml = transpile_snakemake(source).expect("named I/O must transpile");
+        assert!(toml.contains("tool {input} {input[1]} {output}"), "{toml}");
+
+        let bad = source.replace("{input.r1}", "{input.nope}");
+        let error = transpile_snakemake(&bad).expect_err("unknown named input must fail");
+        assert!(error.to_string().contains("input.nope"), "{error}");
+    }
+
+    #[test]
+    fn params_and_resources_placeholders_are_hard_errors() {
+        for token in [
+            "{params.adapter}",
+            "{resources.mem_mb}",
+            "{rule}",
+            "{checkpoints.x}",
+        ] {
+            let source = format!(
+                "rule x:\n    input:\n        \"a/{{sample}}.txt\"\n    output:\n        \"b/{{sample}}.txt\"\n    shell:\n        \"tool {token} {{input}} {{output}}\"\n"
+            );
+            let error =
+                transpile_snakemake(&source).expect_err("runtime-object placeholder must fail");
+            assert!(
+                error.to_string().contains(token),
+                "error must name `{token}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn comments_and_blank_lines_do_not_become_paths() {
+        let source = r#"
+rule x:
+    input:
+        # a comment.with.dots
+        "data/{sample}.txt"
+    output:
+        "out/{sample}.txt"
+    shell:
+        "cp {input} {output}"
+"#;
+        let (rules, _, _) = parse_snakemake(source).expect("comments are not paths");
+        assert_eq!(rules[0].inputs.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_rule_names_are_rejected() {
+        let source = r#"
+rule x:
+    output:
+        "a.txt"
+    shell:
+        "touch {output}"
+
+rule x:
+    output:
+        "b.txt"
+    shell:
+        "touch {output}"
+"#;
+        let error = transpile_snakemake(source).expect_err("duplicate names must fail");
+        assert!(error.to_string().contains("duplicate"), "{error}");
+    }
 }

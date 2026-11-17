@@ -1,6 +1,8 @@
 //! Nextflow DSL2 transpiler for converting Nextflow process blocks into oxo-flow rules.
 
-use super::{infer_bio_types, normalize_memory, push_types_contract};
+use super::{
+    escape_toml_basic, infer_bio_types, normalize_memory, push_types_contract, render_shell,
+};
 use crate::error::{OxoFlowError, Result};
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
@@ -27,6 +29,13 @@ static NF_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid nextflow variable regex")
 });
 
+/// Matches indexed interpolations (`${reads[0]}`, `$reads[0]`), which
+/// NF_VAR_RE intentionally does not match.
+static NF_INDEXED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\[[^\]}]*\]\}?")
+        .expect("valid indexed nextflow regex")
+});
+
 /// One `input:` path channel declaration, in declaration order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NextflowInput {
@@ -43,18 +52,31 @@ pub struct NextflowOutput {
     pub expr: String,
     /// `emit: <name>` label, used by `PROCESS.out.<emit>` wiring.
     pub emit: Option<String>,
+    /// 1-based source line of the declaration (diagnostic context).
+    pub line: usize,
 }
 
 /// Extracted intermediate representation of a Nextflow process.
 #[derive(Debug, Clone, Default)]
 pub struct NextflowProcess {
     pub name: String,
+    /// 1-based source line of the `process` keyword (diagnostic context).
+    pub line: usize,
     pub tag: Option<String>,
     pub conda: Option<String>,
     pub container: Option<String>,
     pub cpus: Option<u32>,
     pub memory: Option<String>,
     pub time: Option<String>,
+    pub disk: Option<String>,
+    pub queue: Option<String>,
+    pub modules: Vec<String>,
+    pub envvars: std::collections::BTreeMap<String, String>,
+    pub scratch: bool,
+    pub retries: Option<u32>,
+    /// The script referenced `task.ext.args` (or an alias) — emit a
+    /// `[config] ext_args = ""` entry so the value is user-settable.
+    pub uses_ext_args: bool,
     /// Declared input channels, in declaration order.
     pub input_decls: Vec<NextflowInput>,
     /// Declared output channels, in declaration order.
@@ -117,6 +139,7 @@ pub fn transpile_nextflow(source: &str) -> Result<String> {
 /// Transpile Nextflow DSL2 source code, additionally returning every
 /// non-fatal translation warning so the CLI can surface them.
 pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<String>)> {
+    reject_include_directives(source)?;
     let processes = parse_nextflow_processes(source)?;
     if processes.is_empty() {
         return Err(OxoFlowError::Config {
@@ -204,6 +227,12 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
     toml.push('\n');
 
     toml.push_str("[defaults]\nthreads = 1\n\n");
+    // `task.ext.args` is the nf-core escape hatch for extra CLI arguments.
+    // The importer maps it to a config key so the value stays user-settable
+    // instead of disappearing with the stripped `def` prelude.
+    if processes.iter().any(|process| process.uses_ext_args) {
+        toml.push_str("[config]\next_args = \"\"\n\n");
+    }
 
     // Emit only the catalog entries the inferred contracts actually use.
     if used_types.contains("fastq") {
@@ -246,16 +275,75 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
             res_fields.push(format!("memory = \"{norm_mem}\""));
         }
         if let Some(time) = &process.time {
-            res_fields.push(format!("time_limit = \"{time}\""));
+            res_fields.push(format!("time_limit = \"{}\"", escape_toml_basic(time)));
+        }
+        if let Some(disk) = &process.disk {
+            res_fields.push(format!("disk = \"{}\"", escape_toml_basic(disk)));
+        }
+        if let Some(queue) = &process.queue {
+            res_fields.push(format!("partition = \"{}\"", escape_toml_basic(queue)));
         }
         if !res_fields.is_empty() {
             toml.push_str(&format!("resources = {{ {} }}\n", res_fields.join(", ")));
         }
 
+        // Nextflow precedence is container > conda > modules. Emitting two
+        // backends would let oxo-flow's resolver (conda before docker) pick
+        // a different one than Nextflow would, so the lower-priority
+        // declarations are dropped with a warning.
         if let Some(container) = &process.container {
-            toml.push_str(&format!("environment = {{ docker = \"{container}\" }}\n"));
+            if process.conda.is_some() || !process.modules.is_empty() {
+                warnings.push(format!(
+                    "process '{}' declares container plus conda/module — Nextflow runs the \
+                     container, so the fallback declarations were not emitted",
+                    process.name
+                ));
+            }
+            toml.push_str(&format!(
+                "environment = {{ docker = \"{}\" }}\n",
+                escape_toml_basic(container)
+            ));
         } else if let Some(conda) = &process.conda {
-            toml.push_str(&format!("environment = {{ conda = \"{conda}\" }}\n"));
+            if !process.modules.is_empty() {
+                warnings.push(format!(
+                    "process '{}' declares conda plus module — Nextflow prefers conda, so the \
+                     module declaration was not emitted",
+                    process.name
+                ));
+            }
+            toml.push_str(&format!(
+                "environment = {{ conda = \"{}\" }}\n",
+                escape_toml_basic(conda)
+            ));
+        } else if !process.modules.is_empty() {
+            let modules = process
+                .modules
+                .iter()
+                .map(|module| format!("\"{}\"", escape_toml_basic(module)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("environment = {{ modules = [{modules}] }}\n"));
+        }
+        if !process.envvars.is_empty() {
+            let entries = process
+                .envvars
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "\"{}\" = \"{}\"",
+                        escape_toml_basic(key),
+                        escape_toml_basic(value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            toml.push_str(&format!("envvars = {{ {entries} }}\n"));
+        }
+        if process.scratch {
+            toml.push_str("scratch = true\n");
+        }
+        if let Some(retries) = process.retries {
+            toml.push_str(&format!("retries = {retries}\n"));
         }
 
         // Never fabricate input/output placeholders: an empty list is the
@@ -295,6 +383,30 @@ pub fn transpile_nextflow_with_warnings(source: &str) -> Result<(String, Vec<Str
     Ok((toml, warnings))
 }
 
+/// Refuse `include`/`includeConfig` directives: the importer translates one
+/// source file and does not follow the include graph, so emitting a fragment
+/// would silently drop every process in the included module.
+fn reject_include_directives(source: &str) -> Result<()> {
+    for (index, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with("include ") || trimmed.starts_with("includeConfig ") {
+            return Err(nextflow_error(
+                "<workflow>",
+                index + 1,
+                format!(
+                    "`{trimmed}` pulls in code from another file, and the importer translates \
+                     one source file at a time. Concatenate the included processes into this \
+                     file (or import each module file separately) before importing"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Parse all `process Name { ... }` blocks from Nextflow source.
 pub fn parse_nextflow_processes(source: &str) -> Result<Vec<NextflowProcess>> {
     let mut processes = Vec::new();
@@ -314,6 +426,21 @@ pub fn parse_nextflow_processes(source: &str) -> Result<Vec<NextflowProcess>> {
             .next()
             .unwrap_or("unnamed_process")
             .to_string();
+        let process_line = source[..abs_proc_idx].lines().count() + 1;
+        if process_name.is_empty()
+            || !process_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(nextflow_error(
+                &process_name,
+                process_line,
+                format!(
+                    "process name `{process_name}` is not a valid identifier — the importer \
+                     requires an alphanumeric/underscore name to emit a rule"
+                ),
+            ));
+        }
 
         let body_start = abs_proc_idx + 8 + brace_rel_idx + 1;
 
@@ -366,10 +493,25 @@ pub fn parse_nextflow_processes(source: &str) -> Result<Vec<NextflowProcess>> {
         };
 
         let body = &source[body_start..body_end];
-        let proc = parse_single_process(&process_name, body)?;
+        let proc = parse_single_process(&process_name, process_line, body)?;
         processes.push(proc);
 
         search_idx = body_end + 1;
+    }
+
+    let mut seen = BTreeSet::new();
+    for process in &processes {
+        let rule_name = process.name.to_lowercase();
+        if !seen.insert(rule_name.clone()) {
+            return Err(nextflow_error(
+                &process.name,
+                process.line,
+                format!(
+                    "process names collide after lowercasing ('{rule_name}') — rule names must \
+                     be unique; rename one process in the source"
+                ),
+            ));
+        }
     }
 
     Ok(processes)
@@ -381,20 +523,28 @@ enum Section {
     Input,
     Output,
     Script,
+    /// `when:` with the expression on the following line.
+    When,
+    /// `stub:` test-only body — ignored until the process ends.
+    Stub,
 }
 
-fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
+fn parse_single_process(name: &str, process_line: usize, body: &str) -> Result<NextflowProcess> {
     let mut proc = NextflowProcess {
         name: name.to_string(),
+        line: process_line,
         ..Default::default()
     };
 
     let mut section = Section::None;
-    let mut script_lines: Vec<String> = Vec::new();
+    let mut script_lines: Vec<(usize, String)> = Vec::new();
     let mut triple_delim: Option<&'static str> = None;
     let mut line_quote: Option<char> = None;
 
-    for raw_line in body.lines() {
+    for (offset, raw_line) in body.lines().enumerate() {
+        // `body` starts immediately after `{`, so its first line is the
+        // remainder of the process declaration line.
+        let line_no = process_line + offset;
         let trimmed = raw_line.trim();
 
         // Inside a triple-quoted script body: collect raw lines until the
@@ -403,11 +553,11 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
             if let Some(pos) = trimmed.find(delim) {
                 let content = &trimmed[..pos];
                 if !content.trim().is_empty() {
-                    script_lines.push(content.to_string());
+                    script_lines.push((line_no, content.to_string()));
                 }
                 triple_delim = None;
             } else {
-                script_lines.push(raw_line.to_string());
+                script_lines.push((line_no, raw_line.to_string()));
             }
             continue;
         }
@@ -417,12 +567,12 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
         if let Some(quote) = line_quote {
             match split_quoted_tail(trimmed, quote) {
                 Some((content, closed)) => {
-                    script_lines.push(content);
+                    script_lines.push((line_no, content));
                     if closed {
                         line_quote = None;
                     }
                 }
-                None => script_lines.push(trimmed.to_string()),
+                None => script_lines.push((line_no, trimmed.to_string())),
             }
             continue;
         }
@@ -431,15 +581,47 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
             continue;
         }
 
+        // A `stub:` body is test-only; there is nothing to translate.
+        if section == Section::Stub {
+            continue;
+        }
+        if section == Section::When {
+            parse_when_gate(trimmed, name, line_no, &mut proc)?;
+            section = Section::None;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("when:") {
+            if rest.trim().is_empty() {
+                section = Section::When;
+            } else {
+                parse_when_gate(rest, name, line_no, &mut proc)?;
+                section = Section::None;
+            }
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("stub:") {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{name}' (line {line_no}): the `stub` body is test-only and was \
+                     not imported"
+                ),
+            );
+            if rest.trim().is_empty() {
+                section = Section::Stub;
+            }
+            continue;
+        }
+
         // Section labels may share their line with the declaration/body.
         if let Some(rest) = trimmed.strip_prefix("input:") {
             section = Section::Input;
-            collect_input_decl(rest, &mut proc);
+            collect_input_decl(rest, name, line_no, &mut proc)?;
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("output:") {
             section = Section::Output;
-            collect_output_decl(rest, &mut proc);
+            collect_output_decl(rest, name, line_no, &mut proc)?;
             continue;
         }
         if let Some(rest) = strip_script_label(trimmed) {
@@ -448,11 +630,11 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
                 let after = &rest[delim.len()..];
                 if let Some(end) = after.find(delim) {
                     if !after[..end].trim().is_empty() {
-                        script_lines.push(after[..end].to_string());
+                        script_lines.push((line_no, after[..end].to_string()));
                     }
                 } else {
                     if !after.trim().is_empty() {
-                        script_lines.push(after.to_string());
+                        script_lines.push((line_no, after.to_string()));
                     }
                     triple_delim = Some(delim);
                 }
@@ -468,13 +650,13 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
                 }
                 let inner = &rest[quote.len_utf8()..];
                 match split_quoted_tail(inner, quote) {
-                    Some((content, true)) => script_lines.push(content),
+                    Some((content, true)) => script_lines.push((line_no, content)),
                     Some((content, false)) => {
-                        script_lines.push(content);
+                        script_lines.push((line_no, content));
                         line_quote = Some(quote);
                     }
                     None => {
-                        script_lines.push(inner.to_string());
+                        script_lines.push((line_no, inner.to_string()));
                         line_quote = Some(quote);
                     }
                 }
@@ -482,8 +664,16 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
             }
             if !rest.is_empty() {
                 // Unquoted remainder: keep it as a best-effort script line.
-                script_lines.push(rest.to_string());
+                script_lines.push((line_no, rest.to_string()));
             }
+            continue;
+        }
+
+        // A directive may follow an input/output section (e.g. `when:`);
+        // route it before section content so it is never treated as data.
+        if section != Section::Script && directive_keyword(trimmed).is_some() {
+            parse_directive(trimmed, name, line_no, &mut proc)?;
+            section = Section::None;
             continue;
         }
 
@@ -495,41 +685,44 @@ fn parse_single_process(name: &str, body: &str) -> Result<NextflowProcess> {
                 let after = &trimmed[delim.len()..];
                 if let Some(end) = after.find(delim) {
                     if !after[..end].trim().is_empty() {
-                        script_lines.push(after[..end].to_string());
+                        script_lines.push((line_no, after[..end].to_string()));
                     }
                 } else {
                     if !after.trim().is_empty() {
-                        script_lines.push(after.to_string());
+                        script_lines.push((line_no, after.to_string()));
                     }
                     triple_delim = Some(delim);
                 }
                 continue;
             }
-            script_lines.push(raw_line.to_string());
+            script_lines.push((line_no, raw_line.to_string()));
             continue;
         }
 
         // Directives (and ignored metadata) close the current section.
-        if parse_directive(trimmed, &mut proc) {
+        if section == Section::None {
+            parse_directive(trimmed, name, line_no, &mut proc)?;
             section = Section::None;
             continue;
         }
 
         if section == Section::Input {
-            collect_input_decl(trimmed, &mut proc);
+            collect_input_decl(trimmed, name, line_no, &mut proc)?;
         } else if section == Section::Output {
-            collect_output_decl(trimmed, &mut proc);
+            collect_output_decl(trimmed, name, line_no, &mut proc)?;
         }
     }
 
     let input_vars = proc.input_vars();
     proc.script = translate_nextflow_script(
-        &script_lines.join("\n"),
         name,
+        proc.line,
+        &script_lines,
         &input_vars,
         proc.script_single_quoted,
         &mut proc.script_warnings,
-    );
+        &mut proc.uses_ext_args,
+    )?;
 
     Ok(proc)
 }
@@ -572,127 +765,502 @@ fn split_quoted_tail(text: &str, quote: char) -> Option<(String, bool)> {
     None
 }
 
-/// Parse one directive line; returns true when the line was consumed.
-fn parse_directive(trimmed: &str, proc: &mut NextflowProcess) -> bool {
-    if trimmed.starts_with("cpus ") || trimmed.starts_with("cpus=") {
-        let val = trimmed
-            .trim_start_matches("cpus")
-            .trim_start_matches('=')
-            .trim();
-        if let Ok(c) = val.parse::<u32>() {
-            proc.cpus = Some(c);
+/// Directive keywords the parser recognizes. Anything else in a process body
+/// (outside `input:`/`output:`/`script:`) is a hard error instead of being
+/// silently dropped.
+const DIRECTIVE_KEYWORDS: &[&str] = &[
+    "cpus",
+    "memory",
+    "time",
+    "conda",
+    "container",
+    "module",
+    "env",
+    "scratch",
+    "disk",
+    "queue",
+    "maxRetries",
+    "errorStrategy",
+    "tag",
+    "label",
+    "publishDir",
+    "when",
+    "stub",
+    "exec",
+    "maxForks",
+    "cache",
+    "storeDir",
+    "beforeScript",
+    "afterScript",
+    "resourceLimits",
+    "machineType",
+    "accelerator",
+    "clusterOptions",
+    "penv",
+];
+
+fn directive_keyword(trimmed: &str) -> Option<&'static str> {
+    let head = trimmed
+        .split(|c: char| c.is_whitespace() || c == '=' || c == ':')
+        .next()
+        .unwrap_or("");
+    DIRECTIVE_KEYWORDS
+        .iter()
+        .copied()
+        .find(|keyword| *keyword == head)
+}
+
+fn nextflow_error(process: &str, line: usize, message: impl Into<String>) -> OxoFlowError {
+    OxoFlowError::Parse {
+        path: std::path::PathBuf::from("<nextflow source>"),
+        message: format!("process '{process}' (line {line}): {}", message.into()),
+    }
+}
+
+fn unquote(value: &str) -> &str {
+    value.trim().trim_matches(['"', '\'']).trim()
+}
+
+/// Parse one directive line. Every recognized directive either maps to a
+/// rule field or is a hard error — none is silently discarded.
+fn parse_directive(
+    trimmed: &str,
+    process: &str,
+    line: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
+    let split_at = trimmed
+        .find(|c: char| c.is_whitespace() || c == '=' || c == ':')
+        .unwrap_or(trimmed.len());
+    let head = &trimmed[..split_at];
+    let rest = trimmed[split_at..]
+        .trim_start_matches(|c: char| c.is_whitespace() || c == '=' || c == ':')
+        .trim();
+
+    match head {
+        "cpus" => {
+            proc.cpus = Some(rest.parse::<u32>().map_err(|_| {
+                nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "`cpus {rest}` is not an integer literal — dynamic CPU expressions are \
+                         not supported; set a literal `cpus N` or hand-port this rule"
+                    ),
+                )
+            })?);
         }
-        return true;
-    }
-    if trimmed.starts_with("memory ") || trimmed.starts_with("memory=") {
-        let val = trimmed
-            .trim_start_matches("memory")
-            .trim_start_matches('=')
-            .trim();
-        let clean = val.trim_matches('\'').trim_matches('"').trim();
-        proc.memory = Some(clean.replace(" ", ""));
-        return true;
-    }
-    if trimmed.starts_with("time ") || trimmed.starts_with("time=") {
-        let val = trimmed
-            .trim_start_matches("time")
-            .trim_start_matches('=')
-            .trim();
-        let clean = val.trim_matches('\'').trim_matches('"').trim();
-        proc.time = Some(clean.to_string());
-        return true;
-    }
-    if trimmed.starts_with("conda ") {
-        let val = trimmed
-            .trim_start_matches("conda")
-            .trim()
-            .trim_matches('\'')
-            .trim_matches('"');
-        proc.conda = Some(val.to_string());
-        return true;
-    }
-    if trimmed.starts_with("container ") {
-        let val = trimmed
-            .trim_start_matches("container")
-            .trim()
-            .trim_matches('\'')
-            .trim_matches('"');
-        if !val.contains("${") {
-            proc.container = Some(val.to_string());
-        } else if val.contains("biocontainers/")
-            && let Some(pos) = val.find("biocontainers/")
-        {
-            let sub = &val[pos..];
-            let end = sub
-                .find('\'')
-                .or_else(|| sub.find('"'))
-                .unwrap_or(sub.len());
-            proc.container = Some(sub[..end].to_string());
+        "memory" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "`memory {rest}` is not a literal value — dynamic memory expressions \
+                         are not supported"
+                    ),
+                ));
+            }
+            proc.memory = Some(value.replace(' ', ""));
         }
-        return true;
+        "time" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!("`time {rest}` is not a literal value"),
+                ));
+            }
+            proc.time = Some(value.to_string());
+        }
+        "conda" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "`conda {rest}` is empty or dynamic — the importer needs the literal \
+                         conda spec so the generated environment is reproducible"
+                    ),
+                ));
+            }
+            proc.conda = Some(value.to_string());
+        }
+        "container" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "`container {rest}` is empty or dynamic — the importer cannot resolve \
+                         a container image from nextflow.config; pin a literal image or \
+                         hand-port this rule"
+                    ),
+                ));
+            }
+            proc.container = Some(value.to_string());
+        }
+        "module" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!("`module {rest}` is empty or dynamic"),
+                ));
+            }
+            proc.modules = value
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|module| !module.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        "env" => parse_env_directive(rest, process, line, proc)?,
+        "scratch" => {
+            proc.scratch = match unquote(rest) {
+                "true" => true,
+                "false" => false,
+                other => {
+                    return Err(nextflow_error(
+                        process,
+                        line,
+                        format!("`scratch {other}` must be true or false"),
+                    ));
+                }
+            };
+        }
+        "disk" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!("`disk {rest}` is empty or dynamic"),
+                ));
+            }
+            proc.disk = Some(value.to_string());
+        }
+        "queue" => {
+            let value = unquote(rest);
+            if value.is_empty() || value.contains('$') {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!("`queue {rest}` is empty or dynamic"),
+                ));
+            }
+            proc.queue = Some(value.to_string());
+        }
+        "maxRetries" => {
+            proc.retries = Some(rest.parse::<u32>().map_err(|_| {
+                nextflow_error(
+                    process,
+                    line,
+                    format!("`maxRetries {rest}` must be an integer"),
+                )
+            })?);
+        }
+        "errorStrategy" => match unquote(rest) {
+            "terminate" | "retry" => {}
+            "ignore" | "finish" => {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "`errorStrategy '{rest}'` changes failure propagation in a way oxo-flow \
+                         cannot express per rule; use the run-level `--keep-going` flag or \
+                         hand-port this rule"
+                    ),
+                ));
+            }
+            other => {
+                return Err(nextflow_error(
+                    process,
+                    line,
+                    format!(
+                        "unrecognized errorStrategy '{other}' — expected terminate, retry, \
+                         ignore, or finish"
+                    ),
+                ));
+            }
+        },
+        "tag" => {
+            // Cosmetic only.
+        }
+        "label" => {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{process}' (line {line}): Nextflow `label '{rest}'` is not \
+                     imported — its resource settings live in nextflow.config and are not \
+                     applied, so verify cpus/memory by hand"
+                ),
+            );
+        }
+        "publishDir" => {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{process}' (line {line}): `publishDir {rest}` is not imported — \
+                     oxo-flow keeps outputs in the run workdir; copy them explicitly if needed"
+                ),
+            );
+        }
+        "when" => parse_when_gate(rest, process, line, proc)?,
+        "stub" => {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{process}' (line {line}): the `stub` body is test-only and was \
+                     not imported"
+                ),
+            );
+        }
+        "exec" => {
+            return Err(nextflow_error(
+                process,
+                line,
+                "`exec:` bodies are not supported — use a `script:`/`shell:` block or \
+                 hand-port this rule",
+            ));
+        }
+        "maxForks" | "cache" | "storeDir" | "beforeScript" | "afterScript" | "resourceLimits"
+        | "machineType" | "accelerator" | "clusterOptions" | "penv" => {
+            return Err(nextflow_error(
+                process,
+                line,
+                format!(
+                    "`{head}` changes execution semantics (concurrency, cache, injected \
+                     commands, or scheduler options) and cannot be translated to oxo-flow; \
+                     remove it or hand-port this rule"
+                ),
+            ));
+        }
+        other => {
+            return Err(nextflow_error(
+                process,
+                line,
+                format!(
+                    "unsupported process construct `{other}` — the importer refuses to drop it \
+                     silently; remove it or hand-port this rule"
+                ),
+            ));
+        }
     }
-    if trimmed.starts_with("tag ")
-        || trimmed.starts_with("label ")
-        || trimmed.starts_with("publishDir ")
-        || trimmed.starts_with("when:")
-        || trimmed.starts_with("stub:")
-        || trimmed.starts_with("exec:")
-    {
-        return true;
+    Ok(())
+}
+
+/// Accept the standard nf-core `when:` gate (whose default is "run") and
+/// reject every other conditional, which would silently change which rules
+/// execute.
+fn parse_when_gate(
+    rest: &str,
+    process: &str,
+    line: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
+    let normalized: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+    if normalized == "task.ext.when==null||task.ext.when" {
+        push_warning(
+            &mut proc.script_warnings,
+            format!(
+                "process '{process}' (line {line}): the `when: task.ext.when` gate is not \
+                 imported — the rule runs unconditionally; add an oxo-flow `when` if \
+                 conditional execution matters"
+            ),
+        );
+        return Ok(());
     }
-    false
+    Err(nextflow_error(
+        process,
+        line,
+        format!(
+            "`when: {rest}` is a conditional gate the importer cannot translate — add an \
+             oxo-flow `when` expression by hand or remove the gate from the source"
+        ),
+    ))
+}
+
+/// Parse `env FOO, "bar"` / `env 'FOO=bar'` into rule envvars.
+fn parse_env_directive(
+    rest: &str,
+    process: &str,
+    line: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
+    let rest = rest.trim();
+    let unquoted = unquote(rest);
+    let (name, value) = if let Some((name, value)) = unquoted.split_once('=') {
+        (name.trim(), unquote(value))
+    } else if let Some((name, value)) = rest.split_once(',') {
+        (unquote(name), unquote(value))
+    } else {
+        return Err(nextflow_error(
+            process,
+            line,
+            format!(
+                "cannot parse `env {rest}` — expected `env NAME, \"value\"` or \
+                 `env 'NAME=value'`"
+            ),
+        ));
+    };
+    if name.is_empty() || value.contains('$') {
+        return Err(nextflow_error(
+            process,
+            line,
+            format!(
+                "`env {rest}` is dynamic or has an empty name; only literal env vars are \
+                     supported"
+            ),
+        ));
+    }
+    proc.envvars.insert(name.to_string(), value.to_string());
+    Ok(())
 }
 
 /// Collect path variable names / literal patterns from an `input:` declaration.
-fn collect_input_decl(line: &str, proc: &mut NextflowProcess) {
+fn collect_input_decl(
+    line: &str,
+    process: &str,
+    line_no: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
     let line = line.trim();
     if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
-        return;
+        return Ok(());
+    }
+    if line.starts_with("stdin") {
+        return Err(nextflow_error(
+            process,
+            line_no,
+            "`stdin` inputs are not supported — pipe the file explicitly in the script or \
+             hand-port this rule",
+        ));
+    }
+    if line.starts_with("env(") || line.starts_with("env ") {
+        return Err(nextflow_error(
+            process,
+            line_no,
+            format!(
+                "environment-value input `{line}` is not supported — the importer cannot map \
+                 it to a file channel; pass the value through `[config]` by hand"
+            ),
+        ));
     }
 
     let mut found = false;
-    for (idx, _) in line.match_indices("path(") {
+    let mut indices: Vec<usize> = line
+        .match_indices("path(")
+        .chain(line.match_indices("file("))
+        .map(|(idx, _)| idx)
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    for idx in indices {
         found = true;
-        let after = &line[idx + "path(".len()..];
-        let Some(end) = after.find(')') else {
+        let after = &line[idx..];
+        let Some(open) = after.find('(') else {
             continue;
         };
-        let inside = after[..end]
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .trim();
-        push_input_decl(inside, proc);
+        let after = &after[open + 1..];
+        let Some(end) = after.find(')') else {
+            return Err(nextflow_error(
+                process,
+                line_no,
+                format!("unclosed path declaration in `{line}`"),
+            ));
+        };
+        let inside = after[..end].trim();
+        let (value, attrs) = inside
+            .split_once(',')
+            .map_or((inside, ""), |(v, rest)| (v.trim(), rest.trim()));
+        if !attrs.is_empty() {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{process}' (line {line_no}): input modifier `{attrs}` on \
+                     `{value}` is not imported — verify channel cardinality by hand"
+                ),
+            );
+        }
+        push_input_decl(unquote(value), process, line_no, proc)?;
     }
     if found {
-        return;
+        return Ok(());
     }
 
     for prefix in ["path ", "file "] {
         if let Some(rest) = line.strip_prefix(prefix) {
-            let rest = rest.split(',').next().unwrap_or(rest).trim();
-            let value = rest.trim_matches('"').trim_matches('\'').trim();
-            push_input_decl(value, proc);
-            return;
+            let (value, attrs) = rest
+                .split_once(',')
+                .map_or((rest, ""), |(v, rest)| (v.trim(), rest.trim()));
+            if !attrs.is_empty() {
+                push_warning(
+                    &mut proc.script_warnings,
+                    format!(
+                        "process '{process}' (line {line_no}): input modifier `{attrs}` on \
+                         `{value}` is not imported — verify channel cardinality by hand"
+                    ),
+                );
+            }
+            return push_input_decl(unquote(value), process, line_no, proc);
         }
     }
+
+    // Value-only declarations (`val`, `tuple val(...)`, `record`) carry no
+    // file channel; metadata is mapped through `meta.id` where the script
+    // uses it, so they are intentionally skipped.
+    let head = line
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .next()
+        .unwrap_or("");
+    if matches!(head, "val" | "tuple" | "record") {
+        return Ok(());
+    }
+    Err(nextflow_error(
+        process,
+        line_no,
+        format!(
+            "unsupported input declaration `{line}` — only `path`/`file` channels are \
+             supported (plus `val`/`tuple val` metadata); declare file channels explicitly"
+        ),
+    ))
 }
 
-fn push_input_decl(value: &str, proc: &mut NextflowProcess) {
+fn push_input_decl(
+    value: &str,
+    process: &str,
+    line_no: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
     if value.is_empty() {
-        return;
+        return Err(nextflow_error(
+            process,
+            line_no,
+            "empty path input declaration",
+        ));
     }
     if value.contains('*') || value.contains('?') || value.contains('/') || value.contains('.') {
         let conversion = channel_glob_to_pattern(value);
         if let Some(warning) = conversion.warning {
-            proc.script_warnings.push(format!(
-                "input pattern '{}' could not be mapped faithfully: {warning}",
-                value
+            return Err(nextflow_error(
+                process,
+                line_no,
+                format!(
+                    "input pattern '{value}' cannot be mapped faithfully ({warning}) — the \
+                     importer refuses to guess which wildcard is the sample domain; rewrite \
+                     the declaration as a single-`*` pattern or hand-port this rule"
+                ),
             ));
         }
         proc.input_decls
             .push(NextflowInput::Literal(conversion.pattern));
-        return;
+        return Ok(());
     }
     let var = value
         .split_whitespace()
@@ -700,76 +1268,185 @@ fn push_input_decl(value: &str, proc: &mut NextflowProcess) {
         .unwrap_or(value)
         .trim_matches(',');
     if var.is_empty() {
-        return;
+        return Ok(());
+    }
+    if !var
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(nextflow_error(
+            process,
+            line_no,
+            format!("input declaration `{var}` is not a plain path variable name"),
+        ));
     }
     proc.input_decls.push(NextflowInput::Var(var.to_string()));
+    Ok(())
 }
 
-/// Extract the `emit: <name>` label from an `output:` declaration.
-fn parse_output_emit(line: &str) -> Option<String> {
-    static EMIT_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\bemit:\s*([A-Za-z_]\w*)").expect("valid emit regex"));
-    EMIT_RE.captures(line).map(|caps| caps[1].to_string())
-}
-
-/// Remove the `, emit: <name>` clause so it never leaks into the expression.
-fn strip_output_emit(line: &str) -> String {
-    static EMIT_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\s*,\s*emit:\s*[A-Za-z_]\w*").expect("valid emit-clause regex")
-    });
-    EMIT_CLAUSE_RE.replace(line, "").into_owned()
-}
-
-/// Collect a raw output expression from an `output:` declaration.
-fn collect_output_decl(line: &str, proc: &mut NextflowProcess) {
+/// Collect all `path`/`file` output expressions from an `output:` declaration.
+fn collect_output_decl(
+    line: &str,
+    process: &str,
+    line_no: usize,
+    proc: &mut NextflowProcess,
+) -> Result<()> {
     let line = line.trim();
     if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
-        return;
-    }
-    if line.starts_with("val(") || line.starts_with("stdout") || line.starts_with("env(") {
-        return;
+        return Ok(());
     }
 
-    let emit = parse_output_emit(line);
-    let decl = strip_output_emit(line);
-    let decl = decl.trim();
-    let expr = if let Some((_, after)) = decl.split_once("path(") {
-        let Some(end) = after.find(')') else {
-            return;
-        };
-        after[..end].trim()
-    } else if let Some(rest) = decl.strip_prefix("path ") {
-        rest.trim()
-    } else if decl.starts_with('"') || decl.starts_with('\'') {
-        decl
-    } else {
-        return;
-    };
-
-    let expr = expr
-        .trim()
-        .trim_matches(',')
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim();
-    if !expr.is_empty() {
-        proc.outputs.push(NextflowOutput {
-            expr: expr.to_string(),
-            emit,
-        });
+    let outputs_before = proc.outputs.len();
+    let mut emit: Option<String> = None;
+    for item in split_top_level_commas(line) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if let Some(label) = item.strip_prefix("emit:") {
+            emit = Some(label.trim().to_string());
+            continue;
+        }
+        if item.starts_with("stdout")
+            || item.starts_with("val(")
+            || item.starts_with("val ")
+            || item.starts_with("env(")
+        {
+            continue;
+        }
+        if item.starts_with("arity:")
+            || item.starts_with("optional:")
+            || item.starts_with("mode:")
+            || item.starts_with("index:")
+        {
+            push_warning(
+                &mut proc.script_warnings,
+                format!(
+                    "process '{process}' (line {line_no}): output attribute `{item}` is not \
+                     imported — verify output cardinality by hand"
+                ),
+            );
+            continue;
+        }
+        let exprs = extract_output_exprs(item);
+        if exprs.is_empty() {
+            if item.starts_with("tuple") || item.starts_with("record") {
+                continue;
+            }
+            return Err(nextflow_error(
+                process,
+                line_no,
+                format!(
+                    "unsupported output declaration `{item}` — only `path`/`file` outputs \
+                     (optionally inside a tuple) are supported"
+                ),
+            ));
+        }
+        for expr in exprs {
+            if expr.is_empty() {
+                return Err(nextflow_error(
+                    process,
+                    line_no,
+                    format!("empty path output in `{item}`"),
+                ));
+            }
+            proc.outputs.push(NextflowOutput {
+                expr,
+                emit: None,
+                line: line_no,
+            });
+        }
     }
+    if let Some(label) = emit
+        && proc.outputs.len() > outputs_before
+    {
+        for output in &mut proc.outputs[outputs_before..] {
+            output.emit = Some(label.clone());
+        }
+    }
+    Ok(())
 }
 
-/// Fallback input pattern when no workflow channel source is available.
-fn legacy_input_pattern(var: &str) -> String {
-    match var {
-        "reads" | "fastq" | "fastqs" => "data/{sample}.fastq.gz".into(),
-        "bam" => "aligned/{sample}.bam".into(),
-        "cram" => "aligned/{sample}.cram".into(),
-        "vcf" => "variants/{sample}.vcf.gz".into(),
-        _ => format!("data/{var}"),
+/// Extract every `path(...)` / `path "..."` expression from one output item.
+///
+/// `tuple val(meta), path("*.bam"), path("*.bai")` splits into separate
+/// top-level items; a parenthesized `tuple(path("a"), path("b"))` keeps both
+/// paths in one item, so every occurrence is collected.
+fn extract_output_exprs(item: &str) -> Vec<String> {
+    let mut exprs = Vec::new();
+    let mut indices: Vec<usize> = item
+        .match_indices("path(")
+        .chain(item.match_indices("file("))
+        .map(|(idx, _)| idx)
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    for idx in indices {
+        let after = &item[idx..];
+        let Some(open) = after.find('(') else {
+            continue;
+        };
+        let after = &after[open + 1..];
+        let Some(end) = after.find(')') else {
+            continue;
+        };
+        let inside = after[..end].trim();
+        let (expr, _attrs) = inside
+            .split_once(',')
+            .map_or((inside, ""), |(v, rest)| (v.trim(), rest.trim()));
+        exprs.push(unquote(expr).to_string());
     }
+    if !exprs.is_empty() {
+        return exprs;
+    }
+    for prefix in ["path ", "file "] {
+        if let Some(rest) = item.strip_prefix(prefix) {
+            let (expr, _attrs) = rest
+                .split_once(',')
+                .map_or((rest, ""), |(v, rest)| (v.trim(), rest.trim()));
+            exprs.push(unquote(expr).to_string());
+            return exprs;
+        }
+    }
+    if item.starts_with('"') || item.starts_with('\'') {
+        exprs.push(unquote(item).to_string());
+    }
+    exprs
+}
+
+/// Split on top-level commas (outside parentheses, brackets, and quotes).
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&text[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
 }
 
 /// A concrete source pattern plus any honesty warning about its conversion.
@@ -845,11 +1522,14 @@ fn render_process_at(
     if let Some(invocations) = invocations
         && invocations.len() > 1
     {
-        rule_warnings.push(format!(
-            "process '{}' is invoked {} times; only the first invocation's channel is mapped",
+        return Err(wiring_error(format!(
+            "process '{}' is invoked {} times in the workflow block — the importer maps one \
+             channel per process and cannot merge multiple invocations faithfully. Wire a \
+             single invocation (fan-out is handled by the engine's wildcard expansion) or \
+             import this process by hand",
             process.name,
             invocations.len()
-        ));
+        )));
     }
 
     let inputs: Vec<String> = match invocations.and_then(|list| list.first()) {
@@ -883,8 +1563,13 @@ fn render_process_at(
                         ChannelFeed::Source(glob) => {
                             let conversion = channel_glob_to_pattern(glob);
                             if let Some(warning) = &conversion.warning {
-                                rule_warnings
-                                    .push(format!("process '{}': {warning}", process.name));
+                                return Err(wiring_error(format!(
+                                    "process '{}' is wired from '{glob}', which cannot be \
+                                     mapped faithfully ({warning}) — the importer refuses to \
+                                     guess the sample domain; rewrite the channel source as a \
+                                     single-`*` pattern or hand-port this rule",
+                                    process.name
+                                )));
                             }
                             patterns.push(conversion.pattern);
                             wired_inputs.push(None);
@@ -917,17 +1602,29 @@ fn render_process_at(
                 patterns
             }
         }
-        // A standalone process definition (a Nextflow module file has no
-        // workflow block) keeps the declaration-derived heuristic: there is
-        // no wiring to resolve, only the declared names.
-        None => process
-            .input_decls
-            .iter()
-            .map(|decl| match decl {
-                NextflowInput::Var(var) => legacy_input_pattern(var),
-                NextflowInput::Literal(pattern) => pattern.clone(),
-            })
-            .collect(),
+        // A standalone process definition (a module file has no workflow
+        // block): literal patterns are self-contained, but a variable input
+        // has no source. Inventing `data/<var>` would silently mistranslate
+        // the pipeline, so the import fails with the exact declaration.
+        None => {
+            let mut patterns = Vec::new();
+            for decl in &process.input_decls {
+                match decl {
+                    NextflowInput::Var(var) => {
+                        return Err(wiring_error(format!(
+                            "process '{}' declares `path {var}` but is never invoked in a \
+                             `workflow {{ }}` block, so the input source is unknown. Add a \
+                             workflow invocation such as \
+                             `workflow {{ {}(Channel.fromPath(\"data/*.fastq.gz\")) }}` or \
+                             hand-port this module",
+                            process.name, process.name
+                        )));
+                    }
+                    NextflowInput::Literal(pattern) => patterns.push(pattern.clone()),
+                }
+            }
+            patterns
+        }
     };
     wired_inputs.resize(inputs.len(), None);
 
@@ -942,11 +1639,17 @@ fn render_process_at(
                 pattern: mapped,
                 emit: output.emit.clone(),
             }),
-            Err(reason) => rule_warnings.push(format!(
-                "process '{}': output '{}' cannot be mapped faithfully ({reason}); output omitted \
-                 — declare it by hand",
-                process.name, expr
-            )),
+            Err(reason) => {
+                return Err(nextflow_error(
+                    &process.name,
+                    output.line,
+                    format!(
+                        "output '{expr}' cannot be mapped faithfully ({reason}) — emitting a \
+                         guessed path would mistranslate the pipeline; declare the concrete \
+                         output by hand or adjust the source"
+                    ),
+                ));
+            }
         }
     }
 
@@ -1059,7 +1762,7 @@ fn map_output_expr(
     inputs: &[String],
 ) -> std::result::Result<String, String> {
     if !NF_VAR_RE.is_match(expr) {
-        return Ok(legacy_output_pattern(expr));
+        return bare_output_pattern(expr);
     }
 
     let mut unresolved: Option<String> = None;
@@ -1092,35 +1795,48 @@ fn map_output_expr(
     Ok(mapped)
 }
 
-/// Legacy heuristic for non-interpolated output expressions.
-fn legacy_output_pattern(expr: &str) -> String {
-    let inside = expr
-        .trim()
-        .trim_matches(',')
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim();
-    if let Some(ext) = inside.strip_prefix("*.") {
-        format!("results/{{sample}}/{ext}.out")
-    } else {
-        format!("data/{inside}")
+/// Map a non-interpolated output expression.
+///
+/// A concrete filename (`quant.sf`) is a real relative path in the task
+/// workdir and is kept verbatim. A bare glob (`*.bam`) does not identify the
+/// produced file, and inventing a directory/name would mistranslate the
+/// pipeline — it is a hard error instead.
+fn bare_output_pattern(expr: &str) -> std::result::Result<String, String> {
+    let inside = unquote(expr.trim().trim_matches(','));
+    if inside.is_empty() {
+        return Err("empty output expression".to_string());
     }
+    if inside.contains('*') || inside.contains('?') {
+        return Err(format!(
+            "a bare glob (`{inside}`) is not anchored to an input variable, so the produced \
+             filename is unknown"
+        ));
+    }
+    Ok(inside.to_string())
 }
 
 /// Translate Nextflow bash script variables into oxo-flow `{var}` syntax.
+#[allow(clippy::too_many_arguments)]
 fn translate_nextflow_script(
-    script: &str,
     process_name: &str,
+    process_line: usize,
+    script_lines: &[(usize, String)],
     input_vars: &[(usize, String)],
     single_quoted: bool,
     warnings: &mut Vec<String>,
-) -> String {
-    let mut out = Vec::new();
+    uses_ext_args: &mut bool,
+) -> Result<String> {
+    let mut out: Vec<(usize, String)> = Vec::new();
     let mut skip_versions_block = false;
-    let mut local_defs: Vec<String> = Vec::new();
+    // Recognized `def` aliases: name -> replacement placeholder.
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    // `def` names with RHS shapes we cannot translate; a later reference is
+    // a hard error instead of a silently-empty shell variable.
+    let mut unsupported_defs: Vec<String> = Vec::new();
 
-    for line in script.lines() {
+    for (line_no, raw_line) in script_lines {
+        let line_no = *line_no;
+        let line = raw_line.as_str();
         let trimmed = line.trim();
         if trimmed.starts_with("cat <<-END_VERSIONS") || trimmed.starts_with("cat <<END_VERSIONS") {
             skip_versions_block = true;
@@ -1133,44 +1849,74 @@ fn translate_nextflow_script(
             continue;
         }
 
-        // Nextflow `def` preludes define workflow-local variables that have no
-        // oxo-flow equivalent. Feeding them to bash would fail on `def: not
-        // found`, so strip the line and report the construct loudly.
+        // Nextflow `def` preludes define per-task variables. The two
+        // documented nf-core idioms map cleanly: ext.args becomes a
+        // user-settable config key, ext.prefix becomes the sample id. Any
+        // other def is stripped and a later reference is a hard error.
         if let Some(rest) = trimmed.strip_prefix("def ")
             && let Some(def_name) = rest
                 .split(|c: char| c.is_whitespace() || c == '=')
                 .next()
                 .filter(|name| !name.is_empty())
         {
-            if !local_defs.iter().any(|name| name == def_name) {
-                local_defs.push(def_name.to_string());
+            let rhs = rest
+                .split_once('=')
+                .map(|(_, rhs)| rhs.trim())
+                .unwrap_or("");
+            let replacement = if rhs.starts_with("task.ext.args") {
+                *uses_ext_args = true;
                 push_warning(
                     warnings,
                     format!(
-                        "process '{process_name}': stripped Nextflow `def {def_name} = …` prelude \
-                         — oxo-flow has no per-rule script variables, so references to it were \
-                         left as shell text"
+                        "process '{process_name}' (line {line_no}): mapped `def {def_name} = \
+                         task.ext.args …` to `{{config.ext_args}}` — set ext_args under \
+                         `[config]` in the generated workflow"
                     ),
                 );
+                Some("{config.ext_args}".to_string())
+            } else if rhs.starts_with("task.ext.prefix") {
+                Some("{sample}".to_string())
+            } else {
+                if !unsupported_defs.iter().any(|name| name == def_name) {
+                    unsupported_defs.push(def_name.to_string());
+                    push_warning(
+                        warnings,
+                        format!(
+                            "process '{process_name}' (line {line_no}): stripped unsupported \
+                             `def {def_name} = …` prelude — oxo-flow has no per-rule script \
+                             variables; any reference to `{def_name}` will abort the import"
+                        ),
+                    );
+                }
+                None
+            };
+            if let Some(replacement) = replacement
+                && !aliases.iter().any(|(name, _)| name == def_name)
+            {
+                aliases.push((def_name.to_string(), replacement));
             }
             continue;
         }
 
-        // Variable transformations
+        // Variable transformations. Order matters: the dotted task/metadata
+        // forms are replaced before the bare input-variable pass.
         let mut l = line.to_string();
         l = l.replace("$task.cpus", "{threads}");
         l = l.replace("${task.cpus}", "{threads}");
+        l = l.replace("${task.ext.prefix}", "{sample}");
+        l = l.replace("$task.ext.prefix", "{sample}");
+        l = l.replace("${task.ext.args}", "{config.ext_args}");
+        l = l.replace("$task.ext.args", "{config.ext_args}");
+        if l.contains("{config.ext_args}") {
+            *uses_ext_args = true;
+        }
         l = l.replace("${meta.id}", "{sample}");
         l = l.replace("$meta.id", "{sample}");
         l = l.replace("${prefix}", "{sample}");
         l = l.replace("$prefix", "{sample}");
-        l = l.replace("${reads[0]}", "{input[0]}");
-        l = l.replace("${reads[1]}", "{input[1]}");
-        l = l.replace("${reads}", "{input}");
-        l = l.replace("$reads", "{input}");
-        l = l.replace("${bam}", "{input[0]}");
-        l = l.replace("$bam", "{input[0]}");
-
+        for (alias, replacement) in &aliases {
+            l = replace_nextflow_var(&l, alias, replacement);
+        }
         for (position, var) in input_vars {
             let placeholder = if *position == 0 {
                 "{input}".to_string()
@@ -1179,88 +1925,199 @@ fn translate_nextflow_script(
             };
             l = replace_nextflow_var(&l, var, &placeholder);
         }
-
-        out.push(l);
+        out.push((line_no, l));
     }
 
-    let joined = out.join("\n").trim().to_string();
+    let joined = out
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
 
     // Residual Nextflow interpolations are never substituted by the engine —
-    // the tool would receive literal `${...}`. Name the construct rather than
-    // let the import look clean. Shell-style uppercase env vars are exempt.
-    let mut reported: Vec<String> = Vec::new();
-    for caps in NF_VAR_RE.captures_iter(&joined) {
-        let ident = caps
-            .get(1)
-            .or_else(|| caps.get(2))
-            .map(|m| m.as_str())
-            .unwrap_or_default();
-        let token = caps[0].to_string();
-        if ident.is_empty() || reported.contains(&token) {
-            continue;
-        }
-        let is_shell_env = ident
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-        if is_shell_env {
-            continue;
-        }
-        reported.push(token.clone());
-        if local_defs.iter().any(|name| ident.starts_with(name)) {
-            push_warning(
-                warnings,
+    // the tool would receive literal `${…}`. Every non-shell-env survivor is
+    // a hard error: a run-time `bad substitution` is exactly the silent
+    // mistranslation this importer refuses to emit.
+    for (line_no, line) in &out {
+        let line = line.trim();
+        for caps in NF_VAR_RE.captures_iter(line) {
+            let ident = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or_default();
+            let token = caps[0].to_string();
+            if ident.is_empty() {
+                continue;
+            }
+            let is_shell_env = ident
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if is_shell_env {
+                continue;
+            }
+            if let Some(def) = unsupported_defs
+                .iter()
+                .find(|def| ident == def.as_str() || ident.starts_with(&format!("{def}.")))
+            {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "`{token}` references the stripped `def {def}` prelude — that Nextflow \
+                         expression has no deterministic oxo-flow equivalent. Inline the value \
+                         (e.g. the literal args string) or hand-port this rule"
+                    ),
+                ));
+            }
+            if ident.starts_with("params.") {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "`{token}` reads a nextflow.config parameter with no value in this source \
+                         — put it under `[config]` in the generated workflow and reference \
+                         `{{config.<key>}}`, or hand-port this rule"
+                    ),
+                ));
+            }
+            if ident.starts_with("task.ext.") {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "`{token}` is a task.ext value other than args/prefix — the importer \
+                         cannot infer its default; map it to `{{config.<key>}}` by hand"
+                    ),
+                ));
+            }
+            if ident.starts_with("meta.") {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "`{token}` references Nextflow metadata other than `meta.id` — the \
+                         importer only maps `meta.id` to `{{sample}}`; map the field to a \
+                         config key or wildcard by hand"
+                    ),
+                ));
+            }
+            if matches!(
+                ident,
+                "projectDir" | "workDir" | "baseDir" | "launchDir" | "nextflow" | "session"
+            ) {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "`{token}` is a Nextflow runtime path — replace it with an oxo-flow \
+                         placeholder or a workflow-relative path by hand"
+                    ),
+                ));
+            }
+            return Err(nextflow_error(
+                process_name,
+                *line_no,
                 format!(
-                    "process '{process_name}': `{token}` references a stripped Nextflow `def` \
-                     local — it may expand to an empty shell variable at run time"
+                    "unresolved Nextflow interpolation `{token}` — the engine never substitutes \
+                     it, so the shell would receive literal text. Map it to `{{config.<key>}}` / \
+                     `{{input}}` / `{{sample}}`, or hand-port this rule"
                 ),
-            );
-        } else {
-            push_warning(
-                warnings,
-                format!(
-                    "process '{process_name}': unresolved Nextflow interpolation `{token}` — it is \
-                     left verbatim and will not be substituted; verify this command by hand"
-                ),
-            );
+            ));
         }
-    }
-    for token in ["task.ext.", "params.", "Channel."] {
-        if joined.contains(token) {
-            push_warning(
-                warnings,
-                format!(
-                    "process '{process_name}': script still references Nextflow `{token}` — this \
-                     cannot be translated; verify this command by hand"
-                ),
-            );
+        if line.contains("Channel.") {
+            return Err(nextflow_error(
+                process_name,
+                *line_no,
+                "the script references a `Channel.*` operator, which has no oxo-flow \
+                 equivalent — resolve the channel in the workflow block or hand-port this rule",
+            ));
         }
-    }
-    if single_quoted
-        && input_vars
-            .iter()
-            .any(|(_, var)| joined.contains(&format!("${var}")))
-    {
-        push_warning(
-            warnings,
-            format!(
-                "process '{process_name}': the script was single-quoted in Nextflow (no string \
-                 interpolation), but declared input variables were mapped to placeholders anyway \
-                 — verify this command by hand"
-            ),
-        );
+        // Indexed interpolations (`${reads[0]}`, `$reads[0]`) are not matched
+        // by NF_VAR_RE. The known read/bam forms were mapped above; any
+        // other non-shell-env base is an unsupported Nextflow expression.
+        for caps in NF_INDEXED_RE.captures_iter(line) {
+            let base = &caps[1];
+            if base
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                continue;
+            }
+            if input_vars.iter().any(|(_, var)| var == base) {
+                return Err(nextflow_error(
+                    process_name,
+                    *line_no,
+                    format!(
+                        "indexed input reference `{}` is not supported — oxo-flow exposes whole \
+                         inputs (`{{input}}` / positional `{{input[N]}}`) rather than per-file \
+                         tuple indexing; split the channel or hand-port this rule",
+                        caps[0].trim()
+                    ),
+                ));
+            }
+            return Err(nextflow_error(
+                process_name,
+                *line_no,
+                format!(
+                    "unresolved indexed interpolation `{}` — replace it with an engine \
+                     placeholder or hand-port this rule",
+                    caps[0].trim()
+                ),
+            ));
+        }
     }
 
-    joined
+    // A single-quoted Nextflow string does not interpolate; mapping declared
+    // input variables into placeholders would change the command. Inspect the
+    // SOURCE lines — the transformed output has already replaced them.
+    if single_quoted
+        && script_lines.iter().any(|(_, line)| {
+            input_vars
+                .iter()
+                .any(|(_, var)| line.contains(&format!("${var}")))
+        })
+    {
+        return Err(nextflow_error(
+            process_name,
+            process_line,
+            "the script is single-quoted in Nextflow (no interpolation), so its `$var` text is \
+             literal shell; mapping declared inputs to placeholders would change the command. \
+             Convert the source to a double-quoted/triple-quoted script or hand-port this rule",
+        ));
+    }
+
+    Ok(joined)
 }
 
 /// Replace `${var}` and `$var` in a shell line with an oxo-flow placeholder.
 fn replace_nextflow_var(line: &str, var: &str, placeholder: &str) -> String {
     let braced = format!("${{{var}}}");
     let replaced = line.replace(&braced, placeholder);
-    let bare = Regex::new(&format!(r"\b\${}\b", regex::escape(var)))
+    // `\b` before `$` never matches (both sides are non-word characters), so
+    // match an explicit non-identifier prefix and preserve it. The negative
+    // lookahead keeps `$var_suffix` and `$var[0]` from being partially
+    // rewritten.
+    // The regex crate has no look-ahead. Match `(prefix)$var` and inspect
+    // the following character in the closure: a variable/dot/index suffix
+    // means this is `$var_suffix`, `$var.field`, or `$var[0]` — leave it for
+    // the residual scan to reject rather than partially rewriting it.
+    let bare = Regex::new(&format!(r"(^|[^A-Za-z0-9_])\${}", regex::escape(var)))
         .expect("valid escaped variable regex");
-    bare.replace_all(&replaced, regex::NoExpand(placeholder))
-        .into_owned()
+    bare.replace_all(&replaced, |caps: &regex::Captures| {
+        let matched = caps.get(0).expect("whole match");
+        match replaced.as_bytes().get(matched.end()).copied() {
+            Some(byte)
+                if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'[' || byte == b'.' =>
+            {
+                matched.as_str().to_string()
+            }
+            _ => format!("{}{}", &caps[1], placeholder),
+        }
+    })
+    .into_owned()
 }
 
 fn push_warning(warnings: &mut Vec<String>, warning: String) {
@@ -1623,24 +2480,6 @@ fn find_matching_paren(source: &str, open: usize) -> Option<usize> {
 
 /// Render a shell body as a TOML value, preferring a literal multi-line string
 /// (shell backslashes must survive; basic strings would interpret them).
-fn render_shell(shell: &str) -> String {
-    let shell = shell.trim();
-    if shell.contains('\n') && !shell.contains("'''") {
-        format!("shell = '''\n{shell}\n'''\n")
-    } else {
-        format!("shell = \"{}\"\n", escape_toml_basic(shell))
-    }
-}
-
-/// Escape a string for use inside a TOML basic (`"…"`) string.
-fn escape_toml_basic(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1733,13 +2572,17 @@ workflow { COUNT(reads) }
         let nf = r#"
 process BWA_MEM {
     input: tuple val(meta), path(reads)
-    output: tuple val(meta), path("*.bam"), emit: bam
+    output: tuple val(meta), path("${reads}.bam"), emit: bam
     script: "bwa mem $reads > out.bam"
 }
 process MYSTERY_STEP {
     input: path x
     output: "${x}.done"
     script: "touch ${x}.done"
+}
+workflow {
+    BWA_MEM(Channel.fromPath("data/*.fastq.gz"))
+    MYSTERY_STEP(Channel.fromPath("data/*.txt"))
 }
 "#;
         let toml = transpile_nextflow(nf).expect("mixed inference");
@@ -1765,21 +2608,25 @@ process MAPPED {
     wc -c $args ${x} > ${x}.out
     """
 }
+workflow { MAPPED(Channel.fromPath("data/*.txt")) }
 "#;
         let (toml, warnings) = transpile_nextflow_with_warnings(nf).expect("def prelude");
         assert!(
             !toml.contains("def args"),
             "Nextflow def prelude must not become bash: {toml}"
         );
-        assert!(toml.contains("wc -c"), "best-effort shell retained: {toml}");
-        let joined = warnings.join("\n");
         assert!(
-            joined.contains("def args"),
-            "warning must name the stripped construct: {joined}"
+            toml.contains("ext_args = \"\""),
+            "ext.args must become a user-settable config key: {toml}"
         );
         assert!(
-            joined.contains("$args"),
-            "warning must name the dangling reference: {joined}"
+            toml.contains("wc -c {config.ext_args}"),
+            "the def alias must map to the config placeholder: {toml}"
+        );
+        let joined = warnings.join("\n");
+        assert!(
+            joined.contains("def args") && joined.contains("ext_args"),
+            "warning must name the mapped construct: {joined}"
         );
     }
 
@@ -1791,6 +2638,7 @@ process EMPTY {
     output: "x.out"
     script: ""
 }
+workflow { EMPTY(Channel.fromPath("data/*.txt")) }
 "#;
         let error = transpile_nextflow(nf).expect_err("empty script must fail");
         assert!(
@@ -1802,22 +2650,20 @@ process EMPTY {
     }
 
     #[test]
-    fn unmappable_output_is_warned_and_omitted_not_fabricated() {
+    fn unmappable_output_aborts_instead_of_fabricating_a_path() {
         let nf = r#"
 process OUT {
     input: path x
     output: "${params.outdir}/x.txt"
     script: "printenv > out.txt"
 }
+workflow { OUT(Channel.fromPath("data/*.txt")) }
 "#;
-        let (toml, warnings) = transpile_nextflow_with_warnings(nf).expect("unmappable output");
+        let error = transpile_nextflow(nf).expect_err("an unresolved output expression must abort");
+        let message = error.to_string();
         assert!(
-            warnings.iter().any(|w| w.contains("params.outdir")),
-            "warning must name the construct: {warnings:?}"
-        );
-        assert!(
-            !toml.contains("output = ["),
-            "unmappable output must be omitted, not fabricated: {toml}"
+            message.contains("params.outdir"),
+            "error must name the construct: {message}"
         );
     }
 
@@ -2150,6 +2996,202 @@ workflow { PAIR(Channel.fromPath("data/*_R1.fastq.gz")) }
         assert!(
             message.contains("declares 2 path input(s)") && message.contains("1 channel argument"),
             "the error must spell out the mismatch: {message}"
+        );
+    }
+
+    #[test]
+    fn semantic_directives_map_to_rule_fields() {
+        let nf = r#"
+process P {
+    module 'bwa/0.7.17'
+    env LANE, "L1"
+    scratch true
+    disk '100 GB'
+    queue 'normal'
+    maxRetries 2
+    cpus 2
+    input: path x
+    output: "${x}.bam"
+    script: "run $x"
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("semantic directives must map");
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        let rule = &config.rules[0];
+        assert_eq!(rule.environment.modules, vec!["bwa/0.7.17".to_string()]);
+        assert_eq!(rule.envvars.get("LANE").map(String::as_str), Some("L1"));
+        assert!(rule.scratch);
+        assert_eq!(rule.resources.disk.as_deref(), Some("100 GB"));
+        assert_eq!(rule.resources.partition.as_deref(), Some("normal"));
+        assert_eq!(rule.retries, 2);
+        assert_eq!(rule.resources.threads, 2);
+    }
+
+    #[test]
+    fn task_ext_args_is_mapped_to_a_config_key() {
+        let nf = r#"
+process P {
+    input: path x
+    output: "${x}.bam"
+    script: "run $task.ext.args $x"
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("task.ext.args must map");
+        assert!(toml.contains("ext_args = \"\""), "{toml}");
+        assert!(toml.contains("run {config.ext_args} {input}"), "{toml}");
+    }
+
+    #[test]
+    fn execution_semantics_directives_are_hard_errors() {
+        let cases = [
+            ("errorStrategy 'ignore'", "errorStrategy"),
+            ("maxForks 4", "maxForks"),
+            ("cache 'deep'", "cache"),
+            ("beforeScript 'module load x'", "beforeScript"),
+            ("exec:", "exec:"),
+        ];
+        for (directive, marker) in cases {
+            let nf = format!(
+                "process P {{\n    {directive}\n    input: path x\n    output: \"${{x}}.bam\"\n    script: \"run $x\"\n}}\nworkflow {{ P(Channel.fromPath(\"data/*.txt\")) }}\n"
+            );
+            let error =
+                transpile_nextflow(&nf).expect_err("unsupported semantic directive must abort");
+            assert!(
+                error.to_string().contains(marker),
+                "error must name `{marker}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_resource_values_abort() {
+        let nf = r#"
+process P {
+    cpus params.cpus
+    input: path x
+    output: "${x}.bam"
+    script: "run $x"
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("dynamic cpus must abort");
+        assert!(error.to_string().contains("cpus"), "{error}");
+    }
+
+    #[test]
+    fn standalone_variable_input_and_multiple_invocations_abort() {
+        let standalone = r#"
+process P {
+    input: path x
+    output: "${x}.bam"
+    script: "run $x"
+}
+"#;
+        let error = transpile_nextflow(standalone).expect_err("standalone variable input");
+        assert!(error.to_string().contains("never invoked"), "{error}");
+
+        let twice = r#"
+process P {
+    input: path x
+    output: "${x}.bam"
+    script: "run $x"
+}
+workflow {
+    P(Channel.fromPath("a/*.txt"))
+    P(Channel.fromPath("b/*.txt"))
+}
+"#;
+        let error = transpile_nextflow(twice).expect_err("multiple invocations");
+        assert!(error.to_string().contains("invoked 2 times"), "{error}");
+    }
+
+    #[test]
+    fn indexed_input_references_abort() {
+        let nf = r#"
+process P {
+    input: path reads
+    output: "${reads}.bam"
+    script: "run ${reads[0]} ${reads[1]}"
+}
+workflow { P(Channel.fromPath("data/*.fastq.gz")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("indexed input must abort");
+        assert!(
+            error.to_string().contains("indexed input reference"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_def_reference_aborts() {
+        let nf = r#"
+process P {
+    input: path x
+    output: "${x}.bam"
+    script: """
+    def region = params.region ?: 'all'
+    run $region $x
+    """
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("unsupported def reference");
+        assert!(
+            error.to_string().contains("def region"),
+            "error must name the def: {error}"
+        );
+    }
+
+    #[test]
+    fn script_body_directive_words_are_not_parsed_as_directives() {
+        let nf = r#"
+process P {
+    input: path x
+    output: "${x}.env"
+    script: """
+    env | sort > ${x}.env
+    """
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("script body must be preserved");
+        assert!(toml.contains("env | sort"), "{toml}");
+    }
+
+    #[test]
+    fn unknown_directives_abort_with_the_line() {
+        let nf = r#"
+process P {
+    frobnicate 'x'
+    input: path x
+    output: "${x}.bam"
+    script: "run $x"
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let error = transpile_nextflow(nf).expect_err("unknown directive");
+        let message = error.to_string();
+        assert!(message.contains("frobnicate"), "{message}");
+        assert!(message.contains("line 3"), "{message}");
+    }
+
+    #[test]
+    fn every_path_output_in_a_declaration_is_collected() {
+        let nf = r#"
+process P {
+    input: path x
+    output:
+    tuple val(meta), path("${x}.bam"), path("${x}.bai")
+    script: "run $x"
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("multiple outputs");
+        assert!(
+            toml.contains("output = [\"data/{sample}.txt.bam\", \"data/{sample}.txt.bai\"]"),
+            "{toml}"
         );
     }
 }

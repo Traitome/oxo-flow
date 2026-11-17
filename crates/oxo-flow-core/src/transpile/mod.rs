@@ -66,16 +66,96 @@ pub fn transpile(source: &str, format: SourceFormat) -> Result<String> {
 /// Transpile external workflow DSL source code, returning the TOML and every
 /// non-fatal translation warning. `transpile` is the warning-free wrapper for
 /// callers that only need the generated workflow.
+///
+/// The generated workflow is parsed and statically validated before it is
+/// returned: an importer defect that would emit an unrunnable workflow fails
+/// here instead of producing a file that only breaks at run time.
 pub fn transpile_with_warnings(source: &str, format: SourceFormat) -> Result<TranspileOutput> {
-    match format {
-        SourceFormat::Nextflow => {
-            let (toml, warnings) = nextflow::transpile_nextflow_with_warnings(source)?;
-            Ok(TranspileOutput { toml, warnings })
+    let (toml, warnings) = match format {
+        SourceFormat::Nextflow => nextflow::transpile_nextflow_with_warnings(source)?,
+        SourceFormat::Snakemake => snakemake::transpile_snakemake_with_warnings(source)?,
+    };
+    ensure_generated_workflow_is_valid(&toml, format)?;
+    Ok(TranspileOutput { toml, warnings })
+}
+
+/// Parse + statically validate the generated `.oxoflow` document.
+///
+/// This is the last line of defence behind the per-construct checks: if the
+/// emitter ever produces TOML the engine cannot parse or validate, the import
+/// fails loudly instead of writing a workflow that is broken at run time.
+fn ensure_generated_workflow_is_valid(toml: &str, format: SourceFormat) -> Result<()> {
+    let config = crate::config::WorkflowConfig::parse(toml).map_err(|e| {
+        crate::error::OxoFlowError::Config {
+            message: format!(
+                "the importer generated TOML that oxo-flow cannot parse ({e}); this is an \
+                 importer defect, not a problem with your source workflow — please report it \
+                 with the source file"
+            ),
         }
-        SourceFormat::Snakemake => Ok(TranspileOutput {
-            toml: snakemake::transpile_snakemake(source)?,
-            warnings: Vec::new(),
-        }),
+    })?;
+    let validation = crate::format::validate_format(&config);
+    let errors: Vec<String> = validation
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == crate::format::Severity::Error)
+        .map(|diagnostic| {
+            let rule = diagnostic
+                .rule
+                .as_deref()
+                .map(|rule| format!(" (rule '{rule}')"))
+                .unwrap_or_default();
+            format!("[{}]{rule}: {}", diagnostic.code, diagnostic.message)
+        })
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(crate::error::OxoFlowError::Config {
+        message: format!(
+            "the importer generated a workflow that fails oxo-flow validation ({} source); \
+             refusing to emit an unrunnable pipeline:\n  - {}\nThis is an importer defect — \
+             please report it with the source file",
+            match format {
+                SourceFormat::Nextflow => "Nextflow",
+                SourceFormat::Snakemake => "Snakemake",
+            },
+            errors.join("\n  - ")
+        ),
+    })
+}
+
+/// Escape a string for use inside a TOML basic (`"…"`) string.
+///
+/// Shared single point of sync: both transpilers emit source-derived text
+/// (paths, commands, environment specs) into TOML, and an unescaped quote,
+/// backslash, or control character would corrupt the document or silently
+/// change the emitted value.
+pub(crate) fn escape_toml_basic(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render a `shell = …` line. Multi-line bodies use a TOML literal string so
+/// shell backslashes stay verbatim; a body that itself contains `'''` falls
+/// back to an escaped basic string, which is always valid.
+pub(crate) fn render_shell(shell: &str) -> String {
+    let shell = shell.trim();
+    if shell.contains('\n') && !shell.contains("'''") {
+        format!("shell = '''\n{shell}\n'''\n")
+    } else {
+        format!("shell = \"{}\"\n", escape_toml_basic(shell))
     }
 }
 
@@ -222,13 +302,14 @@ mod tests {
                 tuple val(meta), path(reads)
 
                 output:
-                tuple val(meta), path("*.bam"), emit: bam
+                tuple val(meta), path("${reads}.bam"), emit: bam
 
                 script:
                 """
                 bwa mem -t $task.cpus $reads > ${meta.id}.bam
                 """
             }
+            workflow { BWA_MEM(Channel.fromPath("data/*.fastq.gz")) }
         "#;
         let toml_res = transpile(nf, SourceFormat::Nextflow);
         assert!(toml_res.is_ok());
@@ -259,13 +340,11 @@ mod tests {
                 shell:
                     "bwa mem -t {threads} {input} > {output}"
         "#;
-        let toml_res = transpile(smk, SourceFormat::Snakemake);
-        assert!(toml_res.is_ok());
-        let toml_str = toml_res.unwrap();
+        let toml_str = transpile(smk, SourceFormat::Snakemake).expect("snakemake transpile");
         assert!(toml_str.contains("[[rules]]"));
         assert!(toml_str.contains("name = \"bwa_mem\""));
         assert!(
-            toml_str.contains("resources = { threads = 4, memory = \"8G\" }"),
+            toml_str.contains("resources = { threads = 4, memory = \"8000M\" }"),
             "threads/memory must use the canonical resources form (W025): {toml_str}"
         );
         assert!(toml_str.contains("types = {"));

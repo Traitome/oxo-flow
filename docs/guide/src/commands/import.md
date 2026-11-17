@@ -1,6 +1,9 @@
 # oxo-flow import
 
-Transpile external Nextflow DSL2 and Snakemake pipelines into native `.oxoflow` workflows.
+> **Migrating a whole pipeline? Start here:** [Migrating from Nextflow or Snakemake](../how-to/migrate-from-nextflow-snakemake.md) walks the decision tree, the gate sequence, and the fidelity checklist. This page is the command reference.
+
+Transpile a **supported deterministic subset** of Nextflow DSL2 or Snakemake
+into a native `.oxoflow` workflow.
 
 ## Usage
 
@@ -10,55 +13,96 @@ oxo-flow import [OPTIONS] <SOURCE>
 
 ## Description
 
-The `import` command transpiles Nextflow DSL2 process definitions and
-Snakemake rules into `.oxoflow` pipelines. It is a **best-effort translator**,
-not a full language implementation. For Nextflow, every construct it cannot
-map faithfully is reported as a warning on stderr or rejected with a clear
-error. Snakemake support is narrower (rules, I/O, threads/resources,
-conda/container, and shell bodies); an unsupported directive such as
-`script:` or `run:` can be rejected by the generated-TOML parse/validate
-gate rather than translated. In neither case does it silently emit a
-workflow with an invented command or file path.
+`oxo-flow import` extracts process/rule definitions, resource directives,
+environments, literal I/O patterns, and shell bodies into `.oxoflow`. It is a
+**deterministic translator, not an interpreter**: there is no semantic parity
+with the source engine, and every construct outside the documented subset is a
+hard error that names the source line. The importer never invents a path, drops
+a semantic directive, or writes a workflow it could not translate.
 
-## What is extracted
+Before returning, the generated TOML is parsed and statically validated by the
+engine (`WorkflowConfig::parse` + `validate_format`). If the emitter ever
+produces an unrunnable workflow, the import fails and no output file is written.
 
-### Nextflow
+## What is translated
 
-- Rule names (`process NAME` → lowercased rule name)
-- `cpus` → `resources.threads`, `memory` (`GB`/`MB` canonicalized) →
-  `resources.memory`, `time` → `resources.time_limit`; a process without
-  `cpus` inherits `[defaults] threads`
-- `conda` / `container` directives → `environment`
-- The `script:` or `shell:` body, in both inline quoted form
-  (`script: "wc -l < ${x}"`) and triple-quoted multi-line form
-  (`script: """ ... """`), including `'''…'''` bodies
-- Declared `path`/`file` input variables, and `${var}` / `$var` references to
-  them inside the script → oxo-flow placeholders (`{input}`, `{input[N]}`)
-- `$task.cpus` → `{threads}`, `${meta.id}` / `${prefix}` → `{sample}`
-- A direct `Channel.fromPath("data/*.txt")` (or a `name = Channel.fromPath(…)`
-  variable) feeding a process → the real wildcard input
-  `data/{sample}.txt`, a matching `sample_pattern`, and input-derived outputs
-  (`output: "${x}.count"` → `data/{sample}.txt.count`). Both invocation forms
-  are supported — the call form `COUNT(Channel.fromPath("data/*.txt"))` and
-  the canonical pipe form `Channel.fromPath("data/*.txt") | COUNT` — and
-  produce identical TOML.
-- Process wiring in the documented forms (see
-  [Nextflow wiring forms](#nextflow-wiring-forms)): a downstream input fed by
-  an upstream output is mapped to the upstream's output pattern and gets a
-  `depends_on` edge.
-- BioType contracts only when inference actually recognizes the tool/files
-  (`[types.fastq]`, `[types.bam_coord]`, `[types.vcf_indexed]` are emitted
-  **only** when a rule's inferred contract references them). A wired input
-  inherits the type of the upstream output it consumes, so a derived
-  intermediate never re-inherits the source file's type.
+### Nextflow DSL2
+
+| Construct | Behavior |
+|---|---|
+| `process NAME { … }` | One rule per process (name lowercased) |
+| `cpus` / `memory` / `time` | `resources.threads` / `resources.memory` / `resources.time_limit`; unparseable or dynamic values are errors |
+| `disk` / `queue` | `resources.disk` / `resources.partition` |
+| `scratch true` | `scratch = true` |
+| `maxRetries N` | `retries = N` |
+| `errorStrategy 'terminate'` / `'retry'` | Accepted; `ignore` / `finish` are errors |
+| `conda` / `container` | `environment` (literal specs only; dynamic values are errors) |
+| `module` | `environment.modules` (HPC modules) |
+| `env NAME, "value"` / `env 'NAME=value'` | `envvars` |
+| `tag` | Ignored (cosmetic) |
+| `label` / `publishDir` | Warning: resource settings from `nextflow.config` and output publishing are not imported |
+| `when: task.ext.when == null \|\| task.ext.when` | Accepted with a warning (the rule runs unconditionally); any other `when` is an error |
+| `stub:` | Ignored with a warning (test-only body) |
+| `input: path/file` channels | Literal patterns or workflow-supplied variables; `val`/`tuple val` metadata is ignored |
+| `output: path/file` | **Every** path expression on the declaration, including tuple members; `emit:` labels are kept |
+| `script:` / `shell:` | Double-quoted, triple-quoted, and single-quoted bodies |
+| `$task.cpus` | `{threads}` |
+| `$task.ext.args` / `def args = task.ext.args ?: ''` | `{config.ext_args}`, with `[config] ext_args = ""` emitted |
+| `$task.ext.prefix` / `def prefix = task.ext.prefix ?: "${meta.id}"` / `${meta.id}` | `{sample}` |
+| Declared input variables (`$reads`, `${reads}`) | `{input}` / `{input[N]}` by declaration position |
+| `versions.yml` output | Skipped (the engine records versions separately) |
+| Workflow wiring | Call, pipe, channel-variable, upstream-output, and upstream-emit forms (table below) |
+
+**Hard errors (no output written):**
+
+- `include` / `includeConfig` (the include graph is not followed; concatenate
+  the files or import each module).
+- Dynamic `cpus`/`memory`/`time`/`container`/`conda`, `errorStrategy
+  'ignore'|'finish'`, `maxForks`, `cache`, `storeDir`, `beforeScript`,
+  `afterScript`, `resourceLimits`, `machineType`, `accelerator`,
+  `clusterOptions`, `penv`, `exec:`, and unknown process directives.
+- `stdin` and `env(...)` inputs.
+- A bare output glob (`path("*.bam")`): the produced filename is unknown, and
+  guessing would mistranslate the pipeline. Use an input-anchored expression
+  (`${reads}.bam`, `${meta.id}.bam`) or a concrete filename.
+- Indexed input references (`${reads[0]}`, `$reads[0]`): oxo-flow exposes
+  whole inputs, not per-file tuple indexing. Split the channel or hand-port.
+- Unresolved interpolations (`${params.x}`, unknown `meta.*`, `task.ext.*`
+  other than args/prefix, `Channel.*` in a script, project/runtime paths).
+- A process declared with `path` inputs but never invoked in a `workflow {}`
+  block (the input source is unknown).
+- A process invoked more than once in the workflow block.
+- Input globs with more than one `*` or character classes, and multi-output
+  `PROC.out` selections without `.out.<emit>`.
 
 ### Snakemake
 
-- Rule names, `threads`, `resources.mem_mb` / `resources.time`
-- `conda:` / `container:` directives → `environment`
-- Literal input/output patterns (including `expand(...)` patterns and
-  `temp()` / `protected()` markers)
-- The `shell:` body
+| Construct | Behavior |
+|---|---|
+| `rule NAME:` | One rule per rule block; duplicate names are errors |
+| `input:` / `output:` | Quoted literal patterns, `expand("pattern/{wildcard}", …)`, and `rules.<name>.output` (single-output rules only) |
+| `temp(…)` / `protected(…)` / `ancient(…)` | `temporary` + `temp_output`, `protected_output`, `ancient` |
+| `touch(…)` | Treated as a plain output with a warning (the engine verifies declared outputs exist) |
+| `threads:` / `priority:` / `retries:` | Rule fields |
+| `resources: mem_mb, mem_gb, time/runtime, gpu, disk_mb` | `resources` (exact MB; other resource keys are errors) |
+| `conda:` / `container:` / `singularity:` / `envmodules:` | `environment`; container wins over conda (warning); combining `envmodules` with conda/container is an error |
+| `log:` / `benchmark:` | Rule `log` / `benchmark` fields; `{log}` / `{benchmark}` placeholders are translated |
+| `envvars:` | `envvars` |
+| `localrules:` / global `wildcard_constraints:` | Rule flags / `[wildcard_constraints]` |
+| `shell:` | Single-line and triple-quoted bodies |
+| `{input}` / `{input.name}` / `{output.name}` / `{wildcards.X}` / `{threads}` | Engine placeholders (`{input[N]}` by declared position) |
+| `rule all` (target-only sink) | Dropped with a warning; an oxo-flow rule with no command would be rejected by `validate` |
+
+**Hard errors (no output written):** `params:`, `run:`, `script:`, `notebook:`,
+per-rule `wildcard_constraints:`, `shadow:`, `group:`, `default_target:`,
+`handlers:`, `include:`, `subworkflow`, `module`, `use rule`, `configfile:`,
+`ruleorder:`, `onsuccess:`, `onerror:`, `directory(...)`, lambda/config/params/
+checkpoints-based dynamic input/output, unknown directives, unknown resource
+keys, duplicate rule names, and `{params.*}` / `{resources.*}` / `{rule}` /
+`{checkpoints.*}` placeholders in `shell:`.
+
+Brace text the importer does not recognize (bash `${VAR}`, brace expansion,
+awk `{print $1}`) passes through unchanged.
 
 ## Nextflow wiring forms
 
@@ -76,48 +120,29 @@ declares them, from exactly these forms:
 | Upstream-output pipe | `TRIM.out.bam \| ALIGN` | same as `TRIM.out.bam` above |
 
 Wiring is positional: argument *i* feeds the process's *i*-th declared `path`
-input, and the argument count must match the declaration count.
-
-**Loud-abort contract.** Any wiring expression outside the table above aborts
-the import with an error naming the construct — for example a channel
-operator chain (`Channel.fromPath(…).map { … } | COUNT`), an unbound channel
-variable, a chained pipe (`Channel.fromPath(…) | A | B`), a multi-output
-`PROC.out` with no `.out.<emit>` selector, a reference to an undefined
-upstream process, or an argument/declaration count mismatch. The importer
-never falls back to a fabricated path or type and never writes an output file
-on this path. Resolve the channel in the source or import that rule by hand.
-
-## What is not extracted
-
-- **Nextflow workflow-local variables** (`def args = task.ext.args ?: ''`):
-  the `def` prelude is stripped so bash does not receive `def: command not
-  found`, and the import prints a warning naming the variable. References to
-  it remain as shell text and may expand to nothing at run time.
-- **Nextflow channel operators and expressions** (`params.*`, `task.ext.*`,
-  `Channel.map`/`join`/`combine`, ternaries, closures): unsupported
-  interpolations are left verbatim and warned about by name. Wiring
-  expressions using these operators abort the import (see above) rather than
-  being guessed.
-- **Multiple-wildcard globs** (`Channel.fromFilePairs("data/*_{1,2}.fastq.gz")`)
-  and character-class globs: only the first `*` maps to `{sample}`; the import
-  warns loudly. Such a channel used as a wiring source aborts instead.
-- **Output expressions that reference unknown variables** (e.g.
-  `"${params.outdir}/x.txt"`): the output is omitted with a warning rather
-  than fabricated.
-- **Processes with no `script:`/`shell:` body**: the import fails with a clear
-  message instead of writing `shell = ""` (such a rule would be skipped at run
-  time; `validate` reports it as error `E022`).
+input, and the argument count must match the declaration count. Any other
+wiring expression aborts the import with the construct named.
 
 ## After importing
 
-Always run `oxo-flow validate` and `oxo-flow lint` on the generated workflow,
-then `oxo-flow dry-run` to confirm the DAG and command preview. Because the
-translation is best-effort, expect to edit the result — the import warnings
-are the checklist of what needs manual attention.
+The import warnings are the migration checklist. Always run the static gates
+in order:
 
-When `--from` is omitted, `oxo-flow import` auto-detects the source format from the
-file extension (`.nf` for Nextflow, `Snakefile` or `.smk` for Snakemake) or through
-content inspection.
+```bash
+oxo-flow validate pipeline.oxoflow
+oxo-flow lint pipeline.oxoflow
+oxo-flow dry-run pipeline.oxoflow
+```
+
+`validate` checks the workflow contract and BioTypes, `lint` reports best
+practices, and `dry-run` previews the resolved commands and missing inputs.
+None of them executes a tool or proves scientific equivalence — see
+[Migrating from Nextflow or Snakemake](../how-to/migrate-from-nextflow-snakemake.md)
+for the full checklist.
+
+When `--from` is omitted, `oxo-flow import` auto-detects the source format from
+the file extension (`.nf` for Nextflow, `Snakefile` or `.smk` for Snakemake) or
+through content inspection.
 
 ## Options
 
@@ -125,21 +150,26 @@ content inspection.
 |--------|-------------|
 | `<SOURCE>` | Path to the Nextflow (`.nf`) or Snakemake (`Snakefile`, `.smk`) source file |
 | `--from <FORMAT>` | Explicit source format: `nextflow` or `snakemake` (auto-detected if omitted) |
-| `-o, --output <OUTPUT>` | Output `.oxoflow` file (prints to stdout if omitted) |
+| `-o, --output <OUTPUT>` | Output `.oxoflow` file (prints to stdout if omitted). Existing files are never overwritten |
 
 ## Examples
 
-Transpile a Nextflow module and print to stdout:
+Transpile a Nextflow pipeline and print to stdout:
+
 ```bash
-oxo-flow import modules/fastqc.nf
+oxo-flow import main.nf
 ```
 
-Transpile a Snakemake pipeline directly to a `.oxoflow` workflow file:
+Transpile a Snakemake pipeline to a file:
+
 ```bash
 oxo-flow import Snakefile -o workflow.oxoflow
 ```
 
-Transpile with explicit format specification:
+Transpile with an explicit format:
+
 ```bash
 oxo-flow import custom_pipeline.txt --from nextflow -o pipeline.oxoflow
 ```
+
+> **Next:** [Migrating a whole pipeline from Nextflow or Snakemake](../how-to/migrate-from-nextflow-snakemake.md)
