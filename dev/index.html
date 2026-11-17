@@ -4417,7 +4417,7 @@ and community submissions.</p>
 </tr>
 <tr>
 <td><strong>Cryptographic provenance</strong></td>
-<td>Local run checkpoints anchored on SHA-256 output checksums, configuration fingerprints, and protected data tree audits (<code>protected_data_trees</code>); recorded checksums take precedence, with fragile file timestamps (<code>mtime</code>) demoted to a bounded fallback (cluster-path checksum recording is outstanding — issue #1093)</td>
+<td>Run checkpoints anchored on SHA-256 output checksums — recorded on both the local and cluster execution paths — plus configuration fingerprints and protected data tree audits (<code>protected_data_trees</code>); recorded checksums take precedence, with fragile file timestamps (<code>mtime</code>) demoted to a bounded fallback</td>
 </tr>
 <tr>
 <td><strong>Environment management</strong></td>

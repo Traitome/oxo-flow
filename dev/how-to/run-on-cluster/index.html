@@ -5051,7 +5051,7 @@ flag &gt; <code>$OXO_FLOW_CLUSTER_BACKEND</code> &gt; <code>slurm</code> (see
 remains required and is validated the same strict way.</p>
 <h3 id="cluster-flag-surface">Cluster flag surface<a class="headerlink" href="#cluster-flag-surface" title="Permanent link">#</a></h3>
 <p><code>run --profile</code> does not consume every <code>run</code> flag. The flags below are
-parsed but have no effect on the cluster path — each of the first five
+parsed but have no effect on the cluster path — each of the first four
 prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 <table>
 <thead>
@@ -5074,10 +5074,6 @@ prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 <td>Warned and dropped — per-job walltime comes from the profile's <code>[cluster]</code> <code>walltime</code> key or the rule's own <code>time_limit</code>; the <code>--walltime</code> flag exists only on <code>cluster submit</code>.</td>
 </tr>
 <tr>
-<td><code>--provenance</code></td>
-<td>Warned and dropped — output checksums are currently recorded only on the local execution path.</td>
-</tr>
-<tr>
 <td><code>--max-threads</code> / <code>--max-memory</code></td>
 <td>Warned and dropped — per-rule <code>[resources]</code> and the <code>[cluster]</code> profile drive scheduler limits; <code>[resource_budget]</code> performs the pre-submit check.</td>
 </tr>
@@ -5094,6 +5090,13 @@ prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 <p><code>--skip-ref-build</code> is accepted on the cluster path and is a no-op there by
 construction: the reference-build step runs only on the local execution
 path, and <code>run --profile</code> never builds references itself.</p>
+<p><code>--provenance</code> <strong>is</strong> honored on the cluster path (issue #1093): each rule's
+expanded outputs are hashed when the job settles and recorded into the
+checkpoint's <code>checksums</code> map, exactly like a local run — <code>provenance verify</code>
+and the freshness gate read the same entries from either execution path.
+The per-rule <code>checksum = "sha256" | "md5"</code> declaration works there too. A
+run that records nothing still warns, with the same wording as the local
+completion path.</p>
 <hr />
 <h2 id="scheduling-fairness">Scheduling Fairness<a class="headerlink" href="#scheduling-fairness" title="Permanent link">#</a></h2>
 <p>Cluster submission honors the same fairness contract as local execution:</p>

@@ -2575,6 +2575,569 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#run-with-auto-discovery-when-only-one-oxoflow-file-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with auto-discovery (when only one .oxoflow file exists)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-with-mainoxoflow-priority-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with main.oxoflow (priority discovery)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-with-explicit-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with explicit workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-a-workflow-from-a-repository-nextflow-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run a workflow from a repository (nextflow-style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-working-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom working directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-going-on-failure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep going on failure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-failed-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry failed jobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-specific-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run specific targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-a-per-job-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set a per-job timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limit-resource-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limit resource usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache environment setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skip-environment-setup-when-environments-are-pre-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skip environment setup (when environments are pre-built)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shared-environment-store-pixivenv-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (pixi/venv, opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backend-preflight-fail-fast-on-a-missing-environment-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend preflight: fail fast on a missing environment backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stale-pixilock-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale pixi.lock fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pass-config-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass config values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#partial-module-runs-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial module runs (--module)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-directory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run directory layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-a-finished-job-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a finished job records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failed-rule-output-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed-rule output rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-validation-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder validation (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute-a-published-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execute a published bundle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-runs-and-scale-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pilot runs and scale-up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-data-arrival-samples-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incremental data arrival: --samples ready
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#background-runs-background" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Background runs (--background)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checkpointing-and-resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpointing and Resuming
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checkpointing and Resuming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variant-checkpoints-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant checkpoints (--checkpoint)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata Directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-run-records-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule run records in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workflow-version-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow version in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#include-resolutions-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Include resolutions in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report snapshots
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-changes-and-precise-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config changes and precise invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-changes-and-manifest-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input changes and manifest invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#temporary-rules-temporary-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Temporary rules (temporary = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disk-pressure monitoring ([engine])
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected data trees (protected_data_trees)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forcing-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forcing Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint re-entry (checkpoint = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
 </li>
       
     </ul>
@@ -3985,6 +4548,569 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#run-with-auto-discovery-when-only-one-oxoflow-file-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with auto-discovery (when only one .oxoflow file exists)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-with-mainoxoflow-priority-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with main.oxoflow (priority discovery)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-with-explicit-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run with explicit workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-a-workflow-from-a-repository-nextflow-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run a workflow from a repository (nextflow-style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-working-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom working directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-going-on-failure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep going on failure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-failed-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry failed jobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-specific-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run specific targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-a-per-job-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set a per-job timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limit-resource-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limit resource usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache environment setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skip-environment-setup-when-environments-are-pre-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skip environment setup (when environments are pre-built)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shared-environment-store-pixivenv-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (pixi/venv, opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backend-preflight-fail-fast-on-a-missing-environment-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend preflight: fail fast on a missing environment backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stale-pixilock-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale pixi.lock fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pass-config-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass config values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#partial-module-runs-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial module runs (--module)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-directory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run directory layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-a-finished-job-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a finished job records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failed-rule-output-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed-rule output rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-validation-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder validation (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute-a-published-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execute a published bundle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-runs-and-scale-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pilot runs and scale-up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-data-arrival-samples-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incremental data arrival: --samples ready
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#background-runs-background" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Background runs (--background)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checkpointing-and-resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpointing and Resuming
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checkpointing and Resuming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variant-checkpoints-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant checkpoints (--checkpoint)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata Directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-run-records-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule run records in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workflow-version-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow version in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#include-resolutions-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Include resolutions in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report snapshots
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-changes-and-precise-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config changes and precise invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-changes-and-manifest-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input changes and manifest invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#temporary-rules-temporary-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Temporary rules (temporary = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disk-pressure monitoring ([engine])
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected data trees (protected_data_trees)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forcing-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forcing Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint re-entry (checkpoint = true)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
 </li>
       
     </ul>
@@ -4272,12 +5398,13 @@ keys matching nothing declared keep the literal spelling.</p>
 <p>On <code>run --profile</code>, several <code>run</code> flags are parsed but not applied — the
 engine warns once per flag you actually passed (full table:
 <a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>).
-Cluster checkpoints therefore carry <strong>no output checksums</strong> today (issue</p>
-<h1 id="1093-and-a-required-rules-failure-cancels-every-in-flight-job">1093), and a required rule's failure cancels every in-flight job<a class="headerlink" href="#1093-and-a-required-rules-failure-cancels-every-in-flight-job" title="Permanent link">#</a></h1>
-<p>regardless of <code>--keep-going</code> — use <code>required = false</code> for best-effort
-rules. Set a per-job walltime with the rule's <code>time_limit</code> (or the
-profile's <code>walltime</code>), and leave resource limits to the per-rule
-<code>[resources]</code> block and the <code>[cluster]</code> profile.</p>
+<code>--provenance</code> is honored there: output checksums are recorded as each
+job settles, exactly like a local run. A required rule's failure cancels
+every in-flight job regardless of <code>--keep-going</code> — use
+<code>required = false</code> for best-effort rules. Set a per-job walltime with
+the rule's <code>time_limit</code> (or the profile's <code>walltime</code>), and leave
+resource limits to the per-rule <code>[resources]</code> block and the
+<code>[cluster]</code> profile.</p>
 </div>
 <h3 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h3>
 <p>The document carries <code>command</code>, <code>status</code>, <code>results</code> counts, and <code>resources</code>.
@@ -4806,9 +5933,10 @@ plan-time rejection, job arrays, the run directory layout, what <code>status.jso
 records, and interrupt/re-attach semantics — lives in
 <a href="../cluster/#cluster-submission-run-profile">Cluster submission</a> on the
 <a href="../cluster/"><code>cluster</code></a> page. <code>run</code> flags that are parsed but dropped on that
-path (<code>--keep-going</code>, <code>--retry</code>, <code>--timeout</code>, <code>--provenance</code>,
+path (<code>--keep-going</code>, <code>--retry</code>, <code>--timeout</code>,
 <code>--max-threads</code>/<code>--max-memory</code>) are tabulated in
-<a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>.</p>
+<a href="../../how-to/run-on-cluster/#cluster-flag-surface">Cluster flag surface</a>
+(<code>--provenance</code> is honored there — checksums are recorded as jobs settle).</p>
 <p>Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured
 separately — see the <a href="../cluster/"><code>cluster</code></a> command.</p>
