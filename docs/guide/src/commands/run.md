@@ -132,7 +132,7 @@ Common flags at a glance — every flag is documented in the
 ## Output
 
 ```
-oxo-flow v0.31.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.32.0 — Rust-native bioinformatics pipeline engine
 DAG: 5 rules in dependency order
   1. fastqc
   2. trim_reads
@@ -239,11 +239,11 @@ oxo-flow run owner/pipeline
 
 # Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,
 # where @tag means a GitHub Release bundle)
-oxo-flow run owner/pipeline@v0.31.0
+oxo-flow run owner/pipeline@v0.32.0
 
 # The explicit forms work the same way (gh: can always be kept)
 oxo-flow run gh:owner/pipeline
-oxo-flow run gh:owner/pipeline@v0.31.0
+oxo-flow run gh:owner/pipeline@v0.32.0
 
 # Any git URL or local repository directory
 oxo-flow run https://example.com/team/pipeline.git
