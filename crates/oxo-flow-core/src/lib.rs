@@ -39,6 +39,7 @@
 //! assert_eq!(order, vec!["step1"]);
 //! ```
 
+pub mod atomic_file;
 pub mod backend;
 pub mod cluster;
 pub mod config;
