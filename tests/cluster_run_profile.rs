@@ -384,15 +384,17 @@ fn oxo_flow(dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 /// Spawn `run --profile slurm`, keeping the child handle so a test can kill
-/// the driver mid-run.
-fn spawn_run(dir: &Path) -> std::process::Child {
+/// the driver mid-run or steer it with extra flags.
+fn spawn_run(dir: &Path, extra_args: &[&str]) -> std::process::Child {
     let path = format!(
         "{}:{}",
         fixtures_dir().display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    let mut args = vec!["run", "wf.oxoflow", "--profile", "slurm"];
+    args.extend_from_slice(extra_args);
     StdCommand::new(workspace_bin("oxo-flow"))
-        .args(["run", "wf.oxoflow", "--profile", "slurm"])
+        .args(&args)
         .current_dir(dir)
         .env("PATH", path)
         .env("MOCK_SCHEDULER_DIR", dir.join("sched"))
@@ -549,7 +551,7 @@ shell = "mkdir -p out && echo started > out/done.txt && { [ -f FAST ] || sleep 1
     )
     .unwrap();
 
-    let mut child = spawn_run(dir.path());
+    let mut child = spawn_run(dir.path(), &[]);
     let partial = dir.path().join("out/done.txt");
     let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
     let observed = wait_for(Duration::from_secs(30), || {
@@ -755,6 +757,129 @@ shell = "test -f FLAG && cp prep.txt gate.txt"
         after_second.get("prep.txt").is_some(),
         "the earlier run's checksum must survive the resume: {after_second}"
     );
+}
+
+// ── --keep-going failure handling (issue #1093 F2b) ───────────────────
+
+/// `bad` fails immediately while the independent `slow` job is still in
+/// flight, and `after` depends on `bad`, so it must stay blocked. `slow`
+/// polls for a RELEASE file: the test decides when it is allowed to finish
+/// (no timer race). The iteration bound only stops an orphaned mock job
+/// from looping forever after the run ends.
+const IN_FLIGHT_FAILURE_WORKFLOW: &str = r#"
+[workflow]
+name = "cluster-keep-going"
+
+[[rules]]
+name = "bad"
+output = ["bad.txt"]
+shell = "exit 1"
+
+[[rules]]
+name = "after"
+input = ["bad.txt"]
+output = ["after.txt"]
+shell = "echo after > after.txt"
+
+[[rules]]
+name = "slow"
+output = ["slow.txt"]
+shell = "for _ in $(seq 1 600); do if [ -f RELEASE ]; then break; fi; sleep 0.05; done; echo done > slow.txt"
+"#;
+
+fn has_event(events: &str, t: &str, rule: &str) -> bool {
+    events.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .is_ok_and(|v| v["t"] == t && v["rule"] == rule)
+    })
+}
+
+/// With `-k` on the cluster path (issue #1093 F2b), a required rule's
+/// failure must not cancel independent jobs already in flight: they finish,
+/// dependents of the failed rule stay blocked, and the run still exits
+/// non-zero because the required rule failed.
+#[test]
+fn keep_going_finishes_inflight_independents_then_fails_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    std::fs::write(dir.path().join("wf.oxoflow"), IN_FLIGHT_FAILURE_WORKFLOW).unwrap();
+    let events_path = dir.path().join(".oxo-flow/runs/latest/events.jsonl");
+
+    let mut child = spawn_run(dir.path(), &["-k"]);
+    let settled = wait_for(Duration::from_secs(30), || {
+        std::fs::read_to_string(&events_path).is_ok_and(|raw| has_event(&raw, "FAILED", "bad"))
+    });
+    assert!(settled, "the required rule never settled as failed");
+
+    // `bad` is terminal and `slow` is still in flight — release it.
+    std::fs::write(dir.path().join("RELEASE"), "").unwrap();
+    let status = child.wait().unwrap();
+    assert!(
+        !status.success(),
+        "a required failure must still fail the run"
+    );
+    assert!(
+        dir.path().join("slow.txt").exists(),
+        "the in-flight independent must finish under -k"
+    );
+    assert!(
+        !dir.path().join("after.txt").exists(),
+        "a dependent of the failed rule must not run"
+    );
+
+    let events = std::fs::read_to_string(&events_path).unwrap();
+    assert!(
+        has_event(&events, "COMPLETED", "slow"),
+        "slow must complete:\n{events}"
+    );
+    assert!(
+        !has_event(&events, "CANCELLED", "slow"),
+        "nothing may be cancelled under -k:\n{events}"
+    );
+    assert!(
+        !has_event(&events, "SUBMITTED", "after"),
+        "blocked dependents must not be submitted:\n{events}"
+    );
+}
+
+/// Without `-k` the historical contract stands (issue #1093 F2b): a
+/// required rule's failure cancels every in-flight job before the run
+/// exits non-zero.
+#[test]
+fn without_keep_going_required_failure_cancels_inflight_independents() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    std::fs::write(dir.path().join("wf.oxoflow"), IN_FLIGHT_FAILURE_WORKFLOW).unwrap();
+
+    let out = run(dir.path(), &["--profile", "slurm"]);
+    assert!(
+        !out.status.success(),
+        "a required failure must fail the run:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The independent job never reached completion: it was cancelled while
+    // still in flight, long before any release marker existed.
+    assert!(
+        !dir.path().join("slow.txt").exists(),
+        "the in-flight independent must be cancelled without -k"
+    );
+    assert!(!dir.path().join("after.txt").exists());
+    let events =
+        std::fs::read_to_string(dir.path().join(".oxo-flow/runs/latest/events.jsonl")).unwrap();
+    assert!(has_event(&events, "FAILED", "bad"), "{events}");
+    assert!(
+        !has_event(&events, "COMPLETED", "slow"),
+        "slow must not complete:\n{events}"
+    );
+    assert!(
+        !has_event(&events, "SUBMITTED", "after"),
+        "blocked dependents must not be submitted:\n{events}"
+    );
+
+    // The mock scheduler's cancel is best-effort on the job process; let a
+    // surviving mock job leave its loop before the tempdir disappears.
+    std::fs::write(dir.path().join("RELEASE"), "").unwrap();
 }
 
 /// The checkpoint's checksum map, or an empty object when the field is

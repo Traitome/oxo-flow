@@ -960,11 +960,6 @@ async fn run_command_inner(
                 "cluster drivers poll their own retry/backoff semantics",
             ),
             (
-                keep_going,
-                "--keep-going",
-                "the driver keeps dispatching independent jobs until the queue drains",
-            ),
-            (
                 timeout_secs > 0,
                 "--timeout",
                 "per-job walltime is set through --walltime instead",
@@ -1002,6 +997,10 @@ async fn run_command_inner(
                 max_submitted,
                 rerun,
                 resume_failed,
+                // Issue #1093 F2b: `-k` is honored on the cluster path —
+                // the driver gates only its required-failure cancel
+                // decision on it (interrupts still cancel everything).
+                keep_going,
                 // The cluster path honors --cache-dir (shared env cache);
                 // --skip-env-setup/--ai-recover are unsupported there and
                 // warned about at submit time (issue #136 tier-2 audit).

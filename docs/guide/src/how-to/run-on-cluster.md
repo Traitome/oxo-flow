@@ -383,16 +383,20 @@ On clusters, the scheduler enforces resources based on the generated directives.
     Generous wall-time limits prevent premature job termination but may lower scheduling priority. Profile your jobs first.
 
 !!! note "Failure handling on the cluster path"
-    `--keep-going` is not honored on the cluster path — the flag prints a
-    warning and is dropped (see
-    [Cluster flag surface](#cluster-flag-surface)). The driver keeps
-    dispatching independent jobs until the queue drains anyway: a failure
-    blocks only its dependents. When a `required = true` rule fails,
-    every in-flight job is cancelled and the run exits — mark salvageable
-    steps `required = false` (best-effort QC, optional per-sample stages)
-    so their failure neither cancels the run nor blocks unrelated
-    branches: the failure is recorded, the run exits 0 with the failures
-    listed, and `resume` / `--resume-failed` re-queues what failed.
+    `--keep-going` / `-k` is honored on the cluster path (issue #1093).
+    By default a `required = true` rule's failure cancels every in-flight
+    job (`scancel`/`qdel`/`bkill`) and the run exits non-zero. With `-k`
+    the failure is still recorded and still fails the run, but jobs
+    already in flight run to completion and the driver keeps dispatching
+    ready independent instances until the queue drains; dependents of the
+    failed rule stay blocked (never submitted). Interrupts
+    (Ctrl-C / SIGTERM / SIGHUP) and driver-internal errors always cancel
+    every in-flight job regardless of `-k`. A `required = false` failure
+    never cancels either way — mark salvageable steps `required = false`
+    (best-effort QC, optional per-sample stages) when their failure
+    should leave the exit code at 0: the failure is recorded, the run
+    exits 0 with the failures listed, and `resume` / `--resume-failed`
+    re-queues what failed.
 
 !!! note "Aborted in-flight siblings are incomplete, not failed"
     When a run aborts, rules still in flight are killed and recorded as
@@ -520,13 +524,12 @@ remains required and is validated the same strict way.
 ### Cluster flag surface
 
 `run --profile` does not consume every `run` flag. The flags below are
-parsed but have no effect on the cluster path — each of the first four
+parsed but have no effect on the cluster path — each of the first three
 prints a warning and the run proceeds (`-j` is dropped silently):
 
 | `run` flag | Cluster-path behavior |
 |---|---|
 | `--retry` | Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by `resume` / `--resume-failed`. |
-| `--keep-going` / `-k` | Warned and dropped — the driver always dispatches independent jobs until the queue drains; only a required rule's failure cancels in-flight jobs (see [Scheduling Fairness](#scheduling-fairness)). |
 | `--timeout` | Warned and dropped — per-job walltime comes from the profile's `[cluster]` `walltime` key or the rule's own `time_limit`; the `--walltime` flag exists only on `cluster submit`. |
 | `--max-threads` / `--max-memory` | Warned and dropped — per-rule `[resources]` and the `[cluster]` profile drive scheduler limits; `[resource_budget]` performs the pre-submit check. |
 | `-j` / `--jobs` | Silently inapplicable — cluster concurrency is governed by `max_submitted` (the profile key or `--max-submitted`), clamped by `[resource_budget] max_jobs`. |
@@ -544,6 +547,19 @@ The per-rule `checksum = "sha256" | "md5"` declaration works there too. A
 run that records nothing still warns, with the same wording as the local
 completion path.
 
+`--keep-going` / `-k` **is** honored on the cluster path (issue #1093).
+It gates exactly one decision — what a `required = true` rule's failure
+does to in-flight work:
+
+| Mode | Required rule fails | `required = false` rule fails |
+|---|---|---|
+| default | cancels every in-flight job, then exits non-zero | never cancels; failure recorded, dependents blocked, run exits 0 |
+| `-k` / `--keep-going` | in-flight jobs finish, ready independent instances keep dispatching until the queue drains, the failed rule's dependents stay blocked — then exits non-zero (a required rule failed) | same as default |
+
+Interrupts (Ctrl-C / SIGTERM / SIGHUP) and driver-internal errors always
+cancel every in-flight job regardless of `-k`; the flag never softens the
+verdict — a run with a required failure exits non-zero either way.
+
 ---
 
 ## Scheduling Fairness
@@ -556,10 +572,13 @@ Cluster submission honors the same fairness contract as local execution:
   +1). A producer parked at the cap therefore outranks fresh
   high-priority rules after `priority gap` rounds — priority-inversion
   starvation cannot persist.
-- **In-flight jobs are cancelled on failure**: when a required rule
-  fails, the driver cancels every job already submitted
+- **In-flight jobs are cancelled on a required failure by default**: when
+  a required rule fails, the driver cancels every job already submitted
   (`scancel`/`qdel`/`bkill`) before the run exits — no orphaned cluster
-  jobs.
+  jobs. With `-k` / `--keep-going` those jobs instead finish, ready
+  independent instances keep dispatching until the queue drains, the
+  failed rule's dependents stay blocked, and the run still exits
+  non-zero (see [Cluster flag surface](#cluster-flag-surface)).
 - **Waits inside the scheduler queue** are the scheduler's own
   ordering and are visible via `squeue`/`qstat`/`bjobs` (job ids are
   recorded per rule under the run directory). The local 60-second

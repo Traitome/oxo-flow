@@ -78,13 +78,15 @@ keys matching nothing declared keep the literal spelling.
     On `run --profile`, several `run` flags are parsed but not applied — the
     engine warns once per flag you actually passed (full table:
     [Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface)).
-    `--provenance` is honored there: output checksums are recorded as each
-    job settles, exactly like a local run. A required rule's failure cancels
-    every in-flight job regardless of `--keep-going` — use
-    `required = false` for best-effort rules. Set a per-job walltime with
-    the rule's `time_limit` (or the profile's `walltime`), and leave
-    resource limits to the per-rule `[resources]` block and the
-    `[cluster]` profile.
+    `--provenance` and `--keep-going` are honored there: checksums are
+    recorded as each job settles, exactly like a local run; by default a
+    required rule's failure cancels every in-flight job, while `-k` lets
+    already-submitted independent jobs finish (dependents of the failed
+    rule stay blocked) and the run still exits non-zero — use
+    `required = false` for best-effort rules. Interrupts always cancel
+    every in-flight job. Set a per-job walltime with the rule's
+    `time_limit` (or the profile's `walltime`), and leave resource limits
+    to the per-rule `[resources]` block and the `[cluster]` profile.
 
 ### JSON output
 
@@ -673,10 +675,12 @@ plan-time rejection, job arrays, the run directory layout, what `status.json`
 records, and interrupt/re-attach semantics — lives in
 [Cluster submission](cluster.md#cluster-submission-run-profile) on the
 [`cluster`](cluster.md) page. `run` flags that are parsed but dropped on that
-path (`--keep-going`, `--retry`, `--timeout`,
+path (`--retry`, `--timeout`,
 `--max-threads`/`--max-memory`) are tabulated in
 [Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface)
-(`--provenance` is honored there — checksums are recorded as jobs settle).
+(`--provenance` and `--keep-going` are honored there — checksums are
+recorded as jobs settle, and `-k` keeps in-flight independents running
+past a required failure).
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured

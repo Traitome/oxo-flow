@@ -100,6 +100,7 @@ fn fast_driver_config() -> DriverConfig {
         poll_timeout: Some(std::time::Duration::from_secs(30)),
         unknown_settle_grace: std::time::Duration::from_secs(90),
         cancel: None,
+        keep_going: false,
     }
 }
 
@@ -248,6 +249,7 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
             poll_timeout: Some(std::time::Duration::from_secs(30)),
             unknown_settle_grace: std::time::Duration::from_secs(90),
             cancel: None,
+            keep_going: false,
         },
     )
     .unwrap();
@@ -364,6 +366,7 @@ fn dry_run_will_run_set_equals_driver_submitted_set() {
             poll_timeout: Some(std::time::Duration::from_secs(30)),
             unknown_settle_grace: std::time::Duration::from_secs(90),
             cancel: None,
+            keep_going: false,
         },
     )
     .unwrap();
@@ -412,6 +415,7 @@ output = ["slow.done"]
             poll_timeout: Some(std::time::Duration::from_secs(1)),
             unknown_settle_grace: std::time::Duration::from_secs(90),
             cancel: None,
+            keep_going: false,
         },
     )
     .unwrap_err();
@@ -602,6 +606,7 @@ fn driver_settles_jobs_that_vanish_from_the_live_queue_via_accounting() {
             poll_timeout: Some(std::time::Duration::from_secs(30)),
             unknown_settle_grace: std::time::Duration::from_secs(90),
             cancel: None,
+            keep_going: false,
         },
         &[("MOCK_SQUEUE_HIDE_TERMINAL", "1")],
     )

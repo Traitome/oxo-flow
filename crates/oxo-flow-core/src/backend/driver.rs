@@ -49,6 +49,18 @@ pub struct DriverConfig {
     /// driver polling to terminal states. The receiver is cloned into the
     /// driver; the sender stays with the caller's signal watcher.
     pub cancel: Option<tokio::sync::watch::Receiver<Option<CancelSignal>>>,
+    /// `-k/--keep-going` (issue #1093 F2b): a required rule's failure is
+    /// recorded but does not cancel jobs already in flight. The driver
+    /// finishes them, keeps dispatching every independent ready instance
+    /// until the queue drains, and leaves dependents of the failed rule
+    /// blocked — the caller still fails the run because a required rule
+    /// failed. `false` keeps the local executor's
+    /// abort-on-first-required-failure default.
+    ///
+    /// This gates ONLY the required-failure decision: interrupts
+    /// ([`Self::cancel`]) and driver-internal errors always cancel every
+    /// in-flight job.
+    pub keep_going: bool,
 }
 
 /// An interrupt request delivered through [`DriverConfig::cancel`].
@@ -80,6 +92,7 @@ impl Default for DriverConfig {
             poll_timeout: None,
             unknown_settle_grace: Duration::from_secs(90),
             cancel: None,
+            keep_going: false,
         }
     }
 }
@@ -1095,7 +1108,16 @@ impl BackendDriver {
                             // Non-required failures leave the run salvageable
                             // (record_outcome counts them separately), so
                             // only a required rule's failure cancels.
-                            if plan.rules[&f.rule].rule.required {
+                            //
+                            // `-k/--keep-going` opts out of that decision
+                            // (issue #1093 F2b): the failure is still
+                            // recorded and still fails the run, but
+                            // independent jobs already in flight finish and
+                            // the driver keeps dispatching ready independent
+                            // instances until the queue drains. Dependents
+                            // of this rule are blocked by the propagation
+                            // step at the top of each round.
+                            if plan.rules[&f.rule].rule.required && !self.config.keep_going {
                                 let siblings: Vec<(String, String, Option<String>)> = inflight
                                     .iter()
                                     .map(|(id, f)| {
@@ -1111,6 +1133,12 @@ impl BackendDriver {
                                     );
                                     self.cancel_inflight(&siblings).await?;
                                 }
+                            } else if plan.rules[&f.rule].rule.required {
+                                tracing::warn!(
+                                    rule = %f.rule,
+                                    job = %job_id,
+                                    "required rule failed — --keep-going: recording the failure and continuing with independent jobs (dependents stay skipped)"
+                                );
                             }
                             JobRecord {
                                 signal: None,
@@ -1808,6 +1836,10 @@ output = ["out/{{sample}}/d.txt"]
     }
 
     fn driver(fx: &Fixture) -> (BackendDriver, Arc<ClusterExecutor>) {
+        driver_with(fx, false)
+    }
+
+    fn driver_with(fx: &Fixture, keep_going: bool) -> (BackendDriver, Arc<ClusterExecutor>) {
         let state = fx._state.path();
         let executor = Arc::new(
             ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
@@ -1824,6 +1856,7 @@ output = ["out/{{sample}}/d.txt"]
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going,
             },
         );
         (d, executor)
@@ -1982,6 +2015,7 @@ output = ["out/{{sample}}/d.txt"]
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let settled: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
@@ -2052,6 +2086,7 @@ output = ["out/{{sample}}/d.txt"]
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: Some(cancel_rx),
+                keep_going: false,
             },
         );
         let settled: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
@@ -2095,6 +2130,58 @@ output = ["out/{{sample}}/d.txt"]
             settled.is_empty(),
             "interrupted records must not pass the settle hook: {settled:?}"
         );
+        assert_eq!(backend.state().lock().unwrap().cancelled, vec!["job-1"]);
+    }
+
+    /// `--keep-going` gates ONLY the required-failure decision (issue
+    /// #1093 F2b): an interrupt still cancels every in-flight job and ends
+    /// the run with `Cancelled`, exactly as without the flag.
+    #[test]
+    fn keep_going_does_not_weaken_interrupt_cancellation() {
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Running));
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: Some(cancel_rx),
+                keep_going: true,
+            },
+        );
+        cancel_tx
+            .send(Some(CancelSignal {
+                signal_name: "SIGINT",
+                signum: 2,
+            }))
+            .unwrap();
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(d.run(
+            &mut plan,
+            &to_run,
+            DriverOptions {
+                run_dir: fx.run_dir.path(),
+                on_checkpoint: None,
+                merge: None,
+                sensitive_values: &[],
+                on_submit: None,
+                on_settle: None,
+            },
+        ));
+        match result {
+            Err(OxoFlowError::Cancelled { records, .. }) => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].status, JobStatus::Failed);
+                assert_eq!(records[0].signal, Some(2));
+            }
+            other => panic!("expected Cancelled error under --keep-going, got: {other:?}"),
+        }
         assert_eq!(backend.state().lock().unwrap().cancelled, vec!["job-1"]);
     }
 
@@ -2193,6 +2280,108 @@ output = ["out/{{sample}}/d.txt"]
             !submitted.contains(&"gather") && !submitted.contains(&"stats"),
             "blocked rules must never be submitted, got: {submitted:?}"
         );
+    }
+
+    /// Run two independent rules through the mock scheduler: `bad` fails
+    /// immediately while `slow` is still in flight. `slow` polls the
+    /// RELEASE marker, so the settle hook — not a timer — decides when it
+    /// finishes (only in the keep-going variant); the bound just stops an
+    /// orphaned mock job from looping after the test. Returns each settled
+    /// record plus whether `slow` produced its output.
+    fn required_failure_with_inflight_sibling(keep_going: bool) -> (Vec<JobRecord>, bool) {
+        let fx = setup();
+        let (d, _) = driver_with(&fx, keep_going);
+        let release = fx.workdir.path().join("RELEASE");
+        let slow_out = fx.workdir.path().join("slow.txt");
+        let mut plan = priority_plan(fx.workdir.path(), &[("bad", 0), ("slow", 0)]);
+        for (name, sr) in plan.rules.iter_mut() {
+            sr.shell_cmd = if name == "bad" {
+                "exit 1".to_string()
+            } else {
+                format!(
+                    "for _ in $(seq 1 600); do if [ -f '{release}' ]; then break; fi; \
+                     sleep 0.05; done; echo done > '{slow_out}'",
+                    release = release.display(),
+                    slow_out = slow_out.display(),
+                )
+            };
+        }
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let on_settle: SettleHook<'_> = {
+            let release = release.clone();
+            Box::new(move |record: JobRecord| {
+                let release = release.clone();
+                Box::pin(async move {
+                    // Release the sibling the moment the required failure
+                    // settles — only under keep-going; on the default path
+                    // the sibling has already been cancelled by then.
+                    if keep_going && record.rule == "bad" && record.status == JobStatus::Failed {
+                        std::fs::write(&release, b"").map_err(|e| OxoFlowError::Config {
+                            message: format!("cannot create {}: {e}", release.display()),
+                        })?;
+                    }
+                    Ok(())
+                })
+            })
+        };
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: Some(on_settle),
+                },
+            ))
+            .unwrap();
+        // Let a surviving mock job leave its loop before the tempdir goes.
+        std::fs::write(&release, b"").unwrap();
+        let produced = slow_out.exists();
+        (records, produced)
+    }
+
+    /// Issue #1093 F2b: `--keep-going` gates ONLY the required-failure
+    /// cancel decision. The failure is still recorded and the caller still
+    /// fails the run, but independent jobs already in flight finish.
+    #[test]
+    fn keep_going_does_not_cancel_inflight_independents() {
+        let (records, slow_produced) = required_failure_with_inflight_sibling(true);
+        assert!(
+            slow_produced,
+            "the in-flight independent must run to completion under --keep-going"
+        );
+        let status: HashMap<&str, JobStatus> = records
+            .iter()
+            .map(|r| (r.rule.as_str(), r.status))
+            .collect();
+        assert_eq!(status["bad"], JobStatus::Failed);
+        assert_eq!(status["slow"], JobStatus::Success);
+        assert!(
+            !records.iter().any(|r| r.status == JobStatus::Cancelled),
+            "nothing may be cancelled under --keep-going: {records:?}"
+        );
+    }
+
+    /// The historical default is byte-for-byte unchanged: a required
+    /// rule's failure cancels every in-flight sibling before the run exits.
+    #[test]
+    fn required_failure_cancels_inflight_siblings_without_keep_going() {
+        let (records, slow_produced) = required_failure_with_inflight_sibling(false);
+        assert!(
+            !slow_produced,
+            "the in-flight independent must be cancelled without --keep-going"
+        );
+        let status: HashMap<&str, JobStatus> = records
+            .iter()
+            .map(|r| (r.rule.as_str(), r.status))
+            .collect();
+        assert_eq!(status["bad"], JobStatus::Failed);
+        assert_eq!(status["slow"], JobStatus::Cancelled);
     }
 
     #[test]
@@ -2305,6 +2494,7 @@ output = ["out/{{sample}}/d.txt"]
                 poll_timeout: None,
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let mut plan = chain_plan(fx.workdir.path(), &[("a", "true", "a.txt")]);
@@ -2511,6 +2701,7 @@ shell = "cat {input} > merged.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         // A directory in place of the file makes the write fail.
@@ -2593,6 +2784,7 @@ shell = "echo asm > out/{assembler}.txt"
                     poll_timeout: Some(std::time::Duration::from_secs(5)),
                     unknown_settle_grace: std::time::Duration::from_secs(90),
                     cancel: None,
+                    keep_going: false,
                 },
             );
             let err = tokio::runtime::Runtime::new()
@@ -2701,6 +2893,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2848,6 +3041,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -2928,6 +3122,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(10)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -2979,6 +3174,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: None, // NO timeout: only the guard ends this
                 unknown_settle_grace: std::time::Duration::from_millis(0),
                 cancel: None,
+                keep_going: false,
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -3044,6 +3240,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -3101,6 +3298,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         tokio::runtime::Runtime::new()
@@ -3162,6 +3360,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -3218,6 +3417,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         tokio::runtime::Runtime::new()
@@ -3258,6 +3458,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -3305,6 +3506,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_millis(120)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         tokio::runtime::Runtime::new()
@@ -3378,6 +3580,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         tokio::runtime::Runtime::new()
@@ -3427,6 +3630,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: Some(cancel_rx),
+                keep_going: false,
             },
         );
         cancel_tx
@@ -3504,6 +3708,7 @@ shell = "echo asm > out/{assembler}.txt"
                 poll_timeout: Some(std::time::Duration::from_secs(5)),
                 unknown_settle_grace: std::time::Duration::from_secs(90),
                 cancel: None,
+                keep_going: false,
             },
         );
         let records = tokio::runtime::Runtime::new()
