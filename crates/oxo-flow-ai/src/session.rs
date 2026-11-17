@@ -301,12 +301,16 @@ const MAX_SESSION_ARCHIVES: usize = 200;
 /// workflow content, so the oldest are pruned after each write.
 const MAX_WORKFLOW_ARCHIVES: usize = 200;
 
-/// chmod 0600 — best-effort (non-unix targets skip).
+/// chmod 0600 — best-effort (non-unix targets skip); a failure is warned
+/// (session archives carry full AI transcripts, potentially including
+/// secrets passed as context) but never blocks the write.
 fn restrict_to_owner(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::warn!("Could not restrict session archive {}: {e}", path.display());
+        }
     }
     #[cfg(not(unix))]
     let _ = path;

@@ -516,7 +516,15 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                 if disk_hold_rounds >= disk_hold_abort_rounds {
                     {
                         let ck = checkpoint.lock().await;
-                        ck.save_to_file_async(checkpoint_path).await.ok();
+                        if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
+                            // The abort message below points the user at the
+                            // checkpoint — under disk pressure the save is
+                            // precisely what is most likely to fail, so the
+                            // resume-from-stale-state case must be visible.
+                            tracing::warn!(
+                                "Failed to save checkpoint before disk-pressure abort: {save_err}"
+                            );
+                        }
                     }
                     progress.finish_and_clear();
                     json_summary.emit("failed", &RunCounts::default(), vec![]);

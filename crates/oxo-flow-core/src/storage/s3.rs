@@ -190,7 +190,8 @@ impl S3Storage {
     /// `AlreadyOwnedByYou`/`BucketAlreadyExists` response is success).
     ///
     /// Not part of the [`StorageBackend`] trait — the engine never creates
-    /// buckets implicitly. Used by setup tooling and live integration tests.
+    /// buckets implicitly. Used by the live remote-staging integration tests
+    /// (`crates/oxo-flow-cli/tests/remote_staging.rs`).
     pub async fn ensure_bucket(&self, bucket: &str) -> Result<()> {
         match self.client.create_bucket().bucket(bucket).send().await {
             Ok(_) => Ok(()),

@@ -144,7 +144,9 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OLLAMA_HOST` | No | — | Local Ollama endpoint (enables Ollama auto-detection) |
 | `OLLAMA_MODEL` | No | (provider default) | Ollama model name (rides the canonical model tier under an explicit `model` override; #948 P2-3) |
-| `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
+| `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory. The web server also honors a bare `FRONTEND_DIR` as a legacy fallback (checked only when this variable is unset) |
+| `NO_COLOR` | No | unset | Standard no-color convention: when set, CLI output drops ANSI colors (same effect as the global `--no-color` flag); command-level `--no-color` flags win |
+| `RUST_LOG` | No | unset | Standard `tracing` env filter for CLI/web logs (e.g. `debug`, `oxo_flow=trace`); unset uses the default level driven by `-v`/`--quiet` |
 | `DATABASE_URL` | No | `sqlite://oxo-flow.db` | Database selection shared by `oxo-flow serve`, `oxo-flow-web`, and desktop: a `postgres://`/`postgresql://` URL selects the PostgreSQL backend (requires the `postgres` compile feature; the published Docker image omits it), anything else stays SQLite. Web domain handlers route through the unified `StorageBackend`; a CI smoke test (`services: postgres`) verifies schema bootstrap + core `StorageBackend` CRUD on a live server, and the storage contract was live-verified against `postgres:16` (2026-11-05), but concurrency, crash recovery, and multi-instance behavior remain unproven. Run endpoints gate on backend-agnostic `RUNS_REQUIRE_STORAGE_BACKEND` — absence of production parity must not be read from the gate |
 | `OXO_FLOW_PORT` | No | `8080` | Web server port (also settable via `--port`). The standalone `oxo-flow-web` binary defaults to `3000` |
 | `OXO_FLOW_ADMIN_PASSWORD` | Team/HPC | — | Admin sign-in password. Without at least one of ADMIN/USER/VIEWER_PASSWORD in team/hpc mode the server still starts but every login is rejected until one is set (warned at startup) |
