@@ -302,11 +302,20 @@ team_profile = "compact"    # "compact" | "full"
 patch. The mode gates on top of the model's own safety verdict and TOML
 validation — it never bypasses either. Independently of the mode, every patch
 is validated before it is written: it must parse as a complete workflow and
-must not drop `[[rules]]`, `[[include]]`, or `[[references]]` sections that the
-original file already had, so a partial "changed portions" response is refused
-(issue #1110) rather than written as a full replacement. A rejected fix leaves
-the workflow byte-for-byte untouched, and an accepted fix is written
-atomically with a `<workflow>.bak` guard beside it:
+must not drop anything the original file declared, so a partial "changed
+portions" response is refused (issue #1110) rather than written as a full
+replacement. The "must be preserved" set is read from the parsed workflow
+model, not counted by hand:
+
+- every rule **name** in the original must still be present — a same-count
+  rename or rule swap is refused, not only a count drop — and the
+  `[[rules]]` / `[[include]]` / `[[references]]` **counts** may not shrink;
+- the wildcard fan-out tables `[[values]]`, `[[sample_groups]]`, and
+  `[[pairs]]` may not shrink in count;
+- no `[config]` key may disappear.
+
+A rejected fix leaves the workflow byte-for-byte untouched, and an accepted
+fix is written atomically with a `<workflow>.bak` guard beside it:
 
 - `ask` (default) — prompt y/N before writing on an interactive terminal;
   non-interactive sessions (CI, scripts) are denied with an explanation, so a

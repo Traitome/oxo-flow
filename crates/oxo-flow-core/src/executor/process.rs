@@ -4311,25 +4311,19 @@ fn discard_tmp(path: &Path) {
 
 /// fsync a path's contents. Opening a directory handle is not portable
 /// (Windows), so a failed open of a directory degrades to a debug note
-/// instead of failing the move.
+/// instead of failing the move. Thin alias for the shared primitive so the
+/// directory-copy path and the file staged-write path share one
+/// implementation ([`crate::atomic_file::sync_path`]).
 fn sync_path(path: &Path) -> std::io::Result<()> {
-    match std::fs::File::open(path) {
-        Ok(file) => file.sync_all(),
-        Err(e) if path.is_dir() => {
-            tracing::debug!(path = %path.display(), error = %e, "skipping fsync of directory (unsupported on this platform)");
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+    crate::atomic_file::sync_path(path)
 }
 
 /// fsync the parent directory so the rename itself is durable; on
 /// platforms that cannot open a directory handle this is best-effort.
+/// Alias for the shared primitive
+/// ([`crate::atomic_file::sync_parent_dir`]).
 fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
-    match path.parent() {
-        Some(parent) => sync_path(parent),
-        None => Ok(()),
-    }
+    crate::atomic_file::sync_parent_dir(path)
 }
 
 /// Recursively copy a file or directory tree. Synchronous `std::fs`
