@@ -226,9 +226,8 @@ fn rate_limited_error(wait_secs: u64) -> (StatusCode, Json<ApiError>) {
             code: "RUN_RATE_LIMITED".into(),
             message: format!("Too many runs created recently; retry in {wait_secs}s."),
             detail: Some(format!(
-                "Default allowance: {} runs per minute (override with \
-                 OXO_FLOW_RUNS_RATE_LIMIT).",
-                run_rate_limit::DEFAULT_LIMIT
+                "Allowance: {} runs per minute (override with OXO_FLOW_RUNS_RATE_LIMIT).",
+                run_rate_limit::limit()
             )),
             suggestion: Some(
                 "Wait for the window to reset, or batch work via `oxo-flow batch` \
@@ -291,7 +290,7 @@ mod run_rate_limit {
     #[cfg(debug_assertions)]
     static TEST_LIMIT: AtomicU64 = AtomicU64::new(NO_TEST_OVERRIDE);
 
-    fn limit() -> u32 {
+    pub fn limit() -> u32 {
         #[cfg(debug_assertions)]
         {
             let test_limit = TEST_LIMIT.load(Ordering::Relaxed);
@@ -315,6 +314,11 @@ mod run_rate_limit {
 
     /// Returns `Err(seconds_until_next_slot)` when over the limit.
     pub fn check(identity: &str) -> Result<(), u64> {
+        // The global kill switch (Playwright/tests, documented as disabling
+        // the login/API limiters) covers this limiter too — "off means off".
+        if crate::rate_limit::rate_limit_disabled() {
+            return Ok(());
+        }
         let max = limit();
         if max == 0 {
             return Ok(()); // disabled

@@ -36,6 +36,17 @@ pub async fn audit_middleware(
 
     let status = response.status().as_u16();
     let action = format!("{method} {path}");
+
+    // Successful sign-ins are recorded by the login handler itself, which
+    // knows the authenticated identity — the middleware only sees the
+    // pre-auth request, so every login row it writes would be misattributed
+    // to the `default` pseudo-user (web-api.md §Audit Logs contract).
+    // Failed attempts still fall through here (actor unknown → `default`,
+    // result: "failure" — the actionable brute-force signal).
+    if login_success_is_handler_recorded(&path, status) {
+        return response;
+    }
+
     let result = if (200..300).contains(&status) {
         "success"
     } else {
@@ -83,6 +94,12 @@ fn audit_actor_id(user: Option<&crate::domains::auth::current_user::CurrentUser>
         .unwrap_or_else(|| crate::domains::auth::current_user::CurrentUser::default_user().id)
 }
 
+/// Successful sign-ins are recorded by the login handler (which owns the
+/// authenticated identity); the middleware records failed attempts only.
+fn login_success_is_handler_recorded(path: &str, status: u16) -> bool {
+    path == "/api/auth/login" && (200..300).contains(&status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +127,17 @@ mod tests {
         // Pre-auth/public requests have no extension: the same 'default'
         // pseudo-user `resolve()` yields everywhere else.
         assert_eq!(audit_actor_id(None), "default");
+    }
+
+    /// Login-success audit rows belong to the login handler (canonical
+    /// actor id); the middleware must not double-record them, but failed
+    /// attempts stay in the middleware trail for brute-force analysis.
+    #[test]
+    fn login_success_rows_are_handler_owned() {
+        assert!(login_success_is_handler_recorded("/api/auth/login", 200));
+        assert!(login_success_is_handler_recorded("/api/auth/login", 204));
+        assert!(!login_success_is_handler_recorded("/api/auth/login", 401));
+        assert!(!login_success_is_handler_recorded("/api/auth/login", 429));
+        assert!(!login_success_is_handler_recorded("/api/runs", 200));
     }
 }
