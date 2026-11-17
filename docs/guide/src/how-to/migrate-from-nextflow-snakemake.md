@@ -131,7 +131,7 @@ The authoritative construct-by-construct tables live in
 | Metadata | `tag` ignored; `label`/`publishDir` warned | `log`/`benchmark` mapped |
 | Sink rules | n/a | `rule all` dropped with a warning |
 
-Everything else is a **hard error with a source line** — dynamic resources,
+Everything else is a **hard error that names the construct** (parse-level errors carry a source line) — dynamic resources,
 channel operators, `include`, `params`, `run:`/`script:` bodies, lambdas,
 directory outputs, dynamic containers, indexed input tuples, unresolved
 interpolations, and unknown directives. The importer never writes a workflow

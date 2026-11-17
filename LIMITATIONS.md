@@ -35,8 +35,8 @@ WDL, and no importers for those formats are currently available.
   Workflow Language or Workflow Description Language files.
 - **Nextflow/Snakemake import covers a deterministic subset, not semantic
   parity** — `oxo-flow import` translates the supported constructs in
-  `docs/guide/src/commands/import.md` and **hard-fails with a source line** on
-  everything else: channel operators, `params`, `include`, dynamic resources,
+  `docs/guide/src/commands/import.md` and **hard-fails, naming the construct (with a source line
+  for parse-level errors)**, on everything else: channel operators, `params`, `include`, dynamic resources,
   Snakemake `run:`/`script:` bodies, lambdas, directory outputs, and unresolved
   interpolations. It never silently drops a directive or invents a path, and
   it parses plus statically validates the generated workflow before writing it.

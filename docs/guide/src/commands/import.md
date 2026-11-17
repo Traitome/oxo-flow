@@ -17,7 +17,7 @@ oxo-flow import [OPTIONS] <SOURCE>
 environments, literal I/O patterns, and shell bodies into `.oxoflow`. It is a
 **deterministic translator, not an interpreter**: there is no semantic parity
 with the source engine, and every construct outside the documented subset is a
-hard error that names the source line. The importer never invents a path, drops
+hard error that names the construct (parse-level errors carry a source line). The importer never invents a path, drops
 a semantic directive, or writes a workflow it could not translate.
 
 Before returning, the generated TOML is parsed and statically validated by the
