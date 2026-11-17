@@ -67,6 +67,16 @@ pub(crate) async fn dispatch_cluster_run(
         Some((summary.succeeded, summary.failed, summary.skipped)),
     )
     .await;
+    // An interrupt ends the process with the signal's exit code (128 +
+    // signum), matching the local executor. By now the interrupted records
+    // are persisted, the `--json` summary was emitted as failed, and the
+    // failure webhook was sent — an interrupt is never reported as a
+    // completed run, even when every interrupted rule was
+    // `required = false` (which is counted as non-required failed).
+    if let Some(code) = summary.interrupt_exit_code {
+        crate::background::remove_pid_file_from_env();
+        std::process::exit(code);
+    }
     if !summary.is_success() {
         return Err(anyhow::anyhow!("workflow execution failed"));
     }

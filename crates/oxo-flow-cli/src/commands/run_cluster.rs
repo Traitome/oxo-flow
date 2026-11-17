@@ -133,11 +133,18 @@ pub(crate) struct ClusterRunSummary {
     /// exempt from failing the run (issue #99 B2, cluster path).
     pub non_required_failed: usize,
     pub skipped: usize,
+    /// `128 + signum` of the signal that interrupted the run (SIGINT→130,
+    /// SIGTERM→143, SIGHUP→129), or `None` for an ordinary terminal
+    /// outcome. Carried out of [`run_on_cluster`] so the caller ends the
+    /// process the way the local executor does: an interrupt is never a
+    /// successful run, even when every interrupted rule was
+    /// `required = false`.
+    pub interrupt_exit_code: Option<i32>,
 }
 
 impl ClusterRunSummary {
     pub fn is_success(&self) -> bool {
-        self.failed == 0
+        self.failed == 0 && self.interrupt_exit_code.is_none()
     }
 }
 
@@ -731,6 +738,7 @@ pub(crate) async fn run_on_cluster(
         failed: 0,
         non_required_failed: 0,
         skipped: 0,
+        interrupt_exit_code: None,
     };
 
     if to_run.is_empty() {
@@ -948,13 +956,19 @@ pub(crate) async fn run_on_cluster(
     // A cancellation must persist its interrupted records like any terminal
     // state — dropping them through map_err would lose the only truthful
     // account of what the signal stopped (and skip the failed-count
-    // summary the webhook + exit contract below rely on).
+    // summary the webhook + exit contract below rely on). The signal's
+    // `128 + signum` exit code rides along: grading the run by its failure
+    // counts alone made a `required = false` interrupt look like success.
     let records = match run_result {
         Ok(records) => records,
         Err(oxo_flow_core::error::OxoFlowError::Cancelled {
             records: interrupted,
+            exit_code,
             ..
-        }) => interrupted,
+        }) => {
+            summary.interrupt_exit_code = Some(exit_code);
+            interrupted
+        }
         Err(e) => return Err(anyhow::anyhow!("cluster execution failed: {e}")),
     };
 

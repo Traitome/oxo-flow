@@ -384,8 +384,9 @@ fn oxo_flow(dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 /// Spawn `run --profile slurm`, keeping the child handle so a test can kill
-/// the driver mid-run or steer it with extra flags.
-fn spawn_run(dir: &Path, extra_args: &[&str]) -> std::process::Child {
+/// the driver mid-run or steer it with extra flags. `stdout_log` captures
+/// the child's stdout (the `--json` summary) when given.
+fn spawn_run(dir: &Path, extra_args: &[&str], stdout_log: Option<&Path>) -> std::process::Child {
     let path = format!(
         "{}:{}",
         fixtures_dir().display(),
@@ -393,15 +394,26 @@ fn spawn_run(dir: &Path, extra_args: &[&str]) -> std::process::Child {
     );
     let mut args = vec!["run", "wf.oxoflow", "--profile", "slurm"];
     args.extend_from_slice(extra_args);
-    StdCommand::new(workspace_bin("oxo-flow"))
-        .args(&args)
+    let mut cmd = StdCommand::new(workspace_bin("oxo-flow"));
+    cmd.args(&args)
         .current_dir(dir)
         .env("PATH", path)
         .env("MOCK_SCHEDULER_DIR", dir.join("sched"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap()
+        .stdout(match stdout_log {
+            Some(path) => Stdio::from(std::fs::File::create(path).unwrap()),
+            None => Stdio::null(),
+        })
+        .stderr(Stdio::null());
+    cmd.spawn().unwrap()
+}
+
+/// Deliver SIGINT to the spawned CLI — the signal a terminal Ctrl-C sends.
+fn send_sigint(child: &std::process::Child) {
+    let status = StdCommand::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("run kill(1)");
+    assert!(status.success(), "failed to deliver SIGINT");
 }
 
 fn wait_for(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
@@ -551,7 +563,7 @@ shell = "mkdir -p out && echo started > out/done.txt && { [ -f FAST ] || sleep 1
     )
     .unwrap();
 
-    let mut child = spawn_run(dir.path(), &[]);
+    let mut child = spawn_run(dir.path(), &[], None);
     let partial = dir.path().join("out/done.txt");
     let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
     let observed = wait_for(Duration::from_secs(30), || {
@@ -805,7 +817,7 @@ fn keep_going_finishes_inflight_independents_then_fails_the_run() {
     std::fs::write(dir.path().join("wf.oxoflow"), IN_FLIGHT_FAILURE_WORKFLOW).unwrap();
     let events_path = dir.path().join(".oxo-flow/runs/latest/events.jsonl");
 
-    let mut child = spawn_run(dir.path(), &["-k"]);
+    let mut child = spawn_run(dir.path(), &["-k"], None);
     let settled = wait_for(Duration::from_secs(30), || {
         std::fs::read_to_string(&events_path).is_ok_and(|raw| has_event(&raw, "FAILED", "bad"))
     });
@@ -880,6 +892,112 @@ fn without_keep_going_required_failure_cancels_inflight_independents() {
     // The mock scheduler's cancel is best-effort on the job process; let a
     // surviving mock job leave its loop before the tempdir disappears.
     std::fs::write(dir.path().join("RELEASE"), "").unwrap();
+}
+
+// ── Interrupt exit contract (issue #1093 follow-up) ────────────────────
+
+/// One rule that stays in flight until the signal, plus a dependent that
+/// must never be submitted once the interrupted rule settles as failed.
+fn interrupt_workflow(required: bool) -> String {
+    format!(
+        r#"
+[workflow]
+name = "cluster-interrupt"
+
+[[rules]]
+name = "hang"
+required = {required}
+output = ["hang.txt"]
+shell = "sleep 30 && echo done > hang.txt"
+
+[[rules]]
+name = "after"
+input = ["hang.txt"]
+output = ["after.txt"]
+shell = "echo after > after.txt"
+"#
+    )
+}
+
+/// SIGINT while a rule is in flight: the driver cancels it, records the
+/// interruption, never reports the run as completed, and exits
+/// `128 + SIGINT` = 130. This must hold whether the interrupted rule is
+/// `required = true` or `required = false` — an interrupt is never a
+/// successful run; a `required = false` failure *without* an interrupt
+/// still exits 0.
+fn interrupt_exits_130(required: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    std::fs::write(dir.path().join("wf.oxoflow"), interrupt_workflow(required)).unwrap();
+    let stdout_path = dir.path().join("stdout.json");
+    let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
+    let events_path = dir.path().join(".oxo-flow/runs/latest/events.jsonl");
+
+    let mut child = spawn_run(dir.path(), &["--json"], Some(&stdout_path));
+    let submitted = wait_for(Duration::from_secs(30), || {
+        std::fs::read_to_string(&events_path).is_ok_and(|raw| has_event(&raw, "SUBMITTED", "hang"))
+    });
+    assert!(submitted, "the in-flight rule was never submitted");
+    // The submission hook records the rule as running before the driver
+    // polls again, so this proves the CLI is mid-driver (signal handlers
+    // installed, job accepted) rather than racing startup.
+    let running = wait_for(Duration::from_secs(30), || {
+        rule_run_status(&checkpoint, "hang").as_deref() == Some("running")
+    });
+    assert!(running, "the rule never reached the running state");
+
+    send_sigint(&child);
+    let status = child.wait().unwrap();
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "SIGINT must exit 128 + signum, got {status:?} (required = {required})"
+    );
+
+    // The interrupted verdict is persisted, and the dependent never ran.
+    assert_eq!(
+        rule_run_status(&checkpoint, "hang").as_deref(),
+        Some("failed"),
+        "the interrupted rule must stay recorded as failed (required = {required})"
+    );
+    let events = std::fs::read_to_string(&events_path).unwrap();
+    assert!(
+        events.lines().any(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            v["t"] == "FAILED"
+                && v["rule"] == "hang"
+                && v["reason"]
+                    .as_str()
+                    .is_some_and(|r| r.contains("interrupted by SIGINT"))
+        }),
+        "missing the interrupted verdict:\n{events}"
+    );
+    assert!(
+        !has_event(&events, "SUBMITTED", "after"),
+        "a dependent of the interrupted rule must not be submitted:\n{events}"
+    );
+    assert!(!dir.path().join("after.txt").exists());
+
+    // `--json` must never call an interrupted run completed — every
+    // non-completed exit is `failed` (see docs/guide/src/commands/run.md).
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&stdout_path).unwrap()).unwrap();
+    assert_eq!(
+        doc["status"], "failed",
+        "an interrupt must be reported as failed: {doc}"
+    );
+}
+
+#[test]
+fn sigint_exits_130_when_a_required_rule_is_in_flight() {
+    interrupt_exits_130(true);
+}
+
+/// The regression that motivated the fix: a `required = false` interrupt
+/// used to look like a successful run (exit 0, `status: "completed"`).
+#[test]
+fn sigint_exits_130_when_only_non_required_rules_are_in_flight() {
+    interrupt_exits_130(false);
 }
 
 /// The checkpoint's checksum map, or an empty object when the field is

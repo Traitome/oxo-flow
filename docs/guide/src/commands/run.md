@@ -94,8 +94,8 @@ The document carries `command`, `status`, `results` counts, and `resources`.
 It is emitted on **every** exit path — completed, failed, and aborted
 (preflight failures, budget breaches, cluster runs, plain-failure aborts) —
 so `--json` consumers never get zero bytes. `status` is `"completed"` only
-when the run finished with zero required failures; every other exit is
-`"failed"`.
+when the run finished with zero required failures and was not interrupted;
+every other exit is `"failed"`.
 
 Human progress and result output on stderr is **not** suppressed — this flag
 appends the summary, it does not switch the run to machine-only mode.
@@ -1614,6 +1614,7 @@ the config surface.
 | `0` | Success — the run finished with zero required-rule failures |
 | `1` | Validation or parse failure — the workflow file could not be read, parsed, or validated |
 | `1` | Run failure — a `required` rule failed (a plain `--keep-going` failure summary still exits non-zero; only `required = false` failures leave the exit code at 0) |
+| `130` / `143` / `129` | Interrupted — SIGINT / SIGTERM / SIGHUP stopped the run. In-flight rules are recorded as interrupted and `--json` reports status `"failed"`; this holds on the local and `run --profile` cluster paths, and even when every interrupted rule is `required = false` (an interrupt is never reported as success) |
 
 Validation and run failures both exit `1`; the distinction is in the stderr
 diagnostics (a parse error names the workflow file, a run failure lists the

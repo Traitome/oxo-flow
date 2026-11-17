@@ -627,8 +627,13 @@ warns for each and proceeds (per-job walltime comes from the `[cluster]`
 Interrupting a cluster run cancels its in-flight scheduler jobs: on
 Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
 every job still in the queue or running, records each interrupted rule as
-failed with an `interrupted by <SIG...>` skip reason, and exits with
-`128 + <signal number>` — the same shape the local executor reports.
+failed with an `interrupted by <SIG...>` skip reason, persists those
+records in the checkpoint, emits the `--json` summary (status `failed`)
+and the failure webhook, and exits with `128 + <signal number>` —
+SIGINT → 130, SIGTERM → 143, SIGHUP → 129 — the same shape the local
+executor reports. An interrupt is always a failed run, even when every
+interrupted rule is `required = false`: it is never reported as completed.
+(A `required = false` failure *without* an interrupt still exits 0.)
 Signals are watched on the cluster path only; the local executor has its
 own (pre-existing) signal handling.
 

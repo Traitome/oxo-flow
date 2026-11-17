@@ -402,7 +402,10 @@ On clusters, the scheduler enforces resources based on the generated directives.
     When a run aborts, rules still in flight are killed and recorded as
     **incomplete** (neither completed nor failed) — `resume` re-runs them
     from their checkpoint, so no output is silently trusted from a killed
-    job.
+    job. A run stopped by SIGINT/SIGTERM/SIGHUP exits `128 + signum`
+    (130/143/129) and `--json` reports status `"failed"`, even when every
+    interrupted rule is `required = false` — an interrupt is never
+    reported as a completed run.
 
 !!! tip "Check resource availability"
     Use `sinfo` (SLURM), `pbsnodes` (PBS), or `qhost` (SGE) to verify available resources before submitting.
