@@ -617,6 +617,13 @@ real code could not be read, instead of defaulting to `1`.
 Outputs, the working directory, and logs are assumed to live on storage
 shared between the submitting host and the compute nodes.
 
+A few `run` flags are parsed but have no effect on this path — the command
+warns for each and proceeds (per-job walltime comes from the `[cluster]`
+`walltime` key or a rule's `time_limit`, cluster concurrency is governed by
+`max_submitted`, and failed rules are re-queued by `resume` /
+`--resume-failed` rather than retried in place). The complete table lives in
+[Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface).
+
 Interrupting a cluster run cancels its in-flight scheduler jobs: on
 Ctrl-C (or SIGTERM/SIGHUP) the driver calls the scheduler's cancel for
 every job still in the queue or running, records each interrupted rule as

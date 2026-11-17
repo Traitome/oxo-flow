@@ -75,15 +75,15 @@ keys matching nothing declared keep the literal spelling.
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
 
 !!! note "Flags the cluster driver does not honor"
-    On `run --profile`, `--provenance`, `--keep-going`, `--retry`,
-    `--timeout`, and `--max-threads`/`--max-memory` are parsed but not
-    applied; the engine warns once per flag you actually passed. Cluster
-    checkpoints therefore carry **no output checksums** today (issue #1093),
-    and a required rule's failure cancels every in-flight job regardless of
-    `--keep-going` — use `required = false` for best-effort rules. Set a
-    per-job walltime with the rule's `time_limit` (or the profile's
-    `walltime`), and leave resource limits to the per-rule `[resources]`
-    block and the `[cluster]` profile.
+    On `run --profile`, several `run` flags are parsed but not applied — the
+    engine warns once per flag you actually passed (full table:
+    [Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface)).
+    Cluster checkpoints therefore carry **no output checksums** today (issue
+    #1093), and a required rule's failure cancels every in-flight job
+    regardless of `--keep-going` — use `required = false` for best-effort
+    rules. Set a per-job walltime with the rule's `time_limit` (or the
+    profile's `walltime`), and leave resource limits to the per-rule
+    `[resources]` block and the `[cluster]` profile.
 
 ### JSON output
 
@@ -671,7 +671,10 @@ profile lookup rules, `TMPDIR` exports on job scripts, the `scratch = true`
 plan-time rejection, job arrays, the run directory layout, what `status.json`
 records, and interrupt/re-attach semantics — lives in
 [Cluster submission](cluster.md#cluster-submission-run-profile) on the
-[`cluster`](cluster.md) page.
+[`cluster`](cluster.md) page. `run` flags that are parsed but dropped on that
+path (`--keep-going`, `--retry`, `--timeout`, `--provenance`,
+`--max-threads`/`--max-memory`) are tabulated in
+[Cluster flag surface](../how-to/run-on-cluster.md#cluster-flag-surface).
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
 GCP Batch) is configured
