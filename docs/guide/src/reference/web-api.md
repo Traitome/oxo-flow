@@ -708,6 +708,13 @@ ignored) and resumes it. On **resume**, a `from_rule` field is rejected with
 specific rule has no meaning (see Smart Retry above: cancel the run and retry
 it instead). A terminal run in either endpoint returns `409 RUN_NOT_ACTIVE`.
 
+Both endpoints signal the run's live process group, so a row with no
+registered group is refused with `409` rather than flipped in the DB:
+**pause** answers `409 NO_PROCESS_GROUP` (a queued run has nothing to freeze)
+and **resume** answers `409 RUN_NOT_RESUMABLE` (a paused run whose process has
+exited has nothing to unfreeze — writing `running` would show it executing
+with nothing behind it). In both cases the stored status is left unchanged.
+
 ### Logs
 ```
 GET /api/runs/{id}/logs

@@ -1884,10 +1884,20 @@ pub async fn pause_run(
     }
 
     let now = now_iso();
-    backend
+    if let Err(e) = backend
         .update_run_status(&id, "paused", &format!("paused: {reason}"))
         .await
-        .map_err(|e| db_err(format!("DB error pausing run {id}: {e}")))?;
+    {
+        // The group is already SIGSTOPped but the DB still says 'running':
+        // the row would contradict process state (UI shows executing while
+        // the process is frozen, and nothing would ever unfreeze it). Roll
+        // the freeze back (best effort) so the two states agree again, then
+        // surface the failure instead of pretending the pause succeeded.
+        let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT);
+        return Err(db_err(format!(
+            "DB error pausing run {id}: {e} (process group unfrozen to keep DB and process state consistent)"
+        )));
+    }
 
     crate::broadcast_event_for(
         "run_paused",
@@ -1954,10 +1964,24 @@ pub async fn resume_run(
         ));
     }
 
-    // Unfreeze the live process group.
-    if let Some(pgid) = crate::process_control::pgid(&id)
-        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT)
-    {
+    // Unfreeze the live process group. A paused row whose process group is
+    // gone (the process exited, or was never registered) cannot be resumed
+    // in place: writing 'running'/'executing' below would fabricate a live
+    // run with nothing behind it — a ghost run the UI shows as executing
+    // while nothing is. First-terminal/consistency intent: the status flip
+    // is conditional on there being a process group to unfreeze, exactly
+    // mirroring the pause path's NO_PROCESS_GROUP gate.
+    let Some(pgid) = crate::process_control::pgid(&id) else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_RESUMABLE",
+            format!(
+                "Run {id} has no live process group to resume (process exited or already \
+                 detached) — cancel it instead"
+            ),
+        ));
+    };
+    if let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT) {
         return Err(err(
             StatusCode::CONFLICT,
             "RESUME_ERROR",
@@ -1966,10 +1990,17 @@ pub async fn resume_run(
     }
 
     let _now = now_iso();
-    backend
-        .update_run_status(&id, "running", "executing")
-        .await
-        .map_err(|e| db_err(format!("DB error resuming run {id}: {e}")))?;
+    if let Err(e) = backend.update_run_status(&id, "running", "executing").await {
+        // Mirror of the pause path: the group is already SIGCONTinued but the
+        // DB still says 'paused', so the row would contradict process state
+        // (UI shows paused while the run is in fact executing). Re-freeze
+        // (best effort) so the two agree again, then surface the failure
+        // instead of pretending the resume succeeded.
+        let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP);
+        return Err(db_err(format!(
+            "DB error resuming run {id}: {e} (process group re-frozen to keep DB and process state consistent)"
+        )));
+    }
 
     crate::broadcast_event_for(
         "run_resumed",
