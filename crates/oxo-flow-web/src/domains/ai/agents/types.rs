@@ -1,8 +1,7 @@
-//! Agent types — shared agent message protocol and status types.
+//! Agent types — shared data and status types for the specialized agents.
 //!
-//! All agents communicate through the uniform AgentMessage protocol.
-//! The orchestrator dispatches tasks to specialized agents, each returning
-//! structured results with confidence, evidence, and unknowns.
+//! `AgentMessage` is the uniform message shape for structured results with
+//! confidence, evidence, and unknowns.
 
 use serde::{Deserialize, Serialize};
 
