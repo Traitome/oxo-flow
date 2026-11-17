@@ -4578,7 +4578,7 @@
 <tr>
 <td><strong>execution</strong></td>
 <td><code>domains/execution/</code></td>
-<td>Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace; runs delegate to the <code>oxo-flow</code> CLI subprocess, which owns checkpointing and invalidation</td>
+<td>Run create/status/cancel/retry, diagnostics engine (31 error patterns), sandbox workspace; runs delegate to the <code>oxo-flow</code> CLI subprocess, which owns checkpointing and invalidation</td>
 </tr>
 <tr>
 <td><strong>ai</strong></td>
@@ -4682,7 +4682,7 @@
 </span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>│   ├── /{id}               # Run detail with log tail
 </span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>│   ├── /{id}/status        # Real-time status (nodes, timeline, resources)
 </span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>│   ├── /{id}/dag-status    # DAG JSON + per-node live status
-</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>│   ├── /{id}/diagnostics   # Diagnostic engine results (30+ error patterns)
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>│   ├── /{id}/diagnostics   # Diagnostic engine results (31 error patterns)
 </span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>│   ├── /{id}/logs          # Execution logs
 </span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>│   ├── /{id}/results       # Output files with sizes
 </span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>│   ├── /{id}/retry         # Smart retry (failed + downstream only)
