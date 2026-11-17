@@ -37,7 +37,15 @@ if [ -n "$array" ]; then
       echo $$ > "$dir/jobs/${id}_${i}/pid"
       SLURM_ARRAY_TASK_ID=$i SGE_TASK_ID=$i PBS_ARRAY_INDEX=$i LSB_JOBINDEX=$i         bash "$script" > "$dir/jobs/${id}_${i}/stdout.log" 2> "$dir/jobs/${id}_${i}/stderr.log"
       code=$?
-      if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/${id}_${i}/state"; else echo "FAILED" > "$dir/jobs/${id}_${i}/state"; fi
+      # A cancel issued while the job runs is authoritative (scancel writes
+      # CANCELLED): a late process exit must not overwrite it, or a driver
+      # polling after the cancel would read COMPLETED and skip the cancel
+      # decision. `kill` in scancel is best-effort (and here targets a
+      # reaped wrapper pid), so this guard is what makes cancellation
+      # observable.
+      if [ "$(cat "$dir/jobs/${id}_${i}/state" 2>/dev/null)" != "CANCELLED" ]; then
+        if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/${id}_${i}/state"; else echo "FAILED" > "$dir/jobs/${id}_${i}/state"; fi
+      fi
       echo "$code" > "$dir/jobs/${id}_${i}/exit_code"
     ) >/dev/null 2>&1 &
   done
@@ -62,7 +70,10 @@ fi
   echo $$ > "$dir/jobs/$id/pid"
   bash "$script" > "$dir/jobs/$id/stdout.log" 2> "$dir/jobs/$id/stderr.log"
   code=$?
-  if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/$id/state"; else echo "FAILED" > "$dir/jobs/$id/state"; fi
+  # See the array branch above: a CANCELLED verdict is final.
+  if [ "$(cat "$dir/jobs/$id/state" 2>/dev/null)" != "CANCELLED" ]; then
+    if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/$id/state"; else echo "FAILED" > "$dir/jobs/$id/state"; fi
+  fi
   echo "$code" > "$dir/jobs/$id/exit_code"
 ) >/dev/null 2>&1 &
 if [ "$parsable" -eq 1 ]; then

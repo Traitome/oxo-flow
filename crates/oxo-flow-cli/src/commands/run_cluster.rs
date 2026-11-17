@@ -95,6 +95,13 @@ pub(crate) struct ClusterRunArgs<'a> {
     pub max_submitted: Option<usize>,
     pub rerun: bool,
     pub resume_failed: bool,
+    /// `-k/--keep-going` (issue #1093 F2b): a required rule's failure is
+    /// recorded and still fails the run, but must not cancel jobs already
+    /// in flight — the driver finishes them and keeps dispatching ready
+    /// independent instances until the queue drains, while dependents of
+    /// the failed rule stay blocked. Interrupts and driver errors still
+    /// cancel everything.
+    pub keep_going: bool,
     /// `--cache-dir`: env cache location (falls back to the same
     /// `workdir/.oxo-flow/env-cache` default the local executor uses, so
     /// the two execution paths share env state — issue #136 tier-2 audit).
@@ -833,6 +840,10 @@ pub(crate) async fn run_on_cluster(
         unknown_settle_grace: std::time::Duration::from_secs(90),
         // Wired below, after the watch channel exists.
         cancel: None,
+        // Issue #1093 F2b: `-k` reaches the driver — the required-failure
+        // cancel decision is the one thing it changes (interrupts below
+        // always cancel).
+        keep_going: args.keep_going,
     };
     // Wire OS signals into the driver: SIGINT/SIGTERM/SIGHUP cancel every
     // in-flight scheduler job and surface as a Cancelled error carrying the
@@ -1595,6 +1606,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
                 max_submitted: None,
                 rerun: false,
                 resume_failed: false,
+                keep_going: false,
                 cache_dir: None,
                 skip_env_setup: false,
                 ai_recover: false,
