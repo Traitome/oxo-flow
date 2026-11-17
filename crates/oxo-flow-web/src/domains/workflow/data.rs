@@ -27,7 +27,8 @@ static FORMAT_MAP: &[(&str, &str)] = &[
     (".txt", "Text"),
 ];
 
-/// Analyze files at given paths.
+/// The format label for extensions outside [`FORMAT_MAP`].
+const UNKNOWN_FORMAT: &str = "unknown";
 ///
 /// Detects formats via extension matching, identifies paired-end naming
 /// patterns, and suggests an appropriate workflow template.
@@ -63,7 +64,7 @@ pub fn analyze_files(
             .iter()
             .find(|(ext, _)| filename.ends_with(ext))
             .map(|(_, name)| (name.to_string(), 0.95))
-            .unwrap_or_else(|| ("unknown".to_string(), 0.0));
+            .unwrap_or_else(|| (UNKNOWN_FORMAT.to_string(), 0.0));
 
         formats.insert(format_name.clone());
 
@@ -146,9 +147,9 @@ fn mate_path(path: &str) -> Option<String> {
         let Some(index) = file_name.rfind(marker) else {
             return false;
         };
-        // `_R10` / `_R1foo` are sample-name tokens, not R1/R2 markers. The
-        // `_1.`/`_2.` forms carry their separator, so any suffix is allowed
-        // (`_1.trimmed.fastq.gz`).
+        // `_R10` (a digit follows the marker) is a sample-name token, not an
+        // R1 marker; `_R1foo` still matches. The `_1.`/`_2.` forms carry
+        // their separator, so any suffix is allowed (`_1.trimmed.fastq.gz`).
         if marker.starts_with("_R") {
             let next = file_name[index + marker.len()..].chars().next();
             return next.is_none_or(|c| !c.is_ascii_digit());
@@ -161,7 +162,11 @@ fn mate_path(path: &str) -> Option<String> {
         &file_name[..index],
         &file_name[index + marker.len()..]
     );
-    let prefix = &path[..path.len() - file_name.len()];
+    // `strip_suffix` rather than byte arithmetic: `Path::file_name()` ignores
+    // trailing separators, so a path ending in `/` or `\` would otherwise
+    // slice at a non-boundary (and panic on multi-byte names). Such a path is
+    // malformed for a file input; no mate is the safe answer.
+    let prefix = path.strip_suffix(file_name)?;
     Some(format!("{prefix}{mate_name}"))
 }
 
@@ -181,7 +186,7 @@ fn pair_files(files: Vec<FileInfo>) -> Vec<FileInfo> {
         files
             .iter()
             .map(|file| {
-                if file.format == "unknown" {
+                if file.format == UNKNOWN_FORMAT {
                     return None;
                 }
                 let mate = mate_path(&file.path)?;
@@ -406,6 +411,24 @@ mod tests {
             !mate.contains(dir.path().to_str().unwrap()),
             "the mate must stay client-relative, never a server path"
         );
+    }
+
+    #[test]
+    fn trailing_separator_paths_do_not_panic_or_pair() {
+        // `Path::file_name()` ignores a trailing separator, so byte arithmetic
+        // would slice at a non-boundary for a multi-byte file name. A file
+        // input must not end in a separator; no pairing is the safe result.
+        let result = analyze_files(
+            &[
+                "/数据/数据_R1.fastq.gz/".into(),
+                "/数据/数据_R2.fastq.gz/".into(),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.files[0].paired_with, None);
+        assert_eq!(result.files[1].paired_with, None);
     }
 
     #[test]
