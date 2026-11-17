@@ -400,8 +400,7 @@ pub struct RuleTypesSpec {
 pub struct TypeViolation {
     /// Diagnostic identifier (`TYPE-001` .. `TYPE-009`, or `TYPE-UNKNOWN`
     /// when a referenced type name cannot be resolved). `TYPE-008` / `TYPE-009`
-    /// are advisory unverifiable-edge codes — see
-    /// [`is_advisory_type_code`](checker::is_advisory_type_code).
+    /// are advisory unverifiable-edge codes — see [`is_advisory_type_code`].
     pub code: String,
     /// Clear explanation of the semantic mismatch.
     pub message: String,
