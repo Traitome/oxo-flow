@@ -429,11 +429,16 @@ fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
 /// joined by [`ClusterProvenance::join_pending`] before the run reports.
 async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_name: &str) {
     {
-        let mut hashed = args
-            .provenance
-            .rules_hashed
-            .lock()
-            .expect("provenance hash set poisoned");
+        let mut hashed = match args.provenance.rules_hashed.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Nothing in this block panics, but a poisoned lock must
+                // never crash a settle path that is only de-duplicating
+                // hashing work: recover the set and keep recording.
+                tracing::warn!("provenance hash set lock was poisoned — recovering");
+                poisoned.into_inner()
+            }
+        };
         if !hashed.insert(rule_name.to_string()) {
             return;
         }
