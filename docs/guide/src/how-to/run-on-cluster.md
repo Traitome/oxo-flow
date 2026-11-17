@@ -382,8 +382,16 @@ On clusters, the scheduler enforces resources based on the generated directives.
 !!! tip "Set realistic time limits"
     Generous wall-time limits prevent premature job termination but may lower scheduling priority. Profile your jobs first.
 
-!!! tip "Use `--keep-going` for large batches"
-    When running hundreds of samples, use `oxo-flow run -k` so that a single failure does not abort the entire run.
+!!! note "Failure handling on the cluster path"
+    `--keep-going` is not honored on the cluster path — the flag prints a
+    warning and is dropped (see
+    [Cluster flag surface](#cluster-flag-surface)). The driver keeps
+    dispatching independent jobs until the queue drains anyway: a failure
+    blocks only its dependents. When a `required = true` rule fails,
+    every in-flight job is cancelled and the run exits — mark salvageable
+    steps `required = false` (best-effort QC, optional per-sample stages)
+    so their failure neither cancels the run nor blocks unrelated
+    branches, then re-queue what failed with `resume` / `--resume-failed`.
 
 !!! note "Aborted in-flight siblings are incomplete, not failed"
     When a run aborts, rules still in flight are killed and recorded as
@@ -507,6 +515,26 @@ unvalidated** — a typo reaches the scheduler as written (the same applies to
 flag > `$OXO_FLOW_CLUSTER_BACKEND` > `slurm` (see
 [Monitoring Jobs](#monitoring-jobs)); the profile block's `backend` key
 remains required and is validated the same strict way.
+
+### Cluster flag surface
+
+`run --profile` does not consume every `run` flag. The flags below are
+parsed but have no effect on the cluster path — the command prints a
+warning for each and proceeds:
+
+| `run` flag | Cluster-path behavior |
+|---|---|
+| `--retry` | Warned and dropped — there is no engine-side retry on the cluster path. Failed rules are recorded in the checkpoint and re-queued by `resume` / `--resume-failed`. |
+| `--keep-going` / `-k` | Warned and dropped — the driver always dispatches independent jobs until the queue drains; only a required rule's failure cancels in-flight jobs (see [Scheduling Fairness](#scheduling-fairness)). |
+| `--timeout` | Warned and dropped — per-job walltime comes from the profile's `[cluster]` `walltime` key or the rule's own `time_limit`; the `-w/--walltime` flag exists only on `cluster submit`. |
+| `--provenance` | Warned and dropped — output checksums are currently recorded only on the local execution path. |
+| `--max-threads` / `--max-memory` | Warned and dropped — per-rule `[resources]` and the `[cluster]` profile drive scheduler limits; `[resource_budget]` performs the pre-submit check. |
+| `-j` / `--jobs` | Silently inapplicable — cluster concurrency is governed by `max_submitted` (the profile key or `--max-submitted`), clamped by `[resource_budget] max_jobs`. |
+| `--skip-env-setup`, `--ai-recover` | Accepted for command-line parity (warned, issue #136): environments are prepared inside each job script, and AI recovery does not run on the cluster path. |
+
+`--skip-ref-build` is accepted on the cluster path and is a no-op there by
+construction: the reference-build step runs only on the local execution
+path, and `run --profile` never builds references itself.
 
 ---
 
