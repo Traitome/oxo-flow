@@ -341,6 +341,24 @@ pub async fn login(
     // (account, ip) bucket — one typo must not poison the next attempt.
     clear_login_failures(&req.username, &ip);
 
+    // The audit middleware sees only the pre-auth request for this path, so
+    // it would attribute the row to the `default` pseudo-user (see audit.rs,
+    // which skips successful logins for exactly this reason). This handler
+    // owns the success row and records the canonical users.id.
+    if let Some(backend) = crate::infra::db::global_backend()
+        && let Err(e) = backend
+            .record_audit_log(
+                &session_user_id,
+                "POST /api/auth/login",
+                "/api/auth/login",
+                "success",
+                Some(&serde_json::json!({ "status": 200 }).to_string()),
+            )
+            .await
+    {
+        tracing::error!("audit insert failed for POST /api/auth/login: {e}");
+    }
+
     Ok(Json(result))
 }
 

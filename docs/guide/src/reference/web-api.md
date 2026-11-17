@@ -7,7 +7,7 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 ## API Design Conventions
 
 - **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail, suggestion }` — `detail` and `suggestion` are always present and are `null` when the error carries no extra context
-- **Errors**: `{ code: "E001", message, detail, suggestion }` — the `code` value uses the engine's [diagnostic codes](./glossary.md#diagnostic-codes)
+- **Errors**: the `code` value is a stable semantic string per failure class (`AUTH_REQUIRED`, `NOT_FOUND`, `RUN_RATE_LIMITED`, `AI_TIMEOUT`, …). Engine [diagnostic codes](./glossary.md#diagnostic-codes) (`E0xx`) surface inside `message` (e.g. a parse failure reported as `RUN_ERROR` carries `E017: unknown key …` in its message), not as the envelope `code`
 - **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
 - **Versioning**: `/api/` prefix for all endpoints
 - **Authentication**: in team/hpc mode, protected endpoints accept an `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.
@@ -42,14 +42,20 @@ answers the same structured `429 RATE_LIMITED` (the countdown is in
 `detail`; the login handler's error tuple cannot attach a `Retry-After`
 header) before any credential check runs. Per-account keying means a
 sprayed username cannot lock out other accounts; a successful login
-resets the counter; `OXO_FLOW_DISABLE_RATE_LIMIT=1` disables both
-limiters (tests/dev only).
+resets the counter; `OXO_FLOW_DISABLE_RATE_LIMIT=1` disables every
+limiter — the API limiter, the login brute-force guard, and the dedicated
+run-creation limiter (#213) (tests/dev only).
 
 Malformed input is answered in the same envelope, never axum's bare-text
 rejection: a query string that does not fit the endpoint's parameters gets
 `400 INVALID_QUERY`, and a JSON body that does not deserialize against the
 endpoint's schema gets `400 INVALID_BODY` — both carry axum's parse message
-in `detail` and a pointer to `GET /api/openapi.json` in `suggestion`.
+in `detail` and a pointer to `GET /api/openapi.json` in `suggestion`. A body
+that deserializes but fails a handler-level required-field check answers an
+endpoint-specific code instead (e.g. `POST /api/runs` without
+`toml_content` gets `400 MISSING`). Clients should rely on the four-field
+envelope and treat `code` as informative; the endpoint-specific sections
+below name the codes each route can return.
 
 ---
 
@@ -910,8 +916,12 @@ Use `POST /api/ai/translate/stream` for generations expected to run longer:
 the SSE route is not capped by this total budget.
 
 `GET /api/ai/config` stays public for anonymous feature discoverability:
-anonymous callers (and non-admin callers outside personal mode) receive only
-`{provider: "", model: null, api_url: null, is_configured}`. Presenting a
+non-admin callers outside personal mode (team/hpc) — including anonymous
+callers — receive only
+`{provider: "", model: null, api_url: null, is_configured}`. Personal mode
+has no sign-in at all (loopback, single local user), so its callers always
+receive the unmasked payload — the exception the SPA settings page relies
+on. Presenting a
 valid credential opts the request into normal authentication, so an admin
 sees the configured provider, model, and URL (never the API key); an invalid
 credential is rejected with `401` rather than silently downgraded to the

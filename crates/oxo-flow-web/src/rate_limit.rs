@@ -426,7 +426,10 @@ fn login_bucket(account: &str, ip: &str) -> String {
     format!("login:{account}@{ip}")
 }
 
-fn rate_limit_disabled() -> bool {
+/// The `OXO_FLOW_DISABLE_RATE_LIMIT=1` kill switch, shared by every limiter
+/// in the crate (login/API middleware, login brute-force guard, and the #213
+/// run-creation limiter) — documented as "off means off".
+pub(crate) fn rate_limit_disabled() -> bool {
     std::env::var("OXO_FLOW_DISABLE_RATE_LIMIT").as_deref() == Ok("1")
 }
 

@@ -892,70 +892,105 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
                 Some("running") | Some("paused") | Some("queued") => {}
                 _ => break,
             }
-            let Ok(meta) = tokio::fs::metadata(&log_path).await else {
-                continue;
-            };
-            let len = meta.len();
-            if len < offset {
-                offset = 0; // log rotated/truncated
-            }
-            if len == offset {
-                continue;
-            }
-            let Ok(mut file) = tokio::fs::File::open(&log_path).await else {
-                continue;
-            };
-            use tokio::io::{AsyncReadExt, AsyncSeekExt};
-            if file.seek(std::io::SeekFrom::Start(offset)).await.is_err() {
-                continue;
-            }
-            // Bound the per-tick delta: a rule that emitted hundreds of MB
-            // between ticks must not buffer all of it for SSE parsing
-            // (issue #734). Anything past the cap is skipped — the next
-            // tick resumes from the new offset.
-            const MAX_TAILER_TICK_BYTES: u64 = 4 * 1024 * 1024;
-            let mut buf = String::new();
-            if file
-                .take(MAX_TAILER_TICK_BYTES)
-                .read_to_string(&mut buf)
-                .await
-                .is_err()
-            {
-                continue;
-            }
-            offset = len;
-            for line in buf.lines() {
-                let event = if let Some(rest) = line.strip_prefix("Running: ") {
-                    Some(("rule_started", rest.trim().to_string()))
-                } else if let Some(rest) = line.strip_prefix('✓') {
-                    // The CLI prints `✓ {rule} ({:.1}s)` — the duration
-                    // suffix must not reach the event's rule name, which
-                    // rule_started/rule_failed carry clean.
-                    let name = rest.trim();
-                    let name = name.split_once(" (").map_or(name, |(r, _)| r);
-                    Some(("rule_completed", name.to_string()))
-                } else if line.starts_with('⊝') {
-                    Some((
-                        "rule_skipped",
-                        line.trim_start_matches('⊝').trim().to_string(),
-                    ))
-                } else {
-                    line.strip_prefix("✗ rule '")
-                        .and_then(|l| l.split_once("'"))
-                        .map(|(rule, _)| ("rule_failed", rule.to_string()))
-                };
-                if let Some((event_type, rule)) = event
-                    && !rule.is_empty()
-                {
-                    broadcast_event_for(
-                        event_type,
-                        &serde_json::json!({"run_id": run_id, "rule": rule}),
-                        user_id.as_deref(),
-                    );
-                }
-            }
+            drain_log_events(&log_path, &mut offset, &run_id, user_id.as_deref()).await;
         }
+        // The run just reached a terminal state, but the CLI may have
+        // narrated rule completions after the final 1.5 s poll (the live
+        // check showed the last rule_completed dropped when the tailer
+        // exited on the status flip). Drain once more before exiting.
+        drain_log_events(&log_path, &mut offset, &run_id, user_id.as_deref()).await;
     });
+}
+
+/// Read the run log from `offset` and broadcast any rule events found.
+async fn drain_log_events(
+    log_path: &std::path::Path,
+    offset: &mut u64,
+    run_id: &str,
+    user_id: Option<&str>,
+) {
+    let Ok(meta) = tokio::fs::metadata(log_path).await else {
+        return;
+    };
+    let len = meta.len();
+    if len < *offset {
+        *offset = 0; // log rotated/truncated
+    }
+    if len == *offset {
+        return;
+    }
+    let Ok(mut file) = tokio::fs::File::open(log_path).await else {
+        return;
+    };
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    if file.seek(std::io::SeekFrom::Start(*offset)).await.is_err() {
+        return;
+    }
+    // Bound the per-tick delta: a rule that emitted hundreds of MB
+    // between ticks must not buffer all of it for SSE parsing
+    // (issue #734). Anything past the cap is skipped — the next
+    // tick resumes from the new offset.
+    const MAX_TAILER_TICK_BYTES: u64 = 4 * 1024 * 1024;
+    let mut buf = String::new();
+    if file
+        .take(MAX_TAILER_TICK_BYTES)
+        .read_to_string(&mut buf)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    *offset = len;
+    for line in buf.lines() {
+        let event = parse_rule_event(line);
+        if let Some((event_type, rule)) = event
+            && !rule.is_empty()
+        {
+            broadcast_event_for(
+                event_type,
+                &serde_json::json!({"run_id": run_id, "rule": rule}),
+                user_id,
+            );
+        }
+    }
+}
+
+/// Map one run-log line to an SSE rule event.
+///
+/// Mirrors the exact formats `progress_narrate` writes into the run log
+/// (crates/oxo-flow-cli/src/commands/run/task.rs and scheduler_loop.rs):
+/// the lines carry a two-space indent, a rule-completion line is always
+/// `✓ {rule} ({:.1}s)`, and `✗ rule '<name>' failed: …` wraps the rule in
+/// quotes — all ANSI-stripped by the CLI before the line reaches the log.
+fn parse_rule_event(line: &str) -> Option<(&'static str, String)> {
+    let line = line.trim_start();
+    if let Some(rest) = line.strip_prefix("Running: ") {
+        return Some(("rule_started", rest.trim().to_string()));
+    }
+    if let Some(rest) = line.strip_prefix('✓') {
+        // The duration suffix is always present on rule completion; other
+        // ✓ narrations (report snapshot written, output files verified) are
+        // not rules and must not become rule_completed events.
+        let rest = rest.trim();
+        if let Some((name, duration)) = rest.rsplit_once(" (")
+            && duration
+                .strip_suffix("s)")
+                .and_then(|d| d.trim().parse::<f64>().ok())
+                .is_some()
+        {
+            return Some(("rule_completed", name.trim().to_string()));
+        }
+        return None;
+    }
+    if line.starts_with('⊝') {
+        return Some((
+            "rule_skipped",
+            line.trim_start_matches('⊝').trim().to_string(),
+        ));
+    }
+    line.strip_prefix("✗ rule '")
+        .and_then(|l| l.split_once("'"))
+        .map(|(rule, _)| ("rule_failed", rule.to_string()))
 }
 
 /// Sample the run's process-tree memory/CPU every 5 seconds into
@@ -1400,6 +1435,53 @@ mod tests {
     fn summary_returns_none_without_invalidation_activity() {
         let log = "DAG: 2 rules in dependency order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
         assert_eq!(extract_invalidation_summary(log), None);
+    }
+
+    /// The SSE log tailer must recognize the exact lines the CLI narrates
+    /// into the run log — including the two-space indent every
+    /// `progress_narrate` line carries. The bare-prefix matching used to
+    /// drop every rule event (live user-sim finding: /api/events emitted
+    /// only run_started/run_completed).
+    #[test]
+    fn parse_rule_event_matches_indented_run_log_lines() {
+        // Verbatim shapes from a real execution.log (ANSI already stripped
+        // by the CLI before the line is written).
+        assert_eq!(
+            parse_rule_event("  Running: slow_make"),
+            Some(("rule_started", "slow_make".to_string()))
+        );
+        assert_eq!(
+            parse_rule_event("  ✓ slow_make (2.0s)"),
+            Some(("rule_completed", "slow_make".to_string()))
+        );
+        assert_eq!(
+            parse_rule_event("  ⊝ make_* (already completed)"),
+            Some(("rule_skipped", "make_* (already completed)".to_string()))
+        );
+        assert_eq!(
+            parse_rule_event("  ✗ rule 'slow_b' failed: exit status 1"),
+            Some(("rule_failed", "slow_b".to_string()))
+        );
+        // Unindented variants keep parsing (historical logs).
+        assert_eq!(
+            parse_rule_event("Running: a"),
+            Some(("rule_started", "a".to_string()))
+        );
+        assert_eq!(
+            parse_rule_event("✓ a (0.1s)"),
+            Some(("rule_completed", "a".to_string()))
+        );
+        // Non-event lines return None.
+        assert_eq!(parse_rule_event("DAG: 2 rules in dependency order"), None);
+        assert_eq!(parse_rule_event("Done: 2 succeeded, 0 failed"), None);
+        assert_eq!(
+            parse_rule_event("  ✓ Report snapshot: .oxo-flow/reports/r.json"),
+            None
+        );
+        assert_eq!(
+            parse_rule_event("  ✓ 2 output files verified (22B total)"),
+            None
+        );
     }
 
     #[test]
