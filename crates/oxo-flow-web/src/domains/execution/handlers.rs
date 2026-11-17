@@ -807,6 +807,9 @@ pub async fn create_run(
                     config_overrides: validated_overrides,
                     allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
                     provenance: req.provenance.unwrap_or(false),
+                    // Issue #1093 follow-up: the failure policy rides the
+                    // remote wrapper command exactly like a local run.
+                    keep_going: req.keep_going.unwrap_or(false),
                 },
             );
             return Ok(Json(resp));
@@ -1626,6 +1629,11 @@ pub async fn retry_run(
         run.workdir.clone().map(std::path::PathBuf::from),
         crate::executor::RunFlags {
             dry_run: false,
+            // The failure policy is create-only (mirrors the other
+            // execution flags below): retry re-executes under the default
+            // abort-on-required-failure policy. The runs row persists no
+            // keep_going value, and retry takes no failure-policy input —
+            // pass keep_going on a new create request instead.
             keep_going: false,
             max_jobs: None,
             samples: vec![],

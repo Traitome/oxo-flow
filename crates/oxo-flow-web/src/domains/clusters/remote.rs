@@ -350,15 +350,64 @@ fn parse_poll_stdout(stdout: &str) -> Option<PollOutcome> {
     None
 }
 
-/// Run-launch parameters staged by `POST /api/runs` and replayed by retry:
-/// the local staging directory plus the CLI flag set forwarded to the
-/// remote wrapper script.
+/// Run-launch parameters staged by `POST /api/runs`: the local staging
+/// directory plus the CLI flag set forwarded to the remote wrapper script.
+/// Retry is local-only and never builds one of these (see the retry handler's
+/// create-only flag contract).
 pub struct RunStaging {
     pub local_workdir: PathBuf,
     pub max_jobs: Option<usize>,
     pub config_overrides: Vec<String>,
     pub allow_protected_drift: bool,
     pub provenance: bool,
+    /// Continue past a failed required rule (`--keep-going`). Create-only:
+    /// retry never stages a remote run, so there is no replay path here.
+    pub keep_going: bool,
+}
+
+/// Build the remote `oxo-flow run …` command line embedded in the wrapper
+/// script. Pure and unit-tested so the remote flag set can never drift from
+/// the local executor's (`RunFlags` -> `build_cli_args`): a missing flag
+/// would silently change cluster-run semantics relative to a local run.
+fn build_remote_run_cmd(
+    max_jobs: Option<usize>,
+    keep_going: bool,
+    allow_protected_drift: bool,
+    provenance: bool,
+    config_overrides: &[String],
+) -> String {
+    let mut run_cmd = format!(
+        "oxo-flow run workflow.oxoflow --workdir .{jobs}",
+        jobs = match max_jobs {
+            Some(j) => format!(" -j {j}"),
+            None => String::new(),
+        }
+    );
+    // Issue #1093 follow-up: forward the failure policy so a cluster run
+    // behaves like a local one. Boolean flag (no value) — no shell quoting.
+    if keep_going {
+        run_cmd.push_str(" --keep-going");
+    }
+    // Issue #935: forward the drift-gate escape hatch so a cluster run
+    // behaves like a local one — without it, the API answers 200 queued
+    // and the remote CLI gate then refuses the run on drift. The flag is
+    // boolean (no value), so it needs no shell quoting.
+    if allow_protected_drift {
+        run_cmd.push_str(" --allow-protected-drift");
+    }
+    // Record output checksums remotely too (issue #276): a cluster run
+    // with provenance enabled behaves like a local one — `provenance
+    // verify` can audit its outputs after the pull. Boolean flag, no
+    // shell quoting.
+    if provenance {
+        run_cmd.push_str(" --provenance");
+    }
+    for kv in config_overrides {
+        run_cmd.push_str(" --arg=");
+        run_cmd.push_str(&shell_quote(kv));
+    }
+    run_cmd.push_str(" > execution.log 2>&1");
+    run_cmd
 }
 
 /// Spawn a remote run: stage → launch → poll → pull → finalize. Mirrors
@@ -375,6 +424,7 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
             config_overrides,
             allow_protected_drift,
             provenance,
+            keep_going,
         } = staged;
 
         // All bookkeeping below uses the storage backend, which resolves to
@@ -439,32 +489,13 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
         //    caller passed — equals form survives hyphen-leading values, and
         //    the CLI's declared-key gate still applies remotely.
         let wrapper = format!("run-{run_id}.sh");
-        let mut run_cmd = format!(
-            "oxo-flow run workflow.oxoflow --workdir .{jobs}",
-            jobs = match max_jobs {
-                Some(j) => format!(" -j {j}"),
-                None => String::new(),
-            }
+        let run_cmd = build_remote_run_cmd(
+            max_jobs,
+            keep_going,
+            allow_protected_drift,
+            provenance,
+            &config_overrides,
         );
-        // Issue #935: forward the drift-gate escape hatch so a cluster run
-        // behaves like a local one — without it, the API answers 200 queued
-        // and the remote CLI gate then refuses the run on drift. The flag is
-        // boolean (no value), so it needs no shell quoting.
-        if allow_protected_drift {
-            run_cmd.push_str(" --allow-protected-drift");
-        }
-        // Record output checksums remotely too (issue #276): a cluster run
-        // with provenance enabled behaves like a local one — `provenance
-        // verify` can audit its outputs after the pull. Boolean flag, no
-        // shell quoting.
-        if provenance {
-            run_cmd.push_str(" --provenance");
-        }
-        for kv in &config_overrides {
-            run_cmd.push_str(" --arg=");
-            run_cmd.push_str(&shell_quote(kv));
-        }
-        run_cmd.push_str(" > execution.log 2>&1");
         match remote_exec(&cluster, &launch_script(&remote_dir, &wrapper, &run_cmd)).await {
             Ok(out) if out.code == 0 => {
                 tracing::info!("remote launch for {run_id} (detached): {}", out.for_log())
@@ -667,6 +698,41 @@ mod tests {
                 .expect("sh runs");
             assert!(status.success(), "invalid POSIX shell: {script}");
         }
+    }
+
+    /// Issue #1093 follow-up: the remote wrapper must forward
+    /// `--keep-going` exactly when the create request asked for it — parity
+    /// with the local executor's `build_cli_args`.
+    #[test]
+    fn remote_run_cmd_carries_keep_going_only_when_enabled() {
+        // Arrange / Act
+        let abort = build_remote_run_cmd(Some(4), false, false, false, &[]);
+        let keep = build_remote_run_cmd(Some(4), true, false, false, &[]);
+
+        // Assert
+        assert!(!abort.contains("--keep-going"), "got: {abort}");
+        assert!(keep.contains("--keep-going"), "got: {keep}");
+        assert!(
+            keep.starts_with("oxo-flow run workflow.oxoflow --workdir ."),
+            "got: {keep}"
+        );
+        assert!(keep.contains(" -j 4"), "got: {keep}");
+        assert!(keep.ends_with(" > execution.log 2>&1"), "got: {keep}");
+    }
+
+    #[test]
+    fn remote_run_cmd_carries_every_boolean_execution_flag() {
+        // Arrange / Act — the full staged set arrives in one command.
+        let cmd = build_remote_run_cmd(None, true, true, true, &["k=v".into(), "b=c d".into()]);
+
+        // Assert — flags and single-quoted overrides, no `-j` when unset.
+        assert!(!cmd.contains(" -j "), "got: {cmd}");
+        assert!(cmd.contains(" --keep-going"), "got: {cmd}");
+        assert!(cmd.contains(" --allow-protected-drift"), "got: {cmd}");
+        assert!(cmd.contains(" --provenance"), "got: {cmd}");
+        assert!(cmd.contains(" --arg='k=v'"), "got: {cmd}");
+        assert!(cmd.contains(" --arg='b=c d'"), "got: {cmd}");
+        assert!(cmd.ends_with(" > execution.log 2>&1"), "got: {cmd}");
     }
 
     #[test]

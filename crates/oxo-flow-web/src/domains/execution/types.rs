@@ -84,6 +84,15 @@ pub struct CreateRunRequest {
     pub max_jobs: Option<usize>,
     #[serde(default)]
     pub dry_run: Option<bool>,
+    /// Continue past a failed required rule (CLI `-k`/`--keep-going`,
+    /// default `false` = the historical abort-on-required-failure policy:
+    /// the engine cancels in-flight jobs when a required rule fails). When
+    /// `true`, already-running independent rules finish, ready independent
+    /// rules keep dispatching, dependents of the failure stay blocked, and
+    /// the run still exits non-zero. Run-only — ignored for `dry_run: true`
+    /// (nothing executes). Cluster (`cluster_id`) runs carry the flag into
+    /// the remote wrapper command. Retry does not re-apply it: the failure
+    /// policy is chosen by the original create request only.
     #[serde(default)]
     pub keep_going: Option<bool>,
     #[serde(default)]
@@ -514,6 +523,7 @@ mod tests {
         assert_eq!(back.pipeline_id.as_deref(), Some("p1"));
         assert_eq!(back.max_jobs, Some(4));
         assert_eq!(back.dry_run, Some(true));
+        assert_eq!(back.keep_going, Some(false));
         assert_eq!(back.samples.as_deref(), Some(&["S1".to_string()][..]));
         assert_eq!(
             back.include_files
@@ -537,6 +547,25 @@ mod tests {
                 .unwrap();
         assert!(back.include_files.is_none());
         assert!(back.config_overrides.is_none());
+        assert!(
+            back.keep_going.is_none(),
+            "absent keep_going means the historical abort-on-required-failure policy"
+        );
+    }
+
+    #[test]
+    fn create_run_request_keep_going_deserializes_every_explicit_value() {
+        // Absent => None; both explicit booleans survive unchanged (the
+        // handler's `unwrap_or(false)` keeps the CLI default).
+        let parse = |value: serde_json::Value| -> CreateRunRequest {
+            serde_json::from_value(value).unwrap()
+        };
+
+        let on = parse(serde_json::json!({"toml_content": "wf", "keep_going": true}));
+        assert_eq!(on.keep_going, Some(true));
+
+        let off = parse(serde_json::json!({"toml_content": "wf", "keep_going": false}));
+        assert_eq!(off.keep_going, Some(false));
     }
 
     #[test]
