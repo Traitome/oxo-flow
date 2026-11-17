@@ -1,6 +1,6 @@
 //! AI-powered error recovery for run failures.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_ai::config::AutoFixMode;
 use oxo_flow_ai::{knowledge::builtin, provider::AiProvider, session::archive_before_modify};
@@ -212,8 +212,9 @@ pub async fn diagnose_failure(
     let fix_action = extract_section(&response_text, "Fix");
     let safe = parse_safe_to_auto_apply(&response_text);
 
-    // Extract modified TOML
-    let modified_toml = extract_toml_block(&response_text);
+    // Extract modified TOML — only a complete replacement that survives
+    // validation against the current workflow is accepted (issue #1110).
+    let modified_toml = extract_toml_block(&response_text, &toml_content);
 
     // Capture the session id before `complete` consumes the tracker, so the
     // caller can link the before-fix workflow archive to this session.
@@ -258,13 +259,195 @@ pub async fn diagnose_failure(
     })
 }
 
+/// Compute the sibling `.bak` path that guards the pre-fix workflow
+/// (`workflow.oxoflow` → `workflow.oxoflow.bak`).
+fn workflow_backup_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "workflow.oxoflow".into());
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// Write `content` to `path` through the shared staged-write discipline
+/// ([`oxo_flow_core::atomic_file::write_file_atomic`]): same-directory temp
+/// sibling → fsync → rename over the target → fsync parent. This module
+/// carries no atomic-write logic of its own — a crash mid-write must never
+/// leave a truncated workflow, and that guarantee lives in exactly one place.
+fn write_atomic(path: &Path, content: &str) -> Result<()> {
+    oxo_flow_core::atomic_file::write_file_atomic(path, content)
+        .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))
+}
+
+/// Validate an AI-proposed fix against the file it will replace (issue #1110,
+/// audit ledger RB-11).
+///
+/// The diagnostic prompt invites the model to emit "only the changed
+/// portions" — a `[workflow]`-only or `[[rules]]`-only fragment. Such a
+/// fragment is a *valid* workflow on its own (zero rules is allowed), so a
+/// standalone parse check cannot tell it apart from a complete document;
+/// writing it verbatim silently drops every section the original carried.
+/// Two gates, both required:
+///
+/// 1. the modified TOML must parse and validate as a workflow, via the same
+///    entry point the run path uses (`oxo_flow_core::WorkflowConfig::parse`),
+///    and
+/// 2. it must not drop anything the original file declared, compared on the
+///    parsed [`oxo_flow_core::WorkflowConfig`] shapes:
+///
+///    - every original rule **name** must still be present (a same-count
+///      rename or a rule swap is refused, not just a count drop), and the
+///      rule/include/reference **counts** may not shrink;
+///    - the `[[values]]` / `[[sample_groups]]` / `[[pairs]]` fan-out tables
+///      may not shrink in count;
+///    - no `[config]` key may disappear.
+///
+/// A genuine minimal fix keeps every declared section; a fragment that would
+/// drop any of them is refused rather than merged. Comparisons work on the
+/// parsed structures so the "must be preserved" set is derived the same way
+/// the run path derives it — never re-parsed by hand.
+fn validate_fix(original: &str, modified: &str) -> std::result::Result<(), String> {
+    use std::collections::BTreeSet;
+
+    /// Record a shrink of a declared section count into `reasons`.
+    fn dropped(reasons: &mut Vec<String>, what: &str, was: usize, now: usize) {
+        if now < was {
+            reasons.push(format!("the fix drops {what} ({was} → {now})"));
+        }
+    }
+
+    let modified_config = oxo_flow_core::WorkflowConfig::parse(modified)
+        .map_err(|e| format!("generated TOML failed validation ({e})"))?;
+
+    // The original is the *shape baseline*. On the live path it parsed
+    // already (the run that failed loaded it), so this branch is
+    // unreachable in practice; it stays as a safety net so an original that
+    // somehow does not parse can never be tightened into a false refusal.
+    // With no baseline we can only enforce gate 1, so this is an explicit
+    // accept rather than a silent fall-through.
+    let original_config = match oxo_flow_core::WorkflowConfig::parse(original) {
+        Ok(config) => config,
+        Err(_) => return Ok(()),
+    };
+
+    let mut reasons = Vec::new();
+
+    // Rule names, not just the count: a same-count rename or swap would
+    // otherwise slip through the count gate while silently retargeting the
+    // DAG.
+    let original_rules: BTreeSet<&str> = original_config
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    let modified_rules: BTreeSet<&str> = modified_config
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    let missing: Vec<&str> = original_rules
+        .difference(&modified_rules)
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        reasons.push(format!(
+            "the fix removes rule(s) the original declared: {}",
+            missing.join(", ")
+        ));
+    }
+    dropped(
+        &mut reasons,
+        "rules",
+        original_config.rules.len(),
+        modified_config.rules.len(),
+    );
+    dropped(
+        &mut reasons,
+        "includes",
+        original_config.includes.len(),
+        modified_config.includes.len(),
+    );
+    dropped(
+        &mut reasons,
+        "references",
+        original_config.references.len(),
+        modified_config.references.len(),
+    );
+
+    // Wildcard fan-out tables: dropping one silently removes rule instances
+    // (a cohort, a parameter sweep), which a same-count rule list hides.
+    dropped(
+        &mut reasons,
+        "[[values]] tables",
+        original_config.values.len(),
+        modified_config.values.len(),
+    );
+    dropped(
+        &mut reasons,
+        "[[sample_groups]] tables",
+        original_config.sample_groups.len(),
+        modified_config.sample_groups.len(),
+    );
+    dropped(
+        &mut reasons,
+        "[[pairs]] tables",
+        original_config.pairs.len(),
+        modified_config.pairs.len(),
+    );
+
+    // `[config]` keys: each one may be referenced as `{config.<key>}` (and
+    // `[config]` values drive resolved paths), so dropping a key breaks the
+    // workflow even when every rule name survives.
+    let missing_config: Vec<&str> = original_config
+        .config
+        .keys()
+        .filter(|k| !modified_config.config.contains_key(*k))
+        .map(String::as_str)
+        .collect();
+    if !missing_config.is_empty() {
+        reasons.push(format!(
+            "the fix drops [config] key(s): {}",
+            missing_config.join(", ")
+        ));
+    }
+
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} — a partial document must be refused, not written as a full replacement",
+            reasons.join("; ")
+        ))
+    }
+}
+
 /// Apply a fix to the workflow file, archiving the original.
+///
+/// The proposed TOML is validated against the file it replaces BEFORE any
+/// mutation (issue #1110, audit ledger RB-11): a partial model reply that
+/// would drop existing `[[rules]]` (or fail workflow validation) is refused
+/// with a precise diagnostic and the workflow is left byte-identical. On a
+/// genuine fix the original is archived through the shared machinery AND
+/// written to a `.bak` beside the workflow; the fix itself lands atomically
+/// (temp file + rename), so a crash mid-write can never truncate the file.
 pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) -> Result<PathBuf> {
+    let original = std::fs::read_to_string(workflow_path)
+        .with_context(|| format!("failed to read workflow {}", workflow_path.display()))?;
+
+    // Validate BEFORE touching the file. A rejected fix must leave the
+    // workflow exactly as it was.
+    if let Err(reason) = validate_fix(&original, modified_toml) {
+        anyhow::bail!(
+            "refusing to apply AI fix to {}: {reason} — the workflow is left unchanged",
+            workflow_path.display()
+        );
+    }
+
     // Archive original via the shared #544/P3-10 machinery: the snapshot
     // carries the full pre-fix workflow content, so it must land 0600 and
     // the per-workflow archive dir must stay pruned — `archive_dir_for`
     // used to hand-roll the layout with neither.
-    let original = std::fs::read_to_string(workflow_path)?;
     let backup_path = archive_before_modify(workflow_path, &original, session_id)?;
     eprintln!(
         "{} Original archived to {}",
@@ -272,8 +455,16 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
         backup_path.display()
     );
 
-    // Write fix
-    std::fs::write(workflow_path, modified_toml)?;
+    // A second, close-at-hand guard: the pre-fix bytes beside the workflow.
+    // Both writes go through the shared staged-write discipline
+    // (`oxo_flow_core::atomic_file::write_file_atomic`): stage into a
+    // same-directory temp file, fsync it, rename it over the target, then
+    // fsync the parent so the rename is durable — a crash mid-write can
+    // never leave a truncated workflow.
+    write_atomic(&workflow_backup_path(workflow_path), &original)?;
+
+    // Write the fix atomically.
+    write_atomic(workflow_path, modified_toml)?;
     eprintln!(
         "{} Fix applied to {}",
         "  ✓".green(),
@@ -347,19 +538,30 @@ Respond in this exact structure:
     )
 }
 
-/// Extract TOML code block from AI response.
+/// Extract the TOML code block from an AI response — but ONLY when it is a
+/// complete, valid replacement for `original` (issue #1110, audit ledger
+/// RB-11).
 ///
-/// The diagnostic prompt allows "only the changed portions" — a `[[rules]]`
-/// block is a valid fix on its own, so accept it alongside `[workflow]`.
+/// The diagnostic prompt invites "only the changed portions", so a model may
+/// answer with a bare `[workflow]` or `[[rules]]` fragment. Such a fragment
+/// is a *valid* workflow on its own, yet writing it verbatim would silently
+/// drop every section the original carried — the failure this guards. There
+/// is no hand-rolled merge: a candidate is accepted only if it is a full
+/// document that survives [`validate_fix`] against `original` (parses, and
+/// drops no rules/includes/references). Anything less is skipped, never
+/// returned as a replacement; if no fence qualifies the model's proposal is
+/// simply not applied.
+///
 /// Fence pairing is the shared state machine
-/// (`pipeline_gen::fenced_segments`); the guard runs per segment so a
-/// first fragment without anchors cannot hide a later complete fix block.
-fn extract_toml_block(response: &str) -> Option<String> {
+/// (`pipeline_gen::fenced_segments`); the guard runs per segment so a first
+/// fragment without anchors cannot hide a later complete fix block.
+fn extract_toml_block(response: &str, original: &str) -> Option<String> {
     oxo_flow_ai::agent::pipeline_gen::fenced_segments(response)
         .into_iter()
         .find(|(tag, body)| {
             tag.eq_ignore_ascii_case("toml")
                 && (body.contains("[workflow]") || body.contains("[[rules]"))
+                && validate_fix(original, body).is_ok()
         })
         .map(|(_, body)| body)
 }
@@ -559,15 +761,35 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         );
     }
 
-    /// The prompt permits "only the changed portions" — a `[[rules]]`-only
-    /// block is a legitimate fix and must not be discarded.
+    // A full workflow the model may legitimately return unchanged.
+    const ORIGINAL: &str = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nthreads = 4\nshell = \"echo align\"\n";
+
+    /// A complete document is always a candidate; a fragment that drops the
+    /// original's rules is rejected (issue #1110, audit ledger RB-11).
     #[test]
-    fn toml_block_accepts_rules_only_fragments() {
-        let fragment = "```toml\n[[rules]]\nname = \"align\"\nthreads = 4\n```";
-        assert!(extract_toml_block(fragment).is_some());
-        assert!(extract_toml_block("```toml\n[workflow]\nname = \"x\"\n```").is_some());
-        assert!(extract_toml_block("```toml\nnot toml at all\n```").is_none());
-        assert!(extract_toml_block("no fence here").is_none());
+    fn toml_block_rejects_partial_fragments_and_keeps_complete_documents() {
+        // A complete document (workflow + rules) passes. The fence body is
+        // trimmed of its trailing newline by `fenced_segments`.
+        let full = format!("```toml\n{ORIGINAL}```");
+        assert_eq!(
+            extract_toml_block(&full, ORIGINAL).as_deref(),
+            Some(ORIGINAL.trim_end())
+        );
+
+        // A `[workflow]`-only fragment against a file with rules parses
+        // standalone but would drop them — refused, never returned.
+        let wf_only = "```toml\n[workflow]\nname = \"x\"\n```";
+        assert!(extract_toml_block(wf_only, ORIGINAL).is_none());
+
+        // A `[[rules]]`-only fragment has no `[workflow]` table, so it is not
+        // a complete workflow — refused.
+        let rules_only =
+            "```toml\n[[rules]]\nname = \"align\"\nthreads = 2\nshell = \"echo x\"\n```";
+        assert!(extract_toml_block(rules_only, ORIGINAL).is_none());
+
+        // Non-TOML / unterminated blocks are still ignored.
+        assert!(extract_toml_block("```toml\nnot toml at all\n```", ORIGINAL).is_none());
+        assert!(extract_toml_block("no fence here", ORIGINAL).is_none());
     }
 
     /// `apply_fix` resolves the archive root from the process cwd, so these
@@ -711,6 +933,124 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
                 "[workflow]\nname = \"fixed\"\n",
                 "the fix itself must be written"
             );
+        });
+    }
+
+    /// RB-11 regression: a `[workflow]`-only model reply against a file that
+    /// carried `[[rules]]` must be refused — the file stays byte-identical,
+    /// never truncated to the fragment. (Both `apply_fix` and the extraction
+    /// gate refuse; this pins the writer.)
+    #[test]
+    fn apply_fix_refuses_partial_document_and_leaves_file_untouched() {
+        with_temp_cwd("refuse-partial", |_| {
+            let original =
+                "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nshell = \"echo align\"\n";
+            std::fs::write("workflow.oxoflow", original).unwrap();
+
+            let err = apply_fix(
+                Path::new("workflow.oxoflow"),
+                "[workflow]\nname = \"x\"\n",
+                "sess-1110",
+            );
+            assert!(
+                err.is_err(),
+                "a partial document must be refused, not written"
+            );
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow").unwrap(),
+                original,
+                "the workflow must be left byte-identical after a refusal"
+            );
+            // No `.bak` is left behind: nothing was applied.
+            assert!(!Path::new("workflow.oxoflow.bak").exists());
+        });
+    }
+
+    /// Positive: a valid full-document fix still applies, and the `.bak`
+    /// guard beside the workflow holds the ORIGINAL pre-fix bytes.
+    #[test]
+    fn apply_fix_writes_valid_fix_and_bak_holds_original() {
+        with_temp_cwd("apply-full", |_| {
+            let original = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nthreads = 4\nshell = \"echo align\"\n";
+            std::fs::write("workflow.oxoflow", original).unwrap();
+            // A genuine minimal fix: same rules, one changed parameter.
+            let fixed = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nthreads = 1\nshell = \"echo align\"\n";
+
+            apply_fix(Path::new("workflow.oxoflow"), fixed, "sess-apply").unwrap();
+
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow").unwrap(),
+                fixed,
+                "the valid fix must be written"
+            );
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow.bak").unwrap(),
+                original,
+                "the .bak guard must hold the original pre-fix bytes"
+            );
+        });
+    }
+
+    /// F3: a same-count rule RENAME (or swap) must be refused — the count
+    /// gate alone would accept it while the DAG silently retargets.
+    #[test]
+    fn apply_fix_refuses_same_count_rule_rename() {
+        with_temp_cwd("refuse-rename", |_| {
+            let original = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nshell = \"echo a\"\n\n[[rules]]\nname = \"call\"\nshell = \"echo c\"\n";
+            std::fs::write("workflow.oxoflow", original).unwrap();
+            // Same rule count (2), but `align` was renamed to `index`.
+            let renamed = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"index\"\nshell = \"echo a\"\n\n[[rules]]\nname = \"call\"\nshell = \"echo c\"\n";
+
+            let err = apply_fix(Path::new("workflow.oxoflow"), renamed, "sess-rename");
+            assert!(
+                err.is_err(),
+                "a same-count rename must be refused, not written"
+            );
+            let reason = err.unwrap_err().to_string();
+            assert!(
+                reason.contains("align"),
+                "the refusal must name the removed rule: {reason}"
+            );
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow").unwrap(),
+                original,
+                "the workflow must be left byte-identical after a refusal"
+            );
+            assert!(!Path::new("workflow.oxoflow.bak").exists());
+        });
+    }
+
+    /// F3: dropping a `[[values]]` fan-out table or a `[config]` key must be
+    /// refused — both silently change what the workflow executes.
+    #[test]
+    fn apply_fix_refuses_dropped_values_table_and_config_key() {
+        with_temp_cwd("refuse-drop", |_| {
+            let original = "[workflow]\nname = \"t\"\n\n[config]\nthreads = 4\n\n[[values]]\nname = \"assembler\"\nvalues = [\"spades\", \"megahit\"]\n\n[[rules]]\nname = \"align\"\nshell = \"echo a\"\n";
+            std::fs::write("workflow.oxoflow", original).unwrap();
+
+            // Same rule; the `[[values]]` table is gone.
+            let no_values = "[workflow]\nname = \"t\"\n\n[config]\nthreads = 4\n\n[[rules]]\nname = \"align\"\nshell = \"echo a\"\n";
+            assert!(
+                apply_fix(Path::new("workflow.oxoflow"), no_values, "sess-noval").is_err(),
+                "dropping the [[values]] table must be refused"
+            );
+
+            // Same rule + values; the `[config]` key is gone.
+            let no_config = "[workflow]\nname = \"t\"\n\n[config]\n\n[[values]]\nname = \"assembler\"\nvalues = [\"spades\", \"megahit\"]\n\n[[rules]]\nname = \"align\"\nshell = \"echo a\"\n";
+            let err = apply_fix(Path::new("workflow.oxoflow"), no_config, "sess-nocfg");
+            assert!(err.is_err(), "dropping a [config] key must be refused");
+            let reason = err.unwrap_err().to_string();
+            assert!(
+                reason.contains("threads"),
+                "the refusal must name the dropped [config] key: {reason}"
+            );
+
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow").unwrap(),
+                original,
+                "the workflow must be left byte-identical after refusals"
+            );
+            assert!(!Path::new("workflow.oxoflow.bak").exists());
         });
     }
 }

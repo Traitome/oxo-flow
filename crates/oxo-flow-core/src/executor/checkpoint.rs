@@ -5,29 +5,23 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Monotonic counter making every staged checkpoint filename unique within
-/// this process (combined with the PID, unique on the machine).
-static STAGED_SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// `checkpoint.json` → `checkpoint.json.<seq>.<pid>.tmp`: a sibling staged
-/// name no other concurrent save can collide with.
+/// name no other concurrent save can collide with. Delegates to the shared
+/// staged-write discipline ([`crate::atomic_file::staged_tmp_path`]) so the
+/// naming scheme lives in exactly one place.
 fn unique_staged_path(path: &Path) -> PathBuf {
-    let seq = STAGED_SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let mut name = path
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_else(|| "checkpoint.json".into());
-    name.push(format!(".{seq}.{}.tmp", std::process::id()));
-    path.with_file_name(name)
+    crate::atomic_file::staged_tmp_path(path)
 }
 
 /// Shared save body for [`CheckpointState::save_to_file`] and
 /// [`save_to_file_async`](CheckpointState::save_to_file_async): create the
 /// parent dir, write + fsync the staged file, rename it over the target,
 /// fsync the parent dir. The staged path is caller-chosen and unique per
-/// call, so concurrent saves never rename or delete each other's file.
+/// call, so concurrent saves never rename or delete each other's file. The
+/// write/fsync/rename/fsync body is the shared
+/// [`crate::atomic_file::publish_staged`] discipline; this wrapper adds the
+/// checkpoint-specific parent-dir creation and error mapping.
 fn write_checkpoint_staged(json: &str, path: &Path, tmp_path: &Path) -> Result<()> {
     let parent = crate::parent_dir(path);
     if parent != std::path::Path::new(".") {
@@ -35,30 +29,8 @@ fn write_checkpoint_staged(json: &str, path: &Path, tmp_path: &Path) -> Result<(
             message: format!("failed to create checkpoint directory: {e}"),
         })?;
     }
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create(tmp_path)?;
-        use std::io::Write;
-        f.write_all(json.as_bytes())?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(tmp_path, path)?;
-        // fsync the parent directory so the rename is durable (POSIX).
-        // Propagate both the open and the sync error: on EIO/quota/
-        // remount-ro the run must NOT believe the checkpoint committed —
-        // resume would silently re-run completed rules against the old
-        // file (audit L-2; file sync_all and process.rs sync_parent_dir
-        // already propagate, this was the outlier).
-        let dir = std::fs::File::open(parent)?;
-        dir.sync_all()?;
-        Ok(())
-    })();
-    write_result.map_err(|e| {
-        // Never leave a partial tmp file behind for the next attempt to
-        // trip over; the real checkpoint (old or new) is what matters.
-        let _ = std::fs::remove_file(tmp_path);
-        OxoFlowError::Config {
-            message: format!("failed to save checkpoint to {}: {e}", path.display()),
-        }
+    crate::atomic_file::publish_staged(json, path, tmp_path).map_err(|e| OxoFlowError::Config {
+        message: format!("failed to save checkpoint to {}: {e}", path.display()),
     })
 }
 
