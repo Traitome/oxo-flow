@@ -877,6 +877,16 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
 
+            // issue #1013 C2: the run driver exports the run's scratch
+            // directory into every job shell; this standalone path must
+            // honor `[engine] tmp_dir` / OXO_FLOW_TMPDIR the same way or
+            // the two paths silently disagree (tx-ubuntu user-sim finding).
+            // Resolved once here — the mkdir fail-fast matches the run path.
+            let tmp_dir = crate::commands::run::tmp_dir_resolved(
+                config.engine.as_ref().and_then(|e| e.tmp_dir.clone()),
+                &cluster_workdir,
+            )?;
+
             for rule_name in &order {
                 let rule = config
                     .get_rule(rule_name)
@@ -928,6 +938,10 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         &cluster_workdir,
                     )
                     .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
+                let wrapped_cmd = match tmp_dir.as_deref() {
+                    Some(tmp) => oxo_flow_core::backend::with_tmp_dir_exports(&wrapped_cmd, tmp),
+                    None => wrapped_cmd,
+                };
                 let scheduled = oxo_flow_core::backend::ScheduledRule {
                     rule: rule.clone(),
                     // The standalone `cluster submit` command has no
