@@ -3978,6 +3978,13 @@ pub(super) fn apply_rule_env_allowlist_with(
 /// variables (`DOCKER_HOST`, …) the test process does not normally carry
 /// without `std::env::set_var` (unsafe in edition 2024; this crate forbids
 /// unsafe code).
+///
+/// Scope of the injection: every name-addressed lookup (`RULE_ENV_ALLOWLIST`,
+/// passthrough, container-daemon names) goes through `ambient`. The `LC_*`
+/// family is matched by PREFIX and therefore still enumerates the real
+/// `std::env::vars_os()` — tests that observe the child environment can see
+/// the developer's own locale variables, but no production behavior depends
+/// on the injection for that branch.
 fn apply_rule_env_allowlist_from(
     cmd: &mut Command,
     envs: &HashMap<String, String>,
