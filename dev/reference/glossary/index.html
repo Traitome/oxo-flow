@@ -5788,6 +5788,10 @@ below list every code the engine currently emits.</p>
 <td><code>W042</code></td>
 <td><em>(emitted by <code>validate</code>; <code>lint</code> does not raise it)</em> An empty <code>[[sample_groups]]</code> <code>samples</code> list. Downgraded from E023 (issue #1153 review): the cohort may be supplied at run time with <code>--samples @sheet.tsv</code>, so <code>validate</code> warns while <code>run</code>/<code>dry-run</code> still fail closed when no domain binds. Fix by listing samples, removing the group, or supplying the cohort at run time</td>
 </tr>
+<tr>
+<td><code>W043</code></td>
+<td><em>(emitted by <code>lint</code>)</em> A rule selects an <code>[env_groups.&lt;g&gt;]</code> that is empty — <code>resolve_environment</code> returns the empty group (it still wins over the rule's inline <code>environment</code> and <code>[defaults] environment</code> per issue #1210), so the rule silently runs in <code>system</code> while the group name reads as if it isolated an environment. Fix by populating the group with a backend (conda/mamba/pixi/docker/singularity/venv/modules) or removing <code>env_group</code> from the rule</td>
+</tr>
 </tbody>
 </table>
 <p>Schema-check codes (<code>S001</code>–<code>S007</code>) come from the raw-file schema pass,

@@ -8517,13 +8517,21 @@ named groups once in <code>[env_groups]</code> and reference them via <code>env_
 named group. The <code>env_group</code> spec takes precedence over an inline
 <code>[rules.environment]</code>; the inline spec is only used when no <code>env_group</code> is set
 (or the named group does not exist), followed by <code>[defaults] environment</code>.</p>
+<p>A group that is <strong>declared but empty</strong> (<code>[env_groups.&lt;g&gt;]</code> with no backend key)
+still wins the selection and contributes nothing, so the rule silently runs in
+the system environment — <code>env list</code> labels it <code>system</code> with no other signal.
+<code>lint</code> reports this as warning <code>W043</code> on every rule that selects the empty
+group (the group name reads as isolation while the shell gets the bare host).</p>
 <p>This precedence is the execution precedence, not just a listing convenience:
 <code>run</code>, <code>dry-run</code>, cluster submission, and the run monitor's DAG status fold
 the winning spec onto each rule before scheduling, and <code>env list</code> / <code>env check</code>
 call the same resolver — so a rule declaring both an <code>env_group</code> and an inline
 <code>environment</code> is reported AND executed with the group's backend. (Before
 issue #1210 the listing honored the group while execution silently used the
-inline spec.)</p>
+inline spec.) The web editor's rule summaries and DAG canvas resolve each
+rule's environment through the same <code>resolve_environment</code> (issue #1220), so
+the canvas paints the <code>env_group</code> backend the run executes rather than the
+losing inline spec it used to read.</p>
 <h3 id="environment-variables-envvars">Environment Variables (<code>envvars</code>)<a class="headerlink" href="#environment-variables-envvars" title="Permanent link">#</a></h3>
 <p>Inject rule-specific environment variables directly into the execution context:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">[[rules]]</span>
