@@ -2375,8 +2375,15 @@ impl StorageBackend for SqliteBackend {
 
     async fn quota_release(&self, run_id: &str) -> Result<bool, String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        // The DELETE ... RETURNING is both the reservation lookup and the
+        // release gate: a concurrent release that already removed the row
+        // returns nothing here and must not decrement again. It is also the
+        // transaction's FIRST statement, so the write lock is taken up front
+        // (a read-then-write upgrade can fail with SQLITE_BUSY_SNAPSHOT under
+        // a concurrent admission in WAL mode).
         let reservation: Option<(String, i64, i64)> = sqlx::query_as(
-            "SELECT user_id, threads, memory_mb FROM quota_reservations WHERE run_id = ?",
+            "DELETE FROM quota_reservations WHERE run_id = ? \
+             RETURNING user_id, threads, memory_mb",
         )
         .bind(run_id)
         .fetch_optional(&mut *tx)
@@ -2386,17 +2393,6 @@ impl StorageBackend for SqliteBackend {
             tx.commit().await.map_err(|e| e.to_string())?;
             return Ok(false);
         };
-        // The DELETE is the gate: a concurrent release that already removed
-        // the row affects 0 rows here and must not decrement again.
-        let deleted = sqlx::query("DELETE FROM quota_reservations WHERE run_id = ?")
-            .bind(run_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?;
-        if deleted.rows_affected() == 0 {
-            tx.commit().await.map_err(|e| e.to_string())?;
-            return Ok(false);
-        }
         sqlx::query(
             "UPDATE quota_usage SET \
                  active_runs = CASE WHEN active_runs > 0 THEN active_runs - 1 ELSE 0 END, \

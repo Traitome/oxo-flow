@@ -107,15 +107,20 @@ async fn quota_state_is_atomic_durable_and_shared_across_instances() {
     assert_eq!(usage.active_runs, 2, "restart preserves quota usage");
     assert_eq!(usage.runs_today, 2, "the daily counter survives restart");
 
-    // A release through one instance is visible through the other, and a
-    // second release is a no-op (idempotent terminal paths).
+    // Concurrent double-release through two instances: exactly one call may
+    // decrement (the DELETE ... RETURNING gate), and the result is visible
+    // through both instances.
     let winners = restarted
         .quota_stale_reservations()
         .await
         .expect("stale reservations");
     assert_eq!(winners.len(), 2, "both admitted runs own a reservation");
-    assert!(b.quota_release(&winners[0]).await.expect("release"));
-    assert!(!b.quota_release(&winners[0]).await.expect("second release"));
+    let target = winners[0].clone();
+    let (ra, rb) = tokio::join!(a.quota_release(&target), b.quota_release(&target));
+    let released =
+        usize::from(ra.expect("release via A")) + usize::from(rb.expect("release via B"));
+    assert_eq!(released, 1, "exactly one concurrent release decrements");
+    assert!(!b.quota_release(&target).await.expect("later release"));
     let usage = a.quota_usage("user-1", now).await.expect("usage A");
     assert_eq!(usage.active_runs, 1, "release is shared across instances");
     assert_eq!(

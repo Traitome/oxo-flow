@@ -465,8 +465,10 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// Idempotent: `Ok(false)` means no reservation existed (already
     /// released, never admitted, or reclaimed by reconciliation) and
-    /// nothing was decremented. The select+delete+decrement runs in one
-    /// transaction so concurrent releases cannot double-decrement.
+    /// nothing was decremented. `DELETE ... RETURNING` (the reservation
+    /// lookup and the release gate in one statement) plus the counter
+    /// decrement run in one transaction, so concurrent releases cannot
+    /// double-decrement.
     async fn quota_release(&self, run_id: &str) -> Result<bool, String>;
 
     /// A user's current durable usage. `runs_today` reports 0 when the

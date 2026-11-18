@@ -344,8 +344,9 @@ Mechanism (issue #1133):
   whose rows-affected is the decision, plus the reservation insert in the
   same transaction. A rejected request rolls back its reservation insert,
   so nothing is recorded; re-admitting a reserved run id is an idempotent
-  replay. Release is a select+delete+decrement transaction guarded by the
-  DELETE's rows-affected (idempotent under cancel-vs-failure races).
+  replay. Release is a `DELETE ... RETURNING` (lookup and release gate in
+  one statement) plus counter decrement in one transaction (idempotent
+  under cancel-vs-failure races).
 - Handlers call `admit_spawn_budget` immediately before the atomic workdir
   claim (create/retry/resume) and give the reservation back on any later
   error path; every terminal path calls the now-async
