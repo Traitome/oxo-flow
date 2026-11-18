@@ -1356,6 +1356,42 @@ consumes it in one atomic delete, before any token exchange:
 A mismatched binding still consumes the state: it can never be retried, and
 two concurrent callbacks can never both validate the same value.
 
+### Browser binding (issue #1197)
+
+The state is also bound to the browser that started the flow, closing the
+login-CSRF variant where an attacker starts an authorize flow, obtains a
+valid state, and tricks another browser into completing the callback:
+
+- `POST /api/auth/oauth/authorize` generates a random per-flow binding value
+  and returns it as the `oxoflow_oauth_binding` cookie — `HttpOnly`,
+  `SameSite=Lax`, `Path` scoped to the OAuth routes (the parent of the
+  request path, e.g. `/api/auth/oauth`), and `Max-Age=600` (the state TTL).
+  `Secure` is added only when the browser-facing callback origin is https;
+  a plain-http localhost deployment never carries it, because browsers drop
+  `Secure` cookies on http. The raw value is never returned in the response
+  body; only its SHA-256 digest is stored next to the state row
+  (`oauth_states.binding_hash`, with idempotent SQLite and PostgreSQL
+  migrations).
+- `POST /api/auth/oauth/callback` requires the cookie to hash to the stored
+  binding. Missing, mismatched, or empty bindings — and historical rows
+  written before the migration (empty digest) — answer the same
+  `400 {code:"OAUTH_STATE_MISMATCH"}` as a provider/redirect mismatch, with
+  a message that does not reveal which component failed. The browser
+  binding is checked before the provider/redirect bindings for that reason.
+- A binding mismatch still consumes the state (single use), and the cookie
+  is cleared on every callback response, success or failure.
+
+The cookie is handled automatically by same-origin browser calls (the SPA
+uses a same-origin `fetch`). Non-browser API clients that drive the two
+steps manually must capture the `Set-Cookie` value from the authorize
+response and send it back on the callback request.
+
+Scope: this proves that a callback can only complete a flow started by the
+browser presenting the same binding value — cross-browser completion and
+cookie-less replay are rejected by the tests below. It is not a claim that
+login CSRF is impossible in every threat model (e.g. an attacker able to
+write cookies into the victim's browser is outside this control).
+
 ### Redirect allowlist
 
 The redirect target's **origin** must appear in a server-side allowlist
