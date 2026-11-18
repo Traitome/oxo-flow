@@ -100,24 +100,156 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Prototype; blocks reproducible run-history claims
+**Maturity**: Fixed (2026-11-18) — every run created through `POST /api/runs`
+owns a unique `runs/<run_id>/` workdir (retry/resume are documented lineage
+continuations, see the limits below), and saved-pipeline admission is a
+guarded insert backed by partial unique indexes on both storage backends
+(issue #1130, implementation commits `7bded48d`, `9e15a609` (review
+fixes), and `4402f076` (PostgreSQL migration lock)).
 
-Runs created from a saved pipeline can share the persistent pipeline directory as their `workdir`. A later run can overwrite an earlier run's workflow, checkpoint, logs, and outputs. Concurrent initial runs are not protected by the guarded insertion path used for retry and resume.
+Runs created from a saved pipeline shared the persistent pipeline directory
+as their `workdir`, so a later run overwrote an earlier run's workflow,
+checkpoint, logs, and outputs. Initial creation used the same guarded
+insertion path as retry/resume, but the guard was the shared workdir — which
+is exactly the property that had to go. The first revision of this fix then
+still relied on `INSERT ... SELECT ... WHERE NOT EXISTS` alone, which is NOT
+atomic under PostgreSQL READ COMMITTED (review finding F1): two concurrent
+transactions can both pass `NOT EXISTS` before either commits.
 
-Evidence:
+Fix:
 
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:493`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:557`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:566`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:1374`
-- `crates/oxo-flow-web/src/workspace.rs:236`
-- `crates/oxo-flow-web/src/domains/execution/files.rs:600`
+- `create_run` allocates `workspace/users/<u>/runs/<run_id>/` only AFTER
+  every 400-producing gate (parse, include resolution, DAG, BioType
+  admission), so a validation-rejected create leaves neither a run row nor an
+  orphan directory (F2; `handlers.rs:675`). Claim-then-stage ordering is
+  retained: sources wait in a per-request temp dir until admission wins, and
+  a rejected request removes its own run dir. `pipeline_id` is an
+  association only; new runs never write `pipelines/<pipeline_id>/`.
+- Admission is one guarded `INSERT ... SELECT ... WHERE NOT EXISTS ...
+  ON CONFLICT DO NOTHING` (shared SQL builder `infra/db/mod.rs:68`; plain and
+  guarded inserts share `RUN_INSERT_COLUMNS`, F6). Both schema bootstraps
+  create partial unique indexes over live rows —
+  `idx_runs_live_pipeline` on `runs(pipeline_id)` and
+  `idx_runs_live_workdir` on `runs(workdir)`, `WHERE status IN ('queued',
+  'running', 'paused')` (`infra/db/sqlite.rs:191`,
+  `infra/db/postgres.rs:518`). The index is the atomic guarantee: under
+  PostgreSQL READ COMMITTED only `ON CONFLICT` decides the loser, and zero
+  affected rows maps to `409 RUN_NOT_TERMINAL` (F1). A one-time migration
+  demotes all but the earliest live row per scope before creating the
+  indexes, so a database that already held a duplicate live scope can be
+  upgraded without discarding history (logged as a warning; clean databases
+  demote nothing).
+- Saved-pipeline runs serialize on `pipeline_id` globally (F5): one live run
+  per saved pipeline across all readers, so a `workspace`-shared pipeline
+  answers another identity's create with the same 409. Ad-hoc runs, retry,
+  and resume serialize on the workdir. `claim_run_row` (`handlers.rs:310`)
+  is the single helper all three handlers call: create (`:704`),
+  retry (`:1613`), resume (`:3223`).
 
-Required exit evidence:
+Evidence (current baseline — the audit's line numbers had drifted; the
+shared-workdir branch and the missing pipeline guard were re-confirmed on
+`main` before the fix):
 
-- Every run has a unique, immutable workdir or content-addressed snapshot.
-- Two sequential runs leave all hashes and provenance records for the first run unchanged.
-- Concurrent creation from one saved pipeline yields one admitted run and one conflict under the declared policy.
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs:675` (workdir
+  allocation after validation)
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs:704` (atomic claim)
+- `crates/oxo-flow-web/src/infra/db/mod.rs:68` (guarded insert + ON CONFLICT)
+- `crates/oxo-flow-web/src/infra/db/mod.rs:251`
+  (`create_run_if_pipeline_idle`)
+- `crates/oxo-flow-web/src/infra/db/sqlite.rs:191` and
+  `crates/oxo-flow-web/src/infra/db/postgres.rs:518` (admission indexes)
+
+Required exit evidence (all produced):
+
+- Every run created through `POST /api/runs` has a unique, immutable workdir
+  (no create writes into another run's tree; retry/resume-checkpoint are
+  explicit continuations of a predecessor lineage, never new run history),
+  and a rejected create leaves no run directory at all.
+- Two sequential runs leave all hashes and provenance records for the first
+  run unchanged.
+- Concurrent creation from one saved pipeline yields one admitted run and one
+  conflict under the declared policy — on SQLite (pooled file database) and
+  on live PostgreSQL (`ON CONFLICT` + partial unique index).
+
+Tests (`crates/oxo-flow-web/tests/run_snapshot_isolation.rs`,
+`crates/oxo-flow-web/tests/run_snapshot_concurrency.rs`,
+`crates/oxo-flow-web/src/infra/db/sqlite.rs`,
+`crates/oxo-flow-web/src/infra/db/postgres.rs`):
+
+- `sequential_runs_from_one_saved_pipeline_are_isolated` — hashes run A's
+  workflow/checkpoint/engine log/execution log/output before and after run B;
+  asserts distinct `runs/<id>` workdirs, unchanged hashes and snapshot, and
+  that no per-pipeline directory is materialized. Fail-first verified by
+  temporarily restoring the shared pipeline workdir (workflow + log hashes
+  changed; run A's workdir was `pipelines/<id>`).
+- `run_executes_the_snapshot_not_a_mutated_pipeline` — a probe workflow
+  sleeps mid-run while the test rewrites the saved pipeline row and plants a
+  different workflow in the legacy pipeline directory; the run's start and
+  end observations of its workflow are identical and match the create-time
+  `toml_content`.
+- `concurrent_creates_from_one_saved_pipeline_admit_exactly_one` — two
+  simultaneous `POST /api/runs` against one saved pipeline yield exactly one
+  200 and one `409 RUN_NOT_TERMINAL`; only the admitted request leaves a run
+  dir, and a cancelled run releases the slot. Each of the two guards is
+  individually sufficient on SQLite (switching the claim to the workdir guard
+  still passes, because `idx_runs_live_pipeline` rejects the loser; making only
+  the index non-unique still passes, because one statement serializes on
+  SQLite); only removing both fails. The partial unique index is the mechanism
+  PostgreSQL depends on under READ COMMITTED.
+- `pipeline_guard_rejects_a_second_live_run_of_the_same_pipeline`,
+  `pipeline_guard_is_atomic_under_concurrent_inserts`,
+  `pipeline_guard_requires_a_pipeline_id` — storage-level guard contract.
+- `pipeline_guard_serializes_across_pooled_connections` — the SQLite claim
+  with multiple pooled connections (true concurrency, not the one-connection
+  in-memory fixture): exactly one admitted, one live row, no `SQLITE_BUSY`
+  leak. This checks the cross-connection path only; the index mechanism is
+  covered by the two tests below.
+- `pipeline_unique_index_blocks_the_other_guard_column` — isolates the guard
+  COLUMN from the partial unique INDEX: a workdir-guarded claim for a
+  saved-pipeline run is rejected by `idx_runs_live_pipeline`, a
+  pipeline-guarded claim is rejected on a `pipeline_id` collision by
+  `NOT EXISTS` and on a `workdir` collision by `idx_runs_live_workdir`.
+  Fail-first verified by making `idx_runs_live_pipeline` non-unique (this test
+  and the next both fail).
+- `live_admission_indexes_reject_bare_duplicate_live_rows` — the partial
+  unique indexes themselves reject a raw second live row per pipeline and per
+  workdir while a terminal row releases the slot. Fail-first verified by
+  temporarily creating the indexes as non-unique (the raw duplicate then
+  inserted).
+- `test_concurrent_pipeline_admission_admits_exactly_one` and
+  `test_concurrent_workdir_admission_admits_exactly_one` — live PostgreSQL
+  concurrency for both scopes; they skip locally without `OXO_PG_TEST_URL`
+  and run in CI's `PostgreSQL storage smoke` step against the
+  `services: postgres` container (`--lib infra::db::postgres`).
+- `shared_pipeline_slot_is_global_across_identities` — a shared
+  (`workspace`-visibility) pipeline admits one live run across two identities
+  (owner 200, other reader 409 `RUN_NOT_TERMINAL`; the reader's read is
+  proven first so the 409 is not a masked 404).
+- `validation_rejected_create_leaves_no_run_directory` — a missing
+  `[[include]]` answers 400 with zero rows and no new `runs/<uuid>/`.
+  Fail-first verified by temporarily allocating the workdir before the gates
+  (the rejected create then left an orphan directory).
+- `web_saved_pipeline_reruns_are_isolated_full_executions` — the real CLI:
+  two sequential saved-pipeline runs get distinct workdirs, a fresh create
+  fully re-executes, and the first run's workflow/output stay byte-identical.
+
+Docs: Create Run workdir lifecycle, the provenance-verify checkpoint note,
+and the global-per-pipeline admission policy in
+`docs/guide/src/reference/web-api.md`; “Run workdir lifecycle” in
+`docs/guide/src/reference/web-system-architecture.md`; the workspace-layout
+notes (legacy pipeline tree retained for retry/resume of pre-upgrade runs) in
+`docs/guide/src/how-to/deploy-modes.md`; the dry-run/run semantics in
+`docs/guide/src/how-to/web-editor.md` and
+`docs/guide/src/commands/serve.md`; `AGENTS.md`.
+
+Stated limits (not overclaimed): `retry` and `resume-checkpoint` intentionally
+continue a predecessor run's workdir so the CLI checkpoint drives partial
+re-execution — they are continuations of an existing run lineage, not new
+history. PostgreSQL atomicity is proven for concurrent connections against a
+single server (CI service container), not for cross-host orchestration; crash
+recovery remains RB-03. Pre-upgrade rows keep their old `pipelines/<id>`
+workdir, and retry/resume of those rows still writes there until they are no
+longer needed.
 
 ### RB-03: Create, stage, persist, and spawn are not atomic
 
@@ -251,27 +383,44 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype; mock and CLI-wrapper evidence only
+**Maturity**: Partial (2026-11-18) — the three code-level defects are fixed and covered by fail-first unit/wire tests (issue #1132); cloud live campaigns remain open under CL-05 (#1158), so Kubernetes/AWS Batch/GCP Batch stay **Prototype** and no live verification is claimed here
 
-Cancellation errors can be discarded, missing accounting data can be converted to exit code `0`, and a non-element backend can expand one array-base verdict across all elements. Cloud executors shell out through `kubectl`, `aws`, and `gcloud`; they are not direct API clients.
+At the audit baseline the driver discarded cancellation errors (`let _ = backend.cancel(...)`), a Completed job with no accounting record was stamped `exit_code: 0`, and every non-SLURM array backend copied one base-job verdict onto all elements.
 
-Evidence:
+What changed:
 
-- `crates/oxo-flow-core/src/backend/driver.rs:194`
-- `crates/oxo-flow-core/src/backend/driver.rs:203`
-- `crates/oxo-flow-core/src/backend/driver.rs:760`
-- `crates/oxo-flow-core/src/backend/driver.rs:769`
-- `crates/oxo-flow-core/src/backend/driver.rs:991`
-- `crates/oxo-flow-core/src/backend/k8s.rs:242`
-- `crates/oxo-flow-core/src/backend/aws_batch.rs:201`
-- `crates/oxo-flow-core/src/backend/gcp_batch.rs:218`
+- **Cancellation is surfaced and reconciled** — already shipped by #1188 / CL-01 and re-confirmed here: `BackendDriver::cancel_inflight` attempts every target (arrays by base id, deduped) and returns an error naming exactly the unresolved scheduler ids with the scheduler's own error; `fail_with_cancel` appends that outcome to the original failure. Every post-submit error path (artifact writes, poll failure, poll timeout, interrupt, required-rule failure) cancels the accepted jobs; an unconfirmed cancel is never reported as cancelled.
+- **Missing accounting is unknown, never success** — the driver's Completed branch now records `exit_code: acct.and_then(|a| a.exit_code)` (was `Some(...unwrap_or(0))`), matching the Failed branch's existing rule. The Kubernetes poller asks for pipe-separated status fields (so a missing field is an empty cell, not a shifted column) and keeps an unparseable job out of `statuses` (Unknown, guard-settled) instead of fabricating `Running`; the GCP poller maps empty/unrecognised `status.state` to Unknown instead of Pending (which polled forever). Base-level accounting numbers are no longer copied onto array elements.
+- **Per-element outcomes are independent where the scheduler exposes them** — the cloud array backends now poll elements directly (`ClusterExecutor::polls_elements_directly` = true for SLURM, Kubernetes, AWS Batch, GCP Batch):
+  - Kubernetes Indexed Jobs: one base-Job probe per array reads `status.completedIndexes` / `status.failedIndexes`; each element gets its own verdict, missing `failedIndexes` (Kubernetes < 1.31) yields Unknown for unattributable elements, and the aggregate counts are only a fallback for clusters without `completedIndexes`.
+  - AWS Batch: element handles are the real child job ids (`{parent}:{zeroBasedArrayIndex}`); `describe-jobs` answers per child. `--jobs` is now passed as separate argv entries (a space-joined single argument was one invalid id) and chunked at DescribeJobs' 100-id per-call cap (`AWS_DESCRIBE_JOBS_MAX_IDS`), with per-call answers merged — `max_submitted` has no 100 ceiling, and one oversized call would fail, warn "treating ids as absent", and (AWS having no accounting store) leave every element to blind-settle as Failed despite AWS-side success. Both the driver poller and the standalone `cluster status` invocations chunk. `submit-job` asks for the bare id (`--query jobId --output text`, with a JSON `jobId` fallback for wrapped CLIs) instead of returning the whole response document as the job id.
+  - GCP Batch: element handles are zero-based task indexes resolved through `gcloud batch tasks list`; each task index gets its own state, and an undescribed task is Unknown. `submit` returns the minted id it passed positionally (gcloud prints the submitted Job resource, not the id), so tracking and task handles are keyed on a real job id.
+  - PBS/LSF/SGE remain base-polled: this adapter's live-verified invocations list only the array base id (issue #136 H4). Their expanded element records now carry `skip_reason: "array base <id> verdict <status>: per-element outcome unavailable from <backend>"` and no base-level accounting/exit code, so the aggregate is never presented as an independently observed per-element outcome.
+- **Live campaigns (exit evidence #4) are NOT run** — Kubernetes/AWS Batch/GCP Batch remain CLI wrappers (`kubectl` / `aws` / `gcloud`) with mock/wire evidence only. Per-backend submit/queue/run/cancel/fail/retry/artifact-retrieval campaigns are tracked by CL-05 (#1158); the maturity label stays Prototype.
+
+Evidence (current `main` sites):
+
+- `crates/oxo-flow-core/src/backend/driver.rs` (`cancel_inflight`, `fail_with_cancel`, Completed-branch exit code, base-only-array provenance)
+- `crates/oxo-flow-core/src/backend/cluster.rs` (`ClusterExecutor::poll` Kubernetes/AWS/GCP arms, `polls_elements_directly`, `array_element_id`, `k8s_element_index`, `gcp_element_index`)
+- `crates/oxo-flow-core/src/backend/k8s.rs` (`parse_index_list`, `indexed_element_status`)
+- `crates/oxo-flow-core/src/backend/aws_batch.rs` (`array_child_id`)
+- `crates/oxo-flow-core/src/backend/gcp_batch.rs` (`task_element_id`, `parse_task_states`)
+
+Tests (issue #1132; fail-first verified by temporary reverts, not committed):
+
+- Cancellation (shipped by #1188, re-run): `backend::driver::tests::{cancel_inflight_reports_unresolved_jobs_only, cancel_failure_after_post_submit_write_error_reports_unresolved_job, cancel_failure_after_array_index_write_reports_unresolved_base, post_submit_artifact_write_failures_cancel_accepted_jobs}`.
+- Missing accounting/status (fail-first verified by reverts): `backend::driver::tests::completed_job_without_accounting_reports_unknown_exit_code` (fails pre-fix with `Some(0)` vs `None`), `backend::cluster::tests::{kubernetes_empty_status_answer_stays_unknown, kubernetes_missing_failed_indexes_are_unknown_not_guessed, gcp_batch_missing_state_is_unknown_not_pending}`. Spec pin only (also passes on the old parser — it pins the pipe-template contract the old whitespace parser cannot represent, not a regression): `backend::cluster::tests::kubernetes_unset_counters_do_not_shift_columns`.
+- Per-element outcomes: `backend::driver::tests::{direct_backend_settles_array_elements_independently, kubernetes_indexed_array_settles_elements_independently, non_element_backends_poll_by_base_and_expand_to_elements}`, `backend::cluster::tests::{kubernetes_indexed_elements_report_independent_statuses, aws_batch_child_jobs_report_independent_statuses, aws_batch_poll_chunks_past_the_describe_jobs_100_id_cap, aws_status_invocations_chunk_past_the_describe_jobs_cap, gcp_batch_tasks_report_independent_statuses, array_element_ids_match_each_scheduler, status_invocations_match_each_scheduler_cli}`, `backend::k8s::tests::{parse_index_list_reads_the_indexed_job_status_format, indexed_element_status_is_per_element_and_never_fabricates}`, `backend::aws_batch::tests::array_child_ids_are_zero_based_real_job_ids`, `backend::gcp_batch::tests::{task_element_ids_are_zero_based, parse_task_states_reads_per_element_outcomes}`. The end-to-end Kubernetes test fails pre-fix with the successful element recorded `Failed`.
+- Submit-id handles (prerequisite for the child/task handles above): `backend::cluster::tests::{aws_batch_submit_returns_the_bare_job_id, gcp_batch_submit_returns_the_minted_job_id, parse_job_id_aws_extracts_the_json_job_id}`.
+
+Docs: `docs/guide/src/how-to/run-on-cluster.md` (Supported Schedulers maturity table + per-element settlement), `docs/guide/src/reference/execution-backends.md` (trait capability + per-element boundary).
 
 Required exit evidence:
 
-- Cancellation failure is surfaced and reconciled.
-- Missing accounting is unknown, not success.
-- Per-element outcomes are represented independently where the scheduler exposes them.
-- At least one live campaign covers submit, queue, run, cancel, fail, retry, and artifact retrieval for each claimed backend.
+- Cancellation failure is surfaced and reconciled. [DONE — #1188 / CL-01; re-confirmed and listed above.]
+- Missing accounting is unknown, not success. [DONE — Completed-branch exit code, cloud pollers' missing-data handling; tests above.]
+- Per-element outcomes are represented independently where the scheduler exposes them. [DONE for SLURM, Kubernetes Indexed Jobs, AWS Batch child jobs, and GCP Batch tasks. PBS/LSF/SGE expose only the array base id through this adapter's invocations; their records name that aggregate provenance explicitly instead of fabricating per-element detail.]
+- At least one live campaign covers submit, queue, run, cancel, fail, retry, and artifact retrieval for each claimed backend. [OPEN — CL-05 (#1158). No credentials for Kubernetes/AWS Batch/GCP Batch were available; no campaign was run or claimed. Maturity remains Prototype for those backends.]
 
 ### RB-07: Run lifecycle state can contradict the process and database
 
@@ -320,7 +469,7 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-18) — atomic admission and durable/shared state are Fixed (issue #1133); declared-memory enforcement is proven for local Linux runs, while non-Linux platforms and remote (cluster) runs remain advisory (follow-up #1221)
+**Maturity**: Partial (2026-11-19) — atomic admission and durable/shared state are Fixed (issue #1133); declared-memory enforcement is proven for local Linux runs, and remote (cluster) runs now forward their declared ceilings to the cluster engine's scheduler pool + budget gate (issue #1221); non-Linux platforms remain advisory (follow-up #1221)
 
 Pre-fix behavior (verified on `main` before #1133): `QuotaTracker` kept all
 usage in a process-local `Mutex<HashMap>` (`infra/quota.rs:66` before the
@@ -386,8 +535,11 @@ Exit evidence:
 - Enforced resource ceilings with observable rejection — PARTIAL. Local
   Linux runs: proven end-to-end — a stub CLI allocating 520 MiB under a
   512 MiB declaration fails the run, while the identical stub with no
-  declaration completes. Non-Linux (Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS`
-  with EINVAL) and remote cluster runs remain advisory; follow-up #1221.
+  declaration completes. Remote cluster runs forward their declared
+  ceilings (`--max-memory`/`--max-threads`, only when nonzero) to the
+  cluster engine's scheduler pool + budget gate (issue #1221). Non-Linux
+  (Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` with EINVAL) remains advisory;
+  follow-up #1221.
 
 Evidence tests:
 
@@ -452,8 +604,9 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Partial (2026-11-18) — local container argv and cloud job bodies route values through
-references; HPC script bodies and live artifact-inspection proof remain.
+**Maturity**: Partial (2026-11-18) — local container argv, cloud job bodies, and HPC scheduler
+scripts all route values through references; live artifact-inspection proof on real infrastructure
+remains.
 
 Cluster command files contain the fully expanded shell command. Kubernetes, AWS Batch, and GCP
 Batch manifests embed that command, and Docker/Singularity execution keeps sensitive values in
@@ -476,7 +629,11 @@ Required exit evidence:
   job bodies of Kubernetes / AWS Batch / GCP Batch — both the `run --profile` driver and
   `cluster submit` route each value to an `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is
   built (issue #1120), with one shared binding table per run. HPC script bodies
-  (SLURM/PBS/SGE/LSF) still materialize the literal — open. Residual found by PR
+  (SLURM/PBS/SGE/LSF) now route the same way through a private `0o600` env file
+  written beside the run (`<rule>.<n>.secrets.env`, sourced inside the `env -i`
+  wrapper) so the scheduler-visible script carries `$OXO_FLOW_SENSITIVE_<n>`
+  and never the value; the env file holds only the references that rule uses,
+  is refreshed on resubmission, and is removed when the chunk settles. Residual found by PR
   #1176's review and fixed in `dea4ee73` (issue #1177): a path-valued sensitive
   value keeps its docker auto-bind mount — mounts are discovered from the
   PRE-routing command and a sensitive path is expanded host-side from its routed
@@ -695,11 +852,15 @@ precedence and is unchanged by this CLI-scoped fix.
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) — rule/HPC/cloud shells isolated behind the shared
+allowlist (#1108/#1173/#1171/#1176); the environment-setup channel is an accepted risk (#1174)
 
 The rule shell adds declared environment variables but does not clear or allowlist the inherited
 environment. A shared or imported workflow can read provider keys, cloud credentials, database
-URLs, MCP tokens, and proxy credentials without declaring them.
+URLs, MCP tokens, and proxy credentials without declaring them. *Status: fixed for every
+workflow-authored shell — local rule/pre_exec/hook shells, HPC scheduler scripts, and cloud
+dispatch bodies; the one remaining ambient channel is environment SETUP, an accepted risk
+below.*
 
 Evidence:
 
@@ -759,7 +920,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | :--- | :---: | :--- | :--- | :--- |
 | CL-01 | P1 | Post-submit failures could orphan accepted jobs before local job registration. | Fixed (#1188) | Code commit a0f0885: every fallible step after the scheduler accepts a job now cancels the accepted job(s) by scheduler id and fails the run naming them — non-array `jobs/<rule>/job.id` and `status.json` writes, array `index.json` plus per-element `status.json` writes. `cancel_inflight` attempts every target (arrays by base id, deduped) and returns the unresolved ids with the scheduler's own error instead of swallowing it; `fail_with_cancel` appends that outcome to the original failure, so an unconfirmed cancel is never reported as cancelled and a poll-timeout/interrupt/required-failure path surfaces it too. Tests (mock scheduler, fail-first verified against a0f0885^): `backend::driver::tests::post_submit_artifact_write_failures_cancel_accepted_jobs`, `backend::driver::tests::driver_errors_when_index_json_is_not_writable`, `backend::driver::tests::array_element_status_write_failure_cancels_accepted_array`, `backend::driver::tests::cancel_failure_after_post_submit_write_error_reports_unresolved_job`, `backend::driver::tests::cancel_failure_after_array_index_write_reports_unresolved_base`, `backend::driver::tests::cancel_inflight_reports_unresolved_jobs_only`. Docs: `docs/guide/src/how-to/run-on-cluster.md` → "Submission failure semantics". Remaining boundary (documented): a job the scheduler accepts but prints no parseable id for has no cancel handle; the run fails with the scheduler output quoted for manual cleanup. |
 | CL-02 | P1 | Cluster artifacts and commands could expose sensitive values. | Implemented but unproven | Artifact permissions tightened and command logging masked; scheduler/container secret artifacts remain RB-12. |
-| CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Planned / blocked | See RB-06. |
+| CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Partial (#1132) | Cancellation errors are surfaced/reconciled (#1188) and per-element settlement now applies to every backend that exposes element status (SLURM, Kubernetes Indexed Jobs, AWS Batch child jobs, GCP Batch tasks); PBS/LSF/SGE stay base-polled with explicit aggregate provenance. Cloud live campaigns remain CL-05. See RB-06. |
 | CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Partial (#1189) | A failed result pull fails the run and records `artifacts_incomplete` (#1112). Extraction runs through `oxo-flow-core::archive::extract_tar_requiring`: absolute/`..` members and link targets that are absolute or contain any `..` component (including the `x -> .` + `y -> x/..` chain) are rejected by name, every extracted member is re-verified on disk, and the pull requires `execution.log` + `.exit-code` + a run-id completion record tarred after the tree, so a truncated stream fails the run. Still open: declared output paths are not re-verified locally after the pull (output existence remains the remote engine's exit-0 contract). Tests: `archive::tests::*`, `result_extraction_*`, `bundle_with_*_is_rejected`, `bundle_missing_a_declared_member_fails_naming_it`. See RB-05. |
 | CL-05 | P2 | Cloud backend tests are mostly mock and CLI-wrapper tests. | Prototype | Live cloud campaigns are required before cloud-native claims. |
 
@@ -768,14 +929,14 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
 | WEB-01 | P0 | No OS-level tenant execution boundary. | Planned / blocked | RB-01. |
-| WEB-02 | P0 | No immutable per-run artifact snapshot. | Planned / blocked | RB-02. |
+| WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design), allocated only after validation so rejected creates leave no orphan dir. Admission is `INSERT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` backed by partial unique indexes on live `pipeline_id`/`workdir` in both SQLite and PostgreSQL (409 on the loser; proven on live PostgreSQL by the CI smoke concurrency tests); the pipeline slot is global across readers. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `shared_pipeline_slot_is_global_across_identities`, `validation_rejected_create_leaves_no_run_directory`, `pipeline_guard_*`, `live_admission_indexes_*`, `test_concurrent_*admission*`. See RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |
 | WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
-| WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Planned / blocked | RB-06. |
+| WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Partial (#1132) | The core scheduler path no longer discards cancellation errors, fabricates exit code 0, or expands a base array verdict across elements that expose their own status. Cloud live campaigns remain CL-05. See RB-06. |
 | WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Checker parity fixed (#1118); resolved admission open | Direct TOML routes now report TYPE-008/009 for untyped-producer and build-incomplete edges (advisory at the admission gate); the resolved include/override admission seam remains RB-04. |
-| WEB-09 | P1 | Quotas are racy and process-local. | Partially fixed (#1133) | RB-09. Admission is one atomic storage CAS + reservation insert and quota state is durable/shared through `StorageBackend` (SQLite+PostgreSQL); declared memory is OS-enforced for local Linux runs (`RLIMIT_DATA`). Non-Linux and remote cluster runs stay advisory (follow-up #1221). |
+| WEB-09 | P1 | Quotas are racy and process-local. | Partially fixed (#1133, #1221) | RB-09. Admission is one atomic storage CAS + reservation insert and quota state is durable/shared through `StorageBackend` (SQLite+PostgreSQL); declared memory is OS-enforced for local Linux runs (`RLIMIT_DATA`). Remote cluster runs forward their declared ceilings to the cluster engine's scheduler pool + budget gate (#1221). Non-Linux stays advisory (follow-up #1221). |
 | WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Planned / blocked | Fail closed or use a durable revoke/retry protocol. Evidence: `crates/oxo-flow-web/src/domains/auth/handlers.rs:760`, `:454`. |
 | WEB-11 | P1 | Pipeline edits can silently lose updates; revision insertion is best-effort. | Fixed (#1136) | Baseline re-confirmed on main @ ccf1d4ffa: the update path wrote the row unconditionally (`crates/oxo-flow-web/src/domains/workflow/handlers.rs:802` at that base — the issue's `:775` had drifted) and `record_revision` (`:31`) logged-and-continued on DB failure, so the request reported success without its snapshot. Mechanism: a new monotonic `pipelines.revision` column (default 1) is the concurrency token (distinct from the TOML-derived `version`); it travels as a strong HTTP validator — `ETag: "<revision>"` on GET/create/PUT/rollback responses and back in `If-Match` on PUT/rollback — so the mirrored JSON response contract (`frontend/src/api/types.ts`) is unchanged. The storage layer performs a single-statement compare-and-swap (`UPDATE ... SET revision = revision + 1 WHERE id = ? AND (? IS NULL OR revision = ?)`, rows-affected checked) implemented in both the SQLite and PostgreSQL `StorageBackend` impls (`create_pipeline_with_revision`, `update_pipeline_cas`), so the guard is the atomic write, not a read-then-write. A stale validator writes nothing and answers `409 {code:"PIPELINE_VERSION_CONFLICT", detail:"expected revision N but the stored revision is M", suggestion:"Re-read GET /api/pipelines/{id} for its current ETag and retry with If-Match ..."}`; a malformed validator answers `400 INVALID_IF_MATCH`; omitting the header keeps the historical unconditional update (documented backward compatibility, token still advances). Atomicity statement: create (row + initial snapshot) and update/rollback (CAS row write + pre-write snapshot + 50-row prune) each run in ONE storage transaction per backend, so either both commit or the request fails; failure injection (dropping `pipeline_revisions` on a dedicated in-memory DB, no production test hooks) proves the update/create rolls back and cannot report success. Remaining boundary (documented): the fork/import `save_pipeline` upsert path writes no revision rows (copies start at revision 1 with no history), and the permission/default read before the CAS is outside the transaction — the write itself is guarded by the token, not by that read. Evidence tests: `interleaved_writers_one_conflicts_and_the_winner_survives`, `update_without_if_match_stays_backward_compatible`, `malformed_if_match_is_rejected_not_ignored`, `quoted_and_unquoted_if_match_both_work`, `cas_applies_once_and_records_the_pre_write_snapshot`, `stale_token_is_a_conflict_and_writes_nothing`, `failed_revision_insert_rolls_back_the_pipeline_update`, `failed_initial_revision_insert_rolls_back_the_create` (`crates/oxo-flow-web/tests/pipeline_concurrency.rs`). Docs: `docs/guide/src/reference/web-api.md` → "Optimistic concurrency (`ETag` / `If-Match`)" and Version History transaction semantics. Commit binding: 755259911e93dc68feb6c64daf0761c5e7aa90ba. |
 | WEB-12 | P1/P2 | DAG edit history is unowned, process-global, unbounded, and non-durable. | Fixed (#1191) | Commit binding: `7636a2ab67b683fa6f68a8e27795729fe2cca5e1` (PR #1191, issue #1137). Stacks are now keyed by `(CurrentUser.id, pipeline id)` — the same `resolve(Option<Extension<CurrentUser>>)` identity the other pipeline handlers use, with the `default` pseudo-user in personal mode — so two identities editing the same pipeline id own independent stacks. Bounds are documented constants in `crates/oxo-flow-web/src/domains/dag/service.rs`: `MAX_EDIT_HISTORY_DEPTH` = 50 transitions per stack (oldest dropped) and `MAX_EDIT_HISTORY_PIPELINES` = 256 stacks process-wide (LRU eviction on a monotonic use clock). Restart semantics are fail-closed and documented, not persisted: history remains in RAM, undo/redo return a typed `HistoryOutcome`, and the HTTP layer answers `409 EDIT_HISTORY_UNAVAILABLE` (no stack: never edited, restart, or LRU loss) or `409 EDIT_HISTORY_STALE` (supplied TOML is not the history tip) with remediation suggestions; `404 NO_UNDO`/`NO_REDO` remain only for a genuinely exhausted direction. Tests: `domains::dag::service::tests::{edit_history_is_scoped_by_owner, edit_history_depth_cap_drops_the_oldest_transition, edit_history_lru_evicts_the_oldest_pipeline, undo_and_redo_without_history_are_unavailable, exhausted_undo_is_distinguished_from_unavailable_history}`; `domains::dag::handlers::tests::{undo_is_scoped_to_the_acting_user, undo_after_restart_fails_closed_with_structured_code, redo_after_restart_fails_closed_with_structured_code, stale_undo_fails_closed_without_consuming_history, undo_with_no_remaining_transitions_keeps_no_undo}`. Docs: `docs/guide/src/reference/web-api.md` (DAG editing scope/caps/lifetime/codes), `docs/guide/src/reference/dag-edit-api.md` ("History scope, caps, and lifetime" + failure-code table), `docs/guide/src/reference/web-system-architecture.md` (error-code table). |
@@ -817,7 +978,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
 | AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Fixed (#1117) | `--ai-recover` now rejects a patch that shrinks the original's rules/includes/references (checked through `WorkflowConfig::parse`) and writes accepted fixes atomically. See RB-11. |
-| AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
+| AI-02 | P1 | Rule shells inherit ambient credentials. | Partial (2026-11-18) | Workflow-authored shells are isolated behind the shared allowlist on the local, HPC, and cloud paths (#1108/#1173/#1171/#1176); the environment-setup channel is an accepted risk (#1174). See RB-15. |
 | AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Fixed (#1122) for the CLI task surfaces | The CLI resolves the full chain before building the provider and applies the resolved provider/model (`create_provider_from_config_chain`) for `template --ai`, `env create --ai`, `ai explain`, and the `validate`/`lint`/`dry-run`/`debug`/`report`/`run`-recovery analyses; a saved config's endpoint/model/key never cross into a different provider. Scope note: the status commands (`oxo-flow ai`, `ai test`) take no workflow and report environment + saved config only; the web/desktop provider registry keeps its own precedence and is not covered. E2E precedence tests in `crates/oxo-flow-cli/tests/ai_policy.rs`. See RB-14. |
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Fixed (#1123) | The generic `OXO_FLOW_MCP_TOKEN` is released only to exact origins listed in `OXO_FLOW_MCP_TRUSTED_ORIGINS` (unset/empty = never released; unparseable entries warned and ignored); per-server tokens are destination-scoped by construction. Tests cover unapproved, lookalike, and approved origins (wire-level for the first and the approved case) plus per-server precedence; the SSRF screen is unchanged. See RB-13. |
 | AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Fixed (#1123) | Outbound egress is classified per invocation (`Tool::egress_target`; `fetch_url` = destination origin, MCP = opaque) and no longer inherits the read-only auto-approval: the call needs an explicit human approval, or its exact origin must be listed in `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`; non-interactive sessions refuse. Refusals name the origin only. Tests: `egress_data_release_policy`, `read_then_fetch_cannot_reach_the_network_without_approval`, `egress_refusal_names_only_the_origin_and_never_the_payload`. See RB-13. |
