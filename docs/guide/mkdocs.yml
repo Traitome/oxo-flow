@@ -178,6 +178,7 @@ nav:
       - diff: commands/diff.md
       - dry-run: commands/dry-run.md
       - env: commands/env.md
+      - runs: commands/runs.md
       - export: commands/export.md
       - format: commands/format.md
       - graph: commands/graph.md

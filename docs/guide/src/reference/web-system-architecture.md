@@ -192,6 +192,14 @@ not per user, so a `workspace`-shared pipeline admits one live run across all
 its readers. `retry` and `resume-checkpoint` are the only paths that
 deliberately continue a predecessor's workdir.
 
+Nothing reclaims those trees automatically: a long-lived server accumulates one
+`users/<u>/runs/<run_id>/` directory per run forever. The manual sweeper is
+[`oxo-flow runs gc`](../commands/runs.md), which deletes only terminal-run
+trees past an age gate, never a live run, never a tree a later retry/resume
+still points at, and never a tree carrying a declared protected output — the
+shared `workdir` string across run rows is exactly the lineage signal it keys
+on.
+
 ---
 
 ## UI Test Coverage
