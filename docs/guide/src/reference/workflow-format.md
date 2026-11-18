@@ -1645,7 +1645,14 @@ threads = 16  # Override inherited value
 grandchild receives values its parent only inherits. The base rule may live in
 an `[[include]]`d file; when that include declares a `namespace`, `extends`
 references to rules inside the same module are qualified automatically
-(`base` → `<namespace>::base`).
+(`base` → `<namespace>::base`). Resolution happens at load time — after any
+available `[[include]]` sources are merged and before validation, DAG
+construction, and the per-rule fingerprints recorded in the checkpoint are
+derived. The CLI (`run`/`dry-run`/`validate`/`graph`) resolves includes from
+disk; the web API resolves staged `include_files` on run creation
+(`POST /api/runs`), while the single-document parse/validate endpoints accept
+one TOML text — a base rule that lives in a file they cannot see is a load
+error, never a silently missing rule.
 
 ### Priority and Targeting
 

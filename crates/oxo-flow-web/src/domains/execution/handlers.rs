@@ -599,8 +599,9 @@ pub async fn create_run(
     // retry/resume keyed the user id, so the per-minute limits stacked.
     // The quota admission (durable, mutating) runs later — see
     // `admit_spawn_budget` right before the run-row claim.
-    // Re-budgeted from the resolved config below when the workflow has
-    // includes (they can declare their own resources).
+    // Provisional host-string parse; re-derived from the resolved config
+    // below (staged includes can declare their own resources) — the reserve
+    // must charge the RESOLVED rule set, not the host text (review fix F1).
     let mut quota_usage = quota_usage_for(toml);
     check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
     let max_jobs = req.max_jobs.unwrap_or(4);
@@ -640,8 +641,32 @@ pub async fn create_run(
         ));
     }
 
+    // Read permission, not just existence (#519): executing a private
+    // pipeline by id exposes its name/DAG/products through the run's own
+    // status endpoints. Foreign and unknown ids both answer
+    // PIPELINE_NOT_FOUND (no oracle). Checked here — before any IO — because
+    // source staging and the resolved load path below can touch the module
+    // cache (repo-pinned [[include]]s clone on load), so an unreadable id
+    // must be rejected first.
+    if let Some(pid) = pipeline_id.as_ref()
+        && let Some(backend) = crate::infra::db::global_backend()
+    {
+        let row = backend
+            .get_pipeline(pid)
+            .await
+            .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
+        if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
+            return Err(err(
+                StatusCode::NOT_FOUND,
+                "PIPELINE_NOT_FOUND",
+                format!("Pipeline {pid} not found"),
+            ));
+        }
+    }
+
     // Quota enforcement (issue #82 P1-9) is the atomic admission right
-    // before the workdir claim below (RB-09 / #1133).
+    // before the workdir claim below (RB-09 / #1133); its charge is derived
+    // from the resolved config (see below).
 
     // Validate BEFORE anything is persisted: `validate_config_overrides`
     // and the two pure include-key gates below answer 400s, and a 400 must
@@ -681,15 +706,66 @@ pub async fn create_run(
         include_paths.push((rel, content.clone()));
     }
 
-    let resp = service::create_run(toml, &config, None)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?;
+    // Stage the sources BEFORE the plan is derived: `include_files` land
+    // beside `workflow.oxoflow` in a per-request temp dir, so only the
+    // canonical `from_file` load path can see the rules they contribute.
+    // Deriving the plan from the host string used to report fewer rules than
+    // the spawned CLI executes, and rejected a valid `extends` chain that
+    // reached an included base rule outright (issue #1152, ledger WF-01).
+    //
+    // The sources are NOT written into the run workdir here: a saved
+    // pipeline reuses its persistent workdir, so a request that loses the
+    // concurrent-run race below (409 RUN_NOT_TERMINAL) must not have
+    // already clobbered the winner's on-disk files. Stage into a temp dir
+    // instead; the claim's Ok(true) arm copies them into the workdir
+    // (claim-then-stage).
+    let staging = tempfile::tempdir().map_err(|e| {
+        tracing::error!("Failed to create staging directory: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RUN_ERROR",
+            "Failed to create staging directory".to_string(),
+        )
+    })?;
+    let workflow_path = stage_run_sources(staging.path(), toml, &include_paths).await?;
+
+    // One canonical load path for the plan: when secondary sources are
+    // staged, resolve them (`from_file`) before building the response. The
+    // resolved config is reused for admission below — never re-parsed.
+    let resolved_config = if include_paths.is_empty() {
+        None
+    } else {
+        Some(
+            oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path).map_err(|e| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "RUN_ERROR",
+                    format!("resolved workflow parse failed: {e}"),
+                )
+            })?,
+        )
+    };
+    let resp = match &resolved_config {
+        Some(resolved) => service::create_run_from_config(resolved, &config)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?,
+        None => service::create_run(toml, &config, None)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?,
+    };
 
     // Persist run to database. Ad-hoc runs (no pipeline_id) keep a NULL
     // pipeline_id (the column is an FK only when a pipeline exists).
     if let Some(backend) = crate::infra::db::global_backend() {
-        let workflow_name = oxo_flow_core::config::WorkflowConfig::parse(toml)
-            .map(|c| c.workflow.name)
-            .unwrap_or_else(|_| "unnamed".to_string());
+        // The resolved config carries the include-merged name; fall back to
+        // the single-file parse for workflows without staged sources.
+        let workflow_name = resolved_config
+            .as_ref()
+            .map(|c| c.workflow.name.clone())
+            .or_else(|| {
+                oxo_flow_core::config::WorkflowConfig::parse(toml)
+                    .map(|c| c.workflow.name)
+                    .ok()
+            })
+            .unwrap_or_else(|| "unnamed".to_string());
 
         // Read permission, not just existence (#519): executing a private
         // pipeline by id exposes its name/DAG/products through the run's own
@@ -734,40 +810,54 @@ pub async fn create_run(
         // the CLI, which warns on unknown keys and hard-fails on invalid
         // values for declared keys.
 
-        // Issue #1018: resolved-workflow BioType admission. When the host
-        // declares type contracts AND has includes (or config overrides),
-        // the simple parse in service::create_run cannot resolve the full
-        // type graph — the include files are not on disk yet at that point.
-        // Now that all sources are staged, re-parse through the canonical
-        // from_file path and run the same validate_workflow_types gate the
-        // CLI preflight runs on the merged config.
+        // Issue #1018: resolved-workflow BioType admission. When secondary
+        // sources were staged, `resolved_config` above already came through
+        // the canonical `from_file` load path — reuse it. Otherwise resolve
+        // only when the host declares type contracts or [[include]]: a host
+        // include pointing at a missing file must surface as a 400, not
+        // silently queue a run whose spawned CLI will fail identically.
         //
         // The old scan_admission_sources text-scan that rejected any typed
         // workflow with includes as TYPED_ADMISSION_UNSUPPORTED is gone —
         // this is the real resolved admission path.
-        let host_config = oxo_flow_core::config::WorkflowConfig::parse(toml)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?;
-        let host_has_types =
-            host_config.rules.iter().any(|r| r.types.is_some()) || !host_config.types.is_empty();
-        // Host workflows that declare [[include]] need the resolved path
-        // even when include_files is empty — an include pointing at a
-        // missing file must surface as a 400, not silently queue a run
-        // whose spawned CLI will fail identically.
-        let host_has_includes = !host_config.includes.is_empty();
-        if host_has_types || !include_paths.is_empty() || host_has_includes {
-            let resolved_config = oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path)
-                .map_err(|e| {
-                    err(
-                        StatusCode::BAD_REQUEST,
-                        "RUN_ERROR",
-                        format!("resolved workflow parse failed: {e}"),
+        let admission_config = match resolved_config {
+            Some(resolved) => Some(resolved),
+            None => {
+                let host_config =
+                    oxo_flow_core::config::WorkflowConfig::parse(toml).map_err(|e| {
+                        err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}"))
+                    })?;
+                let host_has_types = host_config.rules.iter().any(|r| r.types.is_some())
+                    || !host_config.types.is_empty();
+                if host_has_types || !host_config.includes.is_empty() {
+                    Some(
+                        oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path).map_err(
+                            |e| {
+                                err(
+                                    StatusCode::BAD_REQUEST,
+                                    "RUN_ERROR",
+                                    format!("resolved workflow parse failed: {e}"),
+                                )
+                            },
+                        )?,
                     )
-                })?;
-            // Expand before deriving (AGENTS invariant): included modules
-            // may declare their own resources, so the quota charge and the
-            // enforced memory ceiling must cover the resolved rule set, not
-            // just the host TOML.
-            quota_usage = quota_usage_for_config(&resolved_config);
+                } else {
+                    None
+                }
+            }
+        };
+        // Expand before deriving (AGENTS invariant): included modules may
+        // declare their own resources, so the quota charge and the enforced
+        // memory ceiling must cover the RESOLVED rule set, not just the host
+        // TOML. The reservation below is charged from this resolved quota —
+        // a staged-include run whose host text does not parse on its own
+        // (`extends` an included base rule) would otherwise be admitted at
+        // the `(1, 0)` host-string fallback (review fix F1, #1152).
+        // Resolve FIRST, then reserve below.
+        if let Some(resolved) = admission_config.as_ref() {
+            quota_usage = quota_usage_for_config(resolved);
+        }
+        if let Some(resolved_config) = admission_config {
             let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
                 &resolved_config.rules,
                 &resolved_config.config_placeholder_values(),

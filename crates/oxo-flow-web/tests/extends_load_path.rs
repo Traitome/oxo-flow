@@ -1,13 +1,22 @@
 //! Issue #1152 (audit ledger WF-01): the web load path (`WorkflowConfig::parse`
-//! behind `POST /api/pipelines/parse` / `POST /api/pipelines/validate`) must
-//! resolve rule-level `extends` — including multi-level chains — before it
-//! derives the plan it reports.
+//! behind `POST /api/pipelines/parse` / `POST /api/pipelines/validate`, and
+//! the staged-include path behind `POST /api/runs`) must resolve rule-level
+//! `extends` — including multi-level chains — before it derives the plan it
+//! reports.
 //!
 //! Commit-bound evidence: `WorkflowConfig::parse` never called
 //! `resolve_rule_templates` before af4929c53e67e7bc5ab7ab65c8b96edc0b47bea6
 //! (#997) wired it in. These tests fail on that parent commit: the leaf rule
 //! would report the default thread count and `system` environment instead of
 //! the values it inherits through its parent.
+//!
+//! The run-creation path had a second, include-specific bypass: it derived
+//! the plan from the host TOML string before `include_files` were staged, so
+//! a host rule extending an included base rule was rejected with
+//! "extends 'base' which does not exist", and a plain include was executed by
+//! the CLI but omitted from the reported plan. `POST /api/runs` now builds
+//! its plan from the same `from_file`-resolved config the admission gate
+//! uses.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -60,6 +69,20 @@ async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
+}
+
+/// Run-creation setup: the dedicated run limiter (5/min) and the global
+/// concurrent-run quota are process-wide, and this binary creates several
+/// runs across independent cases — mirror the other run-contract suites.
+async fn ensure_run_db() {
+    oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
+    oxo_flow_web::infra::quota::global_quota_tracker().update_config(
+        oxo_flow_web::infra::quota::QuotaConfig {
+            max_concurrent_runs: 100,
+            ..Default::default()
+        },
+    );
+    common::ensure_db().await;
 }
 
 /// The parse handler returns the loaded plan (`rules[]` + DAG). The leaf row
@@ -169,4 +192,161 @@ async fn web_validate_handler_reports_inherited_fields_for_multilevel_chain() {
             "{code} must be reported for every rule that inherits the field: {body}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Run creation: the response's `execution_plan` is the LOADED PLAN.
+// ---------------------------------------------------------------------------
+
+fn plan_names(body: &Value) -> Vec<String> {
+    let mut names: Vec<String> = body["execution_plan"]["execution_order"]
+        .as_array()
+        .expect("execution_plan.execution_order")
+        .iter()
+        .filter_map(|n| n.as_str().map(String::from))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// `POST /api/runs` with a multi-level `extends` chain reports every rule in
+/// the plan it derives. The chain itself is proven field-by-field by the
+/// parse/validate cases above; this pins the run-load path to the same
+/// resolution: the plan must not stop at the host text.
+#[tokio::test]
+async fn web_create_run_plan_contains_multilevel_extends_chain() {
+    ensure_run_db().await;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({ "toml_content": MULTILEVEL_TOML, "dry_run": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    assert_eq!(body["execution_plan"]["total_rules"], 3, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec![
+            "leaf_rule".to_string(),
+            "mid_rule".to_string(),
+            "root_rule".to_string()
+        ],
+        "the loaded plan must contain base, parent and child: {body}"
+    );
+}
+
+/// Regression for ledger WF-01's documented exit evidence on the web path:
+/// a base workflow's rules must appear in the loaded plan, not just in the
+/// merged config the CLI later executes. Before the fix the response plan
+/// carried only the host rule while the spawned CLI planned both.
+#[tokio::test]
+async fn web_create_run_plan_lists_rules_from_staged_include() {
+    ensure_run_db().await;
+
+    const BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+    const PLAIN_CHILD: &str = r#"
+[workflow]
+name = "include-plain"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": PLAIN_CHILD,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": BASE },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    assert_eq!(body["execution_plan"]["total_rules"], 2, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec!["base_align".to_string(), "child_align".to_string()],
+        "the staged base workflow's rule must appear in the loaded plan: {body}"
+    );
+    // The resource estimate is derived from the same resolved rules: the
+    // base rule's 6G is visible only once the include is merged.
+    assert_eq!(
+        body["estimated_resources"]["max_memory_mb"], 6144,
+        "estimates must be derived after include resolution: {body}"
+    );
+}
+
+/// The include-specific bypass: the host rule `extends` a rule that exists
+/// only inside a staged `[[include]]`. Before the fix, create-run parsed the
+/// host string before the include was staged and answered 400
+/// "extends 'base_align' which does not exist" for a workflow the CLI runs
+/// successfully.
+#[tokio::test]
+async fn web_create_run_resolves_extends_across_staged_include() {
+    ensure_run_db().await;
+
+    const BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+    const CHILD: &str = r#"
+[workflow]
+name = "extends-include"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": CHILD,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": BASE },
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "extends must resolve across a staged include before the plan is derived: {body}"
+    );
+    assert_eq!(body["execution_plan"]["total_rules"], 2, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec!["base_align".to_string(), "child_align".to_string()],
+        "the include-resolved base rule must be planned: {body}"
+    );
 }

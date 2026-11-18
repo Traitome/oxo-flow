@@ -22,6 +22,23 @@ pub fn create_run(
     _pipeline_id: Option<&str>,
 ) -> Result<CreateRunResponse, String> {
     let wf = WorkflowConfig::parse(pipeline_toml).map_err(|e| format!("Parse: {e}"))?;
+    create_run_from_config(&wf, config)
+}
+
+/// Build the run-creation response (plan, estimates) from an already-loaded
+/// workflow.
+///
+/// [`create_run`] is the string entry point for single-file workflows. The
+/// web run handler calls this function directly with the
+/// `from_file`-resolved config when `include_files` are staged: the string
+/// parse cannot see rules contributed by an `[[include]]`, so deriving the
+/// plan from it would report fewer rules than the spawned CLI executes, and
+/// an `extends` chain crossing an include would fail to resolve at all
+/// (issue #1152, ledger WF-01 — resolve inherited rules BEFORE deriving).
+pub fn create_run_from_config(
+    wf: &WorkflowConfig,
+    config: &RunConfig,
+) -> Result<CreateRunResponse, String> {
     // Config expansion matches `run` (issue #707): {config.*}-routed
     // producer/consumer pairs only match after placeholder expansion.
     let dag = WorkflowDag::from_rules_with_config(&wf.rules, &wf.config_placeholder_values())
@@ -30,7 +47,7 @@ pub fn create_run(
     // Web admission uses the same canonical biological contract gate as the
     // CLI preflight. Rejecting here prevents an invalid run from being
     // persisted or queued while deferring the failure to the spawned CLI.
-    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(&wf, &dag) {
+    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(wf, &dag) {
         let findings = type_errors
             .iter()
             .map(ToString::to_string)

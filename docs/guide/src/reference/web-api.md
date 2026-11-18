@@ -548,6 +548,14 @@ must be readable by the acting user. This flat shape is the typed
 server, and the TypeScript client stay in lockstep. Returns
 `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
+`execution_plan` and `estimated_resources` are derived from the **resolved**
+workflow, not from `toml_content` alone: when `include_files` are supplied, the
+sources are written beside `workflow.oxoflow` and loaded through the same
+`from_file` path the executor uses before the plan is built, so rules
+contributed by an `[[include]]` — and a rule-level `extends` whose base lives in
+one — appear in the reported plan and resource estimate. Without staged
+sources the single-file parse is used, exactly as before.
+
 Run creation pays the dedicated #213 spawn budget: `OXO_FLOW_RUNS_RATE_LIMIT`
 run-creation attempts per minute **per acting identity** (default 5; `0`
 disables the limiter). The budget is keyed by the authenticated `users.id`

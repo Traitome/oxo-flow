@@ -1,7 +1,8 @@
 //! Issue #1152 (audit ledger WF-01): the workflow load path must resolve
 //! rule-level `extends` — including multi-level chains — before any derived
-//! form (DAG, expanded plan) is built. These tests drive the real CLI
-//! (`dry-run --json`, i.e. the loaded plan) against a temporary workflow.
+//! form (DAG, expanded plan, checkpoint fingerprints) is built. These tests
+//! drive the real CLI (`dry-run --json`, `validate --json`, and `run`) against
+//! temporary workflows.
 //!
 //! Commit-bound evidence: the resolution was wired into both load paths
 //! (`WorkflowConfig::parse` and `WorkflowConfig::from_file`) by
@@ -9,6 +10,13 @@
 //! load path never called `resolve_rule_templates`. The namespaced-include
 //! case was still broken until the `extends` reference was rewritten with the
 //! module namespace in this PR.
+//!
+//! `cli_run_fingerprints_prove_multilevel_extends_resolution` closes the last
+//! derivation gap the ledger named: the checkpoint's per-rule fingerprints
+//! are hashes of the RESOLVED rule, so a workflow whose child inherits
+//! `log`/`params` through two levels must fingerprint identically to the same
+//! rules written out explicitly. A bypassed resolution yields different
+//! fingerprints and this test fails.
 
 use serde_json::Value;
 
@@ -236,4 +244,277 @@ shell = "echo host > {output}"
         child["threads"], 6,
         "namespace-qualified extends must resolve transitively: {json}"
     );
+}
+
+/// `validate` is the first gate in the documented validate → dry-run → run
+/// path and loads through `from_file`: the included multi-level chain must
+/// merge and validate without diagnostics. The inherited-FIELD evidence lives
+/// in `cli_lint_reports_inherited_fields_after_include_resolution` (lint
+/// exposes per-rule diagnostics the validate summary does not).
+#[test]
+fn cli_validate_loads_included_multilevel_extends_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(
+        dir.path(),
+        "chain_base.oxoflow",
+        r#"
+[workflow]
+name = "chain-base"
+version = "1.0.0"
+
+[[rules]]
+name = "root_rule"
+threads = 7
+memory = "4G"
+output = ["root_rule.txt"]
+shell = "echo root > {output}"
+
+[[rules]]
+name = "mid_rule"
+extends = "root_rule"
+output = ["mid_rule.txt"]
+shell = "echo mid > {output}"
+
+[[rules]]
+name = "leaf_rule"
+extends = "mid_rule"
+output = ["leaf_rule.txt"]
+shell = "echo leaf > {output}"
+"#,
+    );
+    let host = write_workflow(
+        dir.path(),
+        "chain_host.oxoflow",
+        r#"
+[workflow]
+name = "chain-host"
+version = "1.0.0"
+
+[[include]]
+path = "chain_base.oxoflow"
+
+[[rules]]
+name = "host_rule"
+extends = "leaf_rule"
+output = ["host_rule.txt"]
+shell = "echo host > {output}"
+"#,
+    );
+
+    let out = common::oxo_flow_cmd()
+        .args(["validate", host.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "validate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&out.stdout).expect("validate --json must emit one JSON document");
+    assert_eq!(json["valid"], true, "{json}");
+    assert_eq!(
+        json["rules"], 4,
+        "3 included rules + 1 host rule must be validated: {json}"
+    );
+    assert!(
+        !json["errors"]
+            .as_array()
+            .expect("errors array")
+            .iter()
+            .any(|e| e["code"] == "E008"),
+        "extends across the include must resolve before validation: {json}"
+    );
+}
+
+/// Derived-diagnostic proof on the `lint` load path: W025 (deprecated
+/// rule-level threads/memory) is emitted per rule from the LOADED rule, so a
+/// resolved chain carries it on every rule — including the host rule that
+/// extends a rule living in the included file. A bypassed resolution leaves
+/// mid/leaf/host at their defaults and only `root_rule` is flagged.
+#[test]
+fn cli_lint_reports_inherited_fields_after_include_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(
+        dir.path(),
+        "lint_base.oxoflow",
+        r#"
+[workflow]
+name = "lint-base"
+version = "1.0.0"
+
+[[rules]]
+name = "root_rule"
+threads = 7
+output = ["root_rule.txt"]
+shell = "echo root > {output}"
+
+[[rules]]
+name = "mid_rule"
+extends = "root_rule"
+output = ["mid_rule.txt"]
+shell = "echo mid > {output}"
+
+[[rules]]
+name = "leaf_rule"
+extends = "mid_rule"
+output = ["leaf_rule.txt"]
+shell = "echo leaf > {output}"
+"#,
+    );
+    let host = write_workflow(
+        dir.path(),
+        "lint_host.oxoflow",
+        r#"
+[workflow]
+name = "lint-host"
+version = "1.0.0"
+
+[[include]]
+path = "lint_base.oxoflow"
+
+[[rules]]
+name = "host_rule"
+extends = "leaf_rule"
+output = ["host_rule.txt"]
+shell = "echo host > {output}"
+"#,
+    );
+
+    let out = common::oxo_flow_cmd()
+        .args(["lint", host.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "lint failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&out.stdout).expect("lint --json must emit one JSON document");
+    let mut flagged: Vec<&str> = json["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .filter(|d| d["code"] == "W025")
+        .filter_map(|d| d["rule"].as_str())
+        .collect();
+    flagged.sort_unstable();
+    assert_eq!(
+        flagged,
+        vec!["host_rule", "leaf_rule", "mid_rule", "root_rule"],
+        "every rule in the resolved chain must carry the inherited field: {json}"
+    );
+}
+
+/// Derived-artifact proof for the ledger's "before fingerprints are derived"
+/// clause, on the `run` path: the checkpoint's per-rule fingerprints hash the
+/// RESOLVED rule. Two workflows define the same three rules; in the first the
+/// child chain inherits `log`/`params` from `root_rule` two levels up, in the
+/// second the same fields are written out explicitly. Identical fingerprints
+/// prove `run` hashed the resolved rules — a bypassed resolution leaves the
+/// inherited fields at their defaults and the child hashes diverge.
+#[test]
+fn cli_run_fingerprints_prove_multilevel_extends_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let inherited = write_workflow(
+        dir.path(),
+        "inherited.oxoflow",
+        r#"
+[workflow]
+name = "extends-fingerprint"
+version = "1.0.0"
+
+[[rules]]
+name = "root_rule"
+log = "root.log"
+params = { mode = "fast" }
+output = ["root_rule.txt"]
+shell = "echo root > {output}"
+
+[[rules]]
+name = "mid_rule"
+extends = "root_rule"
+output = ["mid_rule.txt"]
+shell = "echo mid > {output}"
+
+[[rules]]
+name = "leaf_rule"
+extends = "mid_rule"
+output = ["leaf_rule.txt"]
+shell = "echo leaf > {output}"
+"#,
+    );
+    let explicit = write_workflow(
+        dir.path(),
+        "explicit.oxoflow",
+        r#"
+[workflow]
+name = "extends-fingerprint"
+version = "1.0.0"
+
+[[rules]]
+name = "root_rule"
+log = "root.log"
+params = { mode = "fast" }
+output = ["root_rule.txt"]
+shell = "echo root > {output}"
+
+[[rules]]
+name = "mid_rule"
+log = "root.log"
+params = { mode = "fast" }
+output = ["mid_rule.txt"]
+shell = "echo mid > {output}"
+
+[[rules]]
+name = "leaf_rule"
+log = "root.log"
+params = { mode = "fast" }
+output = ["leaf_rule.txt"]
+shell = "echo leaf > {output}"
+"#,
+    );
+
+    let fingerprints = |wf: &std::path::Path, workdir: &std::path::Path| -> Value {
+        std::fs::create_dir_all(workdir).unwrap();
+        let out = common::oxo_flow_cmd()
+            .args([
+                "run",
+                wf.to_str().unwrap(),
+                "-d",
+                workdir.to_str().unwrap(),
+                "-j",
+                "1",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let raw = std::fs::read_to_string(workdir.join(".oxo-flow/checkpoint.json"))
+            .expect("run must write a checkpoint");
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        parsed["rule_fingerprints"].clone()
+    };
+
+    let inherited_fp = fingerprints(&inherited, &dir.path().join("run_inherited"));
+    let explicit_fp = fingerprints(&explicit, &dir.path().join("run_explicit"));
+
+    for name in ["root_rule", "mid_rule", "leaf_rule"] {
+        let fp = inherited_fp[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("'{name}' fingerprint missing: {inherited_fp}"));
+        assert!(!fp.is_empty(), "'{name}' fingerprint is empty");
+        assert_eq!(
+            inherited_fp[name], explicit_fp[name],
+            "'{name}' must be fingerprinted from its fully resolved definition: \
+             inherited={inherited_fp} explicit={explicit_fp}"
+        );
+    }
 }
