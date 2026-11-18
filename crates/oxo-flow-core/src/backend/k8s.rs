@@ -17,6 +17,21 @@ pub fn sanitize_k8s_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
 }
 
+/// Deterministic chunk/run-scoped suffix for a generated K8s array job name.
+///
+/// `seed` is the per-chunk job directory (`.../jobs/<template>/chunk-<k>`),
+/// so the digest is stable for a given chunk on re-render (idempotent) and
+/// differs across chunks of one template and across runs. Two chunks of the
+/// same template no longer render the same `metadata.name` and collide on
+/// `kubectl create` (issue #1226).
+fn array_name_suffix(seed: &str) -> String {
+    use sha2::{Digest, Sha256};
+    // 8 hex chars is ample to separate the handful of concurrent chunks of
+    // one template, and short enough to leave the rule name room under the
+    // RFC 1123 63-char cap.
+    hex::encode(Sha256::digest(seed.as_bytes()))[..8].to_string()
+}
+
 /// Kubernetes Secret the manifest pulls `sensitive = true` config values
 /// from (issue #1120 / ledger RB-12). The operator creates it once per
 /// workflow, keyed by the same `OXO_FLOW_SENSITIVE_<n>` variable names the
@@ -156,7 +171,16 @@ pub fn generate_k8s_array_job_manifest(
     sensitive_refs: &[String],
     _cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
-    let job_name = format!("oxoflow-array-{}", sanitize_k8s_name(&rule.name));
+    // The job name carries a deterministic per-chunk suffix so sibling
+    // chunks of one template (and repeat runs) get distinct names and do not
+    // collide on `kubectl create` (issue #1226). The rule name is budgeted so
+    // the whole name stays within the RFC 1123 63-char cap:
+    // 14 ("oxoflow-array-") + 40 (rule) + 1 ("-") + 8 (suffix) = 63.
+    let job_name = format!(
+        "oxoflow-array-{}-{}",
+        sanitize_cloud_name(&rule.name, 40, true, ""),
+        array_name_suffix(cmd_dir)
+    );
 
     let container_image = rule
         .environment
@@ -297,6 +321,78 @@ mod tests {
         );
         // Array jobs must carry the same GPU limit as single jobs.
         assert_eq!(container["resources"]["limits"]["nvidia.com/gpu"], "2");
+    }
+
+    /// Regression (issue #1226): two chunks of the SAME template must not
+    /// render the same `metadata.name`, or the second `kubectl create` fails
+    /// the run on a name collision. The suffix is derived from the per-chunk
+    /// job dir, so sibling chunks differ, the same chunk re-renders stably
+    /// (idempotent), and the whole name stays within the RFC 1123 cap.
+    #[test]
+    fn test_k8s_array_job_name_is_unique_per_chunk() {
+        let rule = Rule {
+            name: "scatter_qc".into(),
+            ..Default::default()
+        };
+        let chunk1 = generate_k8s_array_job_manifest(
+            &rule,
+            "run/jobs/scatter_qc/chunk-1",
+            3,
+            &[],
+            &test_config(),
+        )
+        .expect("chunk 1 manifest must render");
+        let chunk2 = generate_k8s_array_job_manifest(
+            &rule,
+            "run/jobs/scatter_qc/chunk-2",
+            3,
+            &[],
+            &test_config(),
+        )
+        .expect("chunk 2 manifest must render");
+        let chunk1_again = generate_k8s_array_job_manifest(
+            &rule,
+            "run/jobs/scatter_qc/chunk-1",
+            3,
+            &[],
+            &test_config(),
+        )
+        .expect("chunk 1 re-render must succeed");
+
+        let name = |m: &str| -> String {
+            let v: Value = serde_json::from_str(m).expect("manifest must be valid json");
+            v["metadata"]["name"]
+                .as_str()
+                .expect("name must be a string")
+                .to_string()
+        };
+        let n1 = name(&chunk1);
+        let n2 = name(&chunk2);
+        let n1_again = name(&chunk1_again);
+
+        assert_ne!(n1, n2, "sibling chunks must not share a job name");
+        assert_eq!(n1, n1_again, "the same chunk must re-render identically");
+        // RFC 1123 label cap.
+        assert!(n1.len() <= 63, "job name {n1} exceeds the 63-char cap");
+        // A very long rule name must be truncated, never overflow the cap.
+        let long_rule = Rule {
+            name: "x".repeat(200),
+            ..Default::default()
+        };
+        let long_name = name(
+            &generate_k8s_array_job_manifest(
+                &long_rule,
+                "run/jobs/long/chunk-1",
+                2,
+                &[],
+                &test_config(),
+            )
+            .expect("long-name manifest must render"),
+        );
+        assert!(
+            long_name.len() <= 63,
+            "truncated job name {long_name} still exceeds the cap"
+        );
     }
 
     /// Sentinel regression (ledger RB-12): once the plan routes a

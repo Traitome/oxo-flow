@@ -106,9 +106,14 @@ pub fn load_node_statuses(run_dir: &Path, run_status: &str) -> Vec<NodeStatusIte
                     Some((b.wall_time_secs * 1000.0).round() as u64)
                 }
             }),
-            // The persisted rule_runs record (issue #758): completed rules
-            // exited 0; a recorded code (legacy or 0) wins.
-            exit_code: record.and_then(|r| r.exit_code).or(Some(0)),
+            // The persisted rule_runs record (issue #758). A recorded code
+            // (0 or a legacy value) is authoritative; when the record is
+            // absent, or present without an exit code (synthetic up-to-date
+            // rows, pre-upgrade checkpoints, cluster accounting the backend
+            // could not settle — RB-06), the code is genuinely UNKNOWN and
+            // stays `None`. The old `.or(Some(0))` fabricated a success exit
+            // for rules the engine never accounted for (issue #1226).
+            exit_code: record.and_then(|r| r.exit_code),
             progress_pct: None,
             stderr_tail: None,
             stdout_tail: None,
@@ -534,6 +539,81 @@ mod tests {
         let fastqc = items.iter().find(|i| i.rule == "fastqc").unwrap();
         assert_eq!(fastqc.exit_code, Some(0));
         assert!(fastqc.stderr_tail.is_none());
+    }
+
+    #[test]
+    fn completed_rule_without_accounting_reports_unknown_not_zero() {
+        // #1226 (RB-06): a completed rule whose `rule_runs` record carries no
+        // exit code has UNKNOWN accounting — the scheduler never settled it,
+        // or the checkpoint predates the field. The old `.or(Some(0))`
+        // fabricated a success exit code, contradicting the engine's own
+        // "missing accounting is UNKNOWN, never success" contract.
+        let dir = std::env::temp_dir().join("cp-unknown-exit");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["settled", "unaccounted", "no_record"],
+                "failed_rules": [],
+                "benchmarks": {},
+                "rule_runs": {
+                    "settled": {"exit_code": 0},
+                    "unaccounted": {"started_at": "2026-01-01T00:00:00Z"}
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, "completed");
+
+        let settled = items.iter().find(|i| i.rule == "settled").unwrap();
+        assert_eq!(
+            settled.exit_code,
+            Some(0),
+            "a recorded exit 0 is real evidence and must survive"
+        );
+
+        let unaccounted = items.iter().find(|i| i.rule == "unaccounted").unwrap();
+        assert!(matches!(unaccounted.status, NodeStatus::Success));
+        assert_eq!(
+            unaccounted.exit_code, None,
+            "a record without an exit code is UNKNOWN, not a fabricated 0"
+        );
+
+        let no_record = items.iter().find(|i| i.rule == "no_record").unwrap();
+        assert_eq!(
+            no_record.exit_code, None,
+            "no rule_runs record at all is UNKNOWN, not a fabricated 0"
+        );
+    }
+
+    #[test]
+    fn synthetic_up_to_date_rule_is_not_alarmed() {
+        // #324 F-1: a synthetic up-to-date row did not execute in this run and
+        // must stay Success with no exit evidence — the #1226 change must not
+        // turn it into a failure or invent an exit code for it.
+        let dir = std::env::temp_dir().join("cp-synthetic-unknown");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["cached"],
+                "failed_rules": [],
+                "benchmarks": {
+                    "cached": {"rule": "cached", "wall_time_secs": 0.0,
+                               "retries": 0, "recorded_as": "outputs up-to-date"}
+                },
+                "rule_runs": {"cached": {"exit_code": 0}}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, "completed");
+        let cached = items.iter().find(|i| i.rule == "cached").unwrap();
+        assert!(matches!(cached.status, NodeStatus::Success));
+        assert_eq!(
+            cached.duration_ms, None,
+            "synthetic rows report no fake duration"
+        );
+        assert_eq!(cached.started_at, None);
     }
 
     #[test]

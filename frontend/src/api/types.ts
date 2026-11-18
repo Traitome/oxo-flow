@@ -131,6 +131,10 @@ export interface RunInstance {
   group?: string;
   status: string;
   duration_ms?: number;
+  /** Exit code, or `null` when the engine settled the rule without an
+   *  accounting record (synthetic up-to-date rows, pre-upgrade checkpoints,
+   *  cluster accounting a backend could not settle). UNKNOWN is not success —
+   *  the monitor renders "-", never 0 (issue #1226 / RB-06). */
   exit_code?: number;
   /** Bounded stderr tail of a failed rule (issue #758). */
   stderr_tail?: string;
