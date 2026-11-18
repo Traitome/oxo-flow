@@ -508,27 +508,80 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Fixed (2026-11-18) — the CLI now resolves the documented config chain (defaults →
+global config file → environment → project `.oxo-flow/ai.toml` → workflow `[ai]` → CLI overrides)
+BEFORE building the provider, and applies the resolved provider/model end to end
+(`create_provider_from_config_chain`); enabled AI that cannot resolve a usable provider emits a
+structured degraded-mode reason (`AI_DISABLED_BY_ENV` / `AI_PROVIDER_INVALID` /
+`AI_CREDENTIAL_MISSING` / `AI_NOT_CONFIGURED`); `template --ai` refuses an existing destination
+without `--force` or interactive confirmation and writes through the shared
+`oxo_flow_core::atomic_file` staged-write helper (issue #1122).
 
-The CLI selects its provider before resolving workflow-scoped settings, while `auto_fix` has no
-runtime consumer outside parsing and tests. Enabled AI can silently degrade after a provider
-resolution error. AI template generation can overwrite an existing reviewed workflow
-non-atomically.
+> **Correction**: the previous sentence "`auto_fix` has no runtime consumer outside parsing and
+> tests" was stale and is removed. `crates/oxo-flow-cli/src/commands/run/failure.rs` consumes
+> `auto_fix_decision` at run time, so `never` / `ask` / `always` already produced distinct write
+> behavior before this fix.
 
 Evidence:
 
-- `crates/oxo-flow-cli/src/commands/ai_runtime.rs:36`, `:39`, `:143`
-- `crates/oxo-flow-ai/src/config.rs:217`, `:238`, `:346`
-- `crates/oxo-flow-cli/src/commands/run/failure.rs:257`, `:303`
-- `crates/oxo-flow-cli/src/commands/run/dry_run.rs:102`
-- `crates/oxo-flow-cli/src/commands/ai_template.rs:107`, `:124`, `:161`, `:574`
+- `crates/oxo-flow-ai/src/config.rs` — `AiConfig::provider_explicit` (distinguishes an absent
+  `provider` key from an explicit default), `AiConfig::resolve_chain_with_env`
+- `crates/oxo-flow-ai/src/provider.rs` — `create_provider_from_config_chain`,
+  `AiDegradedReason`, `degraded_reason`
+- `crates/oxo-flow-cli/src/commands/ai_runtime.rs` — `resolve_ai_scope`, `AiRuntime::new`
+- `crates/oxo-flow-cli/src/commands/ai_template.rs` — `overwrite_decision`,
+  `ensure_destination_writable`, `write_output`, `try_resolve_ai`
+- `crates/oxo-flow-cli/src/commands/run/failure.rs:325-358` — `auto_fix` IS a runtime consumer
+- Docs: `docs/guide/src/reference/ai-cli.md` (provider/model precedence table, degraded mode,
+  overwrite semantics), `docs/guide/src/commands/template.md`,
+  `docs/guide/src/commands/ai.md`, `docs/guide/src/reference/workflow-format.md`
+
+Tests:
+
+- `chain_provider_and_model_override_the_environment`,
+  `chain_explicit_provider_without_credential_degrades_to_noop`,
+  `chain_saved_key_is_reused_only_for_the_same_provider`,
+  `chain_model_override_applies_without_an_explicit_provider`,
+  `chain_disabled_pin_outranks_an_explicit_provider`,
+  `degraded_reason_names_the_failure_class` (`oxo-flow-ai`, provider.rs)
+- `provider_explicit_distinguishes_absent_from_an_explicit_default`,
+  `resolve_chain_with_env_orders_global_env_project_workflow_cli` (`oxo-flow-ai`, config.rs)
+- CLI end to end (`crates/oxo-flow-cli/tests/ai_policy.rs`, all five fail on the pre-fix tree):
+  `workflow_provider_and_model_override_project_env_and_global`,
+  `project_ai_config_applies_when_the_workflow_selects_nothing`,
+  `enabled_ai_with_unusable_credentials_reports_a_structured_reason`,
+  `template_ai_refuses_to_overwrite_an_existing_destination`,
+  `template_ai_force_passes_the_overwrite_guard`
+- Atomic replacement (`ai_template.rs`): `overwrite_decision_requires_consent_for_existing_destinations`,
+  `write_output_replaces_the_destination_atomically_without_following_symlinks`,
+  `write_output_leaves_no_staged_temp_files`
+
+Commit binding: `858e2ddf` (issue #1122, branch `fix/1122-rb14-ai-policy`);
+pre-fix failure verified by temporarily stashing the fix and re-running the E2E suite
+(5/5 failed, including the documented `Model: deepseek-v4-pro` env selection and the
+missing `--force` flag).
 
 Required exit evidence:
 
-- Documented global/project/workflow provider and model precedence is tested end to end.
-- `never`, `ask`, and `always` produce distinct write behavior.
-- Enabled AI with unusable credentials emits a structured degraded-mode reason.
-- Generation refuses an existing destination without confirmation and uses atomic replacement.
+- Documented global/project/workflow provider and model precedence is tested end to end. —
+  **Met**: the E2E tests spawn the real CLI and assert the workflow's provider/model beats the
+  project file, the environment, and the saved global file, with a local stub proving which
+  endpoint actually received the request.
+- `never`, `ask`, and `always` produce distinct write behavior. — **Met before this change**
+  (`auto_fix_decision` + `run/failure.rs`); the stale prose is corrected above.
+- Enabled AI with unusable credentials emits a structured degraded-mode reason. — **Met**:
+  the reason carries a stable code, the provider/credential detail, and the actionable
+  suggestion; degrader surfaces print it, hard-fail surfaces (`template --ai`,
+  `env create --ai`) return it as the command error.
+- Generation refuses an existing destination without confirmation and uses atomic replacement. —
+  **Met**: the guard runs before any paid generation; an accepted write uses the shared
+  `atomic_file` helper (temp file + fsync + rename + parent fsync).
+
+Still unproven (not claimed by this fix): real-provider behaviour (live endpoints, auth and
+streaming failures) was not exercised — the E2E tests use local stubs; the interactive y/N
+prompt path is covered only by its pure decision function (the non-interactive refusal and
+`--force` consent are covered end to end); the web/desktop provider registry keeps its own
+precedence and is unchanged by this CLI-scoped fix.
 
 ### RB-15: Rule shells inherit the runner's ambient credentials
 
@@ -656,14 +709,14 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | :--- | :---: | :--- | :--- | :--- |
 | AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Fixed (#1117) | `--ai-recover` now rejects a patch that shrinks the original's rules/includes/references (checked through `WorkflowConfig::parse`) and writes accepted fixes atomically. See RB-11. |
 | AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
-| AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Planned / blocked | RB-14. |
+| AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Fixed (#1122) | The CLI resolves the full chain before building the provider and applies the resolved provider/model (`create_provider_from_config_chain`); E2E precedence tests in `crates/oxo-flow-cli/tests/ai_policy.rs`. See RB-14. |
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Fixed (#1123) | The generic `OXO_FLOW_MCP_TOKEN` is released only to exact origins listed in `OXO_FLOW_MCP_TRUSTED_ORIGINS` (unset/empty = never released; unparseable entries warned and ignored); per-server tokens are destination-scoped by construction. Tests cover unapproved, lookalike, and approved origins (wire-level for the first and the approved case) plus per-server precedence; the SSRF screen is unchanged. See RB-13. |
 | AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Fixed (#1123) | Outbound egress is classified per invocation (`Tool::egress_target`; `fetch_url` = destination origin, MCP = opaque) and no longer inherits the read-only auto-approval: the call needs an explicit human approval, or its exact origin must be listed in `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`; non-interactive sessions refuse. Refusals name the origin only. Tests: `egress_data_release_policy`, `read_then_fetch_cannot_reach_the_network_without_approval`, `egress_refusal_names_only_the_origin_and_never_the_payload`. See RB-13. |
 | AI-06 | P1 | CLI and web admission evaluate different graphs when includes or overrides change the workflow. | Implemented but unproven | Direct TOML BioTypes now share the core gate; include/override admission parity is still absent. RB-04 defines the exit seam. |
 | AI-07 | P2 | Malformed tool arguments are converted to `{}` and remain executable. | Implemented and verified for model-emitted arguments | Provider parsers pass model argument strings through raw (never repaired to `{}`), the orchestrator's JSON-validity gate rejects them with a fail-closed tool-result message before the registry, and `ToolRegistry::execute` re-checks. Wire-format echoes (Anthropic `tool_use.input`, Ollama `arguments`) keep a protocol-valid `{}` fallback but are never executed. MCP-side argument handling is unchanged. |
-| AI-08 | P2 | `[ai] auto_fix` is documented but has no runtime consumer. | Planned / blocked | RB-14; user docs now warn that it is not a safety control. |
-| AI-09 | P2 | Enabled AI can silently become unavailable during analysis and recovery. | Planned / blocked | RB-14. |
-| AI-10 | P2 | AI template generation overwrites existing destinations non-atomically. | Planned / blocked | RB-14. |
+| AI-08 | P2 | `[ai] auto_fix` is documented but has no runtime consumer. | Fixed (verified in this wave) | Refuted by shipped code: `run/failure.rs` consumes `auto_fix_decision` (`never`/`ask`/`always` produce distinct write behavior). The RB-14 prose claiming otherwise was stale and is corrected there. |
+| AI-09 | P2 | Enabled AI can silently become unavailable during analysis and recovery. | Fixed (#1122) | Enabled-AI surfaces now emit a structured degraded-mode reason (`AiDegradedReason`: stable code + provider/credential detail + suggestion) instead of silently skipping AI; hard-fail surfaces return it as the command error. See RB-14. |
+| AI-10 | P2 | AI template generation overwrites existing destinations non-atomically. | Fixed (#1122) | `template --ai` refuses an existing destination without `--force`/interactive confirmation before any paid generation, and writes through the shared `oxo_flow_core::atomic_file` staged-write helper. See RB-14. |
 | AI-11 | P2 | README and provider guide overstated autonomous safety. | Fixed in this audit wave | User-facing claims now describe repair as experimental; malformed arguments are fail-closed end to end (see AI-07). |
 | AI-12 | P3 | Oversized-file guidance refers to an unavailable shell channel. | Planned / blocked | Direct the model to a bounded supported alternative and add a standard-registry test. Evidence: `crates/oxo-flow-ai/src/tools/builtin.rs:177`. |
 
