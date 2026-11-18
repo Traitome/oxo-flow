@@ -1402,12 +1402,11 @@ impl LocalExecutor {
                                     "environment verification failed after retry — \
                                      tearing down the broken environment"
                                 );
-                                let mut teardown_cmd = Command::new("sh");
-                                teardown_cmd
-                                    .kill_on_drop(true)
-                                    .arg("-c")
-                                    .arg(&teardown)
-                                    .current_dir(&self.config.workdir);
+                                // Same tooling-shell contract as every other
+                                // setup/teardown spawn (#1174): full ambient
+                                // environment, never the rule-shell allowlist.
+                                let mut teardown_cmd =
+                                    env_tooling_shell_command(&teardown, &self.config.workdir);
                                 if let Ok(child) = teardown_cmd.spawn() {
                                     let _ = wait_bounded(child, None).await;
                                 }
@@ -6887,8 +6886,15 @@ mod tests {
             "TERM",
             "HOSTNAME",
         ];
+        // Hermetic against the operator's own shell config: a name listed in
+        // `OXO_FLOW_ENV_PASSTHROUGH` IS re-admitted into rule shells, so the
+        // rule-shell side of the contract would observe it and the test
+        // would fail for a correct engine (independently caught with the
+        // documented example `OXO_FLOW_ENV_PASSTHROUGH=SLURM_JOB_ID,USER`).
+        let passthrough = env_passthrough_names();
         CANDIDATES
             .iter()
+            .filter(|name| !passthrough.iter().any(|p| p.as_str() == **name))
             .find_map(|name| std::env::var_os(name).map(|value| ((*name).to_string(), value)))
     }
 
@@ -6936,8 +6942,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // `${NAME-hidden}` distinguishes "unset" from "set to empty".
         let script = format!("printf '%s' \"${{{name}-hidden}}\"");
-        let child =
-            spawn_rule_shell(&script, dir.path(), &HashMap::new()).expect("rule shell must spawn");
+        let child = spawn_rule_shell(&script, dir.path(), &HashMap::new(), false)
+            .expect("rule shell must spawn");
         let out = child.wait_with_output().await.unwrap();
         assert!(
             out.status.success(),
