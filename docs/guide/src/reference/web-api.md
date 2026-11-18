@@ -1273,13 +1273,17 @@ session via `setsid`, with `nohup` fallback) so the launch call returns
 while the workflow keeps running, and pulls the results back on completion
 so every downstream endpoint (logs, files, report) works unchanged. The
 pulled stream is extracted through the engine's validated archive reader:
-absolute/`..` member paths and link targets escaping the workdir are
-rejected by name, every member is verified on disk, and `execution.log` +
-`.exit-code` must both be present (issue #1157 / audit CL-04). If that pull
-fails, the run is **not** finalized as a success — it is failed with the
-pull error and the run row records `artifacts_incomplete` (see
+absolute/`..` member paths and link targets that are absolute or contain
+any `..` component are rejected by name, every member is verified on disk,
+and `execution.log`, `.exit-code`, plus a run-specific completion record
+tarred **after** the result tree must be present — a truncated stream
+cannot carry the record (issue #1157 / audit CL-04). If that pull fails,
+the run is **not** finalized as a success — it is failed with the pull
+error and the run row records `artifacts_incomplete` (see
 [Run Detail](#run-detail)), because the local workdir the downstream
 endpoints read may be missing or stale (issue #1112 / audit RB-05).
+Because the pull does not re-derive the expanded output list locally,
+declared-output existence remains the remote engine's exit-0 contract.
 Cancel kills the wrapper's recorded process group, so the remote CLI and
 rule subprocesses stop rather than being orphaned. See
 [Run on a cluster](../how-to/run-on-cluster.md).

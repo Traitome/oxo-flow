@@ -33,7 +33,6 @@
 //! The helper returns the member list so callers can verify their own
 //! expectations against exactly what the archive carried.
 
-use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -75,9 +74,15 @@ impl ExtractedArchive {
     }
 
     /// Whether the archive carried a member at the given relative path.
+    ///
+    /// The query is normalized the same way member paths are (`./` and
+    /// repeated separators are dropped), so a caller's `./data/x` matches the
+    /// extracted `data/x`; an absolute or `..` query never matches.
     pub fn contains(&self, path: impl AsRef<Path>) -> bool {
-        let wanted = path.as_ref();
-        self.members.iter().any(|m| m.path == wanted)
+        let Ok(wanted) = normalize_member_path(path.as_ref()) else {
+            return false;
+        };
+        !wanted.as_os_str().is_empty() && self.members.iter().any(|m| m.path == wanted)
     }
 
     /// Number of extracted members.
@@ -111,6 +116,11 @@ pub fn extract_tar_requiring<R: Read>(
     })?;
 
     let mut archive = tar::Archive::new(reader);
+    // The remote result pull concatenates a second, caller-verified tar
+    // segment (the run-specific completion record) after the result tree.
+    // Reading past the first archive's zero terminator is what makes that
+    // trailing record visible — and its absence proof of a truncated stream.
+    archive.set_ignore_zeros(true);
     let entries = archive
         .entries()
         .map_err(|e| io::Error::other(format!("failed to read tar archive: {e}")))?;
@@ -156,11 +166,11 @@ pub fn extract_tar_requiring<R: Read>(
             (ArchiveMemberKind::File, None)
         } else if entry_type.is_symlink() {
             let target = link_target_of(&entry, &path, "symlink")?;
-            ensure_link_stays_inside(&path, &target, true)?;
+            ensure_link_stays_inside(&path, &target, "symlink")?;
             (ArchiveMemberKind::Symlink, Some(target))
         } else if entry_type.is_hard_link() {
             let target = link_target_of(&entry, &path, "hard link")?;
-            ensure_link_stays_inside(&path, &target, false)?;
+            ensure_link_stays_inside(&path, &target, "hard link")?;
             (ArchiveMemberKind::HardLink, Some(target))
         } else {
             // FIFOs, character/block devices, GNU sparse headers, or an
@@ -292,57 +302,37 @@ fn link_target_of<R: Read>(
     }
 }
 
-/// Lexically resolve a link target and require it to stay inside the
-/// destination root.
+/// Require a link target to be relative and free of `..` components.
 ///
-/// Symlink targets are interpreted relative to the link's parent directory; a
-/// hard-link target is archive-root-relative (the tar convention). The check
-/// is lexical on purpose: it must reject `a -> ../../outside` before the link
-/// is created, without depending on what happens to exist on disk yet.
-fn ensure_link_stays_inside(member: &Path, target: &Path, symlink: bool) -> io::Result<()> {
-    if target.is_absolute() {
+/// Lexical containment is deliberately NOT accepted: a target component can
+/// itself be a symlink, so `x -> .` followed by `y -> x/..` resolves (through
+/// `x`) to the destination PARENT even though the `..` "cancels" against `x`
+/// on paper. Any `..` in a symlink or hard-link target is therefore rejected;
+/// in-tree targets without `..` (for example `sub -> data.txt` or
+/// `sub -> .`) remain allowed. Absolute targets are rejected outright.
+fn ensure_link_stays_inside(member: &Path, target: &Path, kind: &str) -> io::Result<()> {
+    if target.is_absolute()
+        || target
+            .components()
+            .any(|c| matches!(c, Component::RootDir | Component::Prefix(_)))
+    {
         return Err(member_error(
             member,
             format!(
-                "points at absolute target '{}' — refusing to create it",
+                "{kind} points at absolute target '{}' — refusing to create it",
                 target.display()
             ),
         ));
     }
-
-    let mut stack: Vec<OsString> = Vec::new();
-    if symlink && let Some(parent) = member.parent() {
-        for component in parent.components() {
-            if let Component::Normal(part) = component {
-                stack.push(part.to_os_string());
-            }
-        }
-    }
-    for component in target.components() {
-        match component {
-            Component::Normal(part) => stack.push(part.to_os_string()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if stack.pop().is_none() {
-                    return Err(member_error(
-                        member,
-                        format!(
-                            "points outside the extraction root (target '{}') — refusing to create it",
-                            target.display()
-                        ),
-                    ));
-                }
-            }
-            Component::Prefix(_) | Component::RootDir => {
-                return Err(member_error(
-                    member,
-                    format!(
-                        "points at absolute target '{}' — refusing to create it",
-                        target.display()
-                    ),
-                ));
-            }
-        }
+    if target.components().any(|c| c == Component::ParentDir) {
+        return Err(member_error(
+            member,
+            format!(
+                "{kind} target '{}' contains '..' — refusing to create it (it can resolve \
+                 outside the extraction root through a symlinked component)",
+                target.display()
+            ),
+        ));
     }
     Ok(())
 }
@@ -441,6 +431,50 @@ mod tests {
         assert_eq!(
             std::fs::read_link(dest.path().join("dir/link")).unwrap(),
             PathBuf::from("data.txt")
+        );
+    }
+
+    #[test]
+    fn contains_normalizes_leading_curdir_components() {
+        let mut tar = RawTar::new();
+        tar.add("./dir/data.txt", b'0', "", b"payload");
+        let bytes = tar.finish();
+
+        let dest = tempfile::tempdir().unwrap();
+        let extracted = extract_tar(bytes.as_slice(), dest.path()).unwrap();
+
+        assert!(extracted.contains("dir/data.txt"));
+        assert!(
+            extracted.contains("./dir/data.txt"),
+            "a manifest-style `./` path must match the normalized member"
+        );
+        assert!(!extracted.contains("../dir/data.txt"));
+        assert!(!extracted.contains("/dir/data.txt"));
+        assert!(!extracted.contains("./"));
+    }
+
+    #[test]
+    fn concatenated_archives_are_read_to_the_end() {
+        // The remote pull appends a second tar segment (the completion
+        // record) after the result tree; `ignore_zeros` must carry the
+        // reader through the first segment's terminator.
+        let mut tree = RawTar::new();
+        tree.add("./execution.log", b'0', "", b"log");
+        tree.add("./outputs/out.txt", b'0', "", b"result");
+        let mut tail = RawTar::new();
+        tail.add("./.oxo-flow-pull-complete", b'0', "", b"run-42");
+        let mut bytes = tree.finish();
+        bytes.extend_from_slice(&tail.finish());
+
+        let dest = tempfile::tempdir().unwrap();
+        let extracted =
+            extract_tar_requiring(bytes.as_slice(), dest.path(), &[".oxo-flow-pull-complete"])
+                .expect("the trailing completion segment must be read");
+
+        assert_eq!(extracted.members().len(), 3);
+        assert_eq!(
+            std::fs::read(dest.path().join(".oxo-flow-pull-complete")).unwrap(),
+            b"run-42"
         );
     }
 
@@ -548,6 +582,64 @@ mod tests {
                 "the escaping symlink must not exist (target {target})"
             );
         }
+    }
+
+    #[test]
+    fn symlink_chain_through_dotdot_is_rejected() {
+        // The bypass the lexical check missed: `x -> .` makes `x/..` resolve
+        // to the destination PARENT even though `x` and `..` cancel on paper.
+        let mut tar = RawTar::new();
+        tar.add("./x", b'2', ".", b"");
+        tar.add("./y", b'2', "x/..", b"");
+        let bytes = tar.finish();
+
+        let parent = tempfile::tempdir().unwrap();
+        let dest = parent.path().join("dest");
+        let err = extract_tar(bytes.as_slice(), &dest)
+            .expect_err("a `..` in a link target must be rejected");
+
+        assert!(
+            err.to_string().contains("'y'") && err.to_string().contains(".."),
+            "error must name the member and the offending target: {err}"
+        );
+        assert!(
+            std::fs::symlink_metadata(dest.join("y")).is_err(),
+            "the escaping chain link must not be created"
+        );
+    }
+
+    #[test]
+    fn chained_symlink_through_dotdot_is_rejected() {
+        // Longer chain: a3 -> a2/.. resolves through a2 -> a1 -> `.` to the
+        // destination parent.
+        let mut tar = RawTar::new();
+        tar.add("./a1", b'2', ".", b"");
+        tar.add("./a2", b'2', "a1", b"");
+        tar.add("./a3", b'2', "a2/..", b"");
+        let bytes = tar.finish();
+
+        let dest = tempfile::tempdir().unwrap();
+        let err = extract_tar(bytes.as_slice(), dest.path())
+            .expect_err("a chained `..` link target must be rejected");
+
+        assert!(err.to_string().contains("a2/.."), "got: {err}");
+        assert!(std::fs::symlink_metadata(dest.path().join("a3")).is_err());
+    }
+
+    #[test]
+    fn link_target_with_dotdot_is_rejected_even_when_lexically_inside() {
+        // Policy: `..` is never accepted in a link target, even when written
+        // form would resolve inside (`sub/up -> ../data.txt`).
+        let mut tar = RawTar::new();
+        tar.add("./sub/", b'5', "", b"");
+        tar.add("./sub/data.txt", b'0', "", b"payload");
+        tar.add("./sub/up", b'2', "../data.txt", b"");
+        let bytes = tar.finish();
+
+        let dest = tempfile::tempdir().unwrap();
+        let err = extract_tar(bytes.as_slice(), dest.path())
+            .expect_err("a `..` link target must be rejected unconditionally");
+        assert!(err.to_string().contains("sub/up"), "got: {err}");
     }
 
     #[test]
