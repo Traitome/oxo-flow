@@ -350,3 +350,276 @@ shell = "echo child > {output}"
         "the include-resolved base rule must be planned: {body}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Run-lifecycle reads of a staged-include run (issue #1152 review, MEDIUM).
+//
+// `pipeline_snapshot` stores the host document as submitted, which is not
+// loadable on its own for this run class (a rule extends a rule that lives
+// in a staged include). Retry, resume, DAG/status, and protected-drift must
+// read the resolved snapshot persisted in the run workdir instead.
+// ---------------------------------------------------------------------------
+
+const LIFECYCLE_BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+
+const LIFECYCLE_CHILD: &str = r#"
+[workflow]
+name = "extends-include"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+const PROTECTED_CHILD: &str = r#"
+[workflow]
+name = "protected-include"
+version = "1.0.0"
+
+[engine]
+protected_data_trees = ["data"]
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+async fn get_json(uri: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let resp = server::build_router("personal").oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Poll the run until it reaches a terminal state (the spawned CLI is
+/// asynchronous). 60 s budget: a dry run of two echo rules takes well under
+/// a second; the ceiling only guards a stalled spawn.
+async fn wait_terminal(run_id: &str) -> Value {
+    for _ in 0..600 {
+        let (status, body) = get_json(&format!("/api/runs/{run_id}")).await;
+        if status == StatusCode::OK
+            && matches!(
+                body["status"].as_str(),
+                Some("completed" | "failed" | "cancelled")
+            )
+        {
+            return body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("run {run_id} did not reach a terminal state in 60 s");
+}
+
+async fn create_include_run(child_toml: &str) -> String {
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": child_toml,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": LIFECYCLE_BASE },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    body["run_id"]
+        .as_str()
+        .expect("run_id in create response")
+        .to_string()
+}
+
+/// Retry reconstructs the DAG from the resolved workflow. Before the fix
+/// this answered `500 DAG_ERROR "Failed to reconstruct DAG from pipeline
+/// snapshot"` for a run the CLI executes (the host snapshot cannot be parsed
+/// once a rule `extends` a staged-include base).
+#[tokio::test]
+async fn web_retry_run_uses_resolved_plan_for_staged_include() {
+    ensure_run_db().await;
+    let run_id = create_include_run(LIFECYCLE_CHILD).await;
+    wait_terminal(&run_id).await;
+
+    let (status, body) = post_json(
+        &format!("/api/runs/{run_id}/retry"),
+        // `skip_succeeded: false` makes the plan the full resolved rule set,
+        // independent of checkpoint state: both rules must be listed.
+        json!({ "skip_succeeded": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "retry failed: {body}");
+    let mut rerun: Vec<&str> = body["will_rerun"]
+        .as_array()
+        .expect("will_rerun array")
+        .iter()
+        .filter_map(|n| n.as_str())
+        .collect();
+    rerun.sort_unstable();
+    assert_eq!(
+        rerun,
+        vec!["base_align", "child_align"],
+        "retry must re-execute the resolved plan: {body}"
+    );
+}
+
+/// The DAG monitor endpoint lists every rule the run executed. The
+/// host-only snapshot omitted include-contributed rules (issue #1152 review,
+/// MEDIUM).
+#[tokio::test]
+async fn web_dag_status_lists_rules_from_staged_include() {
+    ensure_run_db().await;
+    let run_id = create_include_run(LIFECYCLE_CHILD).await;
+    wait_terminal(&run_id).await;
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/dag-status")).await;
+    assert_eq!(status, StatusCode::OK, "dag-status failed: {body}");
+    let mut ids: Vec<&str> = body["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec!["base_align", "child_align"],
+        "the monitor DAG must contain the include-resolved rules: {body}"
+    );
+}
+
+/// Protected-drift reads the host's `[engine] protected_data_trees` for a
+/// staged-include run. Before the fix the unparseable host snapshot yielded
+/// an empty tree list — a silent fail-open returning `new_trees: 0` for a
+/// tree the CLI would protect.
+#[tokio::test]
+async fn web_protected_drift_uses_protected_trees_of_include_run() {
+    ensure_run_db().await;
+    let run_id = create_include_run(PROTECTED_CHILD).await;
+    let run = wait_terminal(&run_id).await;
+    let workdir = std::path::PathBuf::from(
+        run["workdir"]
+            .as_str()
+            .expect("terminal run must carry its workdir"),
+    );
+    // A tree that exists now but has no baseline: the preview must adopt it
+    // as new instead of reporting nothing.
+    std::fs::create_dir_all(workdir.join("data")).unwrap();
+    std::fs::write(workdir.join("data/sample.txt"), "payload").unwrap();
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/protected-drift")).await;
+    assert_eq!(status, StatusCode::OK, "drift preview failed: {body}");
+    assert_eq!(
+        body["new_trees"], 1,
+        "the host's protected_data_trees must be read from the resolved workflow: {body}"
+    );
+    assert_eq!(body["drifted_files"], json!([]), "{body}");
+}
+
+/// Fail closed, never fail open: a run whose workflow sources are all gone
+/// must answer an error for protected-drift rather than report a clean
+/// `drifted_files: []`. (The host snapshot alone cannot be parsed for this
+/// run class, so removing the workdir sources leaves nothing loadable.)
+#[tokio::test]
+async fn web_protected_drift_fails_closed_when_workflow_unreadable() {
+    ensure_run_db().await;
+    let run_id = create_include_run(PROTECTED_CHILD).await;
+    let run = wait_terminal(&run_id).await;
+    let workdir = std::path::PathBuf::from(run["workdir"].as_str().expect("workdir"));
+
+    // Remove both loadable sources: the materialized host document and the
+    // persisted resolved snapshot. The host snapshot in the DB alone does
+    // not parse (it extends an included rule).
+    std::fs::remove_file(workdir.join("workflow.oxoflow")).unwrap();
+    std::fs::remove_file(workdir.join(".oxo-flow/resolved-workflow.oxoflow")).unwrap();
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/protected-drift")).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "unreadable workflow must not report a clean drift result: {body}"
+    );
+    assert_eq!(body["code"], "WORKFLOW_UNREADABLE", "{body}");
+}
+
+/// A BioType violation contributed by a staged include keeps the stable
+/// `TYPE_CONTRACT_VIOLATION` code. The resolved config is now planned
+/// before admission, so this path must not degrade to the generic
+/// `RUN_ERROR` (issue #1152 review, LOW).
+#[tokio::test]
+async fn web_create_run_include_type_violation_keeps_typed_code() {
+    ensure_run_db().await;
+
+    const HOST: &str = r#"
+[workflow]
+name = "typed-include-violation"
+version = "1.0.0"
+
+[[include]]
+path = "modules/producer.oxoflow"
+
+[[rules]]
+name = "consumer"
+input = ["stage.sam"]
+output = ["final.vcf"]
+shell = "echo"
+
+[rules.types]
+inputs = { default = "BAM" }
+"#;
+    const PRODUCER: &str = r#"
+[workflow]
+name = "typed-producer-module"
+
+[[rules]]
+name = "producer"
+output = ["stage.sam"]
+shell = "echo"
+
+[rules.types]
+outputs = { default = "SAM" }
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": HOST,
+            "dry_run": true,
+            "include_files": { "modules/producer.oxoflow": PRODUCER },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["code"], "TYPE_CONTRACT_VIOLATION",
+        "include-contributed type violations must keep the typed error code: {body}"
+    );
+}

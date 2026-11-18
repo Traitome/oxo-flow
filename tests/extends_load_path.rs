@@ -9,7 +9,7 @@
 //! af4929c53e67e7bc5ab7ab65c8b96edc0b47bea6 (#997) after the audit found the
 //! load path never called `resolve_rule_templates`. The namespaced-include
 //! case was still broken until the `extends` reference was rewritten with the
-//! module namespace in this PR.
+//! module namespace in PR #1178.
 //!
 //! `cli_run_fingerprints_prove_multilevel_extends_resolution` closes the last
 //! derivation gap the ledger named: the checkpoint's per-rule fingerprints

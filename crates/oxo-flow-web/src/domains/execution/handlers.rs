@@ -85,26 +85,13 @@ pub(crate) fn require_run_mutator(
     )
 }
 
-/// Pre-flight quota usage (threads, memory MB) for a pipeline TOML — the
-/// single computation shared by create_run, retry, and resume-checkpoint
-/// so every spawn path budgets identically (#519). Memory goes through
-/// `effective_memory()` so both the deprecated `memory` field and the
-/// modern `[rules.resources] memory` count — collecting only the
+/// Pre-flight quota usage (threads, memory MB) of an already-loaded
+/// workflow — the single computation shared by create_run, retry, and
+/// resume-checkpoint so every spawn path budgets identically (#519). Memory
+/// goes through `effective_memory()` so both the deprecated `memory` field
+/// and the modern `[rules.resources] memory` count — collecting only the
 /// deprecated field let the preferred syntax bypass the quota entirely
 /// (issue #738).
-fn quota_usage_for(toml: &str) -> (u32, u64) {
-    oxo_flow_core::config::WorkflowConfig::parse(toml)
-        .map(|wf| quota_usage_for_config(&wf))
-        .unwrap_or((1, 0))
-}
-
-/// Declared resources of an already-resolved [`WorkflowConfig`].
-///
-/// Used where the resolved graph is available (include expansion) so the
-/// quota and the OS memory ceiling account for rules declared by included
-/// modules — deriving from the host TOML alone under-budgets (and would
-/// under-enforce) any workflow whose includes carry their own
-/// `[rules.resources]` (AGENTS invariant: expand before deriving).
 fn quota_usage_for_config(wf: &oxo_flow_core::config::WorkflowConfig) -> (u32, u64) {
     // Saturating: a hostile or generated workflow must not overflow the
     // budget arithmetic (the limit comparison would then wrap).
@@ -121,21 +108,77 @@ fn quota_usage_for_config(wf: &oxo_flow_core::config::WorkflowConfig) -> (u32, u
     (threads.max(1), memory_mb)
 }
 
-/// Budget a retried/resumed run from its workdir's workflow file when one
-/// is present: that file resolves the same includes the original run
-/// materialized, so included rules' resource declarations are counted. Any
-/// read/parse failure falls back to the stored host snapshot (the run
-/// would fail in the CLI for the same reason, so an under-budgeted fallback
-/// is not the error to surface).
+fn quota_usage_for(toml: &str) -> (u32, u64) {
+    oxo_flow_core::config::WorkflowConfig::parse(toml)
+        .map(|wf| quota_usage_for_config(&wf))
+        .unwrap_or((1, 0))
+}
+
+/// Quota usage for an EXISTING run — resolved from the workflow it actually
+/// executed (see [`load_run_workflow`]), not the host-only snapshot. A
+/// staged-include run used to budget 1 thread / 0 MB here because the
+/// snapshot does not parse on its own (issue #1152 review, MEDIUM).
 fn quota_usage_for_run(run: &models::RunRow) -> (u32, u64) {
-    run.workdir
-        .as_deref()
-        .map(std::path::Path::new)
-        .map(|dir| dir.join("workflow.oxoflow"))
-        .filter(|path| path.is_file())
-        .and_then(|path| oxo_flow_core::config::WorkflowConfig::from_file(&path).ok())
+    load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref())
         .map(|wf| quota_usage_for_config(&wf))
         .unwrap_or_else(|| quota_usage_for(&run.pipeline_snapshot))
+}
+
+/// DAG construction with `{config.*}` expansion — the same call every
+/// run-path derivation makes (issue #707).
+fn dag_for_config(
+    wf: &oxo_flow_core::config::WorkflowConfig,
+) -> Option<oxo_flow_core::dag::WorkflowDag> {
+    oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+        &wf.rules,
+        &wf.config_placeholder_values(),
+    )
+    .ok()
+}
+
+/// Path of the resolved workflow snapshot [`materialize_run_sources`]
+/// persists beside the staged sources.
+fn run_resolved_snapshot_path(workdir: &std::path::Path) -> std::path::PathBuf {
+    workdir.join(".oxo-flow").join("resolved-workflow.oxoflow")
+}
+
+/// Load the workflow a run actually executes.
+///
+/// The run row's `pipeline_snapshot` keeps the host document exactly as
+/// submitted, so for a run created from `include_files` it is not
+/// self-contained: a rule may `extends` a base that lives in a staged
+/// include, and the included rules are absent from the text. Sources, in
+/// order:
+///
+/// 1. the resolved snapshot persisted in the run workdir at create time
+///    (includes merged, `extends` resolved) — a pure string parse, safe for
+///    polled endpoints (no module-cache access, no network);
+/// 2. the host snapshot when it declares no `[[include]]`s — complete and
+///    equally pure;
+/// 3. `workflow.oxoflow` in the run workdir through the canonical
+///    `from_file` path — legacy runs created before the resolved snapshot
+///    existed (their staged includes are on disk beside it). Repo-pinned
+///    includes are only re-fetched here, never on the polled fast paths
+///    above.
+fn load_run_workflow(
+    snapshot: &str,
+    workdir: Option<&str>,
+) -> Option<oxo_flow_core::config::WorkflowConfig> {
+    let workdir = workdir.map(std::path::Path::new);
+    if let Some(wd) = workdir
+        && let Ok(content) = std::fs::read_to_string(run_resolved_snapshot_path(wd))
+        && let Ok(wf) = oxo_flow_core::config::WorkflowConfig::parse(&content)
+    {
+        return Some(wf);
+    }
+    if let Ok(wf) = oxo_flow_core::config::WorkflowConfig::parse(snapshot)
+        && wf.includes.is_empty()
+    {
+        return Some(wf);
+    }
+    workdir.and_then(|wd| {
+        oxo_flow_core::config::WorkflowConfig::from_file(&wd.join("workflow.oxoflow")).ok()
+    })
 }
 
 /// Light shape gate for `config_overrides` (full semantics live in the
@@ -515,6 +558,7 @@ async fn materialize_run_sources(
     run_dir: &std::path::Path,
     workflow_path: &std::path::Path,
     include_paths: &[(String, String)],
+    resolved_snapshot: Option<&str>,
 ) {
     let dest_workflow = run_dir.join("workflow.oxoflow");
     if let Err(e) = tokio::fs::copy(workflow_path, &dest_workflow).await {
@@ -532,6 +576,28 @@ async fn materialize_run_sources(
         }
         if let Err(e) = tokio::fs::write(&dest, content).await {
             tracing::error!("Failed to write include {rel} to {:?}: {e}", dest);
+        }
+    }
+    // Persist the effective workflow (includes merged, extends resolved)
+    // beside the staged sources. Run-lifecycle endpoints (retry, resume,
+    // DAG/status, protected-drift) reload it instead of the host-only
+    // snapshot, which is not self-contained for staged-include runs (issue
+    // #1152 review, MEDIUM). Best-effort: the staged sources above still
+    // resolve through `from_file` if this write fails.
+    if let Some(snapshot) = resolved_snapshot {
+        let dest = run_resolved_snapshot_path(run_dir);
+        match dest.parent() {
+            Some(parent) => {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    tracing::warn!(
+                        "Failed to create resolved-snapshot directory {:?}: {e}",
+                        parent
+                    );
+                } else if let Err(e) = tokio::fs::write(&dest, snapshot).await {
+                    tracing::warn!("Failed to write resolved snapshot to {:?}: {e}", dest);
+                }
+            }
+            None => tracing::warn!("resolved snapshot path {:?} has no parent", dest),
         }
     }
     if !include_paths.is_empty() {
@@ -746,11 +812,37 @@ pub async fn create_run(
         )
     };
     let resp = match &resolved_config {
-        Some(resolved) => service::create_run_from_config(resolved, &config)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?,
+        // Keep the stable TYPE_CONTRACT_VIOLATION code for biological
+        // contract violations on the resolved path; everything else is
+        // RUN_ERROR (issue #1152 review, LOW).
+        Some(resolved) => {
+            service::create_run_from_config(resolved, &config).map_err(|e| match e {
+                service::CreateRunError::TypeContract(message) => {
+                    err(StatusCode::BAD_REQUEST, "TYPE_CONTRACT_VIOLATION", message)
+                }
+                service::CreateRunError::Other(message) => {
+                    err(StatusCode::BAD_REQUEST, "RUN_ERROR", message)
+                }
+            })?
+        }
         None => service::create_run(toml, &config, None)
             .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?,
     };
+
+    // Serialize the effective workflow (includes merged, extends resolved) so
+    // the run workdir carries a self-contained snapshot for retry, resume,
+    // DAG/status, and protected-drift. Best-effort: the staged sources still
+    // resolve through `from_file` if serialization fails.
+    let resolved_snapshot =
+        resolved_config
+            .as_ref()
+            .and_then(|wf| match service::resolved_snapshot_toml(wf) {
+                Ok(text) => Some(text),
+                Err(e) => {
+                    tracing::warn!("could not serialize the resolved workflow snapshot: {e}");
+                    None
+                }
+            });
 
     // Persist run to database. Ad-hoc runs (no pipeline_id) keep a NULL
     // pipeline_id (the column is an FK only when a pipeline exists).
@@ -938,7 +1030,13 @@ pub async fn create_run(
         let claim = claim_run_row(backend.as_ref(), &run).await;
         match claim {
             Ok(true) => {
-                materialize_run_sources(&run_dir, &workflow_path, &include_paths).await;
+                materialize_run_sources(
+                    &run_dir,
+                    &workflow_path,
+                    &include_paths,
+                    resolved_snapshot.as_deref(),
+                )
+                .await;
             }
             Ok(false) => {
                 // The run never starts; give the reservation back now.
@@ -1244,18 +1342,17 @@ pub async fn get_run_status(
     // The checkpoint reads are synchronous file I/O and this endpoint is
     // polled — run the combined block on the blocking pool (#268 item 4).
     let workdir = run.workdir.clone().unwrap_or_default();
+    // Optional form for the workflow loader: a run without a workdir must
+    // not resolve relative paths against the server's cwd.
+    let workflow_workdir = run.workdir.clone();
     let run_status = run.status.clone();
     let snapshot = run.pipeline_snapshot.clone();
     let (node_items, metrics) = blocking_checkpoint_io(move || {
-        let dag = oxo_flow_core::WorkflowConfig::parse(&snapshot)
-            .ok()
-            .and_then(|wf| {
-                oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                    &wf.rules,
-                    &wf.config_placeholder_values(),
-                )
-                .ok()
-            });
+        // Same sources every run-lifecycle endpoint uses: the persisted
+        // resolved snapshot first, then the host snapshot for single-file
+        // workflows (issue #1152 review, MEDIUM).
+        let dag = load_run_workflow(&snapshot, workflow_workdir.as_deref())
+            .and_then(|wf| dag_for_config(&wf));
         let node_items =
             checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), &run_status);
         let node_items = match &dag {
@@ -1324,17 +1421,13 @@ pub async fn get_dag_status(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
-    // Parse the pipeline snapshot to build DAG (config-expanded, issue #707).
-    // ONE parse feeds both the DAG and the per-rule environment labels
-    // (issue #1149) — a second parse could disagree with the first.
-    let mut workflow = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot).ok();
-    let dag = workflow.as_ref().and_then(|wf| {
-        oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-            &wf.rules,
-            &wf.config_placeholder_values(),
-        )
-        .ok()
-    });
+    // Load the workflow the run executed to build the DAG (config-expanded,
+    // issue #707) and the per-rule environment labels (issue #1149). ONE
+    // load feeds both — a second parse could disagree with the first. The
+    // host-only snapshot omitted include-contributed rules (issue #1152
+    // review, MEDIUM).
+    let mut workflow = load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref());
+    let dag = workflow.as_ref().and_then(dag_for_config);
 
     // Node status comes from the engine's checkpoint state, merged with the
     // full rule list so unrun rules show as pending. The checkpoint read is
@@ -1512,15 +1605,11 @@ pub async fn get_run_instances(
         checkpoint_status::load_node_statuses(std::path::Path::new(&workdir), &run_status)
     })
     .await;
-    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
-        .ok()
-        .and_then(|wf| {
-            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &wf.rules,
-                &wf.config_placeholder_values(),
-            )
-            .ok()
-        });
+    // Instance attribution uses the rules the run actually executed —
+    // include-contributed rules were missing from the host-only snapshot
+    // (issue #1152 review, MEDIUM).
+    let dag = load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref())
+        .and_then(|wf| dag_for_config(&wf));
     let rules: Vec<String> = dag
         .as_ref()
         .and_then(|d| d.execution_order().ok())
@@ -1743,7 +1832,9 @@ pub async fn retry_run(
     // A retry spawns a REAL run — it pays the same limiter + quota
     // pre-flight as create_run (#519); looping retry on a cheap failed run
     // must not buy unbounded process spawns. The quota admission (durable,
-    // atomic) runs right before the run-row claim below.
+    // atomic) runs right before the run-row claim below, budgeted from the
+    // workflow the run actually executed, not the host-only snapshot
+    // (issue #1152 review, MEDIUM).
     let quota_usage = quota_usage_for_run(&run);
     check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
 
@@ -1782,20 +1873,18 @@ pub async fn retry_run(
         &run.status,
     );
 
-    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
-        .ok()
-        .and_then(|wf| {
-            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &wf.rules,
-                &wf.config_placeholder_values(),
-            )
-            .ok()
-        })
+    // Reconstruct the DAG from the workflow the run actually executed. The
+    // host-only snapshot does not parse for a staged-include run whose rule
+    // extends an included base, so this used to answer 500 DAG_ERROR for a
+    // run the CLI executes (issue #1152 review, MEDIUM). A run whose
+    // sources are all gone fails closed the same way.
+    let dag = load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref())
+        .and_then(|wf| dag_for_config(&wf))
         .ok_or_else(|| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DAG_ERROR",
-                "Failed to reconstruct DAG from pipeline snapshot".into(),
+                "Failed to reconstruct DAG from the run's workflow sources".into(),
             )
         })?;
 
@@ -2418,13 +2507,29 @@ pub async fn get_run_protected_drift(
     let workdir = run.workdir.as_deref().unwrap_or("").to_string();
 
     // The protected trees are declared in the workflow's [engine] section —
-    // read them from the persisted snapshot, the same source the spawned
-    // CLI parses. An unparseable snapshot means no declared trees (the run
-    // would have failed before any tree could be protected).
-    let config = oxo_flow_core::config::WorkflowConfig::parse(&run.pipeline_snapshot).ok();
+    // read them from the workflow the run executed (resolved snapshot /
+    // workdir sources; the host-only snapshot omitted staged includes and
+    // does not even parse when a rule extends an included base).
+    //
+    // FAIL CLOSED (issue #1152 review, MEDIUM): an unreadable workflow means
+    // the tracker cannot know what is protected, and the old
+    // `.ok()`-then-empty path reported a clean `drifted_files: []` — a
+    // silent fail-open on the one endpoint whose job is to warn about
+    // protected data. Never present "no findings" for "could not read the
+    // declaration".
+    let Some(config) = load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref()) else {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "WORKFLOW_UNREADABLE",
+            "The run's workflow sources cannot be loaded, so its declared \
+             protected_data_trees cannot be checked — refusing to report a clean \
+             result"
+                .into(),
+        ));
+    };
     let trees: Vec<String> = config
+        .engine
         .as_ref()
-        .and_then(|wf| wf.engine.as_ref())
         .map(|e| e.protected_data_trees().to_vec())
         .unwrap_or_default();
     if trees.is_empty() {
@@ -2612,8 +2717,7 @@ pub async fn get_ai_status(
 async fn build_report_for_run(
     run: &models::RunRow,
 ) -> crate::domains::ai::agents::types::ReportData {
-    let pipeline_name = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
-        .ok()
+    let pipeline_name = load_run_workflow(&run.pipeline_snapshot, run.workdir.as_deref())
         .map(|c| c.workflow.name.clone())
         .unwrap_or_else(|| "pipeline".into());
 
@@ -3402,7 +3506,9 @@ pub async fn resume_checkpoint(
 
     // A checkpoint resume spawns a REAL run — same budgets as create_run
     // and retry (#519). The quota admission (durable, atomic) runs right
-    // before the run-row claim below.
+    // before the run-row claim below, resolved from the workflow the run
+    // executed rather than the host-only snapshot (issue #1152 review,
+    // MEDIUM).
     let quota_usage = quota_usage_for_run(&run);
     check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
 
@@ -3763,7 +3869,7 @@ mod staging_tests {
         assert_eq!(workflow_path, staging.path().join("workflow.oxoflow"));
         assert_eq!(std::fs::read_to_string(&workflow_path).unwrap(), workflow);
 
-        materialize_run_sources(run_dir.path(), &workflow_path, &includes).await;
+        materialize_run_sources(run_dir.path(), &workflow_path, &includes, None).await;
 
         assert_eq!(
             std::fs::read_to_string(run_dir.path().join("workflow.oxoflow")).unwrap(),
@@ -3777,6 +3883,71 @@ mod staging_tests {
                 "include {rel} must be byte-identical in the workdir"
             );
         }
+    }
+
+    /// The effective workflow is persisted beside the staged sources, and
+    /// the run-lifecycle loader prefers it over the host-only snapshot
+    /// (issue #1152 review, MEDIUM).
+    #[tokio::test]
+    async fn materialization_persists_the_resolved_snapshot() {
+        let staging = tempfile::tempdir().unwrap();
+        let run_dir = tempfile::tempdir().unwrap();
+        let workflow = "[workflow]\nname = \"host\"\n";
+        let resolved = "[workflow]\nname = \"resolved\"\n\n[[rules]]\nname = \"merged\"\noutput = [\"x.txt\"]\nshell = \"echo x\"\n";
+
+        let workflow_path = match stage_run_sources(staging.path(), workflow, &[]).await {
+            Ok(path) => path,
+            Err((status, body)) => panic!("staging failed with {status}: {}", body.0.message),
+        };
+        materialize_run_sources(run_dir.path(), &workflow_path, &[], Some(resolved)).await;
+
+        let snapshot_path = run_resolved_snapshot_path(run_dir.path());
+        assert_eq!(std::fs::read_to_string(&snapshot_path).unwrap(), resolved);
+
+        // The host snapshot alone carries no rules; the persisted resolved
+        // snapshot does — and it wins.
+        let loaded = load_run_workflow(workflow, Some(run_dir.path().to_str().unwrap()))
+            .expect("lifecycle loader must read the resolved snapshot");
+        assert_eq!(loaded.rules.len(), 1);
+        assert_eq!(loaded.rules[0].name, "merged");
+    }
+
+    /// Retry/resume budget from the workflow the run executed, not the
+    /// host-only snapshot: this run's snapshot cannot be parsed on its own
+    /// (an `extends` base lives in a staged include), and the old fallback
+    /// silently budgeted 1 thread / 0 MB.
+    #[test]
+    fn quota_usage_for_run_reads_the_resolved_snapshot() {
+        let run_dir = tempfile::tempdir().unwrap();
+        let resolved = "[workflow]\nname = \"resolved\"\n\n\
+             [[rules]]\nname = \"a\"\nthreads = 5\nmemory = \"6G\"\noutput = [\"a.txt\"]\nshell = \"echo a\"\n\n\
+             [[rules]]\nname = \"b\"\nthreads = 3\nmemory = \"2G\"\noutput = [\"b.txt\"]\nshell = \"echo b\"\n";
+        let path = run_resolved_snapshot_path(run_dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, resolved).unwrap();
+
+        let run = models::RunRow {
+            id: "run-1".into(),
+            user_id: "default".into(),
+            pipeline_id: None,
+            // Not loadable on its own: the extended base is not in this
+            // document (the pre-review code returned (1, 0) here).
+            pipeline_snapshot:
+                "[workflow]\nname = \"host\"\n\n[[rules]]\nname = \"b\"\nextends = \"a\"\noutput = [\"b.txt\"]\nshell = \"echo b\"\n"
+                    .into(),
+            workflow_name: None,
+            status: "failed".into(),
+            phase: "parsing".into(),
+            dry_run: true,
+            pid: None,
+            workdir: Some(run_dir.path().to_string_lossy().to_string()),
+            config_overrides: None,
+            artifacts_incomplete: None,
+            started_at: None,
+            finished_at: None,
+            created_at: "2026-11-18T00:00:00Z".into(),
+        };
+        assert_eq!(quota_usage_for_run(&run), (8, 6 * 1024 + 2 * 1024));
     }
 
     /// An include whose parent path collides with an existing file cannot
