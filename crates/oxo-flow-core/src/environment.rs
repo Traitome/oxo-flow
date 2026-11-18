@@ -451,15 +451,31 @@ fn conda_family_wrap(
     prefix: Option<&str>,
 ) -> Result<String> {
     let target = conda_family_target(kind, spec, prefix)?;
+    Ok(conda_run_with_target(binary, command, &target))
+}
+
+/// Wrap `command` for an environment the caller names VERBATIM (the legacy
+/// `batch -e "<name>"` form, issue #1155 review D2). The spec never goes
+/// through `conda_env_name_from_spec` — that derives a file-stem/hash name
+/// and would truncate a legal dotted conda name (`r-4.4` -> `r-4`).
+pub fn conda_wrap_named_env(binary: &str, command: &str, name: &str) -> String {
+    let target = format!("-n '{}'", escape_for_sh_single_quote(name));
+    conda_run_with_target(binary, command, &target)
+}
+
+/// The one `run`-shell body shared by spec-derived and name-verbatim
+/// environments (execution happens inside the env's own shell, so shell
+/// operators cannot escape to the host PATH).
+fn conda_run_with_target(binary: &str, command: &str, target: &str) -> String {
     let escaped = escape_for_sh_single_quote(command);
     let capture = if binary == "conda" {
         " --no-capture-output"
     } else {
         ""
     };
-    Ok(format!(
+    format!(
         "{binary} run{capture} {target} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
-    ))
+    )
 }
 
 fn conda_family_teardown(
