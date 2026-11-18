@@ -8327,6 +8327,21 @@ context-aware diagnostics run.</p>
 </span><span id="__span-22-30"><a id="__codelineno-22-30" name="__codelineno-22-30" href="#__codelineno-22-30"></a><span class="c1"># # Reference a named environment group (defined in [env_groups])</span>
 </span><span id="__span-22-31"><a id="__codelineno-22-31" name="__codelineno-22-31" href="#__codelineno-22-31"></a><span class="c1"># env_group = "qc_env"</span>
 </span></code></pre></div>
+<p><strong>Setup runs with the operator's environment (accepted risk, issue #1174).</strong>
+The commands that create or verify an environment (<code>conda env create -f</code>,
+<code>pixi install</code>, <code>python3 -m venv</code> plus <code>pip install -r</code>, and their
+teardown/retry forms) inherit the full ambient environment of the
+<code>oxo-flow</code> process. Rule shells do not: they run under a cleared
+environment plus a fixed allowlist (see
+<a href="../../commands/run/#rule-execution-environment-issue-1108">Rule execution environment</a>),
+so a rule with no declared <code>envvars</code> cannot read ambient credentials.
+Setup is different by design: its inputs are workflow-authored executable
+content that can already run arbitrary code as the operator (sdist build
+backends, conda post-link scripts), so hiding the environment would be
+cosmetic; it is kept because conda, pip, and pixi need proxy, mirror,
+index, and CA-certificate configuration to provision anything. The
+practical boundary is not to run workflows you do not trust. See
+<a href="../environment-system/">the environment system reference</a>.</p>
 <p><strong>Container shell:</strong> <code>docker</code>/<code>singularity</code> rules run under <code>bash</code> inside
 the container when the image provides it (falling back to <code>sh</code> otherwise).
 nf-core-derived images ship bash, and their scripts rely on bash features
@@ -8357,6 +8372,28 @@ copy. Anything else a container tool needs (a proxy setting, a private
 registry token, a site variable) requires a rule-level <code>envvars</code> entry or
 the operator-level <code>OXO_FLOW_ENV_PASSTHROUGH</code> list. No <code>podman</code> backend is
 wired, so <code>PODMAN_*</code> is not admitted.</p>
+<p><strong>Cloud job environment (issue #1171):</strong> cloud rules (Kubernetes, AWS
+Batch, GCP Batch) do not run as shell commands of the submitting process.
+The engine writes only the rendered rule command into the manifest/spec
+(the Kubernetes Job <code>args</code>, the AWS Batch <code>containerOverrides.command</code>, or
+the GCP Batch runnable), so the job's environment is:</p>
+<ul>
+<li>the container image's own <code>ENV</code> (or the VM image's environment for a
+  GCP Batch script runnable), plus</li>
+<li>the rule's declared <code>envvars</code>, which travel inside the command as
+  <code>export K='V'</code> lines, plus</li>
+<li>the <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> references for <code>sensitive = true</code> config
+  values (resolved from the backend's own secret channel).</li>
+</ul>
+<p>The submit host's ambient environment is never forwarded: a generated
+body carries no <code>env</code>/<code>environment</code> channel for ambient state (only the
+sensitive-value references above create one), and the submit-side CLI
+(<code>kubectl</code>, <code>aws</code>, <code>gcloud</code>) runs in the operator's own process
+environment, which is likewise never written into the job. Regression
+tests pin the boundary per backend
+(<code>kubernetes_job_body_carries_no_submit_host_environment</code>,
+<code>aws_batch_job_body_carries_no_submit_host_environment</code>,
+<code>gcp_batch_job_body_carries_no_submit_host_environment</code>).</p>
 <p><strong>Stale pixi.lock fallback:</strong> a rule declared with
 <code>environment = { pixi = "envs/pixi.toml" }</code> installs from the committed
 <code>pixi.lock</code> beside that manifest. When the pinned package builds have
@@ -11523,9 +11560,11 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   through the schedulers' export-by-default behavior (<code>--export=ALL</code>,
   <code>-V</code>, <code>-env</code>). See
   <a href="../../commands/run/#hpc-cluster-submissions">the run command reference</a>.
-  Container and cloud backends (docker, singularity, Kubernetes, AWS
-  Batch, GCP Batch) do <strong>not</strong> yet route through the shared policy — they
-  are clean only because they forward no ambient environment.</li>
+  Local <code>docker</code>/<code>singularity</code> dispatch runs <em>inside</em> that same cleared
+  rule shell (covered by the same allowlist, widened only by the narrow
+  daemon-variable list above). Cloud dispatch (Kubernetes, AWS Batch, GCP
+  Batch) never forwards the submit host's environment at all — see
+  <a href="#environment-specification">Environment specification</a>.</li>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from

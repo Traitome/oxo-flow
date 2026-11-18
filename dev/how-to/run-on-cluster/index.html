@@ -4994,6 +4994,29 @@ job. A run stopped by SIGINT/SIGTERM/SIGHUP exits <code>128 + signum</code>
 interrupted rule is <code>required = false</code> — an interrupt is never
 reported as a completed run.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">What environment a cloud job sees</p>
+<p>Cloud jobs (Kubernetes, AWS Batch, GCP Batch) never inherit the
+submitting host's environment. The generated manifest/spec carries the
+rendered rule command (and, when sensitive values are routed, a
+<code>secretKeyRef</code> env block referencing the operator's Secret), so the job
+process sees the container
+image's own <code>ENV</code> (or the VM image's environment for a GCP Batch
+script runnable) plus what the engine puts in the command: the rule's
+declared <code>envvars</code> (rendered as <code>export K='V'</code>) and the
+<code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> references for <code>sensitive = true</code> values.
+Ambient variables from the submit shell — API tokens, cloud
+credentials, proxy settings — are never forwarded, and a regression
+test per backend pins that boundary (issue #1171). To get a host-side
+value onto the compute side, declare it in <code>envvars</code> or deliver it
+through the backend's secret channel; <code>OXO_FLOW_ENV_PASSTHROUGH</code> does
+not apply to cloud jobs because there is no ambient environment to
+re-admit. HPC job scripts (SLURM/PBS/SGE/LSF) are different: they do
+run a shell on nodes that the scheduler seeded from the submit
+environment, so they apply the <code>env -i</code> allowlist described in
+<a href="../../commands/run/#hpc-cluster-submissions">the run reference</a> and in
+<a href="../../reference/workflow-format/#environment-specification">workflow format</a>.</p>
+</div>
 <div class="admonition warning">
 <p class="admonition-title"><code>sensitive = true</code> values need an operator-side secret on cloud backends</p>
 <p>Cloud runs (<code>run --profile &lt;NAME&gt;</code> with <code>[cluster] backend = "kubernetes"</code>,
