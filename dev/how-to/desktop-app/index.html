@@ -1834,6 +1834,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle smoke test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4164,6 +4181,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle smoke test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4448,6 +4482,31 @@ executable, same lookup as the standalone server):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>codesign<span class="w"> </span>-dv<span class="w"> </span>--verbose<span class="o">=</span><span class="m">4</span><span class="w"> </span>oxo-flow.app<span class="w">        </span><span class="c1"># Signature=adhoc</span>
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>plutil<span class="w"> </span>-lint<span class="w"> </span>oxo-flow.app/Contents/Info.plist
 </span></code></pre></div>
+<h3 id="lifecycle-smoke-test">Lifecycle smoke test<a class="headerlink" href="#lifecycle-smoke-test" title="Permanent link">#</a></h3>
+<p><code>scripts/desktop-smoke.sh</code> (also <code>make desktop-smoke</code>) proves the shell
+lifecycle without touching your real data directory:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>make<span class="w"> </span>desktop-smoke<span class="w">          </span><span class="c1"># builds crates/oxo-flow-desktop, then runs the smoke</span>
+</span></code></pre></div>
+<p>It launches the binary with <code>HOME</code> pointed at a temporary directory and
+asserts, in order:</p>
+<ol>
+<li>the shell creates <code>~/.oxo-flow/desktop/oxo-flow.desktop.lock</code> and
+   <code>oxo-flow.db</code> (the embedded server reached its startup path);</li>
+<li>a second launch against the same data directory exits non-zero with
+   <code>another oxo-flow desktop instance is already running</code>;</li>
+<li><code>SIGTERM</code> terminates the shell with exit code 0 and leaves no orphaned
+   embedded server.</li>
+</ol>
+<p>A logged-in desktop session is required. On headless Linux the script starts
+a private Xvfb display (so the <code>SIGTERM</code> still reaches the desktop process
+itself) and exits 77 (skip, never a silent pass) when no display tooling is
+available. CI runs the same script in the <code>desktop</code> job
+on <code>ubuntu-latest</code> with WebKitGTK and xvfb installed; that job is
+path-gated to <code>crates/oxo-flow-desktop/**</code> and <code>scripts/desktop-smoke.sh</code>.</p>
+<p>What this smoke does <strong>not</strong> verify: the rendered webview content or any
+pixel, the <code>.app</code>/<code>.deb</code> packaging, WebKit version compatibility, or
+Windows. Window content is covered indirectly by the Playwright browser
+suite against the same SPA; packaging is exercised by the release jobs.</p>
 <h2 id="github-release-assets">GitHub Release Assets<a class="headerlink" href="#github-release-assets" title="Permanent link">#</a></h2>
 <p>Each tagged release publishes the desktop bundles alongside the raw
 tarballs (built by CI, not by hand):</p>
@@ -4494,18 +4553,18 @@ tarballs (built by CI, not by hand):</p>
 </tbody>
 </table>
 <h3 id="install-from-a-tarball">Install from a tarball<a class="headerlink" href="#install-from-a-tarball" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/SHA256SUMS.txt
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/SHA256SUMS.txt
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
 </span></code></pre></div>
 <p>Pick the target that matches the machine: <code>gnu</code> for glibc distributions,
 <code>musl</code> for Alpine/static links, <code>armv7</code> for 32-bit ARM.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Linux one-liners</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Linux one-liners</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
 </span></code></pre></div>
 <p>The AppImage runs <code>oxo-flow serve --open</code> on launch; the deb/rpm install
 <code>/usr/bin/oxo-flow</code> with the SPA under <code>/usr/share/oxo-flow/static</code>

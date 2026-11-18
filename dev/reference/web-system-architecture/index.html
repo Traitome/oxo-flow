@@ -3475,6 +3475,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ui-test-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UI Test Coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#domain-driven-module-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4262,6 +4273,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ui-test-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UI Test Coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#domain-driven-module-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4560,6 +4582,61 @@
   before use.</li>
 </ul>
 <hr />
+<h2 id="ui-test-coverage">UI Test Coverage<a class="headerlink" href="#ui-test-coverage" title="Permanent link">#</a></h2>
+<p>The SPA's published surfaces are exercised by Playwright specs in
+<code>frontend/e2e/</code> against the real web server. Individual specs stub the
+specific endpoints they need to force — AI provider/chat, pipeline
+validation, auth, and file download — while the core-flow, mobile, WCAG and
+Metro specs drive the real server. <code>make frontend-test</code> runs the suite
+locally; the CI <code>e2e</code> job runs the same <code>npx playwright test</code> with no AI
+provider environment (so the AI-disabled Dashboard/Settings states are the
+ones gated) after asserting the served bundle is the freshly built artifact
+(issue #555).</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Surface</th>
+<th style="text-align: left;">Spec</th>
+<th style="text-align: left;">Asserted contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Browser E2E: author → validate → run → monitor</td>
+<td style="text-align: left;"><code>core-flows.spec.ts</code></td>
+<td style="text-align: left;">Editor renders TOML + DAG, the validation badge reflects a real <code>POST /api/pipelines/validate</code>, Save creates a pipeline, and the Stage 4/5 case creates a real run, then verifies provenance/checksums and the output preview in the monitor/report.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Mobile viewport</td>
+<td style="text-align: left;"><code>mobile-viewport.spec.ts</code></td>
+<td style="text-align: left;">At 390×844, routed content does not overflow: <code>.main-content.scrollWidth &lt;= clientWidth + 1</code> on the dashboard, pipelines, editor, runs, monitor and settings routes (the document-level check alone is vacuous because <code>body</code>/<code>.main-content</code> clip <code>overflow-x</code>). A negative-control test injects a 2000px child and proves the detector reports it. The navigation drawer reaches the editor and an enabled Run button opens the run dialog with its close control inside the viewport; the React Flow canvas does not widen the routed content.</td>
+</tr>
+<tr>
+<td style="text-align: left;">WCAG / accessibility</td>
+<td style="text-align: left;"><code>accessibility.spec.ts</code></td>
+<td style="text-align: left;">axe-core scans the six primary routes in both color themes plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI. CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes and the out-of-scope canvas surface are documented in the spec header.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Metro frame-time budget</td>
+<td style="text-align: left;"><code>metro-performance.spec.ts</code></td>
+<td style="text-align: left;">A 6-rule workflow is switched Rule → Process → Module (a Sugiyama re-layout per switch) and the interaction-to-next-paint latency is measured with <code>performance.now</code> plus two <code>requestAnimationFrame</code>s after the click. Station counts prove the switch regrouped (Rule = 6, Process = 1); worst sample &lt; 750 ms, median &lt; 300 ms.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Keyboard graph navigation</td>
+<td style="text-align: left;"><code>metro-canvas.spec.ts</code></td>
+<td style="text-align: left;">Metro station keyboard access is owned by issue #1148 / ledger UX-06; that spec ships with the keyboard-access change. It is not duplicated here.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Desktop (wry/tao) lifecycle</td>
+<td style="text-align: left;"><code>scripts/desktop-smoke.sh</code> (CI <code>desktop</code> job, <code>make desktop-smoke</code>)</td>
+<td style="text-align: left;">Build + launch against an isolated <code>HOME</code>, the embedded server creates its lock + SQLite database, a second instance is refused with the documented message, and SIGTERM exits 0. See <code>docs/guide/src/how-to/desktop-app.md</code> → Verification.</td>
+</tr>
+</tbody>
+</table>
+<p>Deliberately not covered by this suite: visual pixel rendering, real-device
+mobile gestures, screen-reader output beyond what axe-core's rule set
+evaluates, and Windows desktop packaging (the release pipeline does not
+build a Windows bundle).</p>
 <h2 id="domain-driven-module-structure">Domain-Driven Module Structure<a class="headerlink" href="#domain-driven-module-structure" title="Permanent link">#</a></h2>
 <table>
 <thead>
