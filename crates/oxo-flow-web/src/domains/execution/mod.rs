@@ -8,5 +8,6 @@ pub mod checkpoint_status;
 pub mod diagnostics;
 pub mod files;
 pub mod handlers;
+pub mod run_limit;
 pub mod service;
 pub mod types;

@@ -9,10 +9,12 @@ use crate::domains::ai::agents::types::ReportFile;
 use crate::domains::auth::current_user::{self, CurrentUser};
 use crate::extract::ApiJson;
 use axum::{Extension, Json, extract::Path, http::StatusCode};
+use std::sync::Arc;
 
 use crate::extract::ApiQuery;
 
 use super::checkpoint_status;
+use super::run_limit::RunRateLimiter;
 use super::service;
 use super::types::*;
 use crate::domains::workflow::handlers::{
@@ -216,18 +218,20 @@ memory = \"64G\"
     }
 }
 
-/// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
-/// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
-/// real run, so all of them must respect the same budgets, #519).
-fn rate_limited_error(wait_secs: u64) -> (StatusCode, Json<ApiError>) {
+/// Structured 429 for a run-creation budget breach (issue #213).
+///
+/// An `ApiResult` error tuple cannot carry headers, so the 429 carries the
+/// countdown in `message` and deliberately no `Retry-After` header — the
+/// documented contract in `docs/guide/src/reference/web-api.md`, pinned at
+/// the router level by `tests/run_limiter_composition.rs` (WEB-18).
+fn rate_limited_error(wait_secs: u64, limit: u32) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::TOO_MANY_REQUESTS,
         Json(ApiError {
             code: "RUN_RATE_LIMITED".into(),
             message: format!("Too many runs created recently; retry in {wait_secs}s."),
             detail: Some(format!(
-                "Allowance: {} runs per minute (override with OXO_FLOW_RUNS_RATE_LIMIT).",
-                run_rate_limit::limit()
+                "Allowance: {limit} runs per minute (override with OXO_FLOW_RUNS_RATE_LIMIT)."
             )),
             suggestion: Some(
                 "Wait for the window to reset, or batch work via `oxo-flow batch` \
@@ -238,12 +242,32 @@ fn rate_limited_error(wait_secs: u64) -> (StatusCode, Json<ApiError>) {
     )
 }
 
+/// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
+/// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
+/// real run, so all of them must respect the same budgets, #519).
+///
+/// The limiter instance arrives as a request extension installed by
+/// `server::build_router`. A missing instance is a layer-order wiring bug,
+/// not a license to skip the budget: fail loud and closed, the same
+/// contract as the request-rate middleware (issue #79 P1-04).
 fn check_spawn_budget(
+    limiter: Option<&RunRateLimiter>,
     user_id: &str,
     usage: (u32, u64),
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if let Err(wait_secs) = run_rate_limit::check(user_id) {
-        return Err(rate_limited_error(wait_secs));
+    let Some(limiter) = limiter else {
+        tracing::error!(
+            "RunRateLimiter missing from request extensions — server::build_router \
+             must install the run-limiter extension"
+        );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Server misconfiguration: run rate limiter unavailable".into(),
+        ));
+    };
+    if let Err(wait_secs) = limiter.check(user_id) {
+        return Err(rate_limited_error(wait_secs, limiter.limit()));
     }
     let quota = crate::infra::quota::global_quota_tracker().check(user_id, usage.0, usage.1);
     if !quota.allowed {
@@ -259,100 +283,20 @@ fn check_spawn_budget(
     Ok(())
 }
 
-/// Override the run-creation limiter without mutating process environment.
+/// Override the process-global run-creation budget without mutating the
+/// process environment (debug builds only).
 ///
-/// Integration tests use this to isolate router contract coverage from the
-/// process-wide sliding window. The limiter's enforcement remains covered by
-/// its dedicated unit test. Debug builds expose this seam for integration
-/// tests; release builds omit both the function and its override state.
+/// Integration suites that create many runs in one process share one
+/// process-wide sliding window; they use this to keep unrelated contract
+/// coverage from tripping it. The limiter's real router composition —
+/// enabled budget, identity keying, window refill — is pinned at the router
+/// level by `tests/run_limiter_composition.rs`, which installs a
+/// test-scoped limiter instance instead of using this override. Release
+/// builds omit both the function and its override state.
 #[doc(hidden)]
 #[cfg(debug_assertions)]
 pub fn set_run_rate_limit_for_tests(limit: u32) {
-    run_rate_limit::set_limit_for_tests(limit);
-}
-
-/// Per-identity sliding-window rate limit for run creation (issue #213).
-/// Expensive spawns must not share the global request limiter's budget with
-/// health checks and reads. Configurable via `OXO_FLOW_RUNS_RATE_LIMIT`
-/// (allowed runs per minute, default 5; 0 disables the limiter entirely).
-mod run_rate_limit {
-    use std::collections::HashMap;
-    #[cfg(debug_assertions)]
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{LazyLock, Mutex};
-    use std::time::{Duration, Instant};
-
-    const WINDOW: Duration = Duration::from_secs(60);
-    #[cfg(debug_assertions)]
-    const NO_TEST_OVERRIDE: u64 = u64::MAX;
-    pub const DEFAULT_LIMIT: u32 = 5;
-
-    #[cfg(debug_assertions)]
-    static TEST_LIMIT: AtomicU64 = AtomicU64::new(NO_TEST_OVERRIDE);
-
-    pub fn limit() -> u32 {
-        #[cfg(debug_assertions)]
-        {
-            let test_limit = TEST_LIMIT.load(Ordering::Relaxed);
-            if test_limit != NO_TEST_OVERRIDE {
-                return test_limit as u32;
-            }
-        }
-        std::env::var("OXO_FLOW_RUNS_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_LIMIT)
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn set_limit_for_tests(limit: u32) {
-        TEST_LIMIT.store(u64::from(limit), Ordering::Relaxed);
-    }
-
-    static HITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    /// Returns `Err(seconds_until_next_slot)` when over the limit.
-    pub fn check(identity: &str) -> Result<(), u64> {
-        // The global kill switch (Playwright/tests, documented as disabling
-        // the login/API limiters) covers this limiter too — "off means off".
-        if crate::rate_limit::rate_limit_disabled() {
-            return Ok(());
-        }
-        let max = limit();
-        if max == 0 {
-            return Ok(()); // disabled
-        }
-        let now = Instant::now();
-        let mut map = HITS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stamps = map.entry(identity.to_string()).or_default();
-        stamps.retain(|t| now.duration_since(*t) < WINDOW);
-        if stamps.len() >= max as usize {
-            let oldest = stamps.first().copied().unwrap_or(now);
-            let wait = WINDOW.saturating_sub(now.duration_since(oldest)).as_secs() + 1;
-            return Err(wait);
-        }
-        stamps.push(now);
-        Ok(())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn allows_up_to_limit_then_blocks_with_wait() {
-            // Isolated identity so parallel tests don't interfere.
-            let id = format!("rate-test-{}", std::process::id());
-            for _ in 0..DEFAULT_LIMIT {
-                assert!(check(&id).is_ok());
-            }
-            let wait = check(&id).expect_err("expected limit breach");
-            assert!(wait > 0 && wait <= 61);
-        }
-    }
+    super::run_limit::set_limit_for_tests(limit);
 }
 
 /// Stage run sources (workflow TOML + `[[include]]` files) into a
@@ -453,6 +397,7 @@ async fn materialize_run_sources(
 /// POST /api/runs
 pub async fn create_run(
     authenticated: Option<Extension<CurrentUser>>,
+    limiter: Option<Extension<Arc<RunRateLimiter>>>,
     ApiJson(body): ApiJson<serde_json::Value>,
 ) -> ApiResult<CreateRunResponse> {
     // Parse through the typed contract (issue #324 F-4) so the type is the
@@ -494,7 +439,11 @@ pub async fn create_run(
     // here keyed every personal-mode call into an "anonymous" bucket while
     // retry/resume keyed the user id, so the per-minute limits stacked.
     let quota_usage = quota_usage_for(toml);
-    check_spawn_budget(&user.id, quota_usage)?;
+    check_spawn_budget(
+        limiter.as_ref().map(|Extension(l)| &**l),
+        &user.id,
+        quota_usage,
+    )?;
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
         max_jobs: Some(max_jobs),
@@ -1460,6 +1409,7 @@ pub async fn get_run_results(
 /// POST /api/runs/{id}/retry
 pub async fn retry_run(
     authenticated: Option<Extension<CurrentUser>>,
+    limiter: Option<Extension<Arc<RunRateLimiter>>>,
     Path(id): Path<String>,
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<RetryResponse> {
@@ -1474,7 +1424,11 @@ pub async fn retry_run(
     // pre-flight as create_run (#519); looping retry on a cheap failed run
     // must not buy unbounded process spawns.
     let quota_usage = quota_usage_for(&run.pipeline_snapshot);
-    check_spawn_budget(&user.id, quota_usage)?;
+    check_spawn_budget(
+        limiter.as_ref().map(|Extension(l)| &**l),
+        &user.id,
+        quota_usage,
+    )?;
 
     // The retry re-executes in the SAME workdir; an active run would put
     // two CLIs on one checkpoint concurrently (corrupted state, duplicated
@@ -3113,6 +3067,7 @@ pub async fn verify_run_provenance(
 /// (the same pattern as retry).
 pub async fn resume_checkpoint(
     authenticated: Option<Extension<CurrentUser>>,
+    limiter: Option<Extension<Arc<RunRateLimiter>>>,
     Path(id): Path<String>,
     ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -3124,7 +3079,11 @@ pub async fn resume_checkpoint(
     // A checkpoint resume spawns a REAL run — same budgets as create_run
     // and retry (#519).
     let quota_usage = quota_usage_for(&run.pipeline_snapshot);
-    check_spawn_budget(&user.id, quota_usage)?;
+    check_spawn_budget(
+        limiter.as_ref().map(|Extension(l)| &**l),
+        &user.id,
+        quota_usage,
+    )?;
 
     // The resume spawns a second CLI into the SAME workdir; an active run
     // would put two CLIs on one checkpoint concurrently — the exact hazard
