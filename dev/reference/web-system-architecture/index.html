@@ -3469,6 +3469,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#run-workdir-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run workdir lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4284,6 +4295,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#run-workdir-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run workdir lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4609,12 +4631,33 @@
   logged at startup (from which the source is inferable) and a major/minor
   mismatch between the server and the spawned CLI is warned.</li>
 <li><code>OXO_FLOW_WORKSPACE</code> — root directory for all user-scoped server data
-  (<code>users/&lt;u&gt;/inputs/</code>, <code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code>,
-  <code>users/&lt;u&gt;/pipelines/&lt;pipeline_id&gt;/</code>). Defaults to a relative
-  <code>workspace/</code> under the process cwd; container deployments should point
-  it at a persistent volume. Path components are traversal-validated
-  before use.</li>
+  (<code>users/&lt;u&gt;/inputs/</code>, <code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code>; a legacy
+  <code>users/&lt;u&gt;/pipelines/&lt;pipeline_id&gt;/</code> tree from pre-#1130 releases is no
+  longer written). Defaults to a relative <code>workspace/</code> under the process
+  cwd; container deployments should point it at a persistent volume. Path
+  components are traversal-validated before use.</li>
 </ul>
+<h3 id="run-workdir-lifecycle">Run workdir lifecycle<a class="headerlink" href="#run-workdir-lifecycle" title="Permanent link">#</a></h3>
+<p>Every run created through <code>POST /api/runs</code> owns <code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code>
+for its whole life. The workflow snapshot, staged <code>include_files</code>, uploaded
+inputs, <code>.oxo-flow/checkpoint.json</code>, logs, and outputs are written there and
+nowhere else; the directory name is the run id, so no other run can address
+it. <code>retry</code> and <code>resume-checkpoint</code> are explicit continuations of a
+predecessor's lineage and deliberately write into that predecessor's tree;
+they are not new run history. A saved pipeline's <code>pipeline_id</code>
+is an association (permissions, listing, admission ordering), never a
+workdir. This is what makes a run's recorded checksums and run history
+immutable (issue #1130 / audit RB-02). Admission is a single guarded
+<code>INSERT ... SELECT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING</code> keyed on
+<code>pipeline_id</code> for saved pipelines and on <code>workdir</code> for ad-hoc runs, backed by
+partial unique indexes (<code>idx_runs_live_pipeline</code>, <code>idx_runs_live_workdir</code>) on
+both SQLite and PostgreSQL. The indexes are the guarantee PostgreSQL needs:
+under READ COMMITTED two concurrent transactions can both pass <code>NOT EXISTS</code>,
+and only <code>ON CONFLICT</code> decides the loser (zero rows affected → the documented
+<code>409 RUN_NOT_TERMINAL</code>). The saved-pipeline slot is global to the pipeline,
+not per user, so a <code>workspace</code>-shared pipeline admits one live run across all
+its readers. <code>retry</code> and <code>resume-checkpoint</code> are the only paths that
+deliberately continue a predecessor's workdir.</p>
 <hr />
 <h2 id="ui-test-coverage">UI Test Coverage<a class="headerlink" href="#ui-test-coverage" title="Permanent link">#</a></h2>
 <p>The SPA's published surfaces are exercised by Playwright specs in

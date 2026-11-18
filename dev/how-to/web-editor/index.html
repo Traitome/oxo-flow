@@ -4567,9 +4567,13 @@ part of the workflow file).</p>
 <h2 id="validation-dry-run-run">Validation, dry-run, run<a class="headerlink" href="#validation-dry-run-run" title="Permanent link">#</a></h2>
 <p>The badge above the TOML pane reports the engine's verdict live. <strong>Dry-Run</strong>
 produces the execution plan without running anything; <strong>Run</strong> starts the real
-pipeline and opens the monitor. Both honor the engine's checkpoint semantics:
-re-runs reuse completed rules unless inputs, config, or rule definitions
-changed.</p>
+pipeline and opens the monitor. Every <strong>Run</strong> executes in a fresh, immutable
+run workdir and re-executes the whole workflow — a fresh create never reuses
+another run's checkpoint (issue #1130 / audit RB-02), so editing a config
+value and pressing <strong>Run</strong> again does not skip completed rules. Checkpoint-
+driven partial re-execution is available through <strong>Retry</strong> (and
+<code>POST /api/runs/{id}/resume-checkpoint</code>), which continue the predecessor
+run's lineage in its own workdir.</p>
 <p>The verdict is fail-closed (audit UX-03, issue #1145). When the validation
 request itself fails — a network error or a server 5xx — the editor does not
 keep the previous "Valid" result: the badge switches to <strong>Not validated</strong>,

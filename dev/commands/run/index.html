@@ -6879,10 +6879,12 @@ default — SLURM's <code>--export=ALL</code>, PBS/SGE <code>-V</code>, LSF <cod
 hand the credentials on the submit host to every rule running on the node.
 The generated script therefore wraps both the rule command and the array
 dispatch line in an explicit <code>env -i</code> prefix that admits only the
-allowlisted names and the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, so
-the isolated environment a rule sees is the same on the cluster as it is
-locally. Declared per-rule <code>envvars</code> are re-exported by the command itself
-and are unaffected.</p>
+allowlisted names, the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, and —
+for a rule running through a local container runtime — the exact
+container-daemon names in <code>CONTAINER_DAEMON_ENV_VARS</code> (the same admission
+the local executor makes, issue #1173), so the isolated environment a rule
+sees is the same on the cluster as it is locally. Declared per-rule
+<code>envvars</code> are re-exported by the command itself and are unaffected.</p>
 <p>This is done in the script body rather than through a submit flag because
 SLURM rejects <code>--export=NONE</code> combined with an explicit list, and the other
 schedulers spell the equivalent differently (<code>-V</code>/<code>-v</code>/<code>-env</code>); one
@@ -6891,7 +6893,7 @@ implementation. Two caveats to note:</p>
 <ul>
 <li>A configured <code>[engine]</code> shell prelude rides inside the wrapped command
   (the same path the local executor uses), so it executes <em>inside</em> the
-  isolated <code>sh -c</code> and sees the same allowlisted environment as the rule
+  isolated <code>bash -c</code> and sees the same allowlisted environment as the rule
   body.</li>
 <li>Remote dispatch paths (Kubernetes, AWS Batch, GCP Batch) do not forward
   the submit host's environment into a job at all: a cloud job's environment
@@ -6968,7 +6970,7 @@ the config surface.</p>
 verify loop. AI can also activate implicitly: a workflow with
 <code>[ai] enabled = true</code> runs recovery on failure without the flag. The write
 authorization comes from <code>[ai] auto_fix</code> (see
-<a href="../../reference/workflow-format/#ai--ai-companion-settings">workflow-format</a>);
+<a href="../../reference/workflow-format/#ai-ai-companion-settings">workflow-format</a>);
 in every mode the model's own safety verdict and full workflow validation
 gate the write, and an unauthorized or refused fix never touches the file.</p>
 <p>When a required rule aborts the run and recovery is active:</p>

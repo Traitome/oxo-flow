@@ -7266,7 +7266,7 @@ had written them:</p>
 <td>String</td>
 <td>No</td>
 <td>—</td>
-<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.32.0"</code>)</td>
+<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; a two-component <code>"0.21"</code> is compared as <code>"0.21.0"</code>)</td>
 </tr>
 <tr>
 <td><code>format_version</code></td>
@@ -7520,12 +7520,16 @@ safely. The value itself must come from the backend's secret channel:</p>
 <li><strong>AWS Batch</strong> — the SubmitJob payload has no secrets field; map each
   <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> name on the job definition's
   <code>containerProperties.secrets</code> (or <code>environment</code>).</li>
-<li><strong>GCP Batch</strong> — set <code>taskSpec.environment.secretVariables</code> at submission,
-  pointing each name at
-  <code>projects/&lt;PROJECT&gt;/secrets/&lt;SECRET&gt;/versions/&lt;VERSION&gt;</code> and granting the
-  Batch service account <code>roles/secretmanager.secretAccessor</code>. The engine
-  does not know the project, so it does not invent a path; a hand-kept
-  submission wrapper is the place to add it.</li>
+<li><strong>GCP Batch</strong> — the engine already emits
+  <code>taskSpec.environment.secretVariables</code> entries for every routed
+  <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> name; what it cannot invent is the Secret
+  Manager path, because the project is yours. Provide it with
+  <code>OXO_FLOW_SECRET_REFS</code>, a <code>NAME=REFERENCE</code> map (<code>;</code>, <code>,</code>, or newline
+  separated; malformed entries are warned and skipped, never guessed),
+  e.g.
+  <code>OXO_FLOW_SECRET_REFS='OXO_FLOW_SENSITIVE_0=projects/my-project/secrets/token/versions/latest'</code>.
+  Grant the Batch service account <code>roles/secretmanager.secretAccessor</code>
+  on the referenced secrets.</li>
 </ul>
 <p>Local <code>docker</code>/<code>singularity</code> runs forward the same variables by name
 (<code>docker run -e NAME</code>, and <code>APPTAINERENV_NAME</code>/<code>SINGULARITYENV_NAME</code> in the
@@ -7540,9 +7544,19 @@ source — a bind mount cannot be expressed without the runtime seeing the
 path — and a value embedded inside a longer path is skipped (with a
 warning) instead of re-materializing the value literally.
 Without the operator-side secret the reference expands empty and the rule
-fails — loudly, instead of leaking the value into the artifact. HPC
-job-script bodies (SLURM/PBS/SGE/LSF) are <strong>not</strong> covered yet; that half of
-RB-12 remains open.</p>
+fails — loudly, instead of leaking the value into the artifact.</p>
+<p>The <strong>HPC scheduler backends</strong> (<code>slurm</code>, <code>pbs</code>, <code>sge</code>, <code>lsf</code>) route the
+same way, through a channel of their own: before a rule is submitted the
+driver writes a private <code>0o600</code> env file next to the run
+(<code>&lt;rule&gt;.&lt;n&gt;.secrets.env</code>) holding only the references that rule's command
+actually uses, and the generated job script sources it inside the
+<code>env -i</code> wrapper before running the command. The scheduler script body
+therefore carries <code>$OXO_FLOW_SENSITIVE_&lt;n&gt;</code>, never the literal, and the
+value is never visible to <code>squeue</code>/<code>qstat</code>/<code>bjobs</code> or to the batch system's
+own logs. Array jobs get one env file per rule (shared across the array's
+elements), refreshed on resubmission and removed when the chunk settles. A
+<code>sensitive = true</code> value that is also shorter than 4 characters still stays
+literal on the command line, exactly as on the cloud path.</p>
 </blockquote>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"blast"</span>
@@ -11777,10 +11791,14 @@ that needs the outputs regenerates them first (lazy cascade-up). See
 <li><strong>HPC job scripts apply the same allowlist (issue #1108, RB-15).</strong>
   <code>oxo-flow cluster submit</code> wraps the rule command — and the array
   dispatch line — in an explicit <code>env -i</code> prefix admitting only the
-  allowlisted names and the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, so
+  allowlisted names, the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, and —
+  for a rule running through a local container runtime, exactly as the
+  local spawn path does (issue #1173) — the exact container-daemon names
+  in <code>CONTAINER_DAEMON_ENV_VARS</code>, so
   SLURM/PBS/SGE/LSF jobs do not inherit the submitting shell's environment
   through the schedulers' export-by-default behavior (<code>--export=ALL</code>,
-  <code>-V</code>, <code>-env</code>). See
+  <code>-V</code>, <code>-env</code>). The command runs under <code>bash -c</code> (the script's own
+  shebang), matching the local executor's bash-first shell choice. See
   <a href="../../commands/run/#hpc-cluster-submissions">the run command reference</a>.
   Local <code>docker</code>/<code>singularity</code> dispatch runs <em>inside</em> that same cleared
   rule shell (covered by the same allowlist, widened only by the narrow

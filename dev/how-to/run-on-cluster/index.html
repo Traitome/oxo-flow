@@ -4544,6 +4544,7 @@
 <tr>
 <th>Scheduler</th>
 <th>Status</th>
+<th>Maturity</th>
 <th>Directive prefix</th>
 </tr>
 </thead>
@@ -4551,40 +4552,49 @@
 <tr>
 <td><strong>SLURM</strong></td>
 <td>Supported</td>
+<td>Production deployments + CI mock scheduler (operational evidence; not a per-commit live campaign)</td>
 <td><code>#SBATCH</code></td>
 </tr>
 <tr>
 <td><strong>PBS/Torque</strong></td>
 <td>Supported</td>
+<td>Real-scheduler matrix, OpenPBS 23.06 (2026-09-22/23 campaign; not re-run per commit)</td>
 <td><code>#PBS</code></td>
 </tr>
 <tr>
 <td><strong>SGE</strong></td>
 <td>Supported</td>
+<td>Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit)</td>
 <td><code>#$</code></td>
 </tr>
 <tr>
 <td><strong>LSF</strong></td>
 <td>Supported</td>
+<td>Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference</td>
 <td><code>#BSUB</code></td>
 </tr>
 <tr>
 <td><strong>Kubernetes</strong></td>
 <td>Supported (spec generation)</td>
+<td>Prototype — CLI wrapper (<code>kubectl</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
 <td><code>k8s Job</code></td>
 </tr>
 <tr>
 <td><strong>AWS Batch</strong></td>
 <td>Supported (spec generation)</td>
+<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
 <td><code>aws-batch</code></td>
 </tr>
 <tr>
 <td><strong>GCP Batch</strong></td>
 <td>Supported (spec generation)</td>
+<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
 <td><code>gcp-batch</code></td>
 </tr>
 </tbody>
 </table>
+<p><strong>Per-element outcomes.</strong> Array elements settle on their own scheduler record whenever the backend exposes one: SLURM <code>squeue</code> element ids, Kubernetes Indexed Job completion indexes (<code>status.completedIndexes</code> / <code>status.failedIndexes</code>), AWS Batch child job ids (<code>{parent}:{arrayIndex}</code>), and GCP Batch task indexes (<code>gcloud batch tasks list</code>). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting <code>0</code>. PBS/LSF/SGE are polled by the array base id in this adapter; their per-instance records name that aggregate provenance in <code>skip_reason</code> and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.</p>
+<p>None of the cloud backends is qualified by a live campaign: their maturity label stays <strong>Prototype</strong> until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.</p>
 <hr />
 <h2 id="declaring-resources">Declaring Resources<a class="headerlink" href="#declaring-resources" title="Permanent link">#</a></h2>
 <p>Set resource requirements per rule:</p>
@@ -5049,11 +5059,17 @@ the same names are used across all rules and array elements. Supply the
 value through the backend's own secret channel — a Kubernetes Secret
 named <code>oxoflow-secrets</code> (one key per variable name), the AWS Batch job
 definition's <code>containerProperties.secrets</code>, or GCP Batch
-<code>taskSpec.environment.secretVariables</code> — or the reference expands empty
-and the rule fails. Details:
-<a href="../../reference/workflow-format/#config-configuration-variables">workflow-format: <code>[config]</code></a>.
-HPC scheduler scripts (SLURM/PBS/SGE/LSF) still materialize the value in
-the generated script; that half of the hardening is not yet done.</p>
+<code>taskSpec.environment.secretVariables</code> (the engine emits those entries
+for you; point each name at its Secret Manager path with
+<code>OXO_FLOW_SECRET_REFS</code>, a <code>NAME=REFERENCE</code> map — see
+<a href="../../reference/workflow-format/#config-configuration-variables">workflow-format: <code>[config]</code></a>) —
+or the reference expands empty
+and the rule fails.
+HPC scheduler scripts (SLURM/PBS/SGE/LSF) route the same way: the driver
+writes a private <code>0o600</code> env file beside the run holding only the
+references each rule uses, and the generated script sources it inside the
+<code>env -i</code> wrapper, so the scheduler-visible script body carries
+<code>$OXO_FLOW_SENSITIVE_&lt;n&gt;</code> and never the value.</p>
 </div>
 <div class="admonition tip">
 <p class="admonition-title">Check resource availability</p>
@@ -5077,9 +5093,11 @@ auth, <code>BatchMode</code>).</p>
 <p class="admonition-title">Result pulls are validated before a run can finalize</p>
 <p>The pulled result stream is parsed by oxo-flow's own archive reader,
 not the host <code>tar</code>. A member whose path is absolute or contains <code>..</code>,
-a symlink or hard link whose target is absolute or contains any <code>..</code> (extraction targets are created empty or from regular files only, so no pre-existing symlink can be traversed)
+a symlink or hard link whose target is absolute or contains any <code>..</code>
 component (even one that would "cancel out" lexically — it can escape
-through a symlinked path segment), or a member type other than
+through a symlinked path segment; extraction targets are created empty
+or from regular files only, so no pre-existing symlink can be
+traversed), or a member type other than
 file/directory/link rejects the whole extraction and fails the run
 with the offending member named — nothing is written outside the
 local workdir. After extraction every member is re-checked on disk.

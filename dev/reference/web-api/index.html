@@ -6406,13 +6406,28 @@ working directory, so <code>metadata_file</code> and relative input paths resolv
 same way they do on the CLI. Files already present in the workdir are never
 overwritten.</p>
 <p><code>pipeline_id</code> (optional) only <em>associates</em> the run with a saved pipeline —
-the TOML still comes from <code>toml_content</code>. It makes the run execute in the
-pipeline's <strong>persistent working directory</strong> (<code>workspace/users/&lt;user&gt;/pipelines/&lt;id&gt;</code>),
-so the checkpoint survives across re-runs. Re-running with a changed config
-rebuilds exactly the rules referencing the changed keys (plus their DAG
-downstream) — the rest keep their checkpoint records and are skipped. Runs
-without <code>pipeline_id</code> get a fresh per-run sandbox and execute everything.
-Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</code> /
+the TOML still comes from <code>toml_content</code>. Every run created through this
+endpoint, saved-pipeline or ad-hoc, gets its own immutable workdir
+(<code>workspace/users/&lt;user&gt;/runs/&lt;run_id&gt;/</code>): the workflow snapshot,
+<code>include_files</code>, staged inputs, checkpoint, logs, and outputs live there and
+are never shared with another create (issue #1130 / audit RB-02). The run's <code>pipeline_snapshot</code> column stores the exact TOML it
+was created from, so later edits to the saved pipeline cannot change what an
+existing run executed or what <code>provenance verify</code> audits.</p>
+<p>Saved-pipeline runs are admitted <strong>one live run at a time</strong> per pipeline: a
+second <code>POST /api/runs</code> while a run of that pipeline is <code>queued</code>/<code>running</code>/
+<code>paused</code> answers <code>409 RUN_NOT_TERMINAL</code>; a terminal (completed, failed,
+cancelled) run releases the slot. The slot is global to the pipeline, not
+per user: a <code>workspace</code>-shared pipeline admits one live run across all its
+readers, so another identity's create gets the same 409 while the owner's run
+is live. Pinned by <code>shared_pipeline_slot_is_global_across_identities</code>. This replaces the old checkpoint-reuse
+across re-runs: a fresh create executes the whole pipeline. For
+checkpoint-driven partial re-execution use
+<a href="#smart-retry">retry</a> (<code>POST /api/runs/{id}/retry</code>, re-executes in the
+predecessor run's workdir) or <code>POST /api/runs/{id}/resume-checkpoint</code> —
+those are explicit continuations of an
+existing run lineage, not new run history. Ad-hoc runs are isolated by
+their unique workdir and may run concurrently. Malformed or unknown
+pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</code> /
 <code>404 PIPELINE_NOT_FOUND</code>).</p>
 <p><strong>Typed-workflow admission limit:</strong> directly submitted typed workflows are
 checked by the same core BioType validator as CLI preflight. Typed
@@ -6574,7 +6589,7 @@ Audit the output-file checksums a run recorded into its checkpoint (CLI→web pa
 <li><code>ok</code> — <code>true</code> only when <code>mismatched == 0 &amp;&amp; missing == 0</code> (mirrors the CLI's exit 1 = drift policy; drift is a 200 finding here, not an HTTP error).</li>
 <li><code>note</code> — present only when the checkpoint carries no stored checksums (the run was created without <code>provenance: true</code>): the CLI's hint to re-run with <code>--provenance</code>, plus <code>matched: 0</code> and empty <code>entries</code> (<code>ok: true</code>).</li>
 </ul>
-<p>Checksum tracking is opt-in: pass <code>"provenance": true</code> on Create Run (forwarded as the CLI's <code>--provenance</code>) so the run records <code>sha256</code> checksums of its outputs into the checkpoint. The endpoint is <strong>read-only</strong> — verification never mutates the checkpoint. Errors: <code>404 NOT_FOUND</code> (unknown/foreign run), <code>404 NO_WORKDIR</code> (run has no workdir), <code>404 NO_CHECKPOINT</code> (no checkpoint under the workdir), <code>400 INVALID_CHECKPOINT</code> (the CLI rejected the checkpoint as malformed), <code>500 PROVENANCE_VERIFY_ERROR</code> (CLI output unparseable — usually a stale binary; set <code>OXO_FLOW_BIN</code> to the current one), <code>503</code> when runs are not available on this backend.</p>
+<p>Checksum tracking is opt-in: pass <code>"provenance": true</code> on Create Run (forwarded as the CLI's <code>--provenance</code>) so the run records <code>sha256</code> checksums of its outputs into the checkpoint. The endpoint is <strong>read-only</strong> — verification never mutates the checkpoint. The checkpoint lives in the run's own workdir (<code>runs/&lt;run_id&gt;/.oxo-flow/checkpoint.json</code>), which no later run writes to, so a run's recorded checksums stay auditable for the life of the run tree (issue #1130 / audit RB-02); only <code>retry</code> and <code>resume-checkpoint</code> continue in that directory, by design. Errors: <code>404 NOT_FOUND</code> (unknown/foreign run), <code>404 NO_WORKDIR</code> (run has no workdir), <code>404 NO_CHECKPOINT</code> (no checkpoint under the workdir), <code>400 INVALID_CHECKPOINT</code> (the CLI rejected the checkpoint as malformed), <code>500 PROVENANCE_VERIFY_ERROR</code> (CLI output unparseable — usually a stale binary; set <code>OXO_FLOW_BIN</code> to the current one), <code>503</code> when runs are not available on this backend.</p>
 <h3 id="ai-status">AI Status<a class="headerlink" href="#ai-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>GET /api/runs/{id}/ai-status
 </span></code></pre></div>
@@ -6591,7 +6606,7 @@ The deterministic report object the report page renders: run identity, node stat
 </span></code></pre></div>
 Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim.</p>
 <h3 id="run-status-exit-codes-and-failure-tails">Run Status exit codes and failure tails<a class="headerlink" href="#run-status-exit-codes-and-failure-tails" title="Permanent link">#</a></h3>
-<p><code>GET /api/runs/{id}/status</code>, <code>/dag-status</code>, and <code>/instances</code> populate <code>exit_code</code> and the terminal timing fields from the checkpoint's <code>rule_runs</code> records: completed rules report <code>0</code>, failed rules their recorded code — plus bounded <code>stderr_tail</code> and <code>stdout_tail</code> on failed nodes (some tools print their root cause on stdout). The AI monitor (<code>/ai-status</code>) receives the same tails and classifies failures through the shared <code>DiagnosticsEngine</code> pattern table before falling back to exit-code-only signatures; its alerts carry a stable <code>alert_id</code> for cross-poll dedup. The AI chat <code>get_run_status</code> tool carries the same fields.</p>
+<p><code>GET /api/runs/{id}/status</code>, <code>/dag-status</code>, and <code>/instances</code> populate <code>exit_code</code> and the terminal timing fields from the checkpoint's <code>rule_runs</code> records: a rule whose record carries a code (a completed rule's <code>0</code>, or a failure's recorded code) reports it, plus bounded <code>stderr_tail</code> and <code>stdout_tail</code> on failed nodes (some tools print their root cause on stdout). A rule the engine settled <strong>without</strong> an accounting record — a synthetic up-to-date row, a pre-upgrade checkpoint, or cluster accounting a backend could not settle (RB-06) — reports <code>exit_code: null</code>: unknown is never rendered as a fabricated <code>0</code>, and the monitor shows <code>-</code>. The AI monitor (<code>/ai-status</code>) receives the same tails and classifies failures through the shared <code>DiagnosticsEngine</code> pattern table before falling back to exit-code-only signatures; its alerts carry a stable <code>alert_id</code> for cross-poll dedup. The AI chat <code>get_run_status</code> tool carries the same fields.</p>
 <h3 id="report-visualization">Report Visualization<a class="headerlink" href="#report-visualization" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>POST /api/runs/{id}/report/visualize
 </span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>Content-Type: application/json
@@ -6607,7 +6622,12 @@ Chart data built from real sources: <code>files</code> maps the run's file tree 
 </span></code></pre></div>
 The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the same atomic quota admission as run creation — a retry that
-exceeds the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code>.
+exceeds the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code>. It
+executes in the <strong>predecessor run's workdir</strong> (like <code>resume-checkpoint</code>):
+retry is an explicit continuation of one run lineage, not a new entry in run
+history, so it is the one path that writes into an existing run tree by
+design. A fresh <code>POST /api/runs</code> never does — it always gets its own workdir
+(issue #1130).
 The endpoint accepts <strong>no repair payload</strong>: the diagnostics <code>fix_action</code>
 shown by the monitor is advisory (placeholder values, nothing applies it),
 so the web UI labels its action "Retry unchanged" rather than claiming a
@@ -7305,12 +7325,19 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
   not an advisory overage. Runs that declare no memory have no claim to
   enforce.</li>
 <li><strong>Other platforms</strong>: Darwin rejects <code>RLIMIT_DATA</code>/<code>RLIMIT_AS</code> changes with
-  <code>EINVAL</code>; there the ceiling remains advisory (the quota counters still
-  apply). See the follow-up tracking issue for portable and remote
-  enforcement.</li>
-<li><strong>Remote (cluster) runs</strong>: the local process-tree rlimit does not travel
-  to the cluster host; quota admission still counts them, but the ceiling
-  itself is not yet enforced remotely.</li>
+  <code>EINVAL</code>; there the local ceiling remains advisory (the quota counters
+  still apply). See the follow-up tracking issue for portable enforcement.</li>
+<li><strong>Remote (cluster) runs</strong>: the local process-tree rlimit cannot travel to
+  the cluster host, so the remote wrapper instead forwards the declared
+  ceilings as engine flags — <code>--max-memory &lt;MB&gt;</code> and <code>--max-threads &lt;n&gt;</code>,
+  emitted only when the workflow declares them (a <code>0</code>/unset ceiling
+  auto-detects remotely, exactly like a local run with nothing declared).
+  On the cluster host those drive the engine's scheduler <code>ResourcePool</code> and
+  <code>check_budget_feasibility</code> gate, so a rule requiring more than the declared
+  total hard-fails before it is scheduled. The mechanism differs from a local
+  Linux run (rlimit vs. scheduler budget) but both cap the same declared
+  total; the remote path additionally applies a thread ceiling, which the
+  local web path does not (the engine auto-detects there).</li>
 </ul>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>GET    /api/clusters                  # configured SSH connections

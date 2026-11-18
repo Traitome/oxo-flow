@@ -4115,9 +4115,12 @@ checkpoint semantics.</p>
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">        </span><span class="c1">// default None — terminal record from the scheduler's accounting</span>
 </span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">        </span><span class="c1">// store; None keeps the job in flight</span>
 </span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">polls_elements_directly</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">        </span><span class="c1">// default false — SLURM's squeue reports array elements by their</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">        </span><span class="c1">// `{base}_{index}` ids (true); PBS/SGE/LSF list only the base id</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="p">}</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">        </span><span class="c1">// default false — true when poll resolves individual array</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">        </span><span class="c1">// elements: SLURM's `{base}_{index}` ids, Kubernetes Indexed Job</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">        </span><span class="c1">// completion indexes, AWS Batch child job ids, GCP Batch task</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">        </span><span class="c1">// indexes. PBS/SGE/LSF list only the base id through this</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">        </span><span class="c1">// adapter's invocations (issue #136 H4)</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The first implementation, <code>ClusterExecutor</code> (SLURM/PBS/SGE/LSF, extended
 by k8s and the AWS/GCP Batch backends), renders
@@ -4232,10 +4235,23 @@ the adapter paths executed; they are not a current commit-bound campaign,
 a designated-host qualification, or proof of production behavior. LSF
 cannot be stood up the same way (the community edition is IBMid-gated);
 its directive and status semantics are cross-checked against IBM's bsub
-reference and the jokergoo/bsub client. Re-attach to in-flight jobs,
-cancellation reconciliation, per-element accounting, and crash recovery
-remain evidence gaps. See the audit ledger before describing any backend
-as production-ready.</p>
+reference and the jokergoo/bsub client.</p>
+<p>Per-element settlement is implemented for every backend that exposes
+element-level status: SLURM polls <code>{base}_{index}</code> ids, a Kubernetes
+Indexed Job is resolved from its completed/failed completion indexes, AWS
+Batch array elements are their real child job ids, and GCP Batch elements
+are task indexes read with <code>gcloud batch tasks list</code>. PBS/LSF/SGE are
+polled by the array base id in this adapter (issue #136 H4); their
+expanded element records carry the aggregate verdict's provenance in
+<code>skip_reason</code> and no base-level exit code or resource numbers, so an
+array-level verdict is never presented as an independently observed
+element outcome. Missing accounting/status data is reported as unknown:
+a Completed job with no accounting record has <code>exit_code: null</code>, never
+<code>0</code>. Kubernetes, AWS Batch, and GCP Batch remain <strong>Prototype</strong> (CLI
+wrappers with mock/wire tests only): their per-backend live campaigns,
+re-attach to in-flight jobs, cancellation reconciliation across process
+restarts, and crash recovery remain evidence gaps (CL-05 / #1158). See
+the audit ledger before describing any backend as production-ready.</p>
 <p>Freshness note (2026-11-07): this evidence is a point-in-time campaign —
 the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a
 schedule. Before citing these artifacts against current behavior, re-run

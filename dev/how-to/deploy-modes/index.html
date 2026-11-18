@@ -4662,10 +4662,17 @@ server process's cwd):</p>
   mirrored into each new run's workdir at Create Run
   (<code>POST /api/runs</code>, which stages <code>include_files</code> straight into the run
   dir without touching <code>inputs/</code>)</li>
-<li><code>users/&lt;username&gt;/runs/&lt;run_id&gt;/</code> — each run's workdir (the spawned CLI
-  runs here; checkpoint, logs, and envs live under it)</li>
-<li><code>users/&lt;username&gt;/pipelines/&lt;pipeline_id&gt;/</code> — persistent pipeline
-  directories so checkpoints survive web re-runs</li>
+<li><code>users/&lt;username&gt;/runs/&lt;run_id&gt;/</code> — each run's own immutable workdir
+  (the spawned CLI runs here; the workflow snapshot, checkpoint, logs,
+  outputs, and envs live under it). Every create request — including for a
+  saved pipeline — gets a fresh directory, so a later run can never
+  overwrite an earlier run's artifacts (issue #1130 / audit RB-02); only
+  <code>retry</code>/<code>resume-checkpoint</code> continue their predecessor's directory.</li>
+<li><code>users/&lt;username&gt;/pipelines/&lt;pipeline_id&gt;/</code> — legacy pre-#1130 run
+  workdir. New creates no longer use it, but retrying or resuming a run
+  created before the upgrade still writes into that run's recorded workdir
+  here. Leave the tree in place while any pre-upgrade run may be retried;
+  archive it only once those runs are no longer needed</li>
 </ul>
 <p>Usernames and run ids are traversal-validated before they are joined onto
 the root. In container or systemd deployments, point <code>OXO_FLOW_WORKSPACE</code>
