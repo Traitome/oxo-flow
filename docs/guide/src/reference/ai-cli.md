@@ -730,7 +730,7 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 2 | AI dry-run + validate analysis | Implemented but unproven |
 | Phase 3 | AI error recovery (`--ai-recover`) | Prototype / partial-file replacement refused and fix written atomically with a `.bak` guard (#1110); rerun still unverified |
 | Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | Prototype / workflow-scoped policy is not fully enforced |
-| Phase 5 | MCP/Skill ecosystem | Prototype / security trust-boundary work remains |
+| Phase 5 | MCP/Skill ecosystem | Prototype / generic MCP token release is origin-gated via `OXO_FLOW_MCP_TRUSTED_ORIGINS` (#1123, see [custom skills](custom-skills.md)); the read→egress data-release decision remains open |
 | Phase 6 | Workflow explanation (`ai explain`) | Implemented but unproven |
 | Phase 7 | Provider failure handling | Implemented but unproven; malformed tool arguments are fail-closed (AI-07) |
 

@@ -245,7 +245,11 @@ struct ScreenedTarget {
     pin: Option<(String, std::net::SocketAddr)>,
 }
 
-fn parse_allowlist(raw: &str) -> Vec<String> {
+/// Comma-split, trim and lowercase — the shared convention for
+/// operator-supplied host/origin lists (`OXO_FLOW_AI_FETCH_ALLOW`,
+/// `OXO_FLOW_MCP_TRUSTED_ORIGINS`). One parser so the two lists cannot
+/// drift apart.
+pub(crate) fn parse_allowlist(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
