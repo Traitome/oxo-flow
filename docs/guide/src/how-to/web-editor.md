@@ -65,7 +65,7 @@ is preserved as a new revision first.
 | Pane | What it does |
 |------|--------------|
 | **Tools / Assistant rail** (left) | Search the embedded Bioconda database (6,100+ tools) and add real tools as rules; or ask the AI assistant to draft a workflow |
-| **Pipeline DAG** (center) | The node canvas: drag, connect, delete, double-click to edit |
+| **Pipeline DAG** (center) | The node canvas: drag, connect, delete, double-click (or `Enter`/`Space`) to edit |
 | **Workflow TOML** (right) | The canonical `.oxoflow` text — always in sync with the canvas |
 
 ## AI assistant: proposals require acceptance
@@ -118,10 +118,21 @@ Double-click a node to open the inspector:
 
 Fields the inspector doesn't cover stay editable in the TOML pane.
 
+Every canvas action is also available from the keyboard (audit UX-06,
+issue #1148). Nodes are focus stops in rule-declaration order: `Tab` moves to
+the next node and `Shift+Tab` to the previous one. `Enter` or `Space` on a
+focused node opens the inspector, and `Escape` closes the inspector and
+returns focus to that node.
+
 ## Connecting rules
 
 Drag from a node's right handle to another node's left handle. This adds an
-explicit `depends_on` edge.
+explicit `depends_on` edge. The keyboard equivalent is:
+
+1. Focus the source node and press `c` — the editor announces "Connecting
+   from <rule>" and outlines the source station.
+2. `Tab` to the target node and press `Enter` to write the connection.
+3. Alternatively press `Escape` to cancel without writing anything.
 
 Two connections are always rejected, before anything is written:
 
@@ -149,8 +160,32 @@ be resolved against each other leave the ordering ambiguous — use
 Select one or more nodes and press `Delete` (or `Backspace`) to remove rules;
 with an edge selected instead, the same keys disconnect it (file-inferred
 edges are managed through the `input`/`output` paths, not by disconnect).
-Removing a rule whose outputs other rules consume will surface validation
-errors on those rules — fix their inputs, and the workflow is valid again.
+In the Metro view, focus a single station and press `Delete`/`Backspace` to
+remove exactly that rule. Removing a rule whose outputs other rules consume
+will surface validation errors on those rules — fix their inputs, and the
+workflow is valid again.
+
+## Metro view and grouped granularities
+
+**Metro View** (bottom-right of the canvas) draws the DAG as a transit map,
+with a `Rule` / `Process` / `Module` granularity switch:
+
+- **Rule** — one station per rule. This is a full editing surface: the same
+  keyboard and mouse edit/connect/delete actions as the standard DAG view.
+- **Process** — stations aggregate rules by environment backend (for example
+  one `system` station containing every system rule).
+- **Module** — stations aggregate rules by inferred bioinformatics modality
+  (genomics, transcriptomics, epigenomics, metagenomics, infrastructure).
+
+**Process and Module are read-only** (audit UX-06, issue #1148). Their
+station ids are aggregation keys, not rule names, so a group operation cannot
+be proven to preserve execution semantics — and a rule literally named like a
+group key (for example `system`) would be silently edited instead of the
+group. Grouped stations are therefore not buttons, carry a `read-only` badge,
+render no connect handles, and announce why when activated from the keyboard.
+The toolbar shows the same note. Switch back to **Rule** granularity to edit
+or connect. Grouping only changes the visualization — it never rewrites the
+workflow document.
 
 ## Auto layout
 

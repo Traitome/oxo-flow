@@ -443,6 +443,7 @@ export default function WorkflowCanvas({
           editable={editable}
           onEditRule={onEditRule}
           onConnectRules={onConnectRules}
+          onRemoveRules={onRemoveRules}
           statuses={statusById}
         />
         <div
