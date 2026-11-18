@@ -9,6 +9,8 @@ mod references;
 mod samples;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transform_semantics_tests;
 
 pub(crate) use known_keys::TOP_LEVEL_KEYS;
 pub use known_keys::edit_distance;
