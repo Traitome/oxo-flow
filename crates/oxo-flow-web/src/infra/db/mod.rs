@@ -303,6 +303,12 @@ pub trait StorageBackend: Send + Sync {
         oauth_username: &str,
         fallback_username: &str,
     ) -> Result<String, String>;
+    /// Convenience: record a successful audit action without metadata.
+    ///
+    /// Request-handler call sites must go through
+    /// `crate::audit::{audit_required, audit_best_effort}` so the audit's
+    /// durability class is explicit (WEB-15 / issue #1140). This trait
+    /// method exists for the storage contract and legacy call sites only.
     async fn log_action_with_metadata(
         &self,
         user_id: &str,
@@ -311,6 +317,15 @@ pub trait StorageBackend: Send + Sync {
         metadata: Option<&str>,
     ) -> Result<(), String>;
 
+    /// Low-level audit row writer — the ONE insert into `audit_logs`.
+    ///
+    /// Do not call this directly from request handlers: use
+    /// `crate::audit::{audit_required, audit_best_effort}` so a failed write
+    /// fails the request closed (required) or warns (best-effort) per the
+    /// classification in `crate::audit::audit_durability_for`. The only
+    /// direct handler call site left is the successful-login row in
+    /// `domains/auth/handlers.rs` (best-effort; that file is reserved for an
+    /// in-flight PR and must migrate when it lands).
     async fn record_audit_log(
         &self,
         user_id: &str,

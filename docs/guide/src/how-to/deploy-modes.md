@@ -77,13 +77,25 @@ automatic fallback chain between mechanisms.
 **User management**: beyond the env-var credentials, accounts created on
 the **Users** page (or `POST /api/users`) carry a bcrypt-hashed password in
 the database and sign in through the same `/api/auth/login` endpoint.
-State-changing requests attempt an audit entry visible on the **Audit** page
-or through `GET /api/audit`, with the acting user and recorded outcome. Audit
-writes are not yet a durable, fail-closed compliance ledger: a failed insert
-is logged and the request still succeeds, so do not treat a missing entry as
-proof that no action occurred (the structured event stream still emits an
-`audit` event for machine consumers when the database insert fails). The
-trail spans all users and is admin-only outside personal mode.
+State-changing requests write an audit entry visible on the **Audit** page
+or through `GET /api/audit`, with the acting user and recorded outcome. The
+entry's durability is explicit per action (WEB-15 / issue #1140):
+
+- **Security-relevant actions** — authentication attempts, user/role
+  changes, machine-key changes, run creation and lifecycle control,
+  pipeline deletion and share grants, AI provider key changes, cluster
+  connection secrets, webhook configuration, and license upload — **fail
+  closed**: if the row cannot be written the request answers
+  `500 AUDIT_WRITE_FAILED` instead of acknowledging the action.
+- **Informational mutations** — AI generation, parsing/validation, DAG
+  edits, chat, and pipeline create/update/fork — log a warning and still
+  answer normally if the write fails.
+
+In both cases the structured event stream emits an `audit` event for
+machine consumers even when the database insert fails, and the successful-
+login row is still best-effort. Do not treat a missing entry as proof that
+no action occurred; check the structured event stream as well. The trail
+spans all users and is admin-only outside personal mode.
 
 **Workspace isolation**:
 ```
