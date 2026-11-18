@@ -10,6 +10,7 @@ import { api, apiUrl, ApiError } from '../api/client';
 import { useServerVersion, fetchServerHealth } from '../api/version';
 import { useI18n } from '../context/I18n';
 import { isTerminalRunStatus } from '../utils/runStatus';
+import { AUTH_CHANGED_EVENT, clearIdentityScopedStorage } from '../utils/identityStorage';
 
 // License type renders from the server's own report, never a hardcoded
 // label (issue #82 P2-6: commercial deployments were mislabeled "Academic").
@@ -131,8 +132,8 @@ export default function Layout() {
     // #907 T1: re-check on login/sign-out (client-side navigate() keeps this
     // component mounted, so mount-only deps left the identity chip and the
     // role-trimmed nav stale until a full reload).
-    window.addEventListener('oxo:auth-changed', refreshIdentity);
-    return () => window.removeEventListener('oxo:auth-changed', refreshIdentity);
+    window.addEventListener(AUTH_CHANGED_EVENT, refreshIdentity);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, refreshIdentity);
   }, []);
 
   // Role-trimmed navigation (issue #82 P1-15): authenticated viewers see
@@ -399,8 +400,13 @@ export default function Layout() {
                   // Revoke server-side (#520) before dropping the local copy.
                   // #907 T3: land on /login with an explicit signed-out reason
                   // so the message differs from a session expiry.
+                  // #1144: drop the token AND every identity-scoped key —
+                  // drafts, chat transcripts, canvas positions, and the
+                  // cached identity — so a second account on this browser
+                  // cannot read the first account's state.
                   api.logout().catch(() => {}).finally(() => {
-                    localStorage.removeItem('oxo_token');
+                    clearIdentityScopedStorage();
+                    window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
                     window.location.assign(apiUrl('/login?reason=signed-out'));
                   });
                 }}

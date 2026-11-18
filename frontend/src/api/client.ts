@@ -1,3 +1,4 @@
+import { AUTH_TOKEN_KEY, forgetSessionIdentity } from '../utils/identityStorage';
 import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
   ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
@@ -51,7 +52,7 @@ export function apiUrl(url: string): string {
 }
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const token = localStorage.getItem('oxo_token');
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
   const headers: Record<string, string> = { ...extra };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return headers;
@@ -66,9 +67,14 @@ async function toApiError(res: Response): Promise<ApiError> {
 // reason distinguishes "had a token, now rejected" (expired) from "called a
 // protected endpoint with no token at all" (invalid) so the login page can
 // show an honest message instead of blaming an expiry that never happened.
+//
+// #1144: the cached identity goes with the token — a hint that outlives its
+// session would name an owner the server no longer vouches for. The
+// identity-scoped draft buckets stay put so the same user's unsaved work
+// survives a session expiry and is restored when they sign in again.
 function redirectToLoginOn401(): never {
-  const hadToken = !!localStorage.getItem('oxo_token');
-  localStorage.removeItem('oxo_token');
+  const hadToken = !!localStorage.getItem(AUTH_TOKEN_KEY);
+  forgetSessionIdentity();
   window.location.assign(`${oxoBase()}/login?reason=${hadToken ? 'expired' : 'invalid'}`);
   throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
 }
