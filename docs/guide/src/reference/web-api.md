@@ -1375,16 +1375,21 @@ valid state, and tricks another browser into completing the callback:
 - `POST /api/auth/oauth/callback` requires the cookie to hash to the stored
   binding. Missing, mismatched, or empty bindings — and historical rows
   written before the migration (empty digest) — answer the same
-  `400 {code:"OAUTH_STATE_MISMATCH"}` as a provider/redirect mismatch, with
-  a message that does not reveal which component failed. The browser
-  binding is checked before the provider/redirect bindings for that reason.
-- A binding mismatch still consumes the state (single use), and the cookie
-  is cleared on every callback response, success or failure.
+  `400 {code:"OAUTH_STATE_MISMATCH"}` as a provider/redirect mismatch. A
+  browser-binding mismatch does not say which component failed; the binding
+  is checked before the provider/redirect bindings for that reason. (The
+  provider and redirect checks themselves name the expected value, by
+  design — that is what makes a misconfiguration diagnosable.)
+- A binding mismatch still consumes the state (single use). Handler-generated
+  callback responses clear the cookie on success and failure; a request
+  rejected by body extraction (malformed JSON → `400 INVALID_BODY`) answers
+  before the handler, so that short-lived cookie simply expires.
 
-The cookie is handled automatically by same-origin browser calls (the SPA
-uses a same-origin `fetch`). Non-browser API clients that drive the two
-steps manually must capture the `Set-Cookie` value from the authorize
-response and send it back on the callback request.
+The shipped SPA has no OAuth sign-in UI. A browser client that implements
+the two steps must use same-origin requests so the browser stores and
+returns the cookie automatically; non-browser API clients must capture the
+`Set-Cookie` value from the authorize response and send it back on the
+callback request.
 
 Scope: this proves that a callback can only complete a flow started by the
 browser presenting the same binding value — cross-browser completion and
