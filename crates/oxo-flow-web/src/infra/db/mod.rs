@@ -132,7 +132,12 @@ pub trait StorageBackend: Send + Sync {
         expires_at: &str,
     ) -> Result<(), String>;
     async fn get_session(&self, token: &str) -> Result<Option<models::SessionRow>, String>;
-    async fn delete_session(&self, token: &str) -> Result<(), String>;
+    /// Revoke a session, returning the number of rows removed (#1135).
+    ///
+    /// A `0` means the row was already gone (benign — e.g. a double logout);
+    /// any non-zero value is a real revoke. Callers MUST NOT treat an `Err`
+    /// as a no-op: a failed delete leaves the token live.
+    async fn delete_session(&self, token: &str) -> Result<u64, String>;
     async fn cleanup_expired_sessions(&self) -> Result<u64, String>;
 
     async fn list_templates(&self) -> Result<Vec<models::TemplateRow>, String>;

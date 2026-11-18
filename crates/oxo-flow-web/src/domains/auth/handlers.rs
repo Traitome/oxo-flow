@@ -431,6 +431,26 @@ async fn auth_me_in(
     }
 }
 
+/// Map a `delete_session` outcome to the logout response (#1135).
+///
+/// Fail-closed: a delete that errored must NOT report success — the token
+/// would stay live while the client is told it is dead. A missing row
+/// (`rows_affected == 0`) is the benign already-revoked case and still
+/// succeeds. Extracted from `logout` so the contract is unit-testable
+/// without a process-global storage backend.
+pub fn logout_result(
+    removed: Result<u64, String>,
+) -> Result<serde_json::Value, (StatusCode, Json<ApiError>)> {
+    let removed =
+        removed.map_err(|e| db_err(format!("failed to revoke session on logout: {e}")))?;
+    if removed == 0 {
+        tracing::info!("logout: session already absent (no-op)");
+    } else {
+        tracing::info!(removed, "logout revoked token");
+    }
+    Ok(serde_json::json!({"logged_out": true}))
+}
+
 #[utoipa::path(
     post,
     path = "/api/auth/logout",
@@ -450,14 +470,7 @@ pub async fn logout(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Val
         return Ok(Json(serde_json::json!({"logged_out": false})));
     };
     if let Some(backend) = crate::infra::db::global_backend() {
-        match backend.delete_session(&token).await {
-            Ok(()) => {
-                tracing::info!("logout revoked token");
-            }
-            Err(e) => {
-                tracing::error!("DB error deleting session on logout: {e}");
-            }
-        }
+        return Ok(Json(logout_result(backend.delete_session(&token).await)?));
     }
     Ok(Json(serde_json::json!({"logged_out": true})))
 }
@@ -1166,5 +1179,36 @@ mod tests {
         // No credential → not authenticated.
         let me = auth_me_in(&backend, &axum::http::HeaderMap::new()).await;
         assert!(!me.authenticated);
+    }
+
+    // ---- #1135: logout must fail closed on a real delete error ----
+
+    #[test]
+    fn logout_result_succeeds_when_a_row_was_revoked() {
+        let Ok(body) = logout_result(Ok(1)) else {
+            panic!("a real revoke succeeds");
+        };
+        assert_eq!(body["logged_out"], true);
+    }
+
+    #[test]
+    fn logout_result_is_idempotent_when_no_row_existed() {
+        // A double logout / already-revoked token is benign: no rows removed
+        // is still a success, it just is not a *change*.
+        let Ok(body) = logout_result(Ok(0)) else {
+            panic!("missing row is benign");
+        };
+        assert_eq!(body["logged_out"], true);
+    }
+
+    #[test]
+    fn logout_result_fails_closed_on_delete_error() {
+        // The WEB-10 defect: the original handler logged the error and still
+        // answered {"logged_out": true}, telling the client a stolen token was
+        // dead while it stayed live. The mapping must surface a 500 instead.
+        let (status, Json(err)) =
+            logout_result(Err("database is locked".into())).expect_err("must not report success");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.code, "DB_ERROR");
     }
 }
