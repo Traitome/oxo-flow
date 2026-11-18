@@ -333,6 +333,19 @@ select.search-input{padding-right:1.75rem}
 .validation-error-body{color:var(--color-text)}
 .validation-error-suggestion{color:var(--color-text-secondary);font-size:.75rem}
 
+/* AI proposal review gate (audit UX-05, issue #1147). The generated TOML is
+   staged here as a diff; the editor only changes when Apply is clicked. */
+.ai-proposal{border:1px solid var(--color-primary);border-radius:var(--radius-sm);margin:0 0 1rem;background:var(--color-bg);display:flex;flex-direction:column;max-height:42vh;overflow:hidden}
+.ai-proposal-header{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid var(--color-border);background:var(--color-primary-light);font-size:.78rem;font-weight:600;color:var(--color-text)}
+.ai-proposal-title{white-space:nowrap}
+.ai-proposal-count{font-weight:400;color:var(--color-text-secondary);font-size:.72rem}
+.ai-proposal-summary{padding:.35rem .75rem;font-size:.72rem;color:var(--color-text-secondary);border-bottom:1px solid var(--color-border-light)}
+.ai-proposal-diff{overflow:auto;font-family:var(--font-mono);font-size:.72rem;line-height:1.45;padding:.35rem 0}
+.ai-proposal-line{white-space:pre-wrap;word-break:break-word;padding:0 .75rem;color:var(--color-text)}
+.ai-proposal-sign{display:inline-block;width:1.1em;color:var(--color-text-tertiary);user-select:none}
+.ai-proposal-line--added{background:var(--color-success-bg);color:var(--color-success)}
+.ai-proposal-line--removed{background:var(--color-error-bg);color:var(--color-error)}
+
 /* Guided rule builder (form mode) */
 .guided-meta{display:flex;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap;align-items:flex-end}
 .rule-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem .75rem;align-items:end}

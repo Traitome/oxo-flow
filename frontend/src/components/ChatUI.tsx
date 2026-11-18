@@ -387,7 +387,11 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         const toml = data.toml_content ?? '';
         const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'ai-generated-pipeline';
         await api.createPipeline({ name, toml_content: toml });
-        session.setPipelineToml(toml);
+        // UX-05 (issue #1147): when the host renders an acceptance gate (the
+        // editor's proposal diff), the shared session must not be pre-applied
+        // — the editor would restore that content on remount without the user
+        // ever accepting the diff. The gate applies it on explicit Apply.
+        if (!onPipelineReady) session.setPipelineToml(toml);
         onPipelineReady?.(action.data);
         setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `✅ ${t('chat.saved').replace('{{name}}', name)}` }]);
         navigate('/editor');

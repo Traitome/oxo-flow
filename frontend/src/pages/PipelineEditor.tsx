@@ -13,6 +13,7 @@ import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
 import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
 import { detectGuidedUnsupported } from '../utils/guidedSafety';
+import { diffLines, summarizeDiff } from '../utils/tomlDiff';
 
 // Lazy: guided mode (the default) never mounts these, so @xyflow/react,
 // d3-dag and CodeMirror stay out of the initial editor load (issue #79).
@@ -42,6 +43,17 @@ threads = 8
 interface InspectorState {
   ruleName: string;
   rule: Record<string, unknown> | null;
+}
+
+// UX-05 (issue #1147): AI-generated workflow output is staged here as a
+// PROPOSAL. Nothing is written into editor state until the user accepts the
+// shown diff — a chat round used to overwrite unsaved work silently.
+interface AiProposal {
+  id: string;
+  toml: string;
+  validation?: unknown;
+  pipelineId?: string;
+  receivedAt: number;
 }
 
 // UX-03 (issue #1145): the validation verdict is fail-closed. `unavailable`
@@ -237,6 +249,13 @@ export default function PipelineEditor() {
   const editSeq = useRef(0);
   const [running, setRunning] = useState(false);
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
+  // UX-05 (issue #1147): pending AI proposals, oldest first. The displayed
+  // proposal is `activeProposalId` when set, else the FIRST pending one — so
+  // a second proposal arriving while one is pending is appended, never
+  // silently swapped in. Accept/discard are the only ways state leaves here.
+  const [proposals, setProposals] = useState<AiProposal[]>([]);
+  const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
+  const activeProposal = proposals.find((p) => p.id === activeProposalId) ?? proposals[0] ?? null;
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
   const [inspector, setInspector] = useState<InspectorState | null>(null);
   const [showRunDialog, setShowRunDialog] = useState(false);
@@ -730,6 +749,72 @@ export default function PipelineEditor() {
     }
   };
 
+  // ── UX-05 (issue #1147): the AI proposal gate. `onPipelineReady` stages
+  //    the generated TOML here; the editor content (including unsaved edits)
+  //    is untouched until the user accepts the diff. ──
+  const stagePipelineProposal = (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => {
+    const proposed = data.toml_content;
+    if (!proposed) return;
+    // Chat's own Accept/Edit buttons re-deliver the payload the stream
+    // already staged; point at the existing proposal instead of duplicating.
+    const existing = proposals.find((p) => p.toml === proposed);
+    if (existing) {
+      setActiveProposalId((current) => current ?? existing.id);
+      return;
+    }
+    const hadPending = proposals.length > 0;
+    setProposals((prev) => [
+      ...prev,
+      {
+        id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        toml: proposed,
+        validation: data.validation,
+        pipelineId: data.pipeline_id,
+        receivedAt: Date.now(),
+      },
+    ]);
+    // Leave the displayed proposal alone; a new arrival only queues.
+    session.setRunResult({
+      message: hadPending ? t('editor.aiProposal.stagedMore') : t('editor.aiProposal.staged'),
+      type: 'info',
+    });
+  };
+
+  const acceptActiveProposal = () => {
+    if (!activeProposal) return;
+    // A canvas edit may still be in flight; accepting supersedes it so a late
+    // response cannot overwrite the content the user just approved.
+    ++editSeq.current;
+    setToml(activeProposal.toml);
+    setProposals([]);
+    setActiveProposalId(null);
+    session.setRunResult({ message: t('editor.aiProposal.accepted'), type: 'success' });
+  };
+
+  const discardActiveProposal = () => {
+    if (!activeProposal) return;
+    const remaining = proposals.filter((p) => p.id !== activeProposal.id);
+    setProposals(remaining);
+    setActiveProposalId(remaining[0]?.id ?? null);
+    session.setRunResult({ message: t('editor.aiProposal.discarded'), type: 'info' });
+  };
+
+  const reviewNextProposal = () => {
+    if (proposals.length < 2 || !activeProposal) return;
+    const index = proposals.findIndex((p) => p.id === activeProposal.id);
+    setActiveProposalId(proposals[(index + 1) % proposals.length].id);
+  };
+
+  // Diff against the CURRENT editor content: it is recomputed if the user
+  // keeps editing while a proposal is pending, so Accept always states
+  // exactly what changes.
+  const activeProposalToml = activeProposal?.toml ?? null;
+  const proposalDiff = useMemo(
+    () => (activeProposalToml === null ? [] : diffLines(toml, activeProposalToml)),
+    [toml, activeProposalToml],
+  );
+  const proposalSummary = useMemo(() => summarizeDiff(proposalDiff), [proposalDiff]);
+
   const applyEngineSettings = () => {
     const rawFields = [engineForm.minFreeDisk, engineForm.reclaimFreeDisk, engineForm.tmpDir, engineForm.protectedTrees];
     if (rawFields.some(hasControlOrNewline)) {
@@ -790,6 +875,77 @@ export default function PipelineEditor() {
           </button>
         </div>
       </div>
+
+      {/* UX-05 (issue #1147): a pending AI proposal is reviewed here, above
+          both view modes. Editor state changes only on Apply. */}
+      {activeProposal && (
+        <section
+          className="ai-proposal"
+          data-testid="ai-proposal"
+          aria-label={t('editor.aiProposal.title')}
+        >
+          <div className="ai-proposal-header">
+            <Sparkles size={14} />
+            <span className="ai-proposal-title">{t('editor.aiProposal.title')}</span>
+            {proposals.length > 1 && (
+              <span className="ai-proposal-count" data-testid="ai-proposal-count">
+                {t('editor.aiProposal.count')
+                  .replace('{{index}}', String(proposals.findIndex((p) => p.id === activeProposal.id) + 1))
+                  .replace('{{total}}', String(proposals.length))}
+              </span>
+            )}
+            <div className="row" style={{ marginLeft: 'auto', gap: '6px' }}>
+              {proposals.length > 1 && (
+                <button
+                  type="button"
+                  className="btn-sm"
+                  data-testid="ai-proposal-next"
+                  onClick={reviewNextProposal}
+                >
+                  {t('editor.aiProposal.next')}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-sm"
+                data-testid="ai-proposal-discard"
+                onClick={discardActiveProposal}
+              >
+                {t('editor.aiProposal.discard')}
+              </button>
+              <button
+                type="button"
+                className="btn-run"
+                data-testid="ai-proposal-accept"
+                onClick={acceptActiveProposal}
+              >
+                <CheckCircle size={14} /> {t('editor.aiProposal.accept')}
+              </button>
+            </div>
+          </div>
+          <div className="ai-proposal-summary">
+            {proposalSummary.added === 0 && proposalSummary.removed === 0
+              ? t('editor.aiProposal.identical')
+              : t('editor.aiProposal.summary')
+                  .replace('{{added}}', String(proposalSummary.added))
+                  .replace('{{removed}}', String(proposalSummary.removed))}
+          </div>
+          <div className="ai-proposal-diff" data-testid="ai-proposal-diff">
+            {proposalDiff.map((line, i) => (
+              <div
+                key={i}
+                className={`ai-proposal-line ai-proposal-line--${line.kind}`}
+                data-kind={line.kind}
+              >
+                <span className="ai-proposal-sign">
+                  {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
+                </span>
+                {line.text || ' '}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {viewMode === 'guided' && (
         <div style={{ marginTop: '1rem' }}>
@@ -874,12 +1030,7 @@ export default function PipelineEditor() {
                 {renderHistory()}
               </div>
             ) : (
-              <ChatUI
-                context="editor"
-                onPipelineReady={(data) => {
-                  if (data.toml_content) setToml(data.toml_content);
-                }}
-              />
+              <ChatUI context="editor" onPipelineReady={stagePipelineProposal} />
             )}
           </div>
         </div>
