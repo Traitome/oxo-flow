@@ -162,6 +162,31 @@ MCP tools execute under the same approval policy as all agent tools:
   [y/N]`); non-interactive sessions (CI, `--json`, redirected stdin)
   always refuse.
 
+Outbound network egress from a built-in tool is gated the same way
+(#1123, audit AI-05). A model-initiated `fetch_url` is read-only in the
+local sense — it mutates nothing — but it ships data off the machine, so
+it is a **data-release decision** and never inherits the read-only
+auto-approval:
+
+- In an interactive session the AI prompts for that specific call
+  (`Allow execution? [y/N]`), showing the destination URL.
+- In a non-interactive session (CI, `--json`, redirected stdin, the web
+  chat/translate loop) the call is refused, and the model receives an
+  error naming the destination origin — never the URL's path or query,
+  and never any file content.
+- An operator can pre-authorize automatic release to specific origins
+  with `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS` — comma-separated exact
+  `scheme://host[:port]` origins (default ports omitted, paths ignored,
+  no wildcards or suffix matches; unparseable entries are warned about
+  and ignored). This knob governs *data release*, not reachability: the
+  SSRF screen and `OXO_FLOW_AI_FETCH_ALLOW` still apply independently.
+  Unset or empty means no origin is pre-authorized.
+
+The read half of the chain is unchanged: a scoped `read_file` still
+auto-executes for project files, but a model cannot ship what it read to
+an arbitrary endpoint without an explicit human decision (or an
+operator-listed origin).
+
 The endpoint itself is SSRF-screened at connect time: internal
 address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges,
 CGNAT 100.64/10, benchmarking 198.18/15, NAT64 `64:ff9b::/96`, 6to4
@@ -179,10 +204,11 @@ refused, and an approved hop connects to its own vetted address.
 
 These controls narrow the attack surface but are not a complete trust
 boundary. The generic `OXO_FLOW_MCP_TOKEN` is released only to origins the
-operator explicitly approves (see below), but automatically approved project
-reads combined with outbound fetches can still create a data-exfiltration
-path. Activate only reviewed skills and MCP servers and treat this subsystem
-as prototype-grade until the remaining audit gates close.
+operator explicitly approves (see below), and model-initiated outbound
+fetches require an explicit data-release decision (see above), so an
+auto-approved project read cannot be shipped out without one. Activate
+only reviewed skills and MCP servers and treat this subsystem as
+prototype-grade until the remaining audit gates close.
 
 ### Protocol Version and Authentication
 

@@ -32,8 +32,44 @@ pub trait Tool: Send + Sync {
         true
     }
 
+    /// Classify this invocation for the data-release gate (#1123, audit
+    /// AI-05).
+    ///
+    /// Defaults to [`EgressTarget::None`] for tools that stay local. A tool
+    /// that sends model-supplied data to a remote endpoint MUST override
+    /// this: otherwise a read-only registration would let a prompt-injected
+    /// `read_file` → egress chain run with no operator decision, because
+    /// both halves are "read-only".
+    fn egress_target(&self, _arguments: &str) -> EgressTarget {
+        EgressTarget::None
+    }
+
     /// Human-readable tool name (must match def().name).
     fn name(&self) -> &str;
+}
+
+// ── Egress classification (#1123) ──────────────────────────────────────────
+
+/// How one tool invocation classifies for the data-release gate.
+///
+/// `is_read_only` answers "may this run without touching the world?"; an
+/// outbound call is still a *data release* even when it only reads, so the
+/// approval policy consults this classification separately. Only an explicit
+/// human approval or an operator trust entry for the exact origin authorizes
+/// egress (#1123, audit AI-05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EgressTarget {
+    /// The invocation performs no outbound network I/O (local reads,
+    /// embedded-knowledge lookups).
+    None,
+    /// The invocation sends data to this exact origin
+    /// (`scheme://host[:port]`, canonicalized by the crate's shared
+    /// `url_origin` helper).
+    Origin(String),
+    /// The tool performs outbound network I/O but the destination cannot be
+    /// derived from the arguments (missing or malformed URL, unknown tool).
+    /// Never auto-approved — treated as untrusted.
+    Opaque,
 }
 
 // ── Tool-name sanitization ─────────────────────────────────────────────────
@@ -174,6 +210,17 @@ impl ToolRegistry {
             .get(&sanitize_tool_name(name))
             .map(|t| t.is_read_only())
             .unwrap_or(false)
+    }
+
+    /// Egress classification for one invocation (#1123).
+    ///
+    /// Unknown tools are [`EgressTarget::Opaque`] — deny by default, the
+    /// same posture as [`Self::is_read_only`].
+    pub fn egress_target(&self, name: &str, arguments: &str) -> EgressTarget {
+        self.tools
+            .get(&sanitize_tool_name(name))
+            .map(|t| t.egress_target(arguments))
+            .unwrap_or(EgressTarget::Opaque)
     }
 
     /// Execute a tool by name with JSON-encoded arguments.
@@ -330,5 +377,52 @@ mod tests {
         let reg = ToolRegistry::new();
         let result = reg.execute("nope", "{}").await;
         assert!(result.is_err());
+    }
+
+    /// A tool that classifies as outbound egress (#1123).
+    struct EgressTool;
+    #[async_trait]
+    impl Tool for EgressTool {
+        fn def(&self) -> ToolDef {
+            ToolDef {
+                name: "egress".into(),
+                description: "sends data out".into(),
+                parameters: serde_json::json!({}),
+            }
+        }
+        async fn execute(&self, _args: &str) -> Result<String, AiError> {
+            Ok("sent".into())
+        }
+        fn egress_target(&self, arguments: &str) -> EgressTarget {
+            match serde_json::from_str::<serde_json::Value>(arguments) {
+                Ok(value) => match value["url"].as_str() {
+                    Some(url) => EgressTarget::Origin(url.to_string()),
+                    None => EgressTarget::Opaque,
+                },
+                Err(_) => EgressTarget::Opaque,
+            }
+        }
+        fn name(&self) -> &str {
+            "egress"
+        }
+    }
+
+    #[test]
+    fn registry_egress_classification_and_defaults() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(EchoTool));
+        reg.register(Box::new(EgressTool));
+
+        // Local tools default to no egress.
+        assert_eq!(reg.egress_target("echo", "{}"), EgressTarget::None);
+        // Classified tools report the destination, or an opaque call when
+        // the destination is not derivable.
+        assert_eq!(
+            reg.egress_target("egress", r#"{"url": "https://example.com"}"#),
+            EgressTarget::Origin("https://example.com".into())
+        );
+        assert_eq!(reg.egress_target("egress", "{}"), EgressTarget::Opaque);
+        // Unknown tools deny by default, matching is_read_only.
+        assert_eq!(reg.egress_target("ghost", "{}"), EgressTarget::Opaque);
     }
 }

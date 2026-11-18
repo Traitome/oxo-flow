@@ -27,6 +27,9 @@ use std::time::Duration;
 
 use crate::error::AiError;
 use crate::tools::Tool;
+// One origin transformation for the whole crate (#1123): the MCP credential
+// trust and the fetch data-release trust must spell origins identically.
+use crate::tools::builtin::url_origin as origin_of;
 use crate::types::ToolDef;
 
 /// Connect timeout for MCP HTTP endpoints.
@@ -166,6 +169,15 @@ impl Tool for McpToolBridge {
         // human approver; where none exists (non-interactive sessions) they
         // are refused.
         false
+    }
+
+    fn egress_target(&self, _arguments: &str) -> crate::tools::EgressTarget {
+        // Remote JSON-RPC call. The destination is the server, not a
+        // model-supplied argument, so it is deliberately Opaque: an origin
+        // trust entry must never be able to auto-execute an MCP tool
+        // (#1123). Approval is already mandatory above; this classification
+        // keeps it that way if the read-only flag ever changes.
+        crate::tools::EgressTarget::Opaque
     }
 }
 
@@ -947,25 +959,6 @@ impl McpHttpClient {
         }
         Ok(())
     }
-}
-
-/// Origin of an endpoint URL: `scheme://host[:port]`, with the default
-/// port omitted (`https` → 443, `http` → 80) so redirects that only
-/// re-spell the default port stay same-origin. The path is not part of an
-/// origin. Used to decide which redirect hops may carry credentials.
-fn origin_of(url: &str) -> Option<String> {
-    let u = reqwest::Url::parse(url).ok()?;
-    let scheme = u.scheme();
-    let port = match u.port_or_known_default() {
-        Some(80) if scheme == "http" => None,
-        Some(443) if scheme == "https" => None,
-        p => p,
-    };
-    let host = u.host_str()?;
-    Some(match port {
-        Some(p) => format!("{scheme}://{host}:{p}"),
-        None => format!("{scheme}://{host}"),
-    })
 }
 
 /// Whether a JSON-RPC response carries the id of the request we sent.
