@@ -30,6 +30,20 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
     )
 }
 
+/// Whether the caller may see provider endpoint/model metadata.
+///
+/// Personal mode is loopback single-user (no roles), so its local operator
+/// sees everything. Outside personal mode this is admin-only: the endpoint
+/// URL identifies the internal AI proxy/gateway and the model id discloses
+/// the provider's shape and version — exactly the reconnaissance input a
+/// hardened team deployment must not hand to `user`/`viewer` accounts
+/// (WEB-15 / issue #1140). Non-admins still learn the provider NAME and the
+/// enabled state so Settings can render honestly; endpoint, model id, and
+/// any credential-shape fields are redacted.
+fn may_read_provider_metadata(user: &CurrentUser) -> bool {
+    crate::server::running_mode() == "personal" || user.is_admin()
+}
+
 /// The one `TranslateError` → HTTP contract shared by the JSON and SSE
 /// translate routes: JSON routes pair the `ApiError` with its status code,
 /// the SSE route serializes the same `ApiError` into its terminal `error`
@@ -550,10 +564,11 @@ pub async fn get_ai_config(
     // Anonymous discoverability stays public, but the deployment's internal
     // AI endpoint and model are not world-readable: outside personal mode
     // (loopback, single local user) only `is_configured` is returned unless
-    // the caller is an authenticated admin.
-    if crate::server::running_mode() != "personal"
-        && !authenticated.as_ref().is_some_and(|u| u.0.is_admin())
-    {
+    // the caller is an authenticated admin (WEB-15 / issue #1140). The
+    // public surface is deliberately the strictest mask — not even the
+    // provider name — because this route answers unauthenticated callers.
+    let user = current_user::resolve(authenticated.as_ref());
+    if !may_read_provider_metadata(&user) {
         return Ok(Json(AiConfigResponse {
             provider: String::new(),
             model: None,
@@ -790,20 +805,37 @@ pub async fn get_ai_config_effective(
         None => (None, None, None),
     };
 
+    // WEB-15 / issue #1140: outside personal mode a non-admin sees the
+    // resolution chain's provider NAMES and enabled state but not the
+    // endpoint URLs or model ids — those identify the internal AI
+    // proxy/gateway and the provider version. Admins keep the full view.
+    let detail_visible = may_read_provider_metadata(&user);
+    let effective_model = detail_visible.then(|| config.model.clone()).flatten();
+    let effective_url = detail_visible.then(|| config.api_url.clone()).flatten();
+    let server_model = detail_visible.then(|| config.model.clone()).flatten();
+    let env_model = detail_visible
+        .then(|| std::env::var("OXO_FLOW_AI_MODEL").ok())
+        .flatten();
+    let env_url = detail_visible
+        .then(|| std::env::var("OXO_FLOW_AI_API_URL").ok())
+        .flatten();
+    let user_model = detail_visible.then_some(user_model).flatten();
+    let user_url = detail_visible.then_some(user_url).flatten();
+
     Ok(Json(serde_json::json!({
         "effective": {
             "provider": config.provider,
-            "model": config.model,
-            "api_url": config.api_url,
+            "model": effective_model,
+            "api_url": effective_url,
             "is_configured": config.is_configured,
         },
         "disabled_by_env": oxo_flow_ai::provider::provider_pinned_disabled(),
         "tiers": {
             "env_provider": std::env::var("OXO_FLOW_AI_PROVIDER").ok(),
-            "env_model": std::env::var("OXO_FLOW_AI_MODEL").ok(),
-            "env_url": std::env::var("OXO_FLOW_AI_API_URL").ok(),
+            "env_model": env_model,
+            "env_url": env_url,
             "server_provider": config.provider,
-            "server_model": config.model,
+            "server_model": server_model,
             "user_provider": user_provider,
             "user_model": user_model,
             "user_api_url": user_url,
@@ -1026,13 +1058,19 @@ pub async fn get_user_ai_config(
             })
         }
         None => {
-            // No per-user row yet — mirror the shared runtime and the
-            // PUT defaults so a first save does not surprise.
+            // No per-user row yet — mirror the shared runtime and the PUT
+            // defaults so a first save does not surprise. The mirrored
+            // values are the SHARED provider's metadata: outside personal
+            // mode a non-admin gets the provider name and enabled state
+            // only, never the server endpoint or model id (WEB-15 /
+            // issue #1140). A row the user saved themselves is their own
+            // data and is returned as stored above.
             let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+            let detail_visible = may_read_provider_metadata(&user);
             serde_json::json!({
                 "provider": config.provider,
-                "api_url": config.api_url,
-                "model": config.model,
+                "api_url": if detail_visible { config.api_url } else { None },
+                "model": if detail_visible { config.model } else { None },
                 "api_key_set": false,
                 "is_configured": config.is_configured,
                 "search_enabled": true,

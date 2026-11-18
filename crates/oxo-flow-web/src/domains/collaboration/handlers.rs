@@ -85,18 +85,12 @@ pub async fn fork_pipeline(
         .await
         .map_err(|e| db_err(format!("DB error creating forked pipeline: {e}")))?;
 
-    // Log the fork action
-    if let Err(error) = backend
-        .log_action(&user.id, "fork_pipeline", &forked_id)
-        .await
-    {
-        tracing::error!(
-            user_id = %user.id,
-            forked_id,
-            error = %error,
-            "fork succeeded but its audit record could not be persisted"
-        );
-    }
+    // BEST-EFFORT audit (WEB-15 / issue #1140): a fork copies a pipeline the
+    // caller was already allowed to read into their own private space — an
+    // informational event, not a security boundary change. A failed write
+    // warns and the fork still succeeds; the middleware's REQUIRED rows cover
+    // the security-relevant actions (deletion, share grants, credentials).
+    crate::audit::audit_best_effort(&user.id, "fork_pipeline", &forked_id, "success", None).await;
 
     Ok(Json(ForkResponse { forked_id, name }))
 }

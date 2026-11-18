@@ -140,6 +140,58 @@ Returns paginated structured audit entries:
 
 `user` is the actor's canonical `users.id`, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (`user`, `viewer`) and the `default` personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through `GET /api/users` when one is needed (admin-only).
 
+#### Audit durability (WEB-15 / issue #1140)
+
+Every audit write is explicitly classified, and the class is part of the
+route contract:
+
+- **Required** — security-relevant actions: authentication attempts
+  (`POST /api/auth/login`, logout, OAuth), user/role management
+  (`POST /api/users`, `DELETE /api/users/{id}`), machine-key changes
+  (`POST /api/auth/keys`, `DELETE /api/auth/keys/{id}`), run lifecycle
+  control (`POST /api/runs` and `/{cancel,pause,resume,retry,resume-checkpoint,clean}`),
+  pipeline deletion and share grants
+  (`DELETE /api/pipelines/{id}`, `POST /api/pipelines/{id}/share`), AI
+  provider key changes (`POST /api/ai/config`, `PUT /api/ai/config/server`,
+  `PUT /api/ai/config/user`), cluster connection secrets
+  (`POST /api/clusters`, `DELETE /api/clusters/{id}`), webhook configuration
+  (`PUT /api/webhook`), and license upload (`POST /api/license/upload`).
+  If the row cannot be written, the request **fails closed** with
+  `500 {code: "AUDIT_WRITE_FAILED"}` carrying the storage error in
+  `detail` and a remediation in `suggestion`. Exception: a response that is
+  already a server error (5xx) is preserved, so the documented runs-domain
+  `503 RUNS_REQUIRE_STORAGE_BACKEND` boundary still reaches the client on a
+  deployment with no initialized storage backend.
+- **Best-effort** — informational mutations (AI generation, parsing,
+  validation, DAG edits, chat, pipeline create/update/fork/rollback,
+  template writes, quota and event-ticket requests). A failed write is
+  logged as a warning and the request answers normally.
+
+**The audit row is not written in the same transaction as the mutation.**
+The handler runs first; the audit insert is attempted afterwards. A
+REQUIRED-audit failure therefore does **not** roll the action back — the
+pipeline may already be deleted, the run retry may already have spawned,
+the key revocation may already be applied, the account may already exist.
+The `500 AUDIT_WRITE_FAILED` body says the action "may already have been
+applied" and its `suggestion` tells the caller to verify the affected
+resource (list/inspect it) before retrying, because a blind retry can
+duplicate the effect (e.g. a second forked/deleted resource or a second
+run). Writing the audit row in the mutation's transaction is tracked as
+remaining work in the WEB-15 ledger entry. Per-route implication: every
+REQUIRED route listed above can answer this 500 **after** applying its
+change; treat the 500 as "state unknown", not as "nothing happened".
+
+Both classes share one writer (the storage backend's `record_audit_log`).
+The middleware emits a structured `audit` event for every mutation it
+handles, including when the database insert fails, so machine consumers
+still see the attempt. The successful-login path is the exception: the
+login handler returns before the middleware's event emission and owns its
+own best-effort row, so a successful login on broken storage leaves
+**neither a row nor a structured event**. Failed login attempts are
+REQUIRED rows written by the middleware. Migration of the successful-login
+row to `audit_required` is tracked follow-up work in the WEB-15 ledger
+entry.
+
 ### Server-Sent Events
 ```
 GET /api/events
@@ -999,7 +1051,7 @@ GET  /api/ai/config/user        # The acting user's private provider config
 PUT  /api/ai/config/user        # Set the acting user's private provider config
 GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
 PUT  /api/ai/config/server      # Set the server-level provider config
-GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
+GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain (endpoint/model redacted for non-admins)
 GET  /api/knowledge/tools       # Tool catalog the AI can call
 GET  /api/knowledge/skills      # Skill catalog the AI can follow
 ```
@@ -1037,6 +1089,38 @@ valid credential opts the request into normal authentication, so an admin
 sees the configured provider, model, and URL (never the API key); an invalid
 credential is rejected with `401` rather than silently downgraded to the
 masked anonymous payload.
+
+### Provider metadata is role-gated (WEB-15 / issue #1140)
+
+Outside personal mode, provider metadata is admin-only:
+
+- `GET /api/ai/config` is the public discoverability surface and stays the
+  strictest mask: anonymous and non-admin callers receive only
+  `is_configured` (`provider: ""`, `model: null`, `api_url: null`);
+  authenticated admins see the full resolved configuration.
+- `GET /api/ai/config/effective` is authenticated. Non-admin
+  `user`/`viewer` callers receive the resolution chain's provider NAMES and
+  enabled state, but `effective.model`, `effective.api_url`,
+  `tiers.env_model`, `tiers.env_url`, `tiers.server_model`,
+  `tiers.user_model`, and `tiers.user_api_url` are `null` — the endpoint
+  URL identifies the internal AI proxy/gateway and the model id discloses
+  the provider's shape. Admins receive the full chain.
+- `GET /api/ai/config/user` returns a row the caller saved themselves in
+  full (it is their own configuration). When no per-user row exists, the
+  endpoint mirrors the SHARED runtime; that mirrored `api_url` and `model`
+  are redacted for non-admins the same way.
+- `GET /api/ai/config/server` and `PUT /api/ai/config/server` stay
+  admin-only (403 `ACCESS_DENIED` otherwise), as does the runtime-only
+  `POST /api/ai/config`. `PUT /api/ai/config/user` is **not** admin-gated:
+  it writes only the acting user's own row (outside personal mode a
+  non-admin's save is persisted but not applied to the shared runtime —
+  `applied_to_runtime: false`).
+- API keys and key prefixes are never returned by any of these endpoints.
+
+Personal mode is loopback single-user (no roles), so its local callers keep
+the unmasked view — the exception the SPA settings page relies on.
+`GET /api/ai/config/effective` rejects an unauthenticated caller with the
+normal `401` auth gate.
 
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
@@ -1106,6 +1190,15 @@ POST /api/chat/send        # Streamed chat over SSE
 POST /api/chat/send/json   # Same, single JSON response
 GET  /api/chat/sessions    # The acting user's chat sessions
 ```
+
+**Chat session persistence is best-effort** (WEB-15 / issue #1140): a
+completed reply is persisted to the chat session store and the endpoint
+still succeeds if that write fails — the failure is logged as a warning.
+`GET /api/chat/sessions` returns an empty list when session storage is
+unavailable or a read fails, so an empty history is not proof that no
+conversation happened. The SSE/JSON response remains the source of truth
+for the current turn; `message` on the `done` event repeats the chat-mode
+reply so a lost stream frame cannot leave an empty bubble.
 
 ### Intent routing
 
