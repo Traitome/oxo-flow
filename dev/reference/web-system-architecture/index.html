@@ -1777,6 +1777,8 @@
       
         
       
+        
+      
     
     
     
@@ -2084,6 +2086,34 @@
     
   
     env
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    runs
   
 
     
@@ -4658,6 +4688,13 @@ and only <code>ON CONFLICT</code> decides the loser (zero rows affected → the 
 not per user, so a <code>workspace</code>-shared pipeline admits one live run across all
 its readers. <code>retry</code> and <code>resume-checkpoint</code> are the only paths that
 deliberately continue a predecessor's workdir.</p>
+<p>Nothing reclaims those trees automatically: a long-lived server accumulates one
+<code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code> directory per run forever. The manual sweeper is
+<a href="../../commands/runs/"><code>oxo-flow runs gc</code></a>, which deletes only terminal-run
+trees past an age gate, never a live run, never a tree a later retry/resume
+still points at, and never a tree carrying a declared protected output — the
+shared <code>workdir</code> string across run rows is exactly the lineage signal it keys
+on.</p>
 <hr />
 <h2 id="ui-test-coverage">UI Test Coverage<a class="headerlink" href="#ui-test-coverage" title="Permanent link">#</a></h2>
 <p>The SPA's published surfaces are exercised by Playwright specs in
