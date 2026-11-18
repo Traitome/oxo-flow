@@ -213,11 +213,18 @@ pub struct FormatResponse {
 }
 
 /// A saved pipeline with full metadata, ownership, visibility, and TOML content.
+///
+/// The optimistic-concurrency token (issue #1136) is NOT a body field: it
+/// travels in the HTTP `ETag` response header (the monotonic stored
+/// revision) and back in `If-Match`, so the JSON contract — mirrored by
+/// `frontend/src/api/types.ts` — stays unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Pipeline {
     pub id: String,
     pub user_id: String,
     pub name: String,
+    /// The workflow's declared `[workflow] version` — TOML is the source of
+    /// truth, and this is NOT the concurrency token; see the `ETag` header.
     pub version: String,
     pub toml_content: String,
     pub rules_count: usize,

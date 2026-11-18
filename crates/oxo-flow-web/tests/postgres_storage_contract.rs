@@ -199,6 +199,7 @@ async fn storage_backend_contract_round_trips_on_postgres() {
         visibility: "private".to_string(),
         created_at: timestamp.clone(),
         updated_at: timestamp.clone(),
+        revision: 1,
     };
     let pipeline = backend
         .save_pipeline(&pipeline)

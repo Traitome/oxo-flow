@@ -50,6 +50,24 @@ pub struct Paginated<T: serde::Serialize> {
     pub total_pages: u64,
 }
 
+/// Outcome of [`StorageBackend::update_pipeline_cas`] (issue #1136).
+///
+/// The three states are mutually exclusive by construction — the storage
+/// layer classifies a zero-row compare-and-swap inside the same call, so
+/// callers never need a second read to tell a stale token from a deleted
+/// pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PipelineWriteOutcome {
+    /// The guard matched; the row (and its revision snapshot, when one was
+    /// requested) committed. Carries the new stored revision.
+    Applied { revision: i64 },
+    /// The stored revision did not equal `expected_revision`; nothing was
+    /// written. Carries the revision now stored, for the client to re-read.
+    Conflict { current_revision: i64 },
+    /// No pipeline row with this id exists; nothing was written.
+    NotFound,
+}
+
 /// The #207 migration surface: one storage abstraction the domains route
 /// through, so a PostgreSQL backend becomes a matter of wiring, not rewrites.
 ///
@@ -78,6 +96,30 @@ pub trait StorageBackend: Send + Sync {
     async fn delete_user(&self, id: &str) -> Result<(), String>;
 
     async fn save_pipeline(&self, p: &models::PipelineRow) -> Result<models::PipelineRow, String>;
+    /// Insert a NEW pipeline row and its initial revision snapshot in one
+    /// transaction (issue #1136): either both commit or the call errors and
+    /// neither is visible. Replaces the old `save_pipeline` + best-effort
+    /// `record_pipeline_revision` sequence on the create path.
+    ///
+    /// `p.id` must be set by the caller (the create handler generates it).
+    async fn create_pipeline_with_revision(&self, p: &models::PipelineRow) -> Result<(), String>;
+    /// Atomic compare-and-swap of an existing pipeline row plus an optional
+    /// pre-write revision snapshot, in ONE transaction (issue #1136).
+    ///
+    /// The write applies only when the stored `revision` equals
+    /// `expected_revision`; otherwise nothing is written. `None` restores
+    /// the legacy unconditional update (backward compatibility for clients
+    /// that do not send a token) — the revision still advances by one.
+    /// When `snapshot` is `Some`, its insert (and the 50-row retention prune)
+    /// shares the transaction: if either fails, the pipeline update is rolled
+    /// back and the call errors, so a request can never report success
+    /// without its revision row.
+    async fn update_pipeline_cas(
+        &self,
+        p: &models::PipelineRow,
+        expected_revision: Option<i64>,
+        snapshot: Option<&models::RevisionSnapshot<'_>>,
+    ) -> Result<PipelineWriteOutcome, String>;
     async fn get_pipeline(&self, id: &str) -> Result<Option<models::PipelineRow>, String>;
     async fn list_pipelines(
         &self,
