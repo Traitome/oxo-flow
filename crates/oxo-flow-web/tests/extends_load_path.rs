@@ -76,13 +76,21 @@ async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
 /// runs across independent cases — mirror the other run-contract suites.
 async fn ensure_run_db() {
     oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
-    oxo_flow_web::infra::quota::global_quota_tracker().update_config(
-        oxo_flow_web::infra::quota::QuotaConfig {
-            max_concurrent_runs: 100,
-            ..Default::default()
-        },
-    );
+    // The durable quota charge is the RESOLVED (include-merged) rule set, so
+    // a staged-include run books its full thread/memory total, not the old
+    // `(1, 0)` host-string fallback — several such runs in this binary would
+    // otherwise exceed the default 64-thread ceiling.
+    let limits = oxo_flow_web::infra::quota::QuotaConfig {
+        max_concurrent_runs: 100,
+        max_total_threads: 100_000,
+        max_total_memory_mb: 1_000_000,
+        ..Default::default()
+    };
+    oxo_flow_web::infra::quota::global_quota_tracker().update_config(limits.clone());
     common::ensure_db().await;
+    if let Some(backend) = oxo_flow_web::infra::db::global_backend() {
+        let _ = backend.save_quota_config(&limits).await;
+    }
 }
 
 /// The parse handler returns the loaded plan (`rules[]` + DAG). The leaf row
