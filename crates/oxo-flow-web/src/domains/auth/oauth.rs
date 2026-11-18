@@ -13,6 +13,11 @@
 pub enum OAuthProvider {
     Orcid,
     GitHub,
+    /// Test-only provider that never dials out (issue #1141): the full
+    /// authorize → callback flow needs a provider stub to prove a session
+    /// is minted, and production builds must not be able to install one.
+    #[cfg(test)]
+    Stub,
 }
 
 /// Configuration for an OAuth2 provider.
@@ -48,6 +53,18 @@ impl OAuthConfig {
         }
     }
 
+    /// Create a test-only stub configuration (issue #1141). Never
+    /// constructed outside `#[cfg(test)]` builds.
+    #[cfg(test)]
+    pub fn stub(redirect_uri: &str) -> Self {
+        Self {
+            provider: OAuthProvider::Stub,
+            client_id: "stub-client".to_string(),
+            client_secret: "stub-secret".to_string(),
+            redirect_uri: redirect_uri.to_string(),
+        }
+    }
+
     /// Build the authorization URL for the provider.
     pub fn authorize_url(&self, state: &str) -> String {
         match self.provider {
@@ -73,6 +90,14 @@ impl OAuthConfig {
                     urlencoding::encode(state),
                 )
             }
+            #[cfg(test)]
+            OAuthProvider::Stub => {
+                format!(
+                    "https://stub.invalid/oauth/authorize?redirect_uri={}&state={}",
+                    urlencoding::encode(&self.redirect_uri),
+                    urlencoding::encode(state),
+                )
+            }
         }
     }
 
@@ -84,6 +109,14 @@ impl OAuthConfig {
         match self.provider {
             OAuthProvider::Orcid => self.exchange_orcid_code(code).await,
             OAuthProvider::GitHub => self.exchange_github_code(code).await,
+            #[cfg(test)]
+            OAuthProvider::Stub => {
+                let _ = code;
+                Ok((
+                    "stub-token".to_string(),
+                    Some("0000-0000-0000-0000".to_string()),
+                ))
+            }
         }
     }
 
@@ -260,6 +293,11 @@ impl OAuthConfig {
                 let login = body["login"].as_str().unwrap_or("unknown").to_string();
 
                 Ok((github_id, login))
+            }
+            #[cfg(test)]
+            OAuthProvider::Stub => {
+                let _ = (access_token, orcid_id);
+                Ok(("0000-0000-0000-0000".to_string(), "Stub User".to_string()))
             }
         }
     }

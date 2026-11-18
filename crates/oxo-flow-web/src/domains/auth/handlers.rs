@@ -669,6 +669,19 @@ pub async fn oauth_authorize(
     // The two steps must agree or the provider rejects the code exchange.
     let redirect_uri = super::service::oauth_redirect_uri(req.redirect_uri.as_deref());
 
+    // Server-side redirect allowlist (issue #1141): a crafted start request
+    // must not be able to steer the post-callback redirect off this
+    // deployment's trusted origins.
+    if !super::service::oauth_redirect_allowed(&redirect_uri) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "OAUTH_REDIRECT_NOT_ALLOWED",
+            format!(
+                "Redirect target '{redirect_uri}' is not in the server-side OAuth redirect allowlist"
+            ),
+        ));
+    }
+
     super::service::initiate_oauth(&req.provider, &redirect_uri)
         .await
         .map(Json)
@@ -692,13 +705,18 @@ pub async fn oauth_authorize(
 pub async fn oauth_callback(
     ApiJson(req): ApiJson<OAuthCallbackRequest>,
 ) -> ApiResult<OAuthCallbackResponse> {
-    let provider = req.provider.as_deref().unwrap_or("orcid");
-    let redirect_uri = super::service::oauth_redirect_uri(None);
+    let provider = super::service::normalize_provider(req.provider.as_deref().unwrap_or("orcid"));
+    // Same precedence as `/oauth/authorize`: an explicit request value (the
+    // callback may echo the URI it used), then OXO_FLOW_OAUTH_REDIRECT_URI,
+    // then the documented fallback. The state must have been issued for
+    // exactly this URI.
+    let redirect_uri = super::service::oauth_redirect_uri(req.redirect_uri.as_deref());
 
     // Verify CSRF state: the state issued at authorization time was
-    // persisted server-side (`store_pending_state`), and here it is
-    // consumed single-use — before any token exchange — after an
-    // `OAUTH_STATE_TTL_MINS` (10-minute) freshness window.
+    // persisted server-side (`store_pending_state`) BOUND to this provider
+    // and redirect URI (issue #1141), and here it is consumed single-use —
+    // before any token exchange — after an `OAUTH_STATE_TTL_MINS`
+    // (10-minute) freshness window. A mismatch or replay is rejected.
     if req.state.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -708,16 +726,28 @@ pub async fn oauth_callback(
     }
     // Verify + consume the CSRF state issued at authorization time, BEFORE
     // any token exchange (single use).
-    super::service::verify_and_consume_state(&req.state)
+    super::service::verify_and_consume_state(&req.state, &provider, &redirect_uri)
         .await
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_INVALID_STATE", e))?;
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
+    // Defense in depth: the authorize step already gated the target, but a
+    // config change between issue and callback must not let an off-list
+    // redirect through.
+    if !super::service::oauth_redirect_allowed(&redirect_uri) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "OAUTH_REDIRECT_NOT_ALLOWED",
+            format!(
+                "Redirect target '{redirect_uri}' is not in the server-side OAuth redirect allowlist"
+            ),
+        ));
+    }
     tracing::debug!(
         oauth_provider = provider,
         "OAuth callback state verified against the stored pending request"
     );
 
     let result =
-        super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
+        super::service::handle_oauth_callback(&provider, &req.code, &req.state, &redirect_uri)
             .await
             .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))?;
 
@@ -1210,5 +1240,67 @@ mod tests {
             logout_result(Err("database is locked".into())).expect_err("must not report success");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(err.code, "DB_ERROR");
+    }
+
+    // ---- #1141: a well-formed flow still mints a session ----
+
+    /// The state binding and redirect allowlist must not break the happy
+    /// path. The `stub` provider is compiled in only under `cfg(test)`, so
+    /// no network I/O happens: authorize → callback → persisted session.
+    ///
+    /// The test presents the server's own resolved redirect URI
+    /// (`oauth_redirect_uri(None)`) explicitly: its origin is always on the
+    /// allowlist, which keeps the test hermetic — it never mutates the
+    /// process environment (forbidden inside the library crate).
+    #[tokio::test]
+    async fn well_formed_oauth_flow_mints_a_session() {
+        let backend = crate::infra::db::oauth_test_backend().await;
+        crate::infra::db::set_global_backend(backend.clone());
+        let redirect = service::oauth_redirect_uri(None);
+
+        let authorize = match oauth_authorize(ApiJson(OAuthAuthorizeRequest {
+            provider: "stub".into(),
+            redirect_uri: Some(redirect.clone()),
+        }))
+        .await
+        {
+            Ok(Json(response)) => response,
+            Err((status, Json(err))) => {
+                panic!("authorize failed: {status} {}: {}", err.code, err.message)
+            }
+        };
+        assert!(
+            authorize.authorize_url.contains("stub.invalid"),
+            "unexpected authorize URL: {}",
+            authorize.authorize_url
+        );
+        assert!(!authorize.state.is_empty());
+
+        let callback = match oauth_callback(ApiJson(OAuthCallbackRequest {
+            code: "auth-code".into(),
+            state: authorize.state,
+            provider: Some("stub".into()),
+            redirect_uri: Some(redirect),
+        }))
+        .await
+        {
+            Ok(Json(response)) => response,
+            Err((status, Json(err))) => panic!(
+                "a well-formed callback must mint a session: {status} {}: {}",
+                err.code, err.message
+            ),
+        };
+        assert!(!callback.token.is_empty());
+        assert_eq!(callback.provider_user_id, "0000-0000-0000-0000");
+        assert_eq!(callback.role, "user");
+
+        // The session is persisted under the namespaced provider identity,
+        // exactly like a password login.
+        let session = backend
+            .get_session(&callback.token)
+            .await
+            .expect("session lookup")
+            .expect("the callback persisted a session row");
+        assert_eq!(session.user_id, "oauth:stub:0000-0000-0000-0000");
     }
 }

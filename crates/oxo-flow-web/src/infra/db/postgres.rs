@@ -300,6 +300,8 @@ impl StorageBackend for PostgresBackend {
 
             CREATE TABLE IF NOT EXISTS oauth_states (
                 state TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT '',
+                redirect_uri TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
 
@@ -385,6 +387,19 @@ impl StorageBackend for PostgresBackend {
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG migration pipelines.revision: {e}"))?;
+
+        // OAuth state binding (issue #1141, parity with the SQLite
+        // migration): pending states carry the provider and redirect URI
+        // they were issued for. Historical rows default to '' and can never
+        // pass verification; they age out under the existing purge.
+        for column in ["provider", "redirect_uri"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS {column} TEXT NOT NULL DEFAULT ''"
+            )))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration oauth_states.{column}: {e}"))?;
+        }
 
         // Vocabulary migration (parity with the SQLite init): legacy
         // executors wrote `success` for completed runs; the canonical
@@ -1530,27 +1545,43 @@ impl StorageBackend for PostgresBackend {
     // OAuth CSRF State
     // -----------------------------------------------------------------------
 
-    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String> {
-        sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES ($1, $2)")
-            .bind(state)
-            .bind(created_at)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    async fn store_oauth_state(
+        &self,
+        state: &str,
+        provider: &str,
+        redirect_uri: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO oauth_states (state, provider, redirect_uri, created_at) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(state)
+        .bind(provider)
+        .bind(redirect_uri)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+    async fn consume_oauth_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<models::OAuthStateRow>, String> {
         // DELETE ... RETURNING consumes the state atomically: concurrent
         // callbacks cannot both validate the same CSRF token. A delete error
         // fails the callback closed instead of accepting a reusable state.
-        let row: Option<(String,)> =
-            sqlx::query_as("DELETE FROM oauth_states WHERE state = $1 RETURNING created_at")
-                .bind(state)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
-        Ok(row.map(|(c,)| c))
+        let row: Option<models::OAuthStateRow> = sqlx::query_as(
+            "DELETE FROM oauth_states WHERE state = $1 \
+             RETURNING state, provider, redirect_uri, created_at",
+        )
+        .bind(state)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row)
     }
 
     async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String> {

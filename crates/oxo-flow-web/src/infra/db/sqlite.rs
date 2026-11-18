@@ -410,6 +410,8 @@ impl StorageBackend for SqliteBackend {
 
             CREATE TABLE IF NOT EXISTS oauth_states (
                 state TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT '',
+                redirect_uri TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
 
@@ -574,6 +576,15 @@ impl StorageBackend for SqliteBackend {
         }
         // Migration: add usage_count to templates if missing
         self.add_column_if_missing("templates", "usage_count INTEGER NOT NULL DEFAULT 0")
+            .await;
+
+        // Migration (issue #1141): bind pending OAuth states to their
+        // provider and redirect URI. Rows written before the binding default
+        // to '' and can never pass verification; they age out under the
+        // existing 24 h purge.
+        self.add_column_if_missing("oauth_states", "provider TEXT NOT NULL DEFAULT ''")
+            .await;
+        self.add_column_if_missing("oauth_states", "redirect_uri TEXT NOT NULL DEFAULT ''")
             .await;
 
         // Migration: webhook signature scheme. Defaults to the legacy
@@ -1722,27 +1733,43 @@ impl StorageBackend for SqliteBackend {
     // OAuth CSRF State
     // -----------------------------------------------------------------------
 
-    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String> {
-        sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
-            .bind(state)
-            .bind(created_at)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    async fn store_oauth_state(
+        &self,
+        state: &str,
+        provider: &str,
+        redirect_uri: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO oauth_states (state, provider, redirect_uri, created_at) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(state)
+        .bind(provider)
+        .bind(redirect_uri)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String> {
+    async fn consume_oauth_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<models::OAuthStateRow>, String> {
         // DELETE ... RETURNING consumes the state atomically: concurrent
         // callbacks cannot both validate the same CSRF token. A delete error
         // fails the callback closed instead of accepting a reusable state.
-        let row: Option<(String,)> =
-            sqlx::query_as("DELETE FROM oauth_states WHERE state = ? RETURNING created_at")
-                .bind(state)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
-        Ok(row.map(|(c,)| c))
+        let row: Option<models::OAuthStateRow> = sqlx::query_as(
+            "DELETE FROM oauth_states WHERE state = ? \
+             RETURNING state, provider, redirect_uri, created_at",
+        )
+        .bind(state)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row)
     }
 
     async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String> {
@@ -3232,14 +3259,17 @@ mod ai_provider_config_tests {
         let now = SqliteBackend::now();
 
         backend
-            .store_oauth_state("state-one", &now)
+            .store_oauth_state("state-one", "orcid", "https://flows.example/cb", &now)
             .await
             .expect("store state");
         let consumed = backend
             .consume_oauth_state("state-one")
             .await
-            .expect("consume state");
-        assert_eq!(consumed, Some(now.clone()));
+            .expect("consume state")
+            .expect("state exists");
+        assert_eq!(consumed.created_at, now);
+        assert_eq!(consumed.provider, "orcid");
+        assert_eq!(consumed.redirect_uri, "https://flows.example/cb");
 
         // Single use
         let second = backend
@@ -3251,11 +3281,11 @@ mod ai_provider_config_tests {
         // Pruning
         let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
         backend
-            .store_oauth_state("state-old", &old)
+            .store_oauth_state("state-old", "orcid", "https://flows.example/cb", &old)
             .await
             .expect("store old");
         backend
-            .store_oauth_state("state-fresh", &now)
+            .store_oauth_state("state-fresh", "orcid", "https://flows.example/cb", &now)
             .await
             .expect("store fresh");
 
@@ -3287,7 +3317,12 @@ mod ai_provider_config_tests {
         let backend = backend().await;
         let now = SqliteBackend::now();
         backend
-            .store_oauth_state("concurrent-state", &now)
+            .store_oauth_state(
+                "concurrent-state",
+                "orcid",
+                "https://flows.example/cb",
+                &now,
+            )
             .await
             .expect("store state");
 

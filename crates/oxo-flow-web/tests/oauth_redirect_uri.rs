@@ -51,6 +51,9 @@ async fn authorize_honors_the_env_redirect_uri() {
         std::env::set_var("ORCID_CLIENT_ID", "mock-client");
         std::env::set_var("ORCID_CLIENT_SECRET", "mock-secret");
         std::env::set_var("OXO_FLOW_OAUTH_REDIRECT_URI", REDIRECT_URI);
+        // The explicit-override half below targets this origin; it must be
+        // on the server-side OAuth redirect allowlist (#1141).
+        std::env::set_var("OXO_FLOW_ALLOWED_ORIGINS", "https://other.example.com");
         // Pin the production host so the assertion is deterministic.
         std::env::remove_var("ORCID_SANDBOX");
     }
@@ -76,13 +79,15 @@ async fn authorize_honors_the_env_redirect_uri() {
         "the fixed fallback must not shadow the env override: {authorize_url}"
     );
 
-    // The minted CSRF state was persisted server-side and is single-use.
+    // The minted CSRF state was persisted server-side, bound to this
+    // provider + redirect URI, and is single-use.
     let state = body["state"].as_str().expect("state");
-    oxo_flow_web::domains::auth::service::verify_and_consume_state(state)
+    oxo_flow_web::domains::auth::service::verify_and_consume_state(state, "orcid", REDIRECT_URI)
         .await
         .expect("issued state verifies once");
 
-    // An explicit request value still wins over the env default.
+    // An explicit request value still wins over the env default — provided
+    // its origin is on the allowlist (`OXO_FLOW_ALLOWED_ORIGINS` above).
     let explicit = "https://other.example.com/cb";
     let (status, body) = post_authorize(json!({
         "provider": "orcid",
@@ -95,10 +100,15 @@ async fn authorize_honors_the_env_redirect_uri() {
         authorize_url.contains(&format!("redirect_uri={}", urlencoding::encode(explicit))),
         "{authorize_url}"
     );
+    let state = body["state"].as_str().expect("state");
+    oxo_flow_web::domains::auth::service::verify_and_consume_state(state, "orcid", explicit)
+        .await
+        .expect("the state is bound to the explicit redirect URI");
 
     // SAFETY: same single-threaded mutation as above.
     unsafe {
         std::env::remove_var("OXO_FLOW_OAUTH_REDIRECT_URI");
+        std::env::remove_var("OXO_FLOW_ALLOWED_ORIGINS");
         std::env::remove_var("ORCID_CLIENT_ID");
         std::env::remove_var("ORCID_CLIENT_SECRET");
     }

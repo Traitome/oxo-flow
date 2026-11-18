@@ -303,6 +303,9 @@ only present when a handler supplies them (e.g. `429` bodies carry
 | `NO_UNDO` / `NO_REDO` | 404 | DAG edit history exists but the requested direction is exhausted |
 | `EDIT_HISTORY_UNAVAILABLE` | 409 | No DAG edit history for this identity + pipeline (never edited, or lost to a server restart / LRU eviction); undo/redo fails closed |
 | `EDIT_HISTORY_STALE` | 409 | Supplied `toml_content` is not the tip of the recorded DAG edit history; nothing is applied |
+| `OAUTH_INVALID_STATE` | 400 | OAuth CSRF state missing, unknown, malformed, replayed, or past its 10-minute TTL |
+| `OAUTH_STATE_MISMATCH` | 400 | OAuth CSRF state was issued for a different provider or redirect URI |
+| `OAUTH_REDIRECT_NOT_ALLOWED` | 400 | OAuth redirect target origin is not on the server-side allowlist |
 | `RATE_LIMITED` | 429 | Request rate exceeded |
 | `DB_ERROR` | 500 | Internal database error |
 

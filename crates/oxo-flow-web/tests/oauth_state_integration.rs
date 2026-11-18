@@ -59,8 +59,11 @@ async fn callback_rejects_a_state_past_the_ten_minute_window() {
     // though the daily cleanup has not pruned it yet.
     let backend = oxo_flow_web::infra::db::global_backend().expect("storage backend");
     let stale = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+    // Bindings match the presented callback so only the freshness gate can
+    // reject this state.
+    let redirect = oxo_flow_web::domains::auth::service::oauth_redirect_uri(None);
     backend
-        .store_oauth_state("state-expired", &stale)
+        .store_oauth_state("state-expired", "attacker", &redirect, &stale)
         .await
         .expect("store stale state");
 
@@ -83,9 +86,16 @@ async fn callback_rejects_a_state_past_the_ten_minute_window() {
 #[tokio::test]
 async fn callback_consumes_the_state_before_attempting_the_exchange() {
     ensure_db().await;
-    oxo_flow_web::domains::auth::service::store_pending_state("state-replayed-over-http")
-        .await
-        .expect("store state");
+    // The callback below uses provider "attacker" and the default redirect;
+    // bind them so the state gate passes and the exchange error surfaces.
+    let redirect = oxo_flow_web::domains::auth::service::oauth_redirect_uri(None);
+    oxo_flow_web::domains::auth::service::store_pending_state(
+        "state-replayed-over-http",
+        "attacker",
+        &redirect,
+    )
+    .await
+    .expect("store state");
 
     // Unknown provider: the exchange fails offline, proving the valid state
     // reached the exchange step (not the state gate).
@@ -122,15 +132,23 @@ async fn issued_state_is_single_use() {
     // ships with its schema) — the helpers go through that pool.
     ensure_db().await;
 
-    oxo_flow_web::domains::auth::service::store_pending_state("state-1")
+    let redirect = oxo_flow_web::domains::auth::service::oauth_redirect_uri(None);
+    oxo_flow_web::domains::auth::service::store_pending_state("state-1", "orcid", &redirect)
         .await
         .expect("store state");
-    oxo_flow_web::domains::auth::service::verify_and_consume_state("state-1")
+    oxo_flow_web::domains::auth::service::verify_and_consume_state("state-1", "orcid", &redirect)
         .await
         .expect("first use verifies");
-    let second = oxo_flow_web::domains::auth::service::verify_and_consume_state("state-1").await;
+    let second = oxo_flow_web::domains::auth::service::verify_and_consume_state(
+        "state-1", "orcid", &redirect,
+    )
+    .await;
     assert!(second.is_err(), "state must be single-use");
-    let unknown =
-        oxo_flow_web::domains::auth::service::verify_and_consume_state("never-issued").await;
+    let unknown = oxo_flow_web::domains::auth::service::verify_and_consume_state(
+        "never-issued",
+        "orcid",
+        &redirect,
+    )
+    .await;
     assert!(unknown.is_err(), "unissued state must fail");
 }

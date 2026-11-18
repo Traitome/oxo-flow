@@ -77,7 +77,12 @@ async fn storage_backend_contract_round_trips_on_postgres() {
     );
 
     backend
-        .store_oauth_state(&format!("state-{suffix}"), &timestamp)
+        .store_oauth_state(
+            &format!("state-{suffix}"),
+            "orcid",
+            "https://flows.example/cb",
+            &timestamp,
+        )
         .await
         .expect("store OAuth state");
     let oauth_state = format!("state-{suffix}");

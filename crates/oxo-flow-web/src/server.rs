@@ -773,49 +773,28 @@ fn build_router_with_limiter(
         crate::rate_limit::RateLimiterConfig::default(),
     ));
 
-    // Build CORS layer: restrictive by default, configurable via OXO_FLOW_ALLOWED_ORIGINS.
+    // Build CORS layer: restrictive by default, configurable via
+    // OXO_FLOW_ALLOWED_ORIGINS. The origin list comes from
+    // `configured_origins()` — the same single source the OAuth redirect
+    // allowlist uses (issue #1141), so the two can never diverge.
     let cors = {
-        let allowed = std::env::var("OXO_FLOW_ALLOWED_ORIGINS").unwrap_or_default();
-        if allowed.is_empty() {
-            // Default: only localhost origins (browser dev + local deployments)
-            tower_http::cors::CorsLayer::new()
-                .allow_origin([
-                    "http://localhost:3000".parse().unwrap(),
-                    "http://localhost:5173".parse().unwrap(),
-                    "http://127.0.0.1:3000".parse().unwrap(),
-                    "http://127.0.0.1:5173".parse().unwrap(),
-                ])
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::PUT,
-                    axum::http::Method::DELETE,
-                ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::header::AUTHORIZATION,
-                    axum::http::HeaderName::from_static("x-api-key"),
-                ])
-        } else {
-            // User-specified origins (comma-separated)
-            let origins: Vec<axum::http::HeaderValue> = allowed
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(origins)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::PUT,
-                    axum::http::Method::DELETE,
-                ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::header::AUTHORIZATION,
-                    axum::http::HeaderName::from_static("x-api-key"),
-                ])
-        }
+        let origins: Vec<axum::http::HeaderValue> = configured_origins()
+            .iter()
+            .filter_map(|origin| origin.parse().ok())
+            .collect();
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderName::from_static("x-api-key"),
+            ])
     };
 
     router
@@ -928,6 +907,42 @@ pub fn normalize_base_path(input: &str) -> String {
     }
 }
 
+/// Browser origins trusted when `OXO_FLOW_ALLOWED_ORIGINS` is unset.
+///
+/// These are the localhost origins of the documented dev/deployment
+/// recipes; the OAuth fallback redirect URI (`http://localhost:3000/...`)
+/// resolves inside this set.
+pub const DEFAULT_ALLOWED_ORIGINS: [&str; 4] = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+];
+
+/// The origins this server trusts, as configured strings.
+///
+/// `OXO_FLOW_ALLOWED_ORIGINS` (comma-separated) when set and non-blank,
+/// otherwise [`DEFAULT_ALLOWED_ORIGINS`]. Single source of truth: the CORS
+/// layer and the OAuth redirect allowlist (issue #1141) both read this, so
+/// a deployment's trusted-origin notion is never defined twice.
+#[must_use]
+pub fn configured_origins() -> Vec<String> {
+    let allowed = std::env::var("OXO_FLOW_ALLOWED_ORIGINS").unwrap_or_default();
+    if allowed.trim().is_empty() {
+        DEFAULT_ALLOWED_ORIGINS
+            .iter()
+            .map(|origin| (*origin).to_string())
+            .collect()
+    } else {
+        allowed
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
 /// Mount the fully-layered router under a sub-path (issue #957).
 ///
 /// `axum::Router::nest` registers `GET <base>` itself but leaves the
@@ -997,57 +1012,17 @@ pub fn bound_port() -> Option<u16> {
 /// working.
 pub fn share_url_for(token: &str) -> String {
     let prefix = base_path().trim_end_matches('/');
-    if let Ok(public) = std::env::var("OXO_FLOW_PUBLIC_URL") {
-        let public = public.trim();
-        if public.is_empty() {
-            // Set but empty/whitespace — usually a quoting slip in the env
-            // file. Say so instead of silently behaving as unset (review N5).
-            tracing::warn!(
-                "OXO_FLOW_PUBLIC_URL is set but empty; treating it as unset — \
-                 declare the full public origin (e.g. https://host[/mount]) or remove the variable"
-            );
-        } else {
-            let (scheme, authority) = if let Some(rest) = public.strip_prefix("https://") {
-                ("https", rest)
-            } else if let Some(rest) = public.strip_prefix("http://") {
-                ("http", rest)
-            } else {
-                // Keep accepting scheme-less values (early deployments relied
-                // on the coercion) but say so — a silently wrong scheme mints
-                // links nobody can diagnose.
-                tracing::warn!(
-                    "OXO_FLOW_PUBLIC_URL={public:?} lacks a scheme; minting oxo+http:// — \
-                     declare the full origin (e.g. https://host[/mount]) for HTTPS deployments"
-                );
-                ("http", public)
-            };
-            let authority = authority.trim_end_matches('/');
-            // Port-only garbage (":8080" — no host before the colon) carries
-            // no registrable host; treat it like the no-host case so a
-            // malformed override never mints an unparseable URL (review N4).
-            // A leading colon with ≥2 colons is a bare IPv6 literal ("::1")
-            // and is kept (bracketed below). "[:…]" is malformed too.
-            let host_empty = authority.is_empty()
-                || authority.starts_with('/')
-                || (authority.starts_with(':') && authority.matches(':').count() < 2)
-                || authority.starts_with("[:");
-            if host_empty {
-                tracing::warn!(
-                    "OXO_FLOW_PUBLIC_URL={public:?} carries no host; ignoring it and minting \
-                     a local share URL instead"
-                );
-            } else if authority.contains('/') {
-                // The override includes its own mount path — it is the whole
-                // public origin (deploy-modes.md's reverse-proxy recipe pairs
-                // --base-path /oxo-flow with PUBLIC_URL=…/oxo-flow).
-                return format!("oxo+{scheme}://{authority}/share/{token}");
-            } else {
-                // Bracket an IPv6 literal in a host-only override the same way
-                // the default branch does (::1 alone parses nowhere).
-                let authority = bracket_ipv6_host(authority);
-                return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
-            }
+    if let Some((scheme, authority)) = public_url_parts() {
+        if authority.contains('/') {
+            // The override includes its own mount path — it is the whole
+            // public origin (deploy-modes.md's reverse-proxy recipe pairs
+            // --base-path /oxo-flow with PUBLIC_URL=…/oxo-flow).
+            return format!("oxo+{scheme}://{authority}/share/{token}");
         }
+        // Bracket an IPv6 literal in a host-only override the same way
+        // the default branch does (::1 alone parses nowhere).
+        let authority = bracket_ipv6_host(&authority);
+        return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
     }
     let mut host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
     if host.trim().is_empty() {
@@ -1059,6 +1034,73 @@ pub fn share_url_for(token: &str) -> String {
     // hardcoded to 3000 even when serving on 8080 or any -p value).
     let port = bound_port().unwrap_or(3000);
     format!("oxo+http://{host}:{port}{prefix}/share/{token}")
+}
+
+/// Parse `OXO_FLOW_PUBLIC_URL` into `(scheme, authority)` using the rules
+/// documented on [`share_url_for`], or `None` when the variable is
+/// unset/empty/host-less.
+///
+/// The returned authority has trailing slashes trimmed and may still carry
+/// the override's mount path (`flows.example.com/oxo-flow`); the host alone
+/// is its first `/`-separated segment.
+fn public_url_parts() -> Option<(String, String)> {
+    let public = std::env::var("OXO_FLOW_PUBLIC_URL").ok()?;
+    let public = public.trim();
+    if public.is_empty() {
+        // Set but empty/whitespace — usually a quoting slip in the env
+        // file. Say so instead of silently behaving as unset (review N5).
+        tracing::warn!(
+            "OXO_FLOW_PUBLIC_URL is set but empty; treating it as unset — \
+             declare the full public origin (e.g. https://host[/mount]) or remove the variable"
+        );
+        return None;
+    }
+    let (scheme, authority) = if let Some(rest) = public.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = public.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        // Keep accepting scheme-less values (early deployments relied on
+        // the coercion) but say so — a silently wrong scheme mints links
+        // nobody can diagnose.
+        tracing::warn!(
+            "OXO_FLOW_PUBLIC_URL={public:?} lacks a scheme; minting oxo+http:// — \
+             declare the full origin (e.g. https://host[/mount]) for HTTPS deployments"
+        );
+        ("http", public)
+    };
+    let authority = authority.trim_end_matches('/');
+    // Port-only garbage (":8080" — no host before the colon) carries no
+    // registrable host; treat it like the no-host case so a malformed
+    // override never mints an unparseable URL (review N4). A leading colon
+    // with ≥2 colons is a bare IPv6 literal ("::1") and is kept (bracketed
+    // by the caller). "[:…]" is malformed too.
+    let host_empty = authority.is_empty()
+        || authority.starts_with('/')
+        || (authority.starts_with(':') && authority.matches(':').count() < 2)
+        || authority.starts_with("[:");
+    if host_empty {
+        tracing::warn!(
+            "OXO_FLOW_PUBLIC_URL={public:?} carries no host; ignoring it and minting \
+             a local share URL instead"
+        );
+        return None;
+    }
+    Some((scheme.to_string(), authority.to_string()))
+}
+
+/// The public origin (`scheme://host[:port]`) declared by
+/// `OXO_FLOW_PUBLIC_URL`, if it declares one. Used as a trusted-origin
+/// source by the OAuth redirect allowlist (issue #1141).
+#[must_use]
+pub fn declared_public_origin() -> Option<String> {
+    let (scheme, authority) = public_url_parts()?;
+    // Drop the override's mount path; only the authority is an origin.
+    let host = authority.split('/').next().unwrap_or("");
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{}", bracket_ipv6_host(host)))
 }
 
 /// Bracket a bare IPv6 literal (`::1`, `2001:db8::1`) so the authority stays
