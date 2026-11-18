@@ -424,32 +424,54 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-18) - [AI-04] generic-token release is gated on an explicit
-operator origin allowlist (issue #1123, commit `ced0f3ad`); the [AI-05] read-to-egress
-data-release decision remains open.
+**Maturity**: Fixed (2026-11-18) - [AI-04] generic-token release is gated on an explicit
+operator origin allowlist (issue #1123 token half, commit `ced0f3ad`, merged in `e8048647`);
+the [AI-05] read-to-egress chain now requires an explicit data-release decision (this PR).
 
-A generic MCP bearer token is sent to any activated public MCP endpoint unless a per-server token
-exists, with no operator trust decision. [FIXED (#1123, commit `ced0f3ad`): the generic
-`OXO_FLOW_MCP_TOKEN` is now released only to exact origins listed in
+A generic MCP bearer token was sent to any activated public MCP endpoint unless a per-server token
+existed, with no operator trust decision. [FIXED (#1123, commit `ced0f3ad`, merged `e8048647`):
+the generic `OXO_FLOW_MCP_TOKEN` is now released only to exact origins listed in
 `OXO_FLOW_MCP_TRUSTED_ORIGINS`; per-server `OXO_FLOW_MCP_TOKEN_<SERVER>` tokens remain available
 because their variable name is derived from the endpoint identity — destination-scoped by
 construction — so setting one is itself the operator's per-endpoint decision.] Automatically
-approved project reads and outbound fetches form a data-exfiltration path for project `.env` files
-and unpublished results. [OPEN.]
+approved project reads and outbound fetches formed a data-exfiltration path for project `.env`
+files and unpublished results. [FIXED (#1123 second half): built-in tools now classify each
+invocation for outbound egress (`Tool::egress_target`; `fetch_url` reports the destination
+origin, MCP bridges are Opaque); the approval policy (`tool_call_approved`) no longer lets an
+egress call inherit the read-only shortcut — it runs only with an explicit human approval or
+when its exact origin is listed in `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`, and a non-interactive
+session (no approver) refuses. Refusals name the destination origin only, never the URL path /
+query or file contents. The auto-approved scoped read is unchanged, so local workflows that
+make no outbound calls are unaffected.]
 
 Evidence:
 
-- `crates/oxo-flow-ai/src/mcp.rs:160` (MCP tools never read-only), `:258` (trust-entry
-  canonicalization), `:278` (trust-list parsing), `:298` (exact-origin match), `:320`
-  (token selection), `:340` (per-endpoint resolution), `:373` (`token_env_var`), `:735` (header
-  attach)
+- `crates/oxo-flow-ai/src/mcp.rs:163` (MCP tools never read-only), `:174` (MCP calls classified
+  Opaque for the data-release gate), `:270` (trust-entry canonicalization), `:290` (trust-list
+  parsing), `:310` (exact-origin match), `:332` (token selection), `:352` (per-endpoint
+  resolution), `:385` (`token_env_var`), `:748` (header attach)
 - `crates/oxo-flow-ai/src/tools/builtin.rs:51` (`resolve_scoped_path` — no content denylist),
-  `:140` (scoped read is auto-approved), `:469` (`FetchUrlTool` — no `is_read_only` override)
-- `crates/oxo-flow-ai/src/tools/mod.rs:31` (trait default `is_read_only() == true`)
-- `crates/oxo-flow-ai/src/agent/orchestrator.rs:625` (`tool_call_approved` short-circuits on
-  read-only), `:1683` (fail-closed malformed-arguments regression test)
-- `crates/oxo-flow-cli/src/commands/ai_runtime.rs:87`, `:113` (manifest-declared `mcp://` origin
-  connected + registered)
+  `:140` (scoped read is auto-approved), `:273` (`url_origin` — one origin transformation,
+  shared with `mcp::origin_of`), `:294` (trust-list canonicalization, fail-closed on invalid
+  entries), `:317` (`fetch_trusted_origins`), `:526` (`FetchUrlTool`), `:587`
+  (`FetchUrlTool::egress_target`)
+- `crates/oxo-flow-ai/src/tools/mod.rs:31` (trait default `is_read_only() == true`), `:43`
+  (`Tool::egress_target` default `None`), `:219` (`ToolRegistry::egress_target`,
+  deny-by-default `Opaque`)
+- `crates/oxo-flow-ai/src/agent/orchestrator.rs:638` (`tool_call_approved`), `:658`
+  (`tool_call_approved_with_trusted_origins` — egress gate + exact-origin trust), `:688`
+  (`tool_refusal_message` — origin only, no payload), `:2023` (fail-closed malformed-arguments
+  regression test)
+- `crates/oxo-flow-cli/src/commands/ai_runtime.rs:72` (scoped `read_file`), `:82` (knowledge
+  registry incl. `fetch_url`), `:118` (manifest-declared `mcp://` origin connected + registered)
+- Tests: `egress_data_release_policy`, `egress_refusal_names_only_the_origin_and_never_the_payload`,
+  `read_then_fetch_cannot_reach_the_network_without_approval` (orchestrator),
+  `fetch_url_egress_classification`, `trusted_origins_parse_exactly_and_drop_invalid_entries`,
+  `url_origin_canonicalizes_http_origins_only` (builtin),
+  `registry_egress_classification_and_defaults` (tools), plus the token-half tests
+  `generic_token_is_not_sent_to_an_unapproved_origin`,
+  `generic_token_is_sent_to_an_approved_origin`, and
+  `bearer_token_env_is_propagated_with_per_server_precedence`.
 
 Required exit evidence:
 
@@ -459,16 +481,28 @@ Required exit evidence:
   origins (wire-level for the first and the approved case) plus per-server precedence.
   Per-server tokens are destination-scoped by construction.]
 - Read followed by network egress requires an explicit data-release decision and visible summary.
-  [OPEN.]
+  [DONE (#1123 second half): the policy gate now requires an approver for every classified egress
+  call unless the exact origin is operator-trust-listed; the decision is surfaced as the approval
+  prompt (interactive) or a recorded tool result naming the origin (non-interactive refusal), and
+  the refusal never echoes the URL path/query or file contents. Pinned by
+  `egress_data_release_policy`, `egress_refusal_names_only_the_origin_and_never_the_payload`, and
+  the end-to-end `read_then_fetch_cannot_reach_the_network_without_approval`.]
+
 - Invalid tool arguments are rejected or retried; no executable `{}` call reaches approval. [DONE —
   the orchestrator's JSON-validity gate fails closed before approval/execution (AI-07,
   `malformed_tool_arguments_fail_closed_with_a_reemit_tool_result`). The earlier `{}`-repair claim
   was refuted against shipped code and removed from this entry.]
-- Adversarial project-skill, MCP-output, and prompt-injection tests cover each path. [PARTIAL — the
-  generic-token release path now has project-skill-selected-endpoint wire tests
+- Adversarial project-skill, MCP-output, and prompt-injection tests cover each path. [DONE — the
+  generic-token release path has project-skill-selected-endpoint wire tests
   (`generic_token_is_not_sent_to_an_unapproved_origin`,
-  `bearer_token_env_is_propagated_with_per_server_precedence`); the read-to-egress path remains
-  uncovered.]
+  `bearer_token_env_is_propagated_with_per_server_precedence`), and the read-to-egress path is
+  covered by a prompt-injection-shaped scripted-model test
+  (`read_then_fetch_cannot_reach_the_network_without_approval`: auto-approved scoped read of a
+  secret file followed by `fetch_url` to an unapproved origin — the fetch never executes, the
+  refusal carries the origin only, and neither the refusal nor CLI output echoes the secret.
+  (The scripted backend's `observed_calls` stores the model's own tool-call arguments, so the
+  model-side transcript does contain the value the model chose to send; that is a record of the
+  attempted call, not an output path opened by the gate.)]
 
 ### RB-14: Workflow-scoped AI policy is parsed but not enforced
 
@@ -624,7 +658,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
 | AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Planned / blocked | RB-14. |
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Fixed (#1123) | The generic `OXO_FLOW_MCP_TOKEN` is released only to exact origins listed in `OXO_FLOW_MCP_TRUSTED_ORIGINS` (unset/empty = never released; unparseable entries warned and ignored); per-server tokens are destination-scoped by construction. Tests cover unapproved, lookalike, and approved origins (wire-level for the first and the approved case) plus per-server precedence; the SSRF screen is unchanged. See RB-13. |
-| AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Planned / blocked | RB-13. |
+| AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Fixed (#1123) | Outbound egress is classified per invocation (`Tool::egress_target`; `fetch_url` = destination origin, MCP = opaque) and no longer inherits the read-only auto-approval: the call needs an explicit human approval, or its exact origin must be listed in `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`; non-interactive sessions refuse. Refusals name the origin only. Tests: `egress_data_release_policy`, `read_then_fetch_cannot_reach_the_network_without_approval`, `egress_refusal_names_only_the_origin_and_never_the_payload`. See RB-13. |
 | AI-06 | P1 | CLI and web admission evaluate different graphs when includes or overrides change the workflow. | Implemented but unproven | Direct TOML BioTypes now share the core gate; include/override admission parity is still absent. RB-04 defines the exit seam. |
 | AI-07 | P2 | Malformed tool arguments are converted to `{}` and remain executable. | Implemented and verified for model-emitted arguments | Provider parsers pass model argument strings through raw (never repaired to `{}`), the orchestrator's JSON-validity gate rejects them with a fail-closed tool-result message before the registry, and `ToolRegistry::execute` re-checks. Wire-format echoes (Anthropic `tool_use.input`, Ollama `arguments`) keep a protocol-valid `{}` fallback but are never executed. MCP-side argument handling is unchanged. |
 | AI-08 | P2 | `[ai] auto_fix` is documented but has no runtime consumer. | Planned / blocked | RB-14; user docs now warn that it is not a safety control. |

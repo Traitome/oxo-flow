@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use super::{Tool, ToolDef};
+use super::{EgressTarget, Tool, ToolDef};
 use crate::error::AiError;
 
 /// Read contents of a local file.
@@ -261,6 +261,63 @@ pub(crate) fn parse_allowlist(raw: &str) -> Vec<String> {
 /// to hostnames/IP literals verbatim before validation.
 pub(crate) fn fetch_allowlist() -> Vec<String> {
     parse_allowlist(&std::env::var("OXO_FLOW_AI_FETCH_ALLOW").unwrap_or_default())
+}
+
+/// Canonical origin of an `http(s)` URL: `scheme://host[:port]` with the
+/// default port omitted and path/query/fragment dropped. The single origin
+/// transformation for the crate — MCP endpoint trust (`mcp::origin_of`
+/// delegates here), `fetch_url`'s egress classification and the data-release
+/// trust list all compare these strings, so the spellings cannot drift.
+/// `None` for unparseable URLs and non-`http(s)` schemes (an opaque-scheme
+/// URL can never match a trust entry).
+pub(crate) fn url_origin(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let port = match url.port_or_known_default() {
+        Some(80) if url.scheme() == "http" => None,
+        Some(443) if url.scheme() == "https" => None,
+        p => p,
+    };
+    let host = url.host_str()?;
+    Some(match port {
+        Some(p) => format!("{}://{host}:{p}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    })
+}
+
+/// Parse a comma-separated trusted-origin list into canonical origins,
+/// reusing the [`parse_allowlist`] convention. An entry that is not an
+/// `http(s)` origin is warned about and dropped — a typo must never
+/// pre-authorize anything (fail closed).
+fn trusted_origins_from_raw(raw: &str) -> Vec<String> {
+    parse_allowlist(raw)
+        .into_iter()
+        .filter_map(|entry| {
+            let origin = url_origin(&entry);
+            if origin.is_none() {
+                tracing::warn!(
+                    entry = %entry,
+                    "trusted-origin entry is not a valid http(s) origin \
+                     (expected scheme://host[:port]) — ignored"
+                );
+            }
+            origin
+        })
+        .collect()
+}
+
+/// Comma-separated exact origins whose model-initiated `fetch_url` calls are
+/// pre-authorized for data release (`OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`,
+/// #1123 audit AI-05). Distinct from `OXO_FLOW_AI_FETCH_ALLOW`, which
+/// governs *reachability* (the SSRF screen), not data release. Unset/empty
+/// means no origin is pre-authorized: every model-initiated fetch then
+/// needs an explicit human approval (and non-interactive sessions refuse).
+pub(crate) fn fetch_trusted_origins() -> Vec<String> {
+    trusted_origins_from_raw(
+        &std::env::var("OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS").unwrap_or_default(),
+    )
 }
 
 /// True for addresses an outbound model-driven fetch must never reach:
@@ -520,6 +577,21 @@ impl Tool for FetchUrlTool {
 
     fn name(&self) -> &str {
         "fetch_url"
+    }
+
+    /// Every model-initiated fetch is outbound network egress, i.e. a
+    /// data-release decision (#1123, audit AI-05). The destination is the
+    /// URL argument; anything unparseable or non-`http(s)` classifies as
+    /// [`EgressTarget::Opaque`] so it can never inherit auto-execution from
+    /// the read-only flag.
+    fn egress_target(&self, arguments: &str) -> EgressTarget {
+        let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments) else {
+            return EgressTarget::Opaque;
+        };
+        match args["url"].as_str().and_then(url_origin) {
+            Some(origin) => EgressTarget::Origin(origin),
+            None => EgressTarget::Opaque,
+        }
     }
 
     async fn execute(&self, arguments: &str) -> Result<String, AiError> {
@@ -1348,6 +1420,70 @@ mod fetch_url_ssrf_tests {
             vec!["metadata.internal".to_string(), "example.com".to_string()]
         );
         assert!(parse_allowlist("").is_empty());
+    }
+
+    #[test]
+    fn url_origin_canonicalizes_http_origins_only() {
+        assert_eq!(
+            url_origin("https://Example.COM/path?q=1#frag").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            url_origin("http://example.com:80/x").as_deref(),
+            Some("http://example.com")
+        );
+        assert_eq!(
+            url_origin("https://example.com:443/x").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            url_origin("http://example.com:8080/x").as_deref(),
+            Some("http://example.com:8080")
+        );
+        // Non-http(s) schemes are never a fetch destination.
+        assert_eq!(url_origin("file:///etc/passwd"), None);
+        assert_eq!(url_origin("not a url"), None);
+    }
+
+    #[test]
+    fn trusted_origins_parse_exactly_and_drop_invalid_entries() {
+        assert_eq!(
+            trusted_origins_from_raw(
+                " HTTPS://Docs.Example.com/path , http://127.0.0.1:9000 ,not-an-origin, file:///tmp/x"
+            ),
+            vec![
+                "https://docs.example.com".to_string(),
+                "http://127.0.0.1:9000".to_string()
+            ],
+            "paths are dropped, spelling is canonicalized, garbage is ignored"
+        );
+        assert!(trusted_origins_from_raw("").is_empty());
+    }
+
+    #[test]
+    fn fetch_url_egress_classification() {
+        let tool = FetchUrlTool::new();
+        assert_eq!(
+            tool.egress_target(r#"{"url": "https://collector.example/collect?data=secret"}"#),
+            EgressTarget::Origin("https://collector.example".into()),
+            "the origin is reported without the path or query"
+        );
+        assert_eq!(
+            tool.egress_target(r#"{"url": "http://host.example:8080/x"}"#),
+            EgressTarget::Origin("http://host.example:8080".into())
+        );
+        // Anything whose destination is not a well-formed http(s) URL can
+        // never be auto-approved by an origin trust entry.
+        assert_eq!(
+            tool.egress_target(r#"{"url": "file:///etc/passwd"}"#),
+            EgressTarget::Opaque
+        );
+        assert_eq!(
+            tool.egress_target(r#"{"url": "not a url"}"#),
+            EgressTarget::Opaque
+        );
+        assert_eq!(tool.egress_target("{}"), EgressTarget::Opaque);
+        assert_eq!(tool.egress_target("not json"), EgressTarget::Opaque);
     }
 
     #[test]
