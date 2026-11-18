@@ -3225,7 +3225,7 @@ Only these fields are replaced on generated rules:
 |---|---|---|
 | `name` | `{rule}_{value}` | `{rule}_combine` |
 | `input` | authored `input` with the split variable substituted (other placeholders stay literal) | every chunk output |
-| `output` | the per-chunk path (`.oxo-flow/chunks/{by}/{value}.<ext>`) | the authored output |
+| `output` | the authored output with the split variable substituted when it references one; otherwise the per-chunk path `.oxo-flow/chunks/{by}/{value}.<ext>` | the authored output |
 | `shell` | `transform.map` with the split variable substituted | `transform.combine.shell` (or the generated aggregate command) |
 | `cleanup_chunks` | `false` | `transform.cleanup` |
 | `transform` | cleared | cleared |

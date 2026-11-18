@@ -3,10 +3,12 @@
 //!
 //! The evidence is deliberately exhaustive rather than example-based:
 //!
-//! - [`exhaustive_transform_source`] fills EVERY field of
-//!   [`crate::rule::Rule`] with a non-default value, including the
-//!   engine-internal ones (`cleanup_chunks`, `expand_inputs_baked`) that
-//!   TOML cannot deserialize.
+//! - [`exhaustive_transform_source`] fills every field of
+//!   [`crate::rule::Rule`] that can coexist with `transform` with a
+//!   non-default value, including the engine-internal ones
+//!   (`cleanup_chunks`, `expand_inputs_baked`) that TOML cannot
+//!   deserialize. The three fields that cannot coexist (see the end of this
+//!   module doc) stay at their defaults by construction.
 //! - [`assert_transform_generated_rule`] destructures the whole `Rule`
 //!   struct WITHOUT a `..` rest pattern, so adding a field to `Rule` breaks
 //!   compilation here instead of silently escaping coverage (the
@@ -164,7 +166,7 @@ fn exhaustive_transform_source(transform: TransformConfig) -> Rule {
         envvars,
         checkpoint: true,
         checkpoint_manifest: Some("reentry.toml".to_string()),
-        required: false,
+        required: true, // non-default on purpose: a Rule::default rebuild must fail
         depends_on: vec!["setup".to_string()],
         extends: Some("base".to_string()),
         retry_delay: Some("30s".to_string()),
@@ -429,7 +431,7 @@ fn transform_config(combine: Option<CombineConfig>) -> TransformConfig {
         },
         map: "process {chr} {input} > {output}".to_string(),
         combine,
-        cleanup: true,
+        cleanup: false, // falsified so the combine rule proves the replacement
     }
 }
 
@@ -474,7 +476,7 @@ fn transform_generated_rules_preserve_every_rule_field() {
                 chunk_output("chr1"),
                 chunk_output("chr2")
             ),
-            cleanup_chunks: true, // transform.cleanup
+            cleanup_chunks: false, // transform.cleanup = false, NOT the source value
             expand_inputs_baked: baked,
         },
     );
@@ -552,7 +554,7 @@ fn transform_aggregate_combine_preserves_every_rule_field() {
                 chunk_output("chr1"),
                 chunk_output("chr2")
             ),
-            cleanup_chunks: true, // transform.cleanup
+            cleanup_chunks: false, // transform.cleanup = false, NOT the source value
             expand_inputs_baked: baked,
         },
     );
