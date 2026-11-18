@@ -4471,6 +4471,18 @@ environment name (<code>-e bwa_env</code>, no <code>kind:</code> prefix) is used
 dotted name such as <code>r-4.4</code> is not truncated. <code>mamba:</code> is accepted and uses
 the same shared builder; <code>pixi:</code>/<code>venv:</code>/<code>modules:</code> are rejected rather than
 silently running the item on the host <code>PATH</code>.</p>
+<p>The item shell (<code>sh -c &lt;template&gt;</code>) runs under the same cleared-environment
+allowlist as an <code>oxo-flow run</code> rule shell (issue #1233, RB-15): it starts
+from an empty environment plus <code>PATH</code>, <code>HOME</code>, <code>LANG</code>, every <code>LC_*</code>
+variable, the <code>OXO_FLOW_ENV_PASSTHROUGH</code> names, and the
+<code>OXO_FLOW_TMPDIR</code>-derived <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> triple — never the
+operator's ambient environment. A <code>docker:</code>/<code>singularity:</code> item is an
+exception in one direction only: because the wrapper runs <code>docker run</code> /
+<code>singularity exec</code> from that very shell, the container-daemon variables
+(<code>DOCKER_HOST</code>, <code>DOCKER_TLS_VERIFY</code>, <code>DOCKER_CERT_PATH</code>, <code>DOCKER_CONFIG</code>,
+<code>APPTAINER_*</code>, <code>SINGULARITY_*</code>) are re-admitted for it, exactly as the rule
+executor admits them for a container rule (issue #1173). See
+<a href="../run/#rule-execution-environment-issue-1108">Rule execution environment</a>.</p>
 <h3 id="generate-workflow">Generate workflow<a class="headerlink" href="#generate-workflow" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>--generate-workflow<span class="w"> </span><span class="s2">"bwa mem ref.fa {item}"</span><span class="w"> </span>*.bam<span class="w"> </span>-o<span class="w"> </span>align.oxoflow
 </span></code></pre></div>

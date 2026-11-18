@@ -3132,74 +3132,8 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Protected data trees (protected_data_trees)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#forcing-execution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Forcing Execution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Checkpoint re-entry (checkpoint = true)
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ai-error-recovery-ai-recover" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        AI error recovery (--ai-recover)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#exit-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Exit codes
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
-      
-    </span>
-  </a>
   
 </li>
       
@@ -5138,74 +5072,8 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Protected data trees (protected_data_trees)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#forcing-execution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Forcing Execution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Checkpoint re-entry (checkpoint = true)
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ai-error-recovery-ai-recover" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        AI error recovery (--ai-recover)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#exit-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Exit codes
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
-      
-    </span>
-  </a>
   
 </li>
       
@@ -6849,6 +6717,17 @@ present on one cluster but not another), mirroring <code>OXO_FLOW_TMPDIR</code>.
 <p>Engine tooling commands (conda/pixi/venv environment setup, teardown, and
 <code>env_verify</code>) spawn through a different code path and keep the ambient
 environment, so tool discovery and proxy settings still work.</p>
+<p>Two CLI-side shell spawns run through this same allowlist policy (issue</p>
+<h1 id="1233-rb-15-so-they-cannot-read-the-operators-ambient-secrets-either">1233, RB-15), so they cannot read the operator's ambient secrets either:<a class="headerlink" href="#1233-rb-15-so-they-cannot-read-the-operators-ambient-secrets-either" title="Permanent link">#</a></h1>
+<ul>
+<li>The <strong>reference build shell</strong> (<code>[[references]]</code> <code>build</code>, including its
+  <code>bash</code>-first / <code>sh</code>-fallback) — a reference whose <code>environment</code> is a
+  <code>docker</code>/<code>singularity</code> kind gets the container-daemon admission below,
+  exactly like a container rule.</li>
+<li>The <strong><code>oxo-flow batch</code> sugar shell</strong> (<code>sh -c &lt;template&gt;</code>) — it has no
+  <code>[engine]</code> section, so its scratch routing comes from <code>OXO_FLOW_TMPDIR</code>
+  alone.</li>
+</ul>
 <h4 id="local-container-rules-dockersingularity">Local container rules (docker/singularity)<a class="headerlink" href="#local-container-rules-dockersingularity" title="Permanent link">#</a></h4>
 <p>A container rule runs <code>docker run</code> / <code>apptainer exec</code> from inside that
 cleared shell, so daemon and cache configuration the operator relies on
