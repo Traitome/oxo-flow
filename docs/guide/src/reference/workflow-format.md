@@ -1014,13 +1014,22 @@ named group. The `env_group` spec takes precedence over an inline
 `[rules.environment]`; the inline spec is only used when no `env_group` is set
 (or the named group does not exist), followed by `[defaults] environment`.
 
+A group that is **declared but empty** (`[env_groups.<g>]` with no backend key)
+still wins the selection and contributes nothing, so the rule silently runs in
+the system environment — `env list` labels it `system` with no other signal.
+`lint` reports this as warning `W043` on every rule that selects the empty
+group (the group name reads as isolation while the shell gets the bare host).
+
 This precedence is the execution precedence, not just a listing convenience:
 `run`, `dry-run`, cluster submission, and the run monitor's DAG status fold
 the winning spec onto each rule before scheduling, and `env list` / `env check`
 call the same resolver — so a rule declaring both an `env_group` and an inline
 `environment` is reported AND executed with the group's backend. (Before
 issue #1210 the listing honored the group while execution silently used the
-inline spec.)
+inline spec.) The web editor's rule summaries and DAG canvas resolve each
+rule's environment through the same `resolve_environment` (issue #1220), so
+the canvas paints the `env_group` backend the run executes rather than the
+losing inline spec it used to read.
 
 ### Environment Variables (`envvars`)
 
