@@ -59,7 +59,6 @@ re-attestation of the evidence ledger — see §5.1).
 | Family | Contract it pins | How the expectation traces | Verdict | Remediation / evidence |
 | :--- | :--- | :--- | :---: | :--- |
 | `eval/interpretation/seeds/*` (12 seeds) | Each `manifest.json`'s `run_expect_exit` is the exit status the *planted fault* must produce under the documented run contracts: fail-fast on a missing required source input (`docs/guide/src/commands/run.md`), wildcard safe-default charset (`docs/guide/src/reference/wildcards.md`), declared resource-group capacity, and output validation. `surface` selects `run` vs `dry-run`. | Ran every manifest's documented command with `OXO_FLOW_AI_PROVIDER=disabled` and a pinned `PATH`: 11/12 matched; **`s04-silent-failure` expected 0 and got 1** — its declared input was absent, so the fail-closed readiness gate aborted before the silent pipeline could run. That is the demonstrated stale-semantics fixture (§4.1). `s02-missing-binary` depends on a host precondition (tool absent); it now declares `requires_absent: ["bwa-mem2"]` and the gate enforces it. | traceable | **Was suspect; corrected** (`s04` workflow + manifest re-baselined; `s02` precondition declared). New provider-free gate: `crates/oxo-flow-cli/tests/interpretation_seeds.rs` runs in `cargo test --workspace` and fails on the pre-fix seed (proven, §4.1). |
-| `eval/interpretation/results/*` | Historical measurement artifacts (AI hit-rates per campaign). | Not fixtures: they are records of past runs with the then-shipped seed text. The `s04` redesign makes the historical rows non-comparable; the README now says so and states that no provider was called for this audit. | annotated | Left untouched; no empirical claim is made here. |
 
 ### 3.3 Benchmark fixtures
 
@@ -203,7 +202,10 @@ false invariant.
   live provider and are not reproducible in CI; this audit called no
   provider. Only the deterministic exit-code contracts were verified.
 - `eval/frontier/results/` and `benches/*/results/` are gitignored outputs,
-  not fixtures.
+  not fixtures. The tracked `eval/interpretation/results/*` directories are
+  historical campaign records (run with the then-shipped seed text), also not
+  fixtures; the `s04` redesign makes those rows non-comparable and the README
+  says so. They are not counted in the inventory verdicts.
 
 ## 6. Verification commands (run 2026-11-18, this worktree)
 
