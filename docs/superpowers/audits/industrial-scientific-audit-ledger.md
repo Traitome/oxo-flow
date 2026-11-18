@@ -102,56 +102,78 @@ Required exit evidence:
 
 **Maturity**: Fixed (2026-11-18) — every run created through `POST /api/runs`
 owns a unique `runs/<run_id>/` workdir (retry/resume are documented lineage
-continuations, see the limits below) and saved-pipeline admission is one
-atomic guarded insert keyed on `pipeline_id` (issue #1130, implementation
-commit `7bded48d`).
+continuations, see the limits below), and saved-pipeline admission is a
+guarded insert backed by partial unique indexes on both storage backends
+(issue #1130, implementation commits `7bded48d` + `REVIEW_SHA`).
 
 Runs created from a saved pipeline shared the persistent pipeline directory
 as their `workdir`, so a later run overwrote an earlier run's workflow,
 checkpoint, logs, and outputs. Initial creation used the same guarded
 insertion path as retry/resume, but the guard was the shared workdir — which
-is exactly the property that had to go.
+is exactly the property that had to go. The first revision of this fix then
+still relied on `INSERT ... SELECT ... WHERE NOT EXISTS` alone, which is NOT
+atomic under PostgreSQL READ COMMITTED (review finding F1): two concurrent
+transactions can both pass `NOT EXISTS` before either commits.
 
 Fix:
 
-- `create_run` always allocates `workspace/users/<u>/runs/<run_id>/`
-  (`handlers.rs:588`); `pipeline_id` is an association only, and the
-  `pipelines/<pipeline_id>/` tree is no longer created or written.
-  Claim-then-stage ordering is retained: sources wait in a per-request temp
-  dir until admission wins, and a rejected request removes its own run dir.
-- Admission is one atomic guarded `INSERT ... SELECT ... WHERE NOT EXISTS`.
-  The shared SQL builder lives in `infra/db/mod.rs`; SQLite and PostgreSQL
-  each bind it (`create_run_if_pipeline_idle` /
-  `create_run_if_workdir_idle`, `infra/db/sqlite.rs:115`,
-  `infra/db/sqlite.rs:126`, `infra/db/postgres.rs`). Saved-pipeline runs
-  serialize on `pipeline_id` (one live run per saved pipeline; 409
-  `RUN_NOT_TERMINAL` otherwise); ad-hoc runs, retry, and resume serialize on
-  the workdir. `claim_run_row` (`handlers.rs:310`) is the single helper all
-  three handlers call: create (`:698`), retry (`:1607`), resume (`:3217`).
+- `create_run` allocates `workspace/users/<u>/runs/<run_id>/` only AFTER
+  every 400-producing gate (parse, include resolution, DAG, BioType
+  admission), so a validation-rejected create leaves neither a run row nor an
+  orphan directory (F2; `handlers.rs:675`). Claim-then-stage ordering is
+  retained: sources wait in a per-request temp dir until admission wins, and
+  a rejected request removes its own run dir. `pipeline_id` is an
+  association only; new runs never write `pipelines/<pipeline_id>/`.
+- Admission is one guarded `INSERT ... SELECT ... WHERE NOT EXISTS ...
+  ON CONFLICT DO NOTHING` (shared SQL builder `infra/db/mod.rs:68`; plain and
+  guarded inserts share `RUN_INSERT_COLUMNS`, F6). Both schema bootstraps
+  create partial unique indexes over live rows —
+  `idx_runs_live_pipeline` on `runs(pipeline_id)` and
+  `idx_runs_live_workdir` on `runs(workdir)`, `WHERE status IN ('queued',
+  'running', 'paused')` (`infra/db/sqlite.rs:191`,
+  `infra/db/postgres.rs:518`). The index is the atomic guarantee: under
+  PostgreSQL READ COMMITTED only `ON CONFLICT` decides the loser, and zero
+  affected rows maps to `409 RUN_NOT_TERMINAL` (F1). A one-time migration
+  demotes all but the earliest live row per scope before creating the
+  indexes, so a database that already held a duplicate live scope can be
+  upgraded without discarding history (logged as a warning; clean databases
+  demote nothing).
+- Saved-pipeline runs serialize on `pipeline_id` globally (F5): one live run
+  per saved pipeline across all readers, so a `workspace`-shared pipeline
+  answers another identity's create with the same 409. Ad-hoc runs, retry,
+  and resume serialize on the workdir. `claim_run_row` (`handlers.rs:310`)
+  is the single helper all three handlers call: create (`:704`),
+  retry (`:1613`), resume (`:3223`).
 
 Evidence (current baseline — the audit's line numbers had drifted; the
 shared-workdir branch and the missing pipeline guard were re-confirmed on
 `main` before the fix):
 
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:588` (workdir
-  allocation)
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:698` (atomic claim)
-- `crates/oxo-flow-web/src/infra/db/mod.rs:228` (`create_run_if_pipeline_idle`)
-- `crates/oxo-flow-web/src/infra/db/sqlite.rs:126` (guarded insert)
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs:675` (workdir
+  allocation after validation)
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs:704` (atomic claim)
+- `crates/oxo-flow-web/src/infra/db/mod.rs:68` (guarded insert + ON CONFLICT)
+- `crates/oxo-flow-web/src/infra/db/mod.rs:251`
+  (`create_run_if_pipeline_idle`)
+- `crates/oxo-flow-web/src/infra/db/sqlite.rs:191` and
+  `crates/oxo-flow-web/src/infra/db/postgres.rs:518` (admission indexes)
 
 Required exit evidence (all produced):
 
 - Every run created through `POST /api/runs` has a unique, immutable workdir
   (no create writes into another run's tree; retry/resume-checkpoint are
-  explicit continuations of a predecessor lineage, never new run history).
+  explicit continuations of a predecessor lineage, never new run history),
+  and a rejected create leaves no run directory at all.
 - Two sequential runs leave all hashes and provenance records for the first
   run unchanged.
 - Concurrent creation from one saved pipeline yields one admitted run and one
-  conflict under the declared policy.
+  conflict under the declared policy — on SQLite (pooled file database) and
+  on live PostgreSQL (`ON CONFLICT` + partial unique index).
 
 Tests (`crates/oxo-flow-web/tests/run_snapshot_isolation.rs`,
 `crates/oxo-flow-web/tests/run_snapshot_concurrency.rs`,
-`crates/oxo-flow-web/src/infra/db/sqlite.rs`):
+`crates/oxo-flow-web/src/infra/db/sqlite.rs`,
+`crates/oxo-flow-web/src/infra/db/postgres.rs`):
 
 - `sequential_runs_from_one_saved_pipeline_are_isolated` — hashes run A's
   workflow/checkpoint/engine log/execution log/output before and after run B;
@@ -166,26 +188,55 @@ Tests (`crates/oxo-flow-web/tests/run_snapshot_isolation.rs`,
   `toml_content`.
 - `concurrent_creates_from_one_saved_pipeline_admit_exactly_one` — two
   simultaneous `POST /api/runs` against one saved pipeline yield exactly one
-  200 and one `409 RUN_NOT_TERMINAL`; one row and one run dir persist, and a
-  cancelled run releases the slot. Fail-first verified by temporarily
-  switching the claim back to the workdir guard (both requests admitted).
+  200 and one `409 RUN_NOT_TERMINAL`; only the admitted request leaves a run
+  dir, and a cancelled run releases the slot. Fail-first verified by
+  temporarily switching the claim back to the workdir guard (both requests
+  admitted).
 - `pipeline_guard_rejects_a_second_live_run_of_the_same_pipeline`,
   `pipeline_guard_is_atomic_under_concurrent_inserts`,
-  `pipeline_guard_requires_a_pipeline_id` — storage-level guard contract,
-  including two concurrent guarded inserts (exactly one row).
+  `pipeline_guard_requires_a_pipeline_id` — storage-level guard contract.
+- `pipeline_guard_is_atomic_with_a_pooled_file_database` — the SQLite claim
+  with multiple pooled connections (true concurrency, not the one-connection
+  in-memory fixture): exactly one admitted, one live row.
+- `live_admission_indexes_reject_bare_duplicate_live_rows` — the partial
+  unique indexes themselves reject a raw second live row per pipeline and per
+  workdir while a terminal row releases the slot. Fail-first verified by
+  temporarily creating the indexes as non-unique (the raw duplicate then
+  inserted).
+- `test_concurrent_pipeline_admission_admits_exactly_one` and
+  `test_concurrent_workdir_admission_admits_exactly_one` — live PostgreSQL
+  concurrency for both scopes; they skip locally without `OXO_PG_TEST_URL`
+  and run in CI's `PostgreSQL storage smoke` step against the
+  `services: postgres` container (`--lib infra::db::postgres`).
+- `shared_pipeline_slot_is_global_across_identities` — a shared
+  (`workspace`-visibility) pipeline admits one live run across two identities
+  (owner 200, other reader 409 `RUN_NOT_TERMINAL`; the reader's read is
+  proven first so the 409 is not a masked 404).
+- `validation_rejected_create_leaves_no_run_directory` — a missing
+  `[[include]]` answers 400 with zero rows and no new `runs/<uuid>/`.
+  Fail-first verified by temporarily allocating the workdir before the gates
+  (the rejected create then left an orphan directory).
+- `web_saved_pipeline_reruns_are_isolated_full_executions` — the real CLI:
+  two sequential saved-pipeline runs get distinct workdirs, a fresh create
+  fully re-executes, and the first run's workflow/output stay byte-identical.
 
-Docs: Create Run workdir lifecycle and the provenance-verify checkpoint note
-in `docs/guide/src/reference/web-api.md`; “Run workdir lifecycle” in
+Docs: Create Run workdir lifecycle, the provenance-verify checkpoint note,
+and the global-per-pipeline admission policy in
+`docs/guide/src/reference/web-api.md`; “Run workdir lifecycle” in
 `docs/guide/src/reference/web-system-architecture.md`; the workspace-layout
-notes in `docs/guide/src/how-to/deploy-modes.md` and
-`docs/guide/src/commands/serve.md`.
+notes (legacy pipeline tree retained for retry/resume of pre-upgrade runs) in
+`docs/guide/src/how-to/deploy-modes.md`; the dry-run/run semantics in
+`docs/guide/src/how-to/web-editor.md` and
+`docs/guide/src/commands/serve.md`; `AGENTS.md`.
 
 Stated limits (not overclaimed): `retry` and `resume-checkpoint` intentionally
 continue a predecessor run's workdir so the CLI checkpoint drives partial
 re-execution — they are continuations of an existing run lineage, not new
-history. Create/stage/persist/spawn ordering remains RB-03; crash recovery and
-multi-instance admission remain unproven for PostgreSQL. Pre-upgrade rows keep
-their old `pipelines/<id>` workdir and remain readable.
+history. PostgreSQL atomicity is proven for concurrent connections against a
+single server (CI service container), not for cross-host orchestration; crash
+recovery remains RB-03. Pre-upgrade rows keep their old `pipelines/<id>`
+workdir, and retry/resume of those rows still writes there until they are no
+longer needed.
 
 ### RB-03: Create, stage, persist, and spawn are not atomic
 
@@ -841,7 +892,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
 | WEB-01 | P0 | No OS-level tenant execution boundary. | Planned / blocked | RB-01. |
-| WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design); saved-pipeline creates take an atomic `pipeline_id`-keyed guarded insert (one live run per pipeline, 409 otherwise), shared by create/retry/resume. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `pipeline_guard_*`. See RB-02. |
+| WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design), allocated only after validation so rejected creates leave no orphan dir. Admission is `INSERT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` backed by partial unique indexes on live `pipeline_id`/`workdir` in both SQLite and PostgreSQL (409 on the loser; proven on live PostgreSQL by the CI smoke concurrency tests); the pipeline slot is global across readers. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `shared_pipeline_slot_is_global_across_identities`, `validation_rejected_create_leaves_no_run_directory`, `pipeline_guard_*`, `live_admission_indexes_*`, `test_concurrent_*admission*`. See RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |

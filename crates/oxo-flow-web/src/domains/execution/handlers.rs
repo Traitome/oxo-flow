@@ -709,16 +709,6 @@ pub async fn create_run(
             }
         }
 
-        // Every run — ad-hoc or from a saved pipeline — executes in its own
-        // `runs/<run_id>/` directory (audit RB-02). A saved-pipeline run used
-        // to share `pipelines/<pipeline_id>/`, so a later run overwrote the
-        // earlier run's workflow, checkpoint, logs, and outputs in place.
-        // The row's `pipeline_snapshot` plus this directory keep the run's
-        // exact inputs and artifacts immutable; `pipeline_id` is now purely
-        // an association (listing, permission, admission) — never a workdir.
-        let run_dir = crate::workspace::setup_run_directory(&user.id, &resp.run_id)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?;
-
         // Save pipeline TOML to the working directory so the executor (CLI
         // subprocess) can read it. `tokio::fs` keeps the small write off
         // the async runtime's blocking threads (#268 item 4, web minor).
@@ -804,6 +794,22 @@ pub async fn create_run(
                 ));
             }
         }
+
+        // Allocate the run's workdir only AFTER every 400-producing gate
+        // (parse, include resolution, DAG, BioType admission) has passed:
+        // a validation-rejected request must leave neither a run row nor an
+        // orphan `runs/<uuid>/` directory (review finding F2 on #1130).
+        //
+        // Every create-run — ad-hoc or from a saved pipeline — executes in
+        // its own `runs/<run_id>/` directory (audit RB-02). A saved-pipeline
+        // run used to share `pipelines/<pipeline_id>/`, so a later run
+        // overwrote the earlier run's workflow, checkpoint, logs, and
+        // outputs in place. The row's `pipeline_snapshot` plus this
+        // directory keep the run's exact inputs and artifacts immutable;
+        // `pipeline_id` is an association (listing, permission, admission),
+        // never a workdir.
+        let run_dir = crate::workspace::setup_run_directory(&user.id, &resp.run_id)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?;
 
         let run = models::RunRow {
             id: resp.run_id.clone(),

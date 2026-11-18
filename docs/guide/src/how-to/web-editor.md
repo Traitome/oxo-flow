@@ -223,9 +223,13 @@ part of the workflow file).
 
 The badge above the TOML pane reports the engine's verdict live. **Dry-Run**
 produces the execution plan without running anything; **Run** starts the real
-pipeline and opens the monitor. Both honor the engine's checkpoint semantics:
-re-runs reuse completed rules unless inputs, config, or rule definitions
-changed.
+pipeline and opens the monitor. Every **Run** executes in a fresh, immutable
+run workdir and re-executes the whole workflow — a fresh create never reuses
+another run's checkpoint (issue #1130 / audit RB-02), so editing a config
+value and pressing **Run** again does not skip completed rules. Checkpoint-
+driven partial re-execution is available through **Retry** (and
+`POST /api/runs/{id}/resume-checkpoint`), which continue the predecessor
+run's lineage in its own workdir.
 
 The verdict is fail-closed (audit UX-03, issue #1145). When the validation
 request itself fails — a network error or a server 5xx — the editor does not

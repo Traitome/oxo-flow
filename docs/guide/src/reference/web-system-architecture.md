@@ -181,10 +181,16 @@ they are not new run history. A saved pipeline's `pipeline_id`
 is an association (permissions, listing, admission ordering), never a
 workdir. This is what makes a run's recorded checksums and run history
 immutable (issue #1130 / audit RB-02). Admission is a single guarded
-`INSERT ... SELECT ... WHERE NOT EXISTS` keyed on `pipeline_id` for saved
-pipelines and on `workdir` for ad-hoc runs, so concurrent creates serialize
-on the database instead of racing on disk; `retry` and `resume-checkpoint`
-are the only paths that deliberately continue a predecessor's workdir.
+`INSERT ... SELECT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` keyed on
+`pipeline_id` for saved pipelines and on `workdir` for ad-hoc runs, backed by
+partial unique indexes (`idx_runs_live_pipeline`, `idx_runs_live_workdir`) on
+both SQLite and PostgreSQL. The indexes are the guarantee PostgreSQL needs:
+under READ COMMITTED two concurrent transactions can both pass `NOT EXISTS`,
+and only `ON CONFLICT` decides the loser (zero rows affected → the documented
+`409 RUN_NOT_TERMINAL`). The saved-pipeline slot is global to the pipeline,
+not per user, so a `workspace`-shared pipeline admits one live run across all
+its readers. `retry` and `resume-checkpoint` are the only paths that
+deliberately continue a predecessor's workdir.
 
 ---
 

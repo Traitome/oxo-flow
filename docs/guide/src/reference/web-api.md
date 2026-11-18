@@ -578,7 +578,10 @@ existing run executed or what `provenance verify` audits.
 Saved-pipeline runs are admitted **one live run at a time** per pipeline: a
 second `POST /api/runs` while a run of that pipeline is `queued`/`running`/
 `paused` answers `409 RUN_NOT_TERMINAL`; a terminal (completed, failed,
-cancelled) run releases the slot. This replaces the old checkpoint-reuse
+cancelled) run releases the slot. The slot is global to the pipeline, not
+per user: a `workspace`-shared pipeline admits one live run across all its
+readers, so another identity's create gets the same 409 while the owner's run
+is live. Pinned by `shared_pipeline_slot_is_global_across_identities`. This replaces the old checkpoint-reuse
 across re-runs: a fresh create executes the whole pipeline. For
 checkpoint-driven partial re-execution use
 [retry](#smart-retry) (`POST /api/runs/{id}/retry`, re-executes in the

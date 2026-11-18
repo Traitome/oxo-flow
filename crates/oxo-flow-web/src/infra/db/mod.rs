@@ -26,10 +26,11 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
     None
 }
 
-/// Columns written by every guarded run insert, in bind order.
+/// Columns written by every run insert (plain and guarded), in bind order.
 ///
-/// Kept in one place so the workdir and pipeline admission guards cannot
-/// drift from each other or from the plain insert (audit RB-02).
+/// Both the guarded insert and the plain `create_run` insert are built from
+/// this one list, so a column added to one path cannot silently drift from
+/// the other (audit RB-02).
 pub(crate) const RUN_INSERT_COLUMNS: &str = "id, user_id, pipeline_id, pipeline_snapshot, \
      workflow_name, status, phase, dry_run, pid, workdir, config_overrides, \
      artifacts_incomplete, started_at, finished_at, created_at";
@@ -37,12 +38,33 @@ pub(crate) const RUN_INSERT_COLUMNS: &str = "id, user_id, pipeline_id, pipeline_
 /// Run statuses that count as live for admission guards.
 pub(crate) const RUN_LIVE_STATUSES_SQL: &str = "('queued', 'running', 'paused')";
 
+/// Build the unguarded run insert used by `create_run`.
+pub(crate) fn plain_run_insert_sql(placeholder: impl Fn(usize) -> String) -> String {
+    let values: Vec<String> = (1..=15).map(&placeholder).collect();
+    format!(
+        "INSERT INTO runs ({RUN_INSERT_COLUMNS}) VALUES ({})",
+        values.join(", ")
+    )
+}
+
 /// Build the guarded run insert shared by the workdir and pipeline claims.
 ///
 /// The insert names 15 row values followed by one guard value; the statement
 /// only lands while no live run matches `guard_column`. `placeholder(i)`
 /// yields the dialect's bind marker for the 1-based i-th value (`?` for
 /// SQLite, `$n` for PostgreSQL).
+///
+/// The `NOT EXISTS` predicate handles the ordinary case; the `ON CONFLICT DO
+/// NOTHING` clause is what makes the claim atomic under PostgreSQL READ
+/// COMMITTED, where two concurrent transactions can both evaluate
+/// `NOT EXISTS` before either commits. It relies on the partial unique
+/// indexes below (created by both schema bootstraps):
+///
+/// - `idx_runs_live_pipeline` on `runs(pipeline_id)` where the run is live,
+/// - `idx_runs_live_workdir` on `runs(workdir)` where the run is live.
+///
+/// A loser inserts zero rows either way and callers map that to the
+/// documented `409 RUN_NOT_TERMINAL`.
 pub(crate) fn guarded_run_insert_sql(
     guard_column: &str,
     placeholder: impl Fn(usize) -> String,
@@ -50,7 +72,8 @@ pub(crate) fn guarded_run_insert_sql(
     let values: Vec<String> = (1..=15).map(&placeholder).collect();
     format!(
         "INSERT INTO runs ({RUN_INSERT_COLUMNS}) SELECT {} WHERE NOT EXISTS \
-         (SELECT 1 FROM runs WHERE {guard_column} = {} AND status IN {RUN_LIVE_STATUSES_SQL})",
+         (SELECT 1 FROM runs WHERE {guard_column} = {} AND status IN {RUN_LIVE_STATUSES_SQL}) \
+         ON CONFLICT DO NOTHING",
         values.join(", "),
         placeholder(16)
     )
