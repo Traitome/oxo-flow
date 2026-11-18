@@ -1,29 +1,48 @@
 import { test, expect, type Page } from '@playwright/test';
 
-// UX-09 (issue #1151): the SPA is a published surface on phones, but the
-// only pre-existing mobile check (browser-ui-interaction.spec.ts) asserted
-// that the page merely rendered. These tests pin the two properties a
-// phone user actually depends on: NOTHING makes the document scroll
-// sideways, and the author -> run path is reachable at 390x844 (iPhone
-// 12/13/14 logical resolution).
+// UX-09 (issue #1151): the SPA is a published surface on phones. These tests
+// pin the two properties a phone user depends on: routed CONTENT does not
+// overflow sideways, and the author -> run path is reachable at 390x844
+// (iPhone 12/13/14 logical resolution).
+//
+// Important: below 800px the stylesheet sets `body { overflow-x: hidden }`
+// and `.main-content { overflow-x: hidden }`, so `documentElement.scrollWidth`
+// is clamped and a 2000px-wide child would still pass that check. The
+// authoritative assertion is `.main-content.scrollWidth` (scrollWidth reports
+// overflowing content even when `overflow` clips it), backed by an explicit
+// negative-control test that injects a wide element.
 
 const MOBILE = { width: 390, height: 844 } as const;
 
-/** Document-level horizontal overflow, allowed 1px for sub-pixel rounding. */
-async function horizontalOverflow(page: Page): Promise<{ scrollWidth: number; clientWidth: number }> {
-  return page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
+interface Overflow {
+  document: { scrollWidth: number; clientWidth: number };
+  main: { scrollWidth: number; clientWidth: number };
+}
+
+/** Routed-content overflow, immune to body/.main-content overflow clipping. */
+async function measureOverflow(page: Page): Promise<Overflow> {
+  return page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('.main-content');
+    if (!main) throw new Error('.main-content is missing');
+    const doc = document.documentElement;
+    return {
+      document: { scrollWidth: doc.scrollWidth, clientWidth: doc.clientWidth },
+      main: { scrollWidth: main.scrollWidth, clientWidth: main.clientWidth },
+    };
+  });
 }
 
 async function expectNoHorizontalOverflow(page: Page, route: string) {
   await expect(page.locator('main')).toBeVisible({ timeout: 15_000 });
-  const { scrollWidth, clientWidth } = await horizontalOverflow(page);
+  const overflow = await measureOverflow(page);
   expect(
-    scrollWidth,
-    `${route} must not scroll horizontally at ${MOBILE.width}px (documentElement.scrollWidth ${scrollWidth} > clientWidth ${clientWidth})`,
-  ).toBeLessThanOrEqual(clientWidth + 1);
+    overflow.main.scrollWidth,
+    `${route} content must not overflow at ${MOBILE.width}px (.main-content scrollWidth ${overflow.main.scrollWidth} > clientWidth ${overflow.main.clientWidth})`,
+  ).toBeLessThanOrEqual(overflow.main.clientWidth + 1);
+  expect(
+    overflow.document.scrollWidth,
+    `${route} document must not overflow at ${MOBILE.width}px (scrollWidth ${overflow.document.scrollWidth} > clientWidth ${overflow.document.clientWidth})`,
+  ).toBeLessThanOrEqual(overflow.document.clientWidth + 1);
 }
 
 test.describe('Mobile viewport (390x844, UX-09 #1151)', () => {
@@ -38,6 +57,33 @@ test.describe('Mobile viewport (390x844, UX-09 #1151)', () => {
       await page.goto(route);
       await expectNoHorizontalOverflow(page, route);
     }
+  });
+
+  test('the overflow detector catches a deliberately wide element', async ({ page }) => {
+    // Negative control: without this, a detector that silently reads a
+    // clipped ancestor would let real regressions through.
+    await page.goto('/');
+    await expect(page.locator('main')).toBeVisible();
+    const before = await measureOverflow(page);
+    expect(before.main.scrollWidth).toBeLessThanOrEqual(before.main.clientWidth + 1);
+
+    await page.evaluate(() => {
+      const main = document.querySelector('.main-content');
+      if (!main) throw new Error('.main-content is missing');
+      const wide = document.createElement('div');
+      wide.id = 'overflow-probe';
+      wide.style.width = '2000px';
+      wide.style.height = '1px';
+      main.appendChild(wide);
+    });
+
+    const after = await measureOverflow(page);
+    expect(
+      after.main.scrollWidth,
+      'a 2000px child must register as .main-content overflow',
+    ).toBeGreaterThan(after.main.clientWidth + 1);
+    // Documents why the old assertion was vacuous: the body still clips.
+    expect(after.document.scrollWidth).toBeLessThanOrEqual(after.document.clientWidth + 1);
   });
 
   test('author -> run is reachable from the mobile drawer', async ({ page }) => {
@@ -77,7 +123,7 @@ test.describe('Mobile viewport (390x844, UX-09 #1151)', () => {
 
   test('canvas view stays inside the viewport on a phone', async ({ page }) => {
     // Canvas mode is the dense surface: React Flow controls and the node
-    // cards must not widen the document.
+    // cards must not widen the routed content.
     await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     await expect(page.locator('.rf-rule-node').first()).toBeVisible({ timeout: 15_000 });

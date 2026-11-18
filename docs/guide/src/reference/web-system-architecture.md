@@ -174,17 +174,20 @@ Server process environment:
 ## UI Test Coverage
 
 The SPA's published surfaces are exercised by Playwright specs in
-`frontend/e2e/` against the real web server (no mocked backend for the
-lifecycle specs; individual specs stub only the AI endpoints they cannot
-reach deterministically). `make frontend-test` runs the suite locally; the
-CI `e2e` job runs the same `npx playwright test` after asserting the served
-bundle is the freshly built artifact (issue #555).
+`frontend/e2e/` against the real web server. Individual specs stub the
+specific endpoints they need to force — AI provider/chat, pipeline
+validation, auth, and file download — while the core-flow, mobile, WCAG and
+Metro specs drive the real server. `make frontend-test` runs the suite
+locally; the CI `e2e` job runs the same `npx playwright test` with no AI
+provider environment (so the AI-disabled Dashboard/Settings states are the
+ones gated) after asserting the served bundle is the freshly built artifact
+(issue #555).
 
 | Surface | Spec | Asserted contract |
 | :--- | :--- | :--- |
 | Browser E2E: author → validate → run → monitor | `core-flows.spec.ts` | Editor renders TOML + DAG, the validation badge reflects a real `POST /api/pipelines/validate`, Save creates a pipeline, and the Stage 4/5 case creates a real run, then verifies provenance/checksums and the output preview in the monitor/report. |
-| Mobile viewport | `mobile-viewport.spec.ts` | At 390×844 (`documentElement.scrollWidth <= clientWidth + 1`) the dashboard, pipelines, editor, runs, monitor and settings routes do not scroll horizontally; the navigation drawer reaches the editor and an enabled Run button opens the run dialog with its close control inside the viewport; the React Flow canvas does not widen the document. |
-| WCAG / accessibility | `accessibility.spec.ts` | axe-core scans the six primary routes in both color themes with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI. The scanned routes and the out-of-scope canvas surface are documented in the spec header. |
+| Mobile viewport | `mobile-viewport.spec.ts` | At 390×844, routed content does not overflow: `.main-content.scrollWidth <= clientWidth + 1` on the dashboard, pipelines, editor, runs, monitor and settings routes (the document-level check alone is vacuous because `body`/`.main-content` clip `overflow-x`). A negative-control test injects a 2000px child and proves the detector reports it. The navigation drawer reaches the editor and an enabled Run button opens the run dialog with its close control inside the viewport; the React Flow canvas does not widen the routed content. |
+| WCAG / accessibility | `accessibility.spec.ts` | axe-core scans the six primary routes in both color themes plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI. CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes and the out-of-scope canvas surface are documented in the spec header. |
 | Metro frame-time budget | `metro-performance.spec.ts` | A 6-rule workflow is switched Rule → Process → Module (a Sugiyama re-layout per switch) and the interaction-to-next-paint latency is measured with `performance.now` plus two `requestAnimationFrame`s after the click. Station counts prove the switch regrouped (Rule = 6, Process = 1); worst sample < 750 ms, median < 300 ms. |
 | Keyboard graph navigation | `metro-canvas.spec.ts` | Metro station keyboard access is owned by issue #1148 / ledger UX-06; that spec ships with the keyboard-access change. It is not duplicated here. |
 | Desktop (wry/tao) lifecycle | `scripts/desktop-smoke.sh` (CI `desktop` job, `make desktop-smoke`) | Build + launch against an isolated `HOME`, the embedded server creates its lock + SQLite database, a second instance is refused with the documented message, and SIGTERM exits 0. See `docs/guide/src/how-to/desktop-app.md` → Verification. |

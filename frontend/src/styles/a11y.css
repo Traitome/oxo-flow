@@ -13,6 +13,14 @@
   --color-success: #0B7A55;
 }
 
+/* Error text uses --color-error on --color-error-bg (.status-badge.failed,
+   .result-bar.error): #D63A3A on #FDF0F0 measured 4.18:1 — below AA, and
+   the AI-disabled Settings state renders exactly that badge. #C42B2B
+   measures 5.07:1 there and 5.63:1 on white. */
+:root {
+  --color-error: #C42B2B;
+}
+
 /* Dark theme tertiary text: #64748B on #0F172A measured 3.75:1 (and 3.93:1
    on #0B1220); #7D8BA1 measures 5.1:1. Both the explicit theme toggle and
    the OS-preference block need the override. */

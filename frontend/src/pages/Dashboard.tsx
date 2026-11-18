@@ -109,7 +109,9 @@ export default function Dashboard() {
             <p>{t('dashboard.ai.desc')}</p>
           </button>
         ) : (
-          <div className="dash-card entry-card" style={{ opacity: 0.65, cursor: 'not-allowed' }}>
+          <div className="dash-card entry-card" style={{ borderStyle: 'dashed', cursor: 'not-allowed' }}>
+            {/* Disabled styling is the dashed border + neutral icon: opacity
+                here dropped the card's text below WCAG AA (issue #1151). */}
             <Sparkles size={22} style={{ color: 'var(--color-text-tertiary)' }} />
             <h3>{t('dashboard.ai')}</h3>
             <p>{t('dashboard.ai.disabledDesc')}</p>

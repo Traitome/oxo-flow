@@ -105,8 +105,22 @@ kill -0 "$PID" 2>/dev/null || fail "desktop exited while starting the window"
 
 # 2. Single-instance lock: a second launch on the same data directory must
 #    refuse instead of starting a second server against the same SQLite file.
+#    Run it in the background with a bounded wait — a shell that hangs (e.g.
+#    bypassing the lock on a future refactor) must fail fast rather than
+#    stalling a 45-minute CI job.
+HOME="$HOME" "$BIN" >"$WORK/second.log" 2>&1 &
+SECOND_PID=$!
+second_deadline=$((SECONDS + 20))
+while kill -0 "$SECOND_PID" 2>/dev/null && ((SECONDS < second_deadline)); do
+  sleep 0.2
+done
+if kill -0 "$SECOND_PID" 2>/dev/null; then
+  kill -KILL "$SECOND_PID" 2>/dev/null || true
+  wait "$SECOND_PID" 2>/dev/null || true
+  fail "second instance did not exit within 20s (single-instance lock not enforced)"
+fi
 set +e
-HOME="$HOME" "$BIN" >"$WORK/second.log" 2>&1
+wait "$SECOND_PID"
 SECOND_CODE=$?
 set -e
 [[ $SECOND_CODE -ne 0 ]] || fail "second instance exited 0 (should refuse the data-directory lock)"

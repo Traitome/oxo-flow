@@ -350,7 +350,11 @@ export default function Layout() {
             ref={drawerToggleRef}
             onClick={() => setDrawerOpen(true)}
             aria-label={t('login.openMenu')}
-            aria-controls="app-sidebar"
+            aria-expanded={drawerOpen}
+            // The mobile drawer is mounted only while open; pointing
+            // aria-controls at a missing id is an axe aria-valid-attr-value
+            // violation at phone widths (issue #1151).
+            aria-controls={drawerOpen ? 'app-sidebar' : undefined}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
