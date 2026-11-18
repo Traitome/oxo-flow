@@ -594,6 +594,16 @@ impl EnvironmentSpec {
         }
     }
 
+    /// Whether this spec runs the rule through a local container runtime
+    /// the engine invokes as a host binary (`docker run`, `apptainer
+    /// exec`). Only such rules need the container-daemon ambient variables
+    /// re-admitted into their cleared rule shell (issue #1173, RB-15
+    /// residual); a podman backend is not wired, so it is not included.
+    #[must_use]
+    pub fn is_container_runtime(&self) -> bool {
+        matches!(self.kind(), "docker" | "singularity")
+    }
+
     /// Parse a `conda`/`mamba` spec as an inline package list.
     ///
     /// The AI-facing form — `conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24"`

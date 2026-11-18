@@ -3012,7 +3012,12 @@ impl LocalExecutor {
             // itself (issue #907): a hook that stages temp files must land
             // on the configured volume, not the system default.
             insert_tmpdir_vars(&mut pre_envs, self.config.tmp_dir.as_deref());
-            let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
+            let pre_child = spawn_rule_shell(
+                &rendered_pre,
+                rule_cwd,
+                &pre_envs,
+                rule.environment.is_container_runtime(),
+            );
             let pre_result = match pre_child {
                 Ok(child) => wait_bounded(child, Some(hook_timeout_duration())).await,
                 Err(e) => {
@@ -3100,7 +3105,12 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let mut child = match spawn_rule_shell(cmd, rule_cwd, &rule_envs) {
+                let mut child = match spawn_rule_shell(
+                    cmd,
+                    rule_cwd,
+                    &rule_envs,
+                    rule.environment.is_container_runtime(),
+                ) {
                     Ok(child) => child,
                     Err(e) => {
                         // The shell never started — no diagnostic files can
@@ -3840,6 +3850,45 @@ fn build_execution_command_inner(
 /// here.
 pub(crate) const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
 
+/// Ambient variables re-admitted into a rule shell **only when that rule
+/// runs through a local container runtime** — docker or
+/// singularity/apptainer — which the engine itself invokes as a host
+/// binary inside the otherwise env-cleared rule shell (issue #1173, RB-15
+/// residual).
+///
+/// These names configure the container CLI's daemon/cache plumbing, not the
+/// workflow: dropping them silently rerouted a pre-#1113 remote-daemon
+/// setup to the default local socket, with no hint. The admission is a
+/// deliberate, documented trade — the engine cannot run a remote daemon or
+/// reuse an operator cache it cannot see — and it never widens the bare
+/// (non-container) path's allowlist.
+///
+/// Exact names, deliberately NOT a `DOCKER_*`/`APPTAINER_*` prefix:
+/// prefix admission would re-admit unknown future credential-bearing
+/// variables (`DOCKER_AUTH_CONFIG`, …). Anything else needs a rule-level
+/// `envvars` entry or the operator's `OXO_FLOW_ENV_PASSTHROUGH`.
+/// `PODMAN_*` is absent because no podman backend is wired.
+pub const CONTAINER_DAEMON_ENV_VARS: &[&str] = &[
+    // Docker CLI: remote daemon endpoint, client config dir, TLS material,
+    // build backend.
+    "DOCKER_HOST",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_BUILDKIT",
+    // Apptainer / Singularity: image and build caches, extra bind mounts,
+    // scratch and local cache dirs (both spellings — upstream renamed the
+    // SINGULARITY_* variables, deployments still set either).
+    "APPTAINER_CACHEDIR",
+    "SINGULARITY_CACHEDIR",
+    "APPTAINER_BIND",
+    "SINGULARITY_BIND",
+    "APPTAINER_TMPDIR",
+    "SINGULARITY_TMPDIR",
+    "APPTAINER_LOCALCACHEDIR",
+    "SINGULARITY_LOCALCACHEDIR",
+];
+
 /// Escape hatch for ambient variables a workflow legitimately needs
 /// (issue #1108): a comma-separated list of names, each re-admitted from
 /// the engine's environment into rule shells.
@@ -3878,13 +3927,16 @@ pub(crate) fn env_passthrough_names() -> Vec<String> {
 /// Rebuild a rule/hook shell's environment from scratch (issue #1108,
 /// RB-15): `env_clear()` drops everything the engine process carries —
 /// API tokens, cloud credentials, proxy settings, the operator's shell —
-/// and only three things reach the child:
+/// and only these reach the child:
 ///
 /// 1. the ambient allowlist ([`RULE_ENV_ALLOWLIST`] plus every `LC_*`),
-/// 2. any [`ENV_PASSTHROUGH_ENV`] names the operator opted in, and
-/// 3. the declared `envs` map last, so a rule's own `envvars`
+/// 2. any [`ENV_PASSTHROUGH_ENV`] names the operator opted in,
+/// 3. [`CONTAINER_DAEMON_ENV_VARS`] when `container_daemon` is set — the
+///    rule's environment kind is docker/singularity, so the engine is
+///    about to invoke that CLI from this very shell (issue #1173), and
+/// 4. the declared `envs` map last, so a rule's own `envvars`
 ///    (and the sensitive-value + `TMPDIR`/`TMP`/`TEMP` injection layered
-///    onto it by the caller) always wins over the ambient allowlist.
+///    onto it by the caller) always wins over every ambient source.
 ///
 /// Shared by every rule-shell spawn site: [`spawn_rule_shell`] is the one
 /// choke point covering the rule command, `pre_exec`, rule-level hooks,
@@ -3892,8 +3944,15 @@ pub(crate) fn env_passthrough_names() -> Vec<String> {
 /// (invariant "Reuse, never retype"). Env setup/teardown/verify commands
 /// (`sh -c` for conda/pixi/venv tooling) deliberately do NOT go through
 /// this helper — they are engine tooling, not workflow-authored commands.
-pub(super) fn apply_rule_env_allowlist(cmd: &mut Command, envs: &HashMap<String, String>) {
-    apply_rule_env_allowlist_with(cmd, envs, &env_passthrough_names());
+///
+/// `container_daemon` must be `true` only for rules whose environment
+/// kind is docker or singularity; the bare path's allowlist never widens.
+pub(super) fn apply_rule_env_allowlist(
+    cmd: &mut Command,
+    envs: &HashMap<String, String>,
+    container_daemon: bool,
+) {
+    apply_rule_env_allowlist_with(cmd, envs, &env_passthrough_names(), container_daemon);
 }
 
 /// The policy body of [`apply_rule_env_allowlist`], with the operator
@@ -3906,12 +3965,38 @@ pub(super) fn apply_rule_env_allowlist_with(
     cmd: &mut Command,
     envs: &HashMap<String, String>,
     passthrough: &[String],
+    container_daemon: bool,
+) {
+    apply_rule_env_allowlist_from(cmd, envs, passthrough, container_daemon, &|name| {
+        std::env::var_os(name)
+    });
+}
+
+/// The decision-making body of [`apply_rule_env_allowlist_with`] with the
+/// ambient environment injected: production passes `std::env::var_os`, and
+/// tests pass a synthetic map so they can assert admission **values** of
+/// variables (`DOCKER_HOST`, …) the test process does not normally carry
+/// without `std::env::set_var` (unsafe in edition 2024; this crate forbids
+/// unsafe code).
+///
+/// Scope of the injection: every name-addressed lookup (`RULE_ENV_ALLOWLIST`,
+/// passthrough, container-daemon names) goes through `ambient`. The `LC_*`
+/// family is matched by PREFIX and therefore still enumerates the real
+/// `std::env::vars_os()` — tests that observe the child environment can see
+/// the developer's own locale variables, but no production behavior depends
+/// on the injection for that branch.
+fn apply_rule_env_allowlist_from(
+    cmd: &mut Command,
+    envs: &HashMap<String, String>,
+    passthrough: &[String],
+    container_daemon: bool,
+    ambient: &dyn Fn(&str) -> Option<std::ffi::OsString>,
 ) {
     cmd.env_clear();
     // Ambient allowlist: the bare minimum a POSIX shell needs. `var_os`
     // (not `var`) so a non-UTF-8 value is passed through verbatim.
     for key in RULE_ENV_ALLOWLIST {
-        if let Some(value) = std::env::var_os(key) {
+        if let Some(value) = ambient(key) {
             cmd.env(key, value);
         }
     }
@@ -3924,11 +4009,21 @@ pub(super) fn apply_rule_env_allowlist_with(
     }
     // Operator escape hatch: re-admit named ambient variables.
     for name in passthrough {
-        if let Some(value) = std::env::var_os(name) {
+        if let Some(value) = ambient(name) {
             cmd.env(name, value);
         }
     }
-    // Declared environment last — it overrides the ambient allowlist.
+    // Container-daemon plumbing (issue #1173): only a rule the engine runs
+    // through a local docker/apptainer CLI gets these; a bare rule's shell
+    // stays strictly on the base allowlist.
+    if container_daemon {
+        for name in CONTAINER_DAEMON_ENV_VARS {
+            if let Some(value) = ambient(name) {
+                cmd.env(name, value);
+            }
+        }
+    }
+    // Declared environment last — it overrides every ambient source above.
     cmd.envs(envs);
 }
 
@@ -3943,12 +4038,14 @@ pub(super) fn spawn_rule_shell(
     cmd: &str,
     workdir: &std::path::Path,
     envs: &HashMap<String, String>,
+    container_daemon: bool,
 ) -> std::io::Result<tokio::process::Child> {
     fn shell_command(
         shell: &str,
         cmd: &str,
         workdir: &std::path::Path,
         envs: &HashMap<String, String>,
+        container_daemon: bool,
     ) -> tokio::process::Command {
         let mut c = tokio::process::Command::new(shell);
         // #524: an aborted task (run abort, SIGINT) drops its in-flight
@@ -3960,7 +4057,9 @@ pub(super) fn spawn_rule_shell(
         c.arg("-c").arg(cmd).current_dir(workdir);
         // Issue #1108 (RB-15): rule shells get a cleared environment plus
         // the shared allowlist — never the engine's ambient environment.
-        apply_rule_env_allowlist(&mut c, envs);
+        // Issue #1173: a container rule additionally admits the docker/
+        // apptainer daemon config the wrapper CLI is about to read.
+        apply_rule_env_allowlist(&mut c, envs, container_daemon);
         // stdin is explicitly null (issue #101): tokio's default is INHERIT,
         // so a TTY-launched `oxo-flow run` would hand the terminal to every
         // rule — stdin-polling tools can park forever on it. Null stdin is
@@ -3970,11 +4069,11 @@ pub(super) fn spawn_rule_shell(
         c.stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     }
-    match shell_command("bash", cmd, workdir, envs).spawn() {
+    match shell_command("bash", cmd, workdir, envs, container_daemon).spawn() {
         Ok(child) => Ok(child),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             warn_shell_fallback_once();
-            shell_command("sh", cmd, workdir, envs).spawn()
+            shell_command("sh", cmd, workdir, envs, container_daemon).spawn()
         }
         Err(e) => Err(e),
     }
@@ -4813,7 +4912,12 @@ async fn run_hook(
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = rule.envvars.clone();
     insert_tmpdir_vars(&mut envs, tmp_dir);
-    let child = match spawn_rule_shell(&cmd, workdir, &envs) {
+    let child = match spawn_rule_shell(
+        &cmd,
+        workdir,
+        &envs,
+        rule.environment.is_container_runtime(),
+    ) {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
@@ -4867,7 +4971,7 @@ pub async fn run_workflow_hook(
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
     let mut envs = HashMap::new();
     insert_tmpdir_vars(&mut envs, tmp_dir);
-    let child = match spawn_rule_shell(&cmd, workdir, &envs) {
+    let child = match spawn_rule_shell(&cmd, workdir, &envs, false) {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(error = %e, "failed to spawn workflow hook");
@@ -6425,6 +6529,7 @@ mod tests {
             "seq 1 2000000 >&2",
             std::path::Path::new("/tmp"),
             &HashMap::new(),
+            false,
         )
         .unwrap();
         let waited = wait_bounded(child, None).await.unwrap();
@@ -6440,8 +6545,13 @@ mod tests {
     async fn wait_bounded_times_out_a_hung_child() {
         // H-3: a hook that hangs must not hang the run forever — the
         // deadline abandons the wait (the child dies via kill_on_drop).
-        let child =
-            spawn_rule_shell("sleep 30", std::path::Path::new("/tmp"), &HashMap::new()).unwrap();
+        let child = spawn_rule_shell(
+            "sleep 30",
+            std::path::Path::new("/tmp"),
+            &HashMap::new(),
+            false,
+        )
+        .unwrap();
         let waited = wait_bounded(child, Some(std::time::Duration::from_millis(100)))
             .await
             .unwrap();
@@ -6499,7 +6609,7 @@ mod tests {
     fn apply_rule_env_allowlist_clears_ambient_environment() {
         let envs = HashMap::new();
         let mut cmd = Command::new("sh");
-        apply_rule_env_allowlist_with(&mut cmd, &envs, &[]);
+        apply_rule_env_allowlist_with(&mut cmd, &envs, &[], false);
         // `env_clear()` + re-add: `get_envs()` exposes the exact set handed
         // to the child. Any name outside {PATH, HOME, LANG, LC_*} proves the
         // clear did not happen (or leaked an unlisted credential such as
@@ -6538,7 +6648,7 @@ mod tests {
             ("TEMP".to_string(), "/scratch/oxo".to_string()),
         ]);
         let mut cmd = Command::new("sh");
-        apply_rule_env_allowlist_with(&mut cmd, &envs, &[]);
+        apply_rule_env_allowlist_with(&mut cmd, &envs, &[], false);
         let found: HashMap<String, String> = cmd
             .as_std()
             .get_envs()
@@ -6583,7 +6693,7 @@ mod tests {
         let envs = HashMap::new();
 
         let mut listed = Command::new("sh");
-        apply_rule_env_allowlist_with(&mut listed, &envs, &[ambient_name.to_string()]);
+        apply_rule_env_allowlist_with(&mut listed, &envs, &[ambient_name.to_string()], false);
         let kept: Vec<String> = listed
             .as_std()
             .get_envs()
@@ -6595,7 +6705,7 @@ mod tests {
         );
 
         let mut unlisted = Command::new("sh");
-        apply_rule_env_allowlist_with(&mut unlisted, &envs, &[]);
+        apply_rule_env_allowlist_with(&mut unlisted, &envs, &[], false);
         let hidden: Vec<String> = unlisted
             .as_std()
             .get_envs()
@@ -6604,6 +6714,144 @@ mod tests {
         assert!(
             !hidden.iter().any(|k| k == ambient_name),
             "an ambient variable that is not listed must stay hidden: {hidden:?}"
+        );
+    }
+
+    /// Final environment the builder hands to the child, as owned strings.
+    fn child_env(cmd: &Command) -> HashMap<String, String> {
+        cmd.as_std()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Issue #1173 (RB-15 residual): a docker/singularity rule's shell
+    /// admits the container-daemon variables its local `docker run` /
+    /// `apptainer exec` wrapper is about to read; a bare rule's shell does
+    /// not. Values are asserted (not just presence) against an injected
+    /// ambient map, because `DOCKER_HOST` is not normally set in the test
+    /// process and mutating the real environment would need the `unsafe`
+    /// `std::env::set_var` this crate forbids.
+    #[test]
+    fn container_daemon_vars_admitted_only_for_container_rules() {
+        let ambient = HashMap::from([
+            ("DOCKER_HOST", "tcp://remote.example:2376"),
+            ("DOCKER_CERT_PATH", "/etc/docker/certs"),
+            ("APPTAINER_CACHEDIR", "/scratch/apptainer-cache"),
+            ("SINGULARITY_BIND", "/data:/data"),
+            ("UNRELATED_SECRET", "must-not-leak"),
+        ]);
+        let lookup = |name: &str| ambient.get(name).map(std::ffi::OsString::from);
+
+        let docker_rule = crate::RuleBuilder::new("docker_rule")
+            .shell("true")
+            .environment(EnvironmentSpec {
+                docker: Some("biocontainers/bwa:0.7.17".to_string()),
+                ..Default::default()
+            })
+            .build();
+        assert!(
+            docker_rule.environment.is_container_runtime(),
+            "a docker rule must be recognized as a container runtime"
+        );
+        let mut docker_cmd = Command::new("sh");
+        apply_rule_env_allowlist_from(
+            &mut docker_cmd,
+            &HashMap::new(),
+            &[],
+            docker_rule.environment.is_container_runtime(),
+            &lookup,
+        );
+        let docker_env = child_env(&docker_cmd);
+        assert_eq!(
+            docker_env.get("DOCKER_HOST").map(String::as_str),
+            Some("tcp://remote.example:2376"),
+            "a docker rule's shell must carry the ambient daemon endpoint: {docker_env:?}"
+        );
+        assert_eq!(
+            docker_env.get("DOCKER_CERT_PATH").map(String::as_str),
+            Some("/etc/docker/certs"),
+            "a docker rule's shell must carry the ambient TLS cert path: {docker_env:?}"
+        );
+        assert_eq!(
+            docker_env.get("APPTAINER_CACHEDIR").map(String::as_str),
+            Some("/scratch/apptainer-cache"),
+            "a container rule's shell must carry the ambient apptainer cache: {docker_env:?}"
+        );
+        assert_eq!(
+            docker_env.get("SINGULARITY_BIND").map(String::as_str),
+            Some("/data:/data"),
+            "a container rule's shell must carry the ambient singularity binds: {docker_env:?}"
+        );
+        assert!(
+            !docker_env.contains_key("UNRELATED_SECRET"),
+            "container admission must be an exact-name list, never a prefix: {docker_env:?}"
+        );
+
+        let singularity_rule = crate::RuleBuilder::new("singularity_rule")
+            .shell("true")
+            .environment(EnvironmentSpec {
+                singularity: Some("library://sylabs/examples/singularity:latest".to_string()),
+                ..Default::default()
+            })
+            .build();
+        assert!(
+            singularity_rule.environment.is_container_runtime(),
+            "a singularity rule must be recognized as a container runtime"
+        );
+
+        let bare_rule = crate::RuleBuilder::new("bare_rule").shell("true").build();
+        assert!(
+            !bare_rule.environment.is_container_runtime(),
+            "a rule without a container environment must not widen the allowlist"
+        );
+        let mut bare_cmd = Command::new("sh");
+        apply_rule_env_allowlist_from(
+            &mut bare_cmd,
+            &HashMap::new(),
+            &[],
+            bare_rule.environment.is_container_runtime(),
+            &lookup,
+        );
+        let bare_env = child_env(&bare_cmd);
+        for name in [
+            "DOCKER_HOST",
+            "DOCKER_CERT_PATH",
+            "APPTAINER_CACHEDIR",
+            "SINGULARITY_BIND",
+        ] {
+            assert!(
+                !bare_env.contains_key(name),
+                "a bare rule's shell must not admit {name}: {bare_env:?}"
+            );
+        }
+    }
+
+    /// Issue #1173: the rule's declared `envvars` map still wins over the
+    /// admitted ambient container-daemon copy (the declared map is applied
+    /// last, so an explicit override is never shadowed by the ambient one).
+    #[test]
+    fn declared_envvars_override_ambient_container_daemon_vars() {
+        let ambient = HashMap::from([("DOCKER_HOST", "tcp://remote.example:2376")]);
+        let lookup = |name: &str| ambient.get(name).map(std::ffi::OsString::from);
+        let envs = HashMap::from([(
+            "DOCKER_HOST".to_string(),
+            "unix:///run/user/1000/docker.sock".to_string(),
+        )]);
+        let mut cmd = Command::new("sh");
+        apply_rule_env_allowlist_from(&mut cmd, &envs, &[], true, &lookup);
+        let found = child_env(&cmd);
+        assert_eq!(
+            found.get("DOCKER_HOST").map(String::as_str),
+            Some("unix:///run/user/1000/docker.sock"),
+            "a declared DOCKER_HOST must override the ambient one: {found:?}"
         );
     }
 
