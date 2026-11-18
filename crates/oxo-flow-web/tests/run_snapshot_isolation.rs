@@ -84,7 +84,7 @@ if [ -f "$wd/workflow.oxoflow" ]; then
   cksum "$wd/workflow.oxoflow" > "$wd/.probe-first"
 fi
 if grep -q "slow-snapshot-probe" "$wd/workflow.oxoflow" 2>/dev/null; then
-  sleep 2
+  sleep 5
 fi
 if [ -f "$wd/workflow.oxoflow" ]; then
   cksum "$wd/workflow.oxoflow" > "$wd/.probe-second"
