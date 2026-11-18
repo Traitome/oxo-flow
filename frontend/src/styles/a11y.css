@@ -6,6 +6,40 @@
  * records the measured contrast ratio that motivated it.
  */
 
+/* TOML editor syntax palette (#1223 UX-09). CodeMirror's built-in default
+   highlight style is light-only: on the dark editor background its
+   key/string/atom/comment colors measured 1.43–2.84:1 — a serious
+   color-contrast violation. These tokens are consumed by the
+   HighlightStyle in TomlEditor.tsx and switch with the theme, so BOTH
+   themes pass AA on all three editor background shades. Dark minimums
+   (against --color-bg / --color-bg-secondary / --color-bg-tertiary):
+   key 7.77:1, string 7.95:1, value 9.37:1, bracket 7.94:1, comment 6.35:1.
+   Light minimums: key 6.60:1, string 6.84:1, value 6.79:1, bracket 7.91:1,
+   comment 5.38:1. */
+:root {
+  --toml-key: #0B4FBF;
+  --toml-string: #A3201F;
+  --toml-value: #7A4A00;
+  --toml-bracket: #3F4C5E;
+  --toml-comment: #5A6572;
+}
+:root[data-theme="dark"] {
+  --toml-key: #8FC0FF;
+  --toml-string: #FFA8A8;
+  --toml-value: #F3C97B;
+  --toml-bracket: #B4C0D0;
+  --toml-comment: #9FACBE;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --toml-key: #8FC0FF;
+    --toml-string: #FFA8A8;
+    --toml-value: #F3C97B;
+    --toml-bracket: #B4C0D0;
+    --toml-comment: #9FACBE;
+  }
+}
+
 /* Light theme: #0F9D6E on #E9F9F2 measured 3.18:1; #0B7A55 measures 4.9:1.
    Dark theme keeps its own --color-success through the more specific
    selectors in index.css. */

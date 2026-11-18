@@ -270,6 +270,11 @@
   outline-offset: 2px;
 }
 
+/* Visually-hidden text that stays in the accessibility tree. Shared by the
+   Metro canvas (`.rf-metro-sr-only`) and the standard rule card
+   (`.rf-sr-only`). axe's clipHidden/overflowHidden rules keep it out of the
+   computed VISIBLE text, so it can never widen a label-content match. */
+.rf-sr-only,
 .rf-metro-sr-only {
   position: absolute;
   width: 1px;

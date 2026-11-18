@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -51,12 +51,31 @@ const ENV_LABELS: Record<string, string> = {
 function RuleNodeCard({ data, selected }: NodeProps<Node<RuleNodeData>>) {
   const d = data as RuleNodeData;
   const { t } = useI18n();
+  // #1223 UX-09: the card is a role="button" that opens the Rule Inspector on
+  // double-click / Enter / Space. Its accessible name must contain its VISIBLE
+  // text (rule name, environment, shell) as a CONTIGUOUS token run, or axe's
+  // label-content-name-mismatch fires. `aria-labelledby` composes the name from
+  // the very nodes rendered on screen, joined with a single space; axe's
+  // visible-text walk instead concatenates their contents with no separator, so
+  // without an explicit space between the nodes "fastqc" + "system" merge into
+  // the single token "fastqcsystem" and can never be found in the space-joined
+  // accessible name. The `{' '}` separators below keep the two token streams
+  // identical. A screen-reader-only "Edit rule" hint (excluded from visible text
+  // by axe) supplies the action verb without widening the visible string.
+  const baseId = useId();
+  const hintId = `${baseId}-hint`;
+  const nameId = `${baseId}-name`;
+  const metaId = `${baseId}-meta`;
+  const shellId = `${baseId}-shell`;
+  const labelledBy = [hintId, nameId, metaId, d.shell ? shellId : null]
+    .filter((id): id is string => id !== null)
+    .join(' ');
   return (
     <div
       className={`rf-rule-node ${d.status ? `node-status-${d.status}` : ''} ${selected ? 'selected' : ''}`}
       role="button"
       tabIndex={0}
-      aria-label={t('canvas.editRuleAria').replace('{{name}}', d.label)}
+      aria-labelledby={labelledBy}
       onDoubleClick={(e) => {
         e.stopPropagation();
         d.onEdit?.(d.label);
@@ -69,17 +88,31 @@ function RuleNodeCard({ data, selected }: NodeProps<Node<RuleNodeData>>) {
       }}
       title={d.description || d.label}
     >
+      <span id={hintId} className="rf-sr-only">
+        {t('canvas.editRuleHint')}
+      </span>
       <Handle type="target" position={Position.Left} className="rf-handle" />
-      <div className="rf-rule-name">
+      <div className="rf-rule-name" id={nameId}>
         {d.label}
         {d.transform && <span className="rf-transform-badge" title={t('canvas.transformTitle')}>⇄</span>}
       </div>
-      <div className="rf-rule-meta">
+      {/* Explicit separators: axe's visible-text walk joins child nodes with no
+          space, so adjacent blocks ("fastqc" + "system") would fuse into one
+          token and never match the space-joined accessible name (#1223). */}
+      {' '}
+      <div className="rf-rule-meta" id={metaId}>
         <span className={`rf-env-dot rf-env-${d.environment}`} aria-hidden />
         <span className="rf-env-label">{ENV_LABELS[d.environment] ?? d.environment}</span>
         {d.status && <span className="rf-rule-status">{d.status}</span>}
       </div>
-      {d.shell && <div className="rf-rule-shell">{d.shell}</div>}
+      {d.shell && (
+        <>
+          {' '}
+          <div className="rf-rule-shell" id={shellId}>
+            {d.shell}
+          </div>
+        </>
+      )}
       <Handle type="source" position={Position.Right} className="rf-handle" />
     </div>
   );

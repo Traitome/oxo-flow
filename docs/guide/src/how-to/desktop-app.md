@@ -212,10 +212,50 @@ cd crates/oxo-flow-desktop && cargo run --release
 
 ## Windows
 
-There is no Windows bundle yet — the release pipeline does not build one
-(`cargo-bundle`'s `msi` format requires a Windows host). Windows users run
-the Linux binaries under WSL2. The desktop crate itself compiles for
-Windows (wry uses WebView2) but is not packaged by CI yet.
+**Support status: source-compatible, not built, not tested (issue #1223).**
+Be precise about what that means:
+
+- **It compiles.** The desktop crate carries Windows code paths
+  (`#[cfg(windows)]` in `crates/oxo-flow-desktop/src/main.rs`: `USERPROFILE`
+  instead of `HOME`, the `explorer` opener instead of `cmd /c start`), and
+  wry targets WebView2 on Windows. No CI job builds it for Windows, so
+  "compiles" is a claim about the source, not a verified artifact.
+- **No bundle ships.** The release pipeline builds no Windows installer
+  (`cargo-bundle`'s `msi` format needs a Windows host, and there is no
+  Windows CI runner). Windows users run the Linux binaries under WSL2.
+- **No Windows lifecycle test.** The lifecycle smoke test below is a POSIX
+  bash script — it uses `flock`, `SIGTERM`, and (on headless Linux) a private
+  Xvfb display, none of which exist on Windows. It cannot run on Windows as
+  written, and there is no Windows CI runner, so the Windows desktop
+  lifecycle is **unmeasured**.
+
+To exercise the shell on Windows by hand, build it with its own cargo
+invocation (`cd crates/oxo-flow-desktop && cargo build --release`) after the
+SPA build above; it needs the WebView2 runtime (preinstalled on Windows
+10/11) and MSVC Build Tools. The three properties `desktop-smoke.sh` asserts
+can be checked with this PowerShell sketch (manual, unverified — Windows uses
+no SIGTERM, so the clean-exit check is "close the window" rather than a
+signal):
+
+```powershell
+$bin = "crates\oxo-flow-desktop\target\release\oxo-flow-desktop.exe"
+$home_tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid()))
+# USERPROFILE is the Windows equivalent of the script's isolated HOME.
+$env:USERPROFILE = $home_tmp; $env:HOME = $home_tmp
+$p = Start-Process $bin -PassThru
+# 1. the shell anchors its data dir and brings up the embedded server
+$data = Join-Path $home_tmp ".oxo-flow\desktop"
+while (-not (Test-Path (Join-Path $data "oxo-flow.db"))) { Start-Sleep -Milliseconds 500 }
+# 2. a second launch must refuse the single-instance lock
+$p2 = Start-Process $bin -PassThru -Wait
+if ($p2.ExitCode -eq 0) { throw "second instance should have refused the lock" }
+# 3. close the window (the documented shutdown path) and confirm exit
+Stop-Process $p  # window close; no SIGTERM on Windows
+```
+
+This variant is provided for completeness and is **not** run by CI; treat any
+Windows result as unverified until a Windows runner and a `pwsh` port of the
+smoke test exist.
 
 ## Verification
 

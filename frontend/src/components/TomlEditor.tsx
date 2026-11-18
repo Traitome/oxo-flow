@@ -1,8 +1,27 @@
 import { useRef, useEffect, useState } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
-import { StreamLanguage } from '@codemirror/language';
+import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
+import { tags } from '@lezer/highlight';
+
+// #1223 UX-09: CodeMirror's built-in defaultHighlightStyle is a LIGHT
+// palette; on the dark editor background its key/string/atom/comment colors
+// measured 1.4–2.8:1 (axe color-contrast). `basicSetup` applies that style
+// with `fallback: true`, so any style registered here displaces it entirely —
+// this ONE style must therefore cover every token the TOML mode emits
+// (property, string, atom/bool/number, bracket, comment). The colors are
+// theme-aware CSS variables defined in styles/a11y.css, each measured AA
+// (>= 4.5:1) against --color-bg / --color-bg-secondary / --color-bg-tertiary
+// in its own theme.
+const tomlHighlightStyle = HighlightStyle.define([
+  // keys + table headers
+  { tag: [tags.propertyName, tags.definition(tags.propertyName)], color: 'var(--toml-key)' },
+  { tag: [tags.atom, tags.bool, tags.number], color: 'var(--toml-value)' },
+  { tag: tags.string, color: 'var(--toml-string)' },
+  { tag: tags.bracket, color: 'var(--toml-bracket)' },
+  { tag: tags.comment, color: 'var(--toml-comment)', fontStyle: 'italic' },
+]);
 
 interface TomlEditorProps {
   value: string;
@@ -37,6 +56,9 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
         // TOML syntax highlighting (issue #82 P2-2): previously the core
         // editor rendered as one flat color.
         StreamLanguage.define(toml),
+        // AA syntax palette for both themes (#1223 UX-09); replaces the
+        // light-only defaultHighlightStyle that basicSetup installs.
+        syntaxHighlighting(tomlHighlightStyle),
         // CodeMirror renders a role="textbox" with no name unless one is
         // supplied; axe reports aria-input-field-name without this (#1151).
         EditorView.contentAttributes.of({ 'aria-label': 'Workflow TOML' }),
