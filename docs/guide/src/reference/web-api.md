@@ -1307,8 +1307,28 @@ POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_cont
 POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
 ```
 
-`undo`/`redo` require a JSON body carrying the caller's current TOML; the
-stacked edit is applied only when it matches that state (otherwise `404`).
+`undo`/`redo` require a JSON body carrying the caller's current TOML; a
+recorded transition is applied only when it matches that state exactly.
+
+**Scope, caps, and lifetime (issue #1137).**
+
+- **Scope** — history is keyed by the acting identity *and* the pipeline id.
+  The identity is the same `users.id` the other pipeline handlers resolve
+  (the authenticated session/API-key user; the `default` pseudo-user in
+  personal mode). Two users editing the same pipeline id own independent
+  stacks and cannot see or undo each other's edits.
+- **Caps** — at most `MAX_EDIT_HISTORY_DEPTH` (50) transitions per stack;
+  the oldest is dropped on overflow. At most `MAX_EDIT_HISTORY_PIPELINES`
+  (256) stacks are kept process-wide; recording an edit for a new
+  identity/pipeline pair evicts the least-recently-used stack.
+- **Lifetime** — history is in-memory only. A server restart empties every
+  stack, and `undo`/`redo` then fail closed with HTTP `409` and code
+  `EDIT_HISTORY_UNAVAILABLE` (with a suggestion to re-apply the change)
+  instead of silently no-opping or guessing an undo target. A client
+  document that is not the recorded history tip is refused with HTTP `409`
+  and `EDIT_HISTORY_STALE`; `404 NO_UNDO` / `NO_REDO` mean history exists
+  but that direction is exhausted.
+
 See [DAG Edit API](dag-edit-api.md) for the full command reference.
 
 ---

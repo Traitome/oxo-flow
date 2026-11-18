@@ -28,18 +28,197 @@ pub struct DagEditResponse {
     pub validation_errors: Vec<String>,
 }
 
-#[allow(clippy::type_complexity)]
-/// Undo/redo history per draft id: each entry is a (from, to) TOML
-/// transition, so redo can actually restore the post-edit state (issue #79
-/// P1-09: the old design stored only pre-edit snapshots, so redo could not
-/// produce the state it claimed to restore — and never pushed back either).
-static EDIT_STACKS: std::sync::LazyLock<
-    Mutex<HashMap<String, (Vec<(String, String)>, Vec<(String, String)>)>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Maximum number of undo transitions retained per (identity, pipeline)
+/// history stack. Pushing an edit onto a full stack drops the oldest
+/// transition, so undo can walk back at most this many edits.
+pub const MAX_EDIT_HISTORY_DEPTH: usize = 50;
 
-fn stack_id(pipeline_id: &str) -> String {
-    pipeline_id.to_string()
+/// Maximum number of (identity, pipeline) history stacks kept process-wide.
+/// Recording an edit for a new pair evicts the least-recently-used stack, so
+/// a long-lived server serving many pipeline ids cannot grow without bound.
+pub const MAX_EDIT_HISTORY_PIPELINES: usize = 256;
+
+/// Outcome of an undo/redo request (see [`undo`] and [`redo`]).
+///
+/// The non-`Applied` variants are fail-closed: the caller is told why no
+/// edit was produced instead of receiving a silently-empty result or a
+/// guessed state (issue #1137).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryOutcome {
+    /// A transition was applied; the value is the destination TOML state.
+    Applied(String),
+    /// No history is recorded for this (identity, pipeline) pair — the
+    /// first edit has not happened yet, or the stack was lost (server
+    /// restart, LRU eviction). The HTTP layer answers
+    /// `409 EDIT_HISTORY_UNAVAILABLE`; an undo can never be guessed from
+    /// the client's document alone.
+    Unavailable,
+    /// History exists, but the caller's `current` TOML is not the tip of
+    /// the recorded history (stale or racing client). Nothing is applied;
+    /// the HTTP layer answers `409 EDIT_HISTORY_STALE`.
+    Stale,
+    /// History exists but the requested direction has nothing left to apply
+    /// (every recorded edit was already undone, or nothing was undone to
+    /// redo). Both stacks empty means no history at all ([`Self::Unavailable`]).
+    Exhausted,
 }
+
+/// Undo/redo history key: the owning identity *and* the pipeline id.
+///
+/// Two users editing pipelines that share an id own independent stacks, so
+/// neither can observe or undo the other's edits (issue #1137).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HistoryKey {
+    owner: String,
+    pipeline_id: String,
+}
+
+/// One (owner, pipeline) stack. Each undo entry is a `(from, to)` TOML
+/// transition, so redo can restore the post-edit state (issue #79 P1-09:
+/// the old design stored only pre-edit snapshots, so redo could not
+/// produce the state it claimed to restore — and never pushed back either).
+#[derive(Debug, Default)]
+struct HistoryEntry {
+    undo: Vec<(String, String)>,
+    redo: Vec<(String, String)>,
+    /// Monotonic use counter driving LRU eviction.
+    last_used: u64,
+}
+
+/// In-memory undo/redo history with documented bounds.
+///
+/// - **Scope**: one stack per (owning identity, pipeline id). The identity
+///   is the `CurrentUser.id` the auth middleware resolved for the request
+///   (`default` in personal mode).
+/// - **Bounds**: [`MAX_EDIT_HISTORY_DEPTH`] transitions per stack (oldest
+///   dropped), [`MAX_EDIT_HISTORY_PIPELINES`] stacks process-wide (LRU).
+/// - **Lifetime**: RAM only. A restart empties every stack, and undo/redo
+///   then fail closed with `EDIT_HISTORY_UNAVAILABLE` — the server never
+///   guesses an undo target from the client's document (issue #1137).
+#[derive(Debug)]
+struct EditHistory {
+    stacks: HashMap<HistoryKey, HistoryEntry>,
+    clock: u64,
+    max_depth: usize,
+    max_pipelines: usize,
+}
+
+impl EditHistory {
+    fn new(max_depth: usize, max_pipelines: usize) -> Self {
+        Self {
+            stacks: HashMap::new(),
+            clock: 0,
+            // A zero cap would mean "record nothing"; clamp to one instead
+            // so a misconfiguration cannot silently disable undo entirely.
+            max_depth: max_depth.max(1),
+            max_pipelines: max_pipelines.max(1),
+        }
+    }
+
+    fn tick(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    /// Record a successful `(from, to)` edit, refreshing the stack's LRU
+    /// position, dropping the oldest transition past the depth cap, and
+    /// clearing redo (standard undo/redo semantics).
+    fn record(&mut self, owner: &str, pipeline_id: &str, from: &str, to: &str) {
+        let tick = self.tick();
+        let key = HistoryKey {
+            owner: owner.to_string(),
+            pipeline_id: pipeline_id.to_string(),
+        };
+        let entry = self.stacks.entry(key.clone()).or_default();
+        entry.undo.push((from.to_string(), to.to_string()));
+        if entry.undo.len() > self.max_depth {
+            entry.undo.remove(0);
+        }
+        entry.redo.clear();
+        entry.last_used = tick;
+        self.evict_lru(&key);
+    }
+
+    /// Drop least-recently-used stacks until the process-wide cap holds.
+    /// The stack just touched is never the victim.
+    fn evict_lru(&mut self, keep: &HistoryKey) {
+        while self.stacks.len() > self.max_pipelines {
+            let victim = self
+                .stacks
+                .iter()
+                .filter(|(key, _)| *key != keep)
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone());
+            match victim {
+                Some(key) => {
+                    self.stacks.remove(&key);
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn undo(&mut self, owner: &str, pipeline_id: &str, current: &str) -> HistoryOutcome {
+        let key = HistoryKey {
+            owner: owner.to_string(),
+            pipeline_id: pipeline_id.to_string(),
+        };
+        let tick = self.tick();
+        let Some(entry) = self.stacks.get_mut(&key) else {
+            return HistoryOutcome::Unavailable;
+        };
+        entry.last_used = tick;
+        if entry.undo.is_empty() {
+            return if entry.redo.is_empty() {
+                HistoryOutcome::Unavailable
+            } else {
+                HistoryOutcome::Exhausted
+            };
+        }
+        // The top transition's `to` must equal the client's current state;
+        // checked before popping so a stale client changes nothing.
+        let top_matches = entry.undo.last().is_some_and(|(_, to)| to == current);
+        if !top_matches {
+            return HistoryOutcome::Stale;
+        }
+        let (from, to) = entry.undo.pop().expect("checked non-empty");
+        entry.redo.push((from.clone(), to));
+        HistoryOutcome::Applied(from)
+    }
+
+    fn redo(&mut self, owner: &str, pipeline_id: &str, current: &str) -> HistoryOutcome {
+        let key = HistoryKey {
+            owner: owner.to_string(),
+            pipeline_id: pipeline_id.to_string(),
+        };
+        let tick = self.tick();
+        let Some(entry) = self.stacks.get_mut(&key) else {
+            return HistoryOutcome::Unavailable;
+        };
+        entry.last_used = tick;
+        if entry.redo.is_empty() {
+            return if entry.undo.is_empty() {
+                HistoryOutcome::Unavailable
+            } else {
+                HistoryOutcome::Exhausted
+            };
+        }
+        let top_matches = entry.redo.last().is_some_and(|(from, _)| from == current);
+        if !top_matches {
+            return HistoryOutcome::Stale;
+        }
+        let (from, to) = entry.redo.pop().expect("checked non-empty");
+        entry.undo.push((from, to.clone()));
+        HistoryOutcome::Applied(to)
+    }
+}
+
+static EDIT_HISTORY: std::sync::LazyLock<Mutex<EditHistory>> = std::sync::LazyLock::new(|| {
+    Mutex::new(EditHistory::new(
+        MAX_EDIT_HISTORY_DEPTH,
+        MAX_EDIT_HISTORY_PIPELINES,
+    ))
+});
 
 /// Convert a serde_json::Value into a toml_edit Value (all JSON types map to
 /// the TOML equivalents; JSON `null` maps to an empty string, mirroring the
@@ -236,7 +415,12 @@ fn ensure_acyclic_after_connect(new_toml: &str, from: &str, to: &str) -> Result<
 }
 
 /// Parse TOML, apply edit on the document, validate.
+///
+/// `owner` is the acting user's canonical id (the same value the pipeline
+/// handlers resolve); it scopes the recorded undo history so identities
+/// never share a stack.
 pub fn execute_edit(
+    owner: &str,
     toml_content: &str,
     pipeline_id: &str,
     command: &DagEditCommand,
@@ -463,13 +647,8 @@ pub fn execute_edit(
     // Record the (from, to) transition only now — rejected edits leave the
     // history untouched (atomic rollback).
     {
-        let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
-        let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-        entry.0.push((toml_content.to_string(), new_toml.clone()));
-        if entry.0.len() > 50 {
-            entry.0.remove(0);
-        }
-        entry.1.clear();
+        let mut history = EDIT_HISTORY.lock().map_err(|_| "Lock poisoned")?;
+        history.record(owner, pipeline_id, toml_content, &new_toml);
     }
 
     Ok(DagEditResponse {
@@ -479,48 +658,34 @@ pub fn execute_edit(
     })
 }
 
-/// Undo the latest edit, given the client's current TOML.
+/// Undo the latest edit recorded by `owner` for `pipeline_id`.
 ///
-/// The (from, to) transition is verified against `current` — a stale or
-/// racing client simply gets `None` ("nothing to undo") instead of
-/// corrupting its state.
-pub fn undo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> {
-    let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
-    let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-    // The top transition's `to` must equal the client's current state.
-    // (Checked before popping — the borrow of `last()` cannot overlap the
-    // mutable `pop()`.)
-    let top_matches = entry.0.last().is_some_and(|(_, to)| to.as_str() == current);
-    if top_matches && let Some((from, to)) = entry.0.pop() {
-        entry.1.push((from.clone(), to));
-        Ok(Some(from))
-    } else {
-        Ok(None)
-    }
+/// The (from, to) transition is verified against `current`: a stale or
+/// racing client gets [`HistoryOutcome::Stale`] and the history is left
+/// untouched. No recorded history at all (first undo before any edit, or
+/// after a server restart / LRU eviction) gets
+/// [`HistoryOutcome::Unavailable`] — fail closed, never a guessed edit.
+pub fn undo(owner: &str, pipeline_id: &str, current: &str) -> Result<HistoryOutcome, String> {
+    let mut history = EDIT_HISTORY.lock().map_err(|_| "Lock poisoned")?;
+    Ok(history.undo(owner, pipeline_id, current))
 }
 
-/// Redo the latest undone edit, given the client's current TOML.
+/// Redo the latest edit `owner` undid for `pipeline_id`, given the client's
+/// current TOML.
 ///
 /// Pushes the transition back onto the undo stack (issue #79 P1-09: the old
 /// redo popped without pushing back, so the next undo had nothing to undo).
-pub fn redo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> {
-    let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
-    let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-    let top_matches = entry
-        .1
-        .last()
-        .is_some_and(|(from, _)| from.as_str() == current);
-    if top_matches && let Some((from, to)) = entry.1.pop() {
-        entry.0.push((from, to.clone()));
-        Ok(Some(to))
-    } else {
-        Ok(None)
-    }
+/// Fail-closed semantics mirror [`undo`].
+pub fn redo(owner: &str, pipeline_id: &str, current: &str) -> Result<HistoryOutcome, String> {
+    let mut history = EDIT_HISTORY.lock().map_err(|_| "Lock poisoned")?;
+    Ok(history.redo(owner, pipeline_id, current))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_OWNER: &str = "test-owner";
 
     const TEST_TOML: &str = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"\nshell = \"echo s1\"\n\n[[rules]]\nname = \"s2\"\nshell = \"echo s2\"\ndepends_on = [\"s1\"]\n";
 
@@ -531,7 +696,7 @@ mod tests {
             operation: "add_rule".into(),
             payload: serde_json::json!({"name": "s3", "shell": "echo s3"}),
         };
-        let r = execute_edit(TEST_TOML, "test-id", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "test-id", &cmd).unwrap();
         assert!(r.toml_content.contains("s3"), "should contain new rule");
     }
 
@@ -542,7 +707,7 @@ mod tests {
             operation: "update_params".into(),
             payload: serde_json::json!({"name": "s1", "threads": 8}),
         };
-        let r = execute_edit(TEST_TOML, "test-id", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "test-id", &cmd).unwrap();
         assert!(
             r.toml_content.contains("threads = 8"),
             "should update threads"
@@ -556,7 +721,7 @@ mod tests {
             operation: "disconnect".into(),
             payload: serde_json::json!({"from": "s1", "to": "s2"}),
         };
-        let r = execute_edit(TEST_TOML, "test-id", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "test-id", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let s2 = config.rules.iter().find(|r| r.name == "s2").unwrap();
         assert!(s2.depends_on.is_empty(), "dep should be removed");
@@ -569,11 +734,15 @@ mod tests {
             operation: "add_rule".into(),
             payload: serde_json::json!({"name": "ux", "shell": "ux"}),
         };
-        let edited = execute_edit(TEST_TOML, "ur-test", &cmd).unwrap();
+        let edited = execute_edit(TEST_OWNER, TEST_TOML, "ur-test", &cmd).unwrap();
         assert!(edited.toml_content.contains("ux"));
 
         // Undo with the edited state as current.
-        let undone = undo("ur-test", &edited.toml_content).unwrap().unwrap();
+        let HistoryOutcome::Applied(undone) =
+            undo(TEST_OWNER, "ur-test", &edited.toml_content).unwrap()
+        else {
+            panic!("expected an applied undo");
+        };
         assert!(
             !undone.contains("ux"),
             "undo should restore the pre-edit state"
@@ -581,12 +750,17 @@ mod tests {
 
         // Redo with the undone state as current — must restore the edit
         // (the old redo returned the wrong state and never pushed back).
-        let redone = redo("ur-test", &undone).unwrap().unwrap();
+        let HistoryOutcome::Applied(redone) = redo(TEST_OWNER, "ur-test", &undone).unwrap() else {
+            panic!("expected an applied redo");
+        };
         assert!(redone.contains("ux"), "redo must restore the edit");
 
         // And undo again — the redo must have pushed the pair back, so the
         // stack is not exhausted (issue #79 P1-09 "redo 不回填栈").
-        let undone_again = undo("ur-test", &redone).unwrap().unwrap();
+        let HistoryOutcome::Applied(undone_again) = undo(TEST_OWNER, "ur-test", &redone).unwrap()
+        else {
+            panic!("expected a second applied undo");
+        };
         assert!(!undone_again.contains("ux"));
     }
 
@@ -597,11 +771,18 @@ mod tests {
             operation: "add_rule".into(),
             payload: serde_json::json!({"name": "ux", "shell": "ux"}),
         };
-        let edited = execute_edit(TEST_TOML, "stale-test", &cmd).unwrap();
-        // A client whose state no longer matches the top transition gets
-        // None instead of a corrupting rollback.
-        assert!(undo("stale-test", TEST_TOML).unwrap().is_none());
-        assert!(undo("stale-test", &edited.toml_content).unwrap().is_some());
+        let edited = execute_edit(TEST_OWNER, TEST_TOML, "stale-test", &cmd).unwrap();
+        // A client whose state no longer matches the top transition is
+        // refused with `Stale` — never a corrupting rollback.
+        assert_eq!(
+            undo(TEST_OWNER, "stale-test", TEST_TOML).unwrap(),
+            HistoryOutcome::Stale
+        );
+        // The refused undo consumed nothing: the matching state still works.
+        assert!(matches!(
+            undo(TEST_OWNER, "stale-test", &edited.toml_content).unwrap(),
+            HistoryOutcome::Applied(_)
+        ));
     }
 
     #[test]
@@ -611,7 +792,7 @@ mod tests {
             operation: "add_rule".into(),
             payload: serde_json::json!({"name": "s3", "shell": "echo s3"}),
         };
-        let r = execute_edit(TEST_TOML, "v-test", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "v-test", &cmd).unwrap();
         assert!(r.success);
         assert!(r.success, "edit should succeed");
     }
@@ -634,7 +815,7 @@ mod tests {
                 }
             }),
         };
-        let r = execute_edit(TEST_TOML, "full-spec", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "full-spec", &cmd).unwrap();
         assert!(r.success, "{:?}", r.validation_errors);
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let rule = config
@@ -668,7 +849,7 @@ mod tests {
                 }
             }),
         };
-        let r = execute_edit(TEST_TOML, "patch-1", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "patch-1", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let s1 = config.rules.iter().find(|r| r.name == "s1").unwrap();
         assert_eq!(s1.shell.as_deref(), Some("process {input} > {output}"));
@@ -690,7 +871,7 @@ mod tests {
                 "patch": {"input": ["b.txt"]}
             }),
         };
-        let r = execute_edit(toml, "rewire-1", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, toml, "rewire-1", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let s2 = config.rules.iter().find(|r| r.name == "s2").unwrap();
         assert_eq!(s2.input, vec!["b.txt".to_string()].into());
@@ -709,7 +890,7 @@ mod tests {
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "s1", "patch": {"threads": null, "shell": "x"}}),
         };
-        let r = execute_edit(toml, "patch-null", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, toml, "patch-null", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         let s1 = config.rules.iter().find(|r| r.name == "s1").unwrap();
         assert_eq!(s1.shell.as_deref(), Some("x"));
@@ -727,7 +908,7 @@ mod tests {
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "nope", "patch": {"shell": "x"}}),
         };
-        assert!(execute_edit(TEST_TOML, "patch-2", &cmd).is_err());
+        assert!(execute_edit(TEST_OWNER, TEST_TOML, "patch-2", &cmd).is_err());
     }
 
     #[test]
@@ -739,7 +920,7 @@ mod tests {
                 "patch": {"workflow": {"name": "renamed", "version": "2.0.0", "description": "d"}}
             }),
         };
-        let r = execute_edit(TEST_TOML, "wf-patch", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "wf-patch", &cmd).unwrap();
         let config = WorkflowConfig::parse(&r.toml_content).unwrap();
         assert_eq!(config.workflow.name, "renamed");
         assert_eq!(config.workflow.version, "2.0.0");
@@ -787,7 +968,7 @@ depends_on = [\"align\"]
                 "patch": {"shell": "fastp --in1 {input} --out1 {output} --trim_poly_g"}
             }),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-comments", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-comments", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(r.success, "{:?}", r.validation_errors);
         // The patch applied.
@@ -810,7 +991,7 @@ depends_on = [\"align\"]
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "trim", "patch": {"shell": "fastp --trim_poly_g"}}),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-format", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-format", &cmd).unwrap();
         let out = &r.toml_content;
         // Only the patched value line may differ — everything else, including
         // the untouched rules' blocks, must be byte-identical.
@@ -829,7 +1010,7 @@ depends_on = [\"align\"]
             operation: "remove_rule".into(),
             payload: serde_json::json!({"name": "trim"}),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-remove", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-remove", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(r.success, "{:?}", r.validation_errors);
         assert!(!out.contains("name = \"trim\""));
@@ -867,7 +1048,7 @@ shell = \"echo s2\"
             operation: "connect".into(),
             payload: serde_json::json!({"from": "s1", "to": "s2"}),
         };
-        let r = execute_edit(toml, "p2-connect", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, toml, "p2-connect", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(out.contains("# the rule being connected"));
         let config = WorkflowConfig::parse(out).unwrap();
@@ -882,7 +1063,7 @@ shell = \"echo s2\"
             operation: "disconnect".into(),
             payload: serde_json::json!({"from": "align", "to": "index"}),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-disconnect", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-disconnect", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(r.success, "{:?}", r.validation_errors);
         // The emptied key disappears entirely from index — keeps the TOML
@@ -913,7 +1094,7 @@ shell = \"echo s2\"
                 }
             }),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-add", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-add", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(r.success, "{:?}", r.validation_errors);
         // Existing comments survive and the new rule lands at the end.
@@ -934,7 +1115,7 @@ shell = \"echo s2\"
             operation: "update_workflow".into(),
             payload: serde_json::json!({"patch": {"workflow": {"name": "renamed"}}}),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-wf", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-wf", &cmd).unwrap();
         let out = &r.toml_content;
         assert!(r.success, "{:?}", r.validation_errors);
         assert!(out.contains("# demo pipeline — hand-written, comments must survive edits"));
@@ -951,8 +1132,12 @@ shell = \"echo s2\"
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "trim", "patch": {"shell": "fastp --trim_poly_g"}}),
         };
-        let edited = execute_edit(COMMENTED_TOML, "p2-undo", &cmd).unwrap();
-        let undone = undo("p2-undo", &edited.toml_content).unwrap().unwrap();
+        let edited = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-undo", &cmd).unwrap();
+        let HistoryOutcome::Applied(undone) =
+            undo(TEST_OWNER, "p2-undo", &edited.toml_content).unwrap()
+        else {
+            panic!("expected an applied undo");
+        };
         assert_eq!(
             undone, COMMENTED_TOML,
             "undo must return the exact original"
@@ -967,7 +1152,7 @@ shell = \"echo s2\"
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "s1", "patch": {"shell": "x"}}),
         };
-        let err = execute_edit(toml, "p2-no-rules", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, toml, "p2-no-rules", &cmd).unwrap_err();
         assert!(
             err.contains("workflow has no [[rules]] array"),
             "unexpected error: {err}"
@@ -981,7 +1166,7 @@ shell = \"echo s2\"
             operation: "connect".into(),
             payload: serde_json::json!({"from": "s1", "to": "nope"}),
         };
-        let err = execute_edit(TEST_TOML, "p2-connect-missing", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, TEST_TOML, "p2-connect-missing", &cmd).unwrap_err();
         assert_eq!(err, "Target rule 'nope' not found");
     }
 
@@ -992,7 +1177,7 @@ shell = \"echo s2\"
             operation: "connect".into(),
             payload: serde_json::json!({"from": "s1", "to": "s1"}),
         };
-        let err = execute_edit(TEST_TOML, "p2-self-loop", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, TEST_TOML, "p2-self-loop", &cmd).unwrap_err();
         assert_eq!(err, "Cannot connect a rule to itself");
     }
 
@@ -1004,10 +1189,11 @@ shell = \"echo s2\"
             operation: "connect".into(),
             payload: serde_json::json!({"from": "s2", "to": "s1"}),
         };
-        let err = execute_edit(TEST_TOML, "p2-cycle", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, TEST_TOML, "p2-cycle", &cmd).unwrap_err();
         assert!(err.contains("cycle"), "unexpected error: {err}");
-        assert!(
-            undo("p2-cycle", TEST_TOML).unwrap().is_none(),
+        assert_eq!(
+            undo(TEST_OWNER, "p2-cycle", TEST_TOML).unwrap(),
+            HistoryOutcome::Unavailable,
             "a rejected edit must not enter the undo stack"
         );
     }
@@ -1032,7 +1218,7 @@ shell = \"echo s2\"
             operation: "connect".into(),
             payload: serde_json::json!({"from": "consume", "to": "produce"}),
         };
-        let err = execute_edit(toml, "p2-file-cycle", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, toml, "p2-file-cycle", &cmd).unwrap_err();
         assert!(
             err.contains("cycle"),
             "file-inferred edge + drawn edge must be caught: {err}"
@@ -1048,7 +1234,7 @@ shell = \"echo s2\"
             operation: "update_rule".into(),
             payload: serde_json::json!({"name": "s1", "patch": {"depends_on": ["ghost"]}}),
         };
-        let r = execute_edit(TEST_TOML, "p2-invalid", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, TEST_TOML, "p2-invalid", &cmd).unwrap();
         assert!(!r.success);
         assert!(!r.validation_errors.is_empty());
         assert_eq!(r.toml_content, TEST_TOML, "failed edit must roll back");
@@ -1061,7 +1247,7 @@ shell = \"echo s2\"
             operation: "rename_rule".into(),
             payload: serde_json::json!({"name": "trim", "new_name": "trim_reads"}),
         };
-        let r = execute_edit(COMMENTED_TOML, "p2-rename", &cmd).unwrap();
+        let r = execute_edit(TEST_OWNER, COMMENTED_TOML, "p2-rename", &cmd).unwrap();
         assert!(r.success, "{:?}", r.validation_errors);
         assert!(
             r.toml_content
@@ -1080,7 +1266,7 @@ shell = \"echo s2\"
             operation: "rename_rule".into(),
             payload: serde_json::json!({"name": "nope", "new_name": "x"}),
         };
-        let err = execute_edit(TEST_TOML, "p2-rename-missing", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, TEST_TOML, "p2-rename-missing", &cmd).unwrap_err();
         assert_eq!(err, "Rule 'nope' not found");
     }
 
@@ -1091,10 +1277,179 @@ shell = \"echo s2\"
             operation: "rename_rule".into(),
             payload: serde_json::json!({"name": "s1", "new_name": "s2"}),
         };
-        let err = execute_edit(TEST_TOML, "p2-rename-dup", &cmd).unwrap_err();
+        let err = execute_edit(TEST_OWNER, TEST_TOML, "p2-rename-dup", &cmd).unwrap_err();
         assert!(
             err.contains("duplicate rule name"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// Edit command that changes rule `s1`'s shell to `shell`.
+    fn set_s1_shell(shell: &str) -> DagEditCommand {
+        DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "update_rule".into(),
+            payload: serde_json::json!({"name": "s1", "patch": {"shell": shell}}),
+        }
+    }
+
+    #[test]
+    fn edit_history_is_scoped_by_owner() {
+        let pid = "owner-scoped-pipeline";
+        let alice =
+            execute_edit("alice-scope", TEST_TOML, pid, &set_s1_shell("echo alice")).unwrap();
+        // Bob has no history for the same pipeline id...
+        assert_eq!(
+            undo("bob-scope", pid, &alice.toml_content).unwrap(),
+            HistoryOutcome::Unavailable,
+            "another identity must not see (or undo) Alice's edit"
+        );
+        // ...and Bob's own edit on the same id leaves Alice's stack intact.
+        let bob = execute_edit(
+            "bob-scope",
+            &alice.toml_content,
+            pid,
+            &set_s1_shell("echo bob"),
+        )
+        .unwrap();
+        let HistoryOutcome::Applied(alice_from) =
+            undo("alice-scope", pid, &alice.toml_content).unwrap()
+        else {
+            panic!("Alice's own undo must still apply");
+        };
+        assert_eq!(alice_from, TEST_TOML);
+        let HistoryOutcome::Applied(bob_from) = undo("bob-scope", pid, &bob.toml_content).unwrap()
+        else {
+            panic!("Bob's own undo must apply");
+        };
+        assert_eq!(bob_from, alice.toml_content);
+        // Bob's single transition is now used up; it never became Alice's.
+        assert_eq!(
+            undo("bob-scope", pid, &alice.toml_content).unwrap(),
+            HistoryOutcome::Exhausted
+        );
+    }
+
+    #[test]
+    fn edit_history_depth_cap_drops_the_oldest_transition() {
+        let owner = "depth-cap-owner";
+        let pid = "depth-cap-pipeline";
+        let mut current = TEST_TOML.to_string();
+        // One edit past the cap: the first transition must be dropped.
+        for i in 0..=MAX_EDIT_HISTORY_DEPTH {
+            let edited =
+                execute_edit(owner, &current, pid, &set_s1_shell(&format!("echo s1-{i}"))).unwrap();
+            assert!(edited.success, "{:?}", edited.validation_errors);
+            current = edited.toml_content;
+        }
+
+        let mut applied = 0usize;
+        loop {
+            match undo(owner, pid, &current).unwrap() {
+                HistoryOutcome::Applied(state) => {
+                    applied += 1;
+                    current = state;
+                }
+                other => {
+                    assert_eq!(other, HistoryOutcome::Exhausted);
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            applied, MAX_EDIT_HISTORY_DEPTH,
+            "undo must stop at the documented depth cap"
+        );
+        assert!(
+            current.contains("echo s1-0"),
+            "the oldest surviving transition leads back to edit 0: {current}"
+        );
+        assert_ne!(
+            current, TEST_TOML,
+            "the pre-edit original must have been dropped by the depth cap"
+        );
+    }
+
+    #[test]
+    fn edit_history_lru_evicts_the_oldest_pipeline() {
+        let mut history = EditHistory::new(MAX_EDIT_HISTORY_DEPTH, 2);
+        history.record("u", "p1", "a1", "b1");
+        history.record("u", "p2", "a2", "b2");
+        // Touch p1 so p2 becomes the least-recently-used stack.
+        history.record("u", "p1", "b1", "c1");
+        history.record("u", "p3", "a3", "b3");
+
+        assert_eq!(history.stacks.len(), 2, "pipeline cap must hold");
+        assert_eq!(
+            history.undo("u", "p2", "b2"),
+            HistoryOutcome::Unavailable,
+            "p2 must have been evicted"
+        );
+        assert_eq!(
+            history.undo("u", "p1", "c1"),
+            HistoryOutcome::Applied("b1".into()),
+            "the freshly used stack survives eviction"
+        );
+
+        // The LRU cap counts (identity, pipeline) pairs, not bare ids.
+        history.record("v", "p1", "x", "y");
+        assert_eq!(history.stacks.len(), 2);
+        assert_eq!(
+            history.undo("v", "p1", "y"),
+            HistoryOutcome::Applied("x".into()),
+            "a different owner's p1 is an independent stack"
+        );
+    }
+
+    #[test]
+    fn undo_and_redo_without_history_are_unavailable() {
+        let owner = "restart-owner";
+        let pid = "restart-pipeline";
+        // An empty history is exactly the post-restart state.
+        assert_eq!(
+            undo(owner, pid, TEST_TOML).unwrap(),
+            HistoryOutcome::Unavailable
+        );
+        assert_eq!(
+            redo(owner, pid, TEST_TOML).unwrap(),
+            HistoryOutcome::Unavailable
+        );
+        // A failed lookup must not create an empty stack (otherwise any
+        // caller could plant unbounded keys without ever editing).
+        assert!(
+            !EDIT_HISTORY
+                .lock()
+                .unwrap()
+                .stacks
+                .contains_key(&HistoryKey {
+                    owner: owner.into(),
+                    pipeline_id: pid.into(),
+                })
+        );
+    }
+
+    #[test]
+    fn exhausted_undo_is_distinguished_from_unavailable_history() {
+        let owner = "exhausted-owner";
+        let pid = "exhausted-pipeline";
+        let edited = execute_edit(owner, TEST_TOML, pid, &set_s1_shell("echo once")).unwrap();
+        assert!(matches!(
+            undo(owner, pid, &edited.toml_content).unwrap(),
+            HistoryOutcome::Applied(_)
+        ));
+        // History exists but is fully undone — not "lost".
+        assert_eq!(
+            undo(owner, pid, TEST_TOML).unwrap(),
+            HistoryOutcome::Exhausted
+        );
+        // The undone transition is redoable, and then redo is exhausted.
+        let HistoryOutcome::Applied(redone) = redo(owner, pid, TEST_TOML).unwrap() else {
+            panic!("the undone transition must be redoable");
+        };
+        assert_eq!(redone, edited.toml_content);
+        assert_eq!(
+            redo(owner, pid, &redone).unwrap(),
+            HistoryOutcome::Exhausted
         );
     }
 }
