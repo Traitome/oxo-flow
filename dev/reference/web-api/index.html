@@ -6091,6 +6091,45 @@ save whose content carries <code>version = "1.2.3"</code> reports <code>1.2.3</c
 next GET, and updating content without touching <code>[workflow] version</code>
 bumps the reported version to match. This mirrors the CLI, where the
 file on disk defines the version.</p>
+<h4 id="optimistic-concurrency-etag-if-match">Optimistic concurrency (<code>ETag</code> / <code>If-Match</code>)<a class="headerlink" href="#optimistic-concurrency-etag-if-match" title="Permanent link">#</a></h4>
+<p>Every pipeline row carries a monotonic stored <code>revision</code>: it starts at <code>1</code>
+on create and increments by exactly one on every successful write (PUT or
+rollback). It is deliberately separate from the TOML <code>version</code> — a content
+edit that leaves <code>[workflow] version</code> untouched still advances the token,
+because the token detects writes, not semantic releases. It is not a JSON
+body field; it travels as a strong HTTP validator so the response contract
+stays backward compatible:</p>
+<ul>
+<li><code>GET /api/pipelines/{id}</code>, <code>POST /api/pipelines</code> (create),
+  <code>PUT /api/pipelines/{id}</code>, and <code>POST /api/pipelines/{id}/rollback</code>
+  answer with <code>ETag: "&lt;revision&gt;"</code> (e.g. <code>ETag: "7"</code>).</li>
+<li>To make a write conditional, echo that value in <code>If-Match</code>:</li>
+</ul>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>PUT /api/pipelines/{id}
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>If-Match: "7"
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>Content-Type: application/json
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>{"toml_content": "&lt;TOML&gt;"}
+</span></code></pre></div>
+<p>The compare-and-swap is atomic in the storage backend — a single
+<code>UPDATE ... WHERE id = ? AND revision = ?</code> guarded by the rows-affected
+count, implemented in both the SQLite and PostgreSQL <code>StorageBackend</code> — not
+a read-then-write race. A stale validator changes nothing and answers:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>HTTP/1.1 409 Conflict
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>{"code": "PIPELINE_VERSION_CONFLICT",
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a> "message": "Pipeline &lt;id&gt; was modified by another writer",
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a> "detail": "expected revision 7 but the stored revision is 9",
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a> "suggestion": "Re-read GET /api/pipelines/&lt;id&gt; for its current ETag and retry with If-Match: \"9\"."}
+</span></code></pre></div>
+<p>A successful PUT answers <code>200</code> with the body and the NEW <code>ETag</code>. Omitting
+<code>If-Match</code> keeps the historical unconditional update for backward
+compatibility (the stored revision still advances, so a later conditional
+writer can detect the intervening write); clients that care about lost
+updates SHOULD always send it. <code>POST /api/pipelines/{id}/rollback</code> shares
+the same contract. A malformed validator — non-integer, zero, negative, a
+weak <code>W/"7"</code> form, a multi-token list, or <code>*</code> — is rejected with
+<code>400 INVALID_IF_MATCH</code> rather than silently ignored.</p>
 <hr />
 <h2 id="execution-runs">Execution &amp; Runs<a class="headerlink" href="#execution-runs" title="Permanent link">#</a></h2>
 <h3 id="create-run">Create Run<a class="headerlink" href="#create-run" title="Permanent link">#</a></h3>
@@ -6109,10 +6148,10 @@ endpoints return
 Team/HPC execution also lacks an OS-level tenant boundary and must not be
 exposed to untrusted workflow authors.</p>
 </blockquote>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/runs
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>Content-Type: application/json
-</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;", "samples": ["S1", "S2"], "targets": ["rule_name"], "include_files": {"envs/clinical/pixi.toml": "[env] ..."}, "config_overrides": ["min_quality=30"], "allow_protected_drift": false}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>POST /api/runs
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>Content-Type: application/json
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;", "samples": ["S1", "S2"], "targets": ["rule_name"], "include_files": {"envs/clinical/pixi.toml": "[env] ..."}, "config_overrides": ["min_quality=30"], "allow_protected_drift": false}
 </span></code></pre></div>
 <code>toml_content</code> is the workflow source (required — the run is created from
 it, not from a saved pipeline); <code>max_jobs</code>, <code>dry_run</code>, <code>keep_going</code>,
@@ -6126,6 +6165,17 @@ must be readable by the acting user. This flat shape is the typed
 <code>requestBody</code>, and the handler parses exactly that type, so the spec, the
 server, and the TypeScript client stay in lockstep. Returns
 <code>{ run_id, status: "queued", estimated_resources, execution_plan }</code>.</p>
+<p>Run creation pays the dedicated #213 spawn budget: <code>OXO_FLOW_RUNS_RATE_LIMIT</code>
+run-creation attempts per minute <strong>per acting identity</strong> (default 5; <code>0</code>
+disables the limiter). The budget is keyed by the authenticated <code>users.id</code>
+(the <code>default</code> pseudo-user in personal mode), independent of the per-IP
+request limiter above. Over budget, the attempt is rejected before any
+workflow parsing or process spawn with
+<code>429 {"code": "RUN_RATE_LIMITED", "message": "… retry in Ns", "detail": "Allowance: N runs per minute …"}</code>;
+like every <code>ApiResult</code> error it carries no <code>Retry-After</code> header — the
+countdown lives in <code>message</code>. The sliding window refills once the oldest
+counted attempt is older than 60 seconds. Retries and checkpoint resumes pay
+the same budget (see <a href="#smart-retry">Smart Retry</a>).</p>
 <p>Before spawning the executor the run stages the acting user's uploaded
 files (<code>POST /api/files</code> → <code>workspace/users/&lt;user&gt;/inputs/</code>) into the run's
 working directory, so <code>metadata_file</code> and relative input paths resolve the
@@ -6233,7 +6283,7 @@ assets are ignored.</p>
   <a href="#cluster-connections-remote-execution">Cluster Connections</a>).</li>
 </ul>
 <h3 id="list-runs">List Runs<a class="headerlink" href="#list-runs" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>GET /api/runs?limit=100&amp;cursor=&lt;created_at&gt;&amp;status=&lt;status&gt;&amp;q=&lt;search&gt;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs?limit=100&amp;cursor=&lt;created_at&gt;&amp;status=&lt;status&gt;&amp;q=&lt;search&gt;
 </span></code></pre></div>
 <p>Cursor pagination, not page numbers: pass the <code>created_at</code> of the last row
 of the previous page as <code>cursor</code> (<code>created_at &lt; cursor</code>). <code>limit</code> defaults
@@ -6241,36 +6291,36 @@ to 100 and is capped at 500. The response is the envelope
 <code>{ items, next_cursor, total }</code>, where <code>next_cursor: null</code> means the last
 page. Each item carries <code>dry_run</code> — see <a href="#run-detail">Run Detail</a>.</p>
 <h3 id="run-status">Run Status<a class="headerlink" href="#run-status" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/runs/{id}/status
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/status
 </span></code></pre></div>
 Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }</code>. A rule that did not run — when-gated off (<code>when_verdicts == false</code>) or abort-cancelled (<code>rule_runs</code> status <code>cancelled</code>, which records no set membership) — is surfaced as <code>skipped</code>, never as a forever-<code>pending</code> node.</p>
 <p>Timing guarantees for <code>nodes[]</code>: a terminal node that actually executed (<code>success</code>, <code>failed</code>, or run-level <code>cancelled</code>) reports <code>started_at</code> (RFC 3339 UTC) and <code>duration_ms</code> from the checkpoint's <code>rule_runs</code> start/end pair — completed rules pair the recorded start with their benchmark wall time; failed and cancelled rules derive the duration from the pair. Both fields are <code>null</code> when the underlying data genuinely does not exist: <code>pending</code>, <code>running</code>, <code>skipped</code>, synthetic "outputs up-to-date" completions (the rule did not execute in this run), and checkpoints written by engines predating the timestamp fields. The one legacy exception is a <code>success</code> node from an old checkpoint that recorded a benchmark but no start: it keeps the real <code>duration_ms</code> with <code>started_at: null</code> rather than fabricating a start.</p>
 <h3 id="dag-status">DAG Status<a class="headerlink" href="#dag-status" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs/{id}/dag-status
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}/dag-status
 </span></code></pre></div>
 DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. Each node also carries the same <code>started_at</code>/<code>duration_ms</code> timing contract as <a href="#run-status">Run Status</a> (<code>started_at</code> is an RFC 3339 UTC timestamp, not a duration substitute). A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/diagnostics
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>
 Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }</code>. Uses 31 deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of <code>execution.log</code> (seek-based tail, torn first line dropped), never the whole file.</p>
 <h3 id="run-detail">Run Detail<a class="headerlink" href="#run-detail" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>GET /api/runs/{id}
 </span></code></pre></div>
 The full run row: <code>{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, artifacts_incomplete, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. <code>workflow_name</code> and <code>duration_secs</code> are the same values list items carry (<code>duration_secs</code> is the elapsed time between <code>started_at</code> and <code>finished_at</code>, <code>null</code> until the run finishes). (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.) <code>dry_run</code> mirrors the creation request (<code>true</code> for preview runs spawned by <code>dry_run: true</code>) and appears in both the list and detail responses — legacy rows created before the column existed read as <code>false</code>.</p>
 <p><code>artifacts_incomplete</code> (also on list items) is non-null only when a cluster run's result pull failed: the remote execution finished but its outputs could not be transferred back, so the local workdir — the source for the run's logs, preview and report — is missing or stale. It carries the pull error text (including the remote exit code). Such a run is <strong>never</strong> reported as <code>completed</code>: it is failed through the same non-success path a non-zero remote exit uses, so <code>status</code> reads <code>failed</code> with <code>phase</code> <code>failed</code> and the reason is both logged and persisted here for the UI (issue #1112 / audit RB-05).</p>
 <h3 id="run-preview">Run Preview<a class="headerlink" href="#run-preview" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/preview
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>GET /api/runs/{id}/preview
 </span></code></pre></div>
 The instance-level dry-run plan (<code>checkpoint_preview</code> + execution order), persisted by the executor as <code>dry-run-preview.json</code> when a dry-run completes. Returns <code>404 NO_PREVIEW</code> for runs that never produced one — or when the workdir path is not a regular file (a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return <code>413 PREVIEW_TOO_LARGE</code>.</p>
 <h3 id="protected-tree-drift-preview">Protected-Tree Drift Preview<a class="headerlink" href="#protected-tree-drift-preview" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>GET /api/runs/{id}/protected-drift
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>GET /api/runs/{id}/protected-drift
 </span></code></pre></div>
 Read-only drift audit of the run's <code>[engine] protected_data_trees</code>. The response mirrors the CLI dry-run's <code>protected_tree_drift</code> object:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="p">{</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="w">  </span><span class="nt">"drifted_files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/S1.fq: 1024 B @&lt;baseline-time&gt; → 0 B @&lt;current-time&gt; (TRUNCATED)"</span><span class="p">],</span>
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="w">  </span><span class="nt">"new_trees"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
-</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="p">{</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="w">  </span><span class="nt">"drifted_files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/S1.fq: 1024 B @&lt;baseline-time&gt; → 0 B @&lt;current-time&gt; (TRUNCATED)"</span><span class="p">],</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="w">  </span><span class="nt">"new_trees"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <ul>
 <li><code>drifted_files</code> — one human-readable line per drifted file (removed / added / changed, with <code>(TRUNCATED)</code> and <code>sha256:</code> labels — the same <code>ManifestChange::describe</code> rendering as the CLI dry-run and the run-gate refusal).</li>
@@ -6279,21 +6329,21 @@ Read-only drift audit of the run's <code>[engine] protected_data_trees</code>. T
 </ul>
 <p>The preview is <strong>read-only</strong>: unlike <code>oxo-flow run</code>, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty <code>drifted_files</code> with a non-zero <code>new_trees</code>. The audit reads the tree as it exists <strong>now</strong>: files can still change between this call and the next run, which is exactly the window <code>allow_protected_drift</code> on Create Run covers. Returns <code>404</code> for unknown or foreign runs; <code>503</code> when runs are not available on this backend.</p>
 <h3 id="provenance-verify">Provenance Verify<a class="headerlink" href="#provenance-verify" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>GET /api/runs/{id}/provenance-verify
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>GET /api/runs/{id}/provenance-verify
 </span></code></pre></div>
 Audit the output-file checksums a run recorded into its checkpoint (CLI→web parity, <code>oxo-flow --json provenance verify &lt;checkpoint&gt;</code>). The endpoint shells out to the CLI binary against the run's <code>workdir/.oxo-flow/checkpoint.json</code> and forwards the verdict:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="p">{</span>
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/workdir/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
-</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="w">  </span><span class="nt">"matched"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="w">  </span><span class="nt">"mismatched"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="w">  </span><span class="nt">"missing"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6" href="#__codelineno-35-6"></a><span class="w">  </span><span class="nt">"cleaned"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7" href="#__codelineno-35-7"></a><span class="w">  </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8" href="#__codelineno-35-8"></a><span class="w">  </span><span class="nt">"entries"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9" href="#__codelineno-35-9"></a><span class="w">    </span><span class="p">{</span><span class="nt">"file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gone.txt"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"missing"</span><span class="p">},</span>
-</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10" href="#__codelineno-35-10"></a><span class="w">    </span><span class="p">{</span><span class="nt">"file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"out.txt"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"matched"</span><span class="p">,</span><span class="w"> </span><span class="nt">"expected"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"actual"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:…"</span><span class="p">}</span>
-</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11" href="#__codelineno-35-11"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12" href="#__codelineno-35-12"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="p">{</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/workdir/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="w">  </span><span class="nt">"matched"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="w">  </span><span class="nt">"mismatched"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a><span class="w">  </span><span class="nt">"missing"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a><span class="w">  </span><span class="nt">"cleaned"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a><span class="w">  </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8" href="#__codelineno-37-8"></a><span class="w">  </span><span class="nt">"entries"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a><span class="w">    </span><span class="p">{</span><span class="nt">"file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gone.txt"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"missing"</span><span class="p">},</span>
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10" href="#__codelineno-37-10"></a><span class="w">    </span><span class="p">{</span><span class="nt">"file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"out.txt"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"matched"</span><span class="p">,</span><span class="w"> </span><span class="nt">"expected"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"actual"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:…"</span><span class="p">}</span>
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11" href="#__codelineno-37-11"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12" href="#__codelineno-37-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <ul>
 <li><code>entries</code> — one per audited file, flat (the CLI nests them under <code>verify</code> in its <code>--json</code> document); <code>status</code> is <code>matched</code>, <code>mismatched</code>, <code>missing</code> (vanished output), or <code>cleaned</code> (temporary output swept by the end-of-run gate). Checksums use the CLI's <code>sha256:&lt;hex&gt;</code> form.</li>
@@ -6302,34 +6352,34 @@ Audit the output-file checksums a run recorded into its checkpoint (CLI→web pa
 </ul>
 <p>Checksum tracking is opt-in: pass <code>"provenance": true</code> on Create Run (forwarded as the CLI's <code>--provenance</code>) so the run records <code>sha256</code> checksums of its outputs into the checkpoint. The endpoint is <strong>read-only</strong> — verification never mutates the checkpoint. Errors: <code>404 NOT_FOUND</code> (unknown/foreign run), <code>404 NO_WORKDIR</code> (run has no workdir), <code>404 NO_CHECKPOINT</code> (no checkpoint under the workdir), <code>400 INVALID_CHECKPOINT</code> (the CLI rejected the checkpoint as malformed), <code>500 PROVENANCE_VERIFY_ERROR</code> (CLI output unparseable — usually a stale binary; set <code>OXO_FLOW_BIN</code> to the current one), <code>503</code> when runs are not available on this backend.</p>
 <h3 id="ai-status">AI Status<a class="headerlink" href="#ai-status" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>GET /api/runs/{id}/ai-status
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>GET /api/runs/{id}/ai-status
 </span></code></pre></div>
 Node-level execution statuses pulled from the run's checkpoint — the input the AI endpoints (explain/interpret) consume.</p>
 <h3 id="run-report">Run Report<a class="headerlink" href="#run-report" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>GET /api/runs/{id}/report
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>GET /api/runs/{id}/report
 </span></code></pre></div>
 The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers <code>report/ask</code> and feeds <code>report/visualize</code>. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of <code>execution.log</code>; the full log stays on <code>GET /api/runs/{id}/logs</code>. The report is <strong>failure-aware</strong>: a failed run's narrative headline names the failed rules and exit codes, and carries <code>run_status</code> + <code>failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]</code> from the checkpoint's structured failure data.</p>
 <h3 id="report-qa">Report Q&amp;A<a class="headerlink" href="#report-qa" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>POST /api/runs/{id}/report/ask
-</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a>Content-Type: application/json
-</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a>
-</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a>{"question": "which rules failed and why"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>POST /api/runs/{id}/report/ask
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>Content-Type: application/json
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a>{"question": "which rules failed and why"}
 </span></code></pre></div>
 Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim.</p>
 <h3 id="run-status-exit-codes-and-failure-tails">Run Status exit codes and failure tails<a class="headerlink" href="#run-status-exit-codes-and-failure-tails" title="Permanent link">#</a></h3>
 <p><code>GET /api/runs/{id}/status</code>, <code>/dag-status</code>, and <code>/instances</code> populate <code>exit_code</code> and the terminal timing fields from the checkpoint's <code>rule_runs</code> records: completed rules report <code>0</code>, failed rules their recorded code — plus bounded <code>stderr_tail</code> and <code>stdout_tail</code> on failed nodes (some tools print their root cause on stdout). The AI monitor (<code>/ai-status</code>) receives the same tails and classifies failures through the shared <code>DiagnosticsEngine</code> pattern table before falling back to exit-code-only signatures; its alerts carry a stable <code>alert_id</code> for cross-poll dedup. The AI chat <code>get_run_status</code> tool carries the same fields.</p>
 <h3 id="report-visualization">Report Visualization<a class="headerlink" href="#report-visualization" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>POST /api/runs/{id}/report/visualize
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>Content-Type: application/json
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a>
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>{"type": "files" | "durations" | "volcano"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>POST /api/runs/{id}/report/visualize
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>Content-Type: application/json
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a>{"type": "files" | "durations" | "volcano"}
 </span></code></pre></div>
 Chart data built from real sources: <code>files</code> maps the run's file tree (<code>{name, size_bytes}</code>), everything else maps per-rule durations from the checkpoint. No canned rows.</p>
 <h3 id="smart-retry">Smart Retry<a class="headerlink" href="#smart-retry" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>POST /api/runs/{id}/retry
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>Content-Type: application/json
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a>{"skip_succeeded": true}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>POST /api/runs/{id}/retry
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>Content-Type: application/json
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>{"skip_succeeded": true}
 </span></code></pre></div>
 The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
@@ -6387,12 +6437,12 @@ since they have no success checkpoint record), and <code>will_skip</code> contai
 remaining completed rules — the same set the engine will execute at run
 start.</p>
 <h3 id="cancel">Cancel<a class="headerlink" href="#cancel" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>POST /api/runs/{id}/cancel
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>POST /api/runs/{id}/cancel
 </span></code></pre></div>
 Cancels a running/pending run.</p>
 <h3 id="pause-resume">Pause / Resume<a class="headerlink" href="#pause-resume" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>POST /api/runs/{id}/pause
-</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>POST /api/runs/{id}/resume
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>POST /api/runs/{id}/pause
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>POST /api/runs/{id}/resume
 </span></code></pre></div>
 Pauses a running run (<code>{"reason": "..."}</code> optional; other body fields are
 ignored) and resumes it. On <strong>resume</strong>, a <code>from_rule</code> field is rejected with
@@ -6406,16 +6456,16 @@ and <strong>resume</strong> answers <code>409 RUN_NOT_RESUMABLE</code> (a paused
 exited has nothing to unfreeze — writing <code>running</code> would show it executing
 with nothing behind it). In both cases the stored status is left unchanged.</p>
 <h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>GET /api/runs/{id}/logs
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>GET /api/runs/{id}/logs
 </span></code></pre></div>
 Returns the execution log text — bounded to the newest 8 MiB with an explicit <code>[log truncated …]</code> marker line when the log is larger (buffering a multi-GB log per request was a memory-amplification surface). Read the full file from the run workdir when the marker appears.</p>
 <h3 id="results">Results<a class="headerlink" href="#results" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>GET /api/runs/{id}/results
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>GET /api/runs/{id}/results
 </span></code></pre></div>
 Returns output file tree with sizes and types.</p>
 <h3 id="files-download-preview-zip">Files — download / preview / zip<a class="headerlink" href="#files-download-preview-zip" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>GET /api/runs/{id}/files?path=&lt;relative-path&gt;
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>GET /api/runs/{id}/files?path=&lt;relative-path&gt;&amp;preview=true
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>GET /api/runs/{id}/files?path=&lt;relative-path&gt;
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>GET /api/runs/{id}/files?path=&lt;relative-path&gt;&amp;preview=true
 </span></code></pre></div>
 The read-only result-delivery layer:</p>
 <ul>
@@ -6429,116 +6479,116 @@ The read-only result-delivery layer:</p>
   filenames (.env, keys, credentials) are never served</li>
 </ul>
 <h3 id="instances">Instances<a class="headerlink" href="#instances" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>GET /api/runs/{id}/instances
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>GET /api/runs/{id}/instances
 </span></code></pre></div>
 The sample×rule instance table: every expanded instance the checkpoint
 knows about (<code>qc_auto-discovered_S1</code> → rule <code>qc</code>, group <code>auto-discovered</code>,
 sample <code>S1</code>) with status, duration, and exit code — answers "which sample
 under which rule failed".</p>
 <h3 id="upload-list-user-inputs">Upload &amp; list user inputs<a class="headerlink" href="#upload-list-user-inputs" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>POST /api/files        # multipart: field "path" (optional subdir) + file parts
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>GET  /api/files        # list the acting user's uploaded inputs
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>POST /api/files        # multipart: field "path" (optional subdir) + file parts
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>GET  /api/files        # list the acting user's uploaded inputs
 </span></code></pre></div>
 Uploads land in <code>workspace/users/&lt;user&gt;/inputs/</code> (chunked to disk, 8 GiB
 per-file cap).</p>
 <hr />
 <h2 id="data-discovery">Data Discovery<a class="headerlink" href="#data-discovery" title="Permanent link">#</a></h2>
 <h3 id="analyze-data">Analyze Data<a class="headerlink" href="#analyze-data" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>POST /api/data/analyze
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a>Content-Type: application/json
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a>{"paths": ["/data/*.fastq.gz", "/data/*.bam"], "max_depth": 2}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>POST /api/data/analyze
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>Content-Type: application/json
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a>{"paths": ["/data/*.fastq.gz", "/data/*.bam"], "max_depth": 2}
 </span></code></pre></div>
 Deterministic file scanning + format inference + pipeline recommendation. Returns <code>{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }</code>. Format detection uses filename extension matching — <strong>not AI</strong>. <code>paired_with</code> echoes the mate's client-supplied path when the request contains a mutual pair (<code>_R1</code>/<code>_R2</code> or <code>_1.</code>/<code>_2.</code> in the file name) and both files share a detected, non-unknown format; it is <code>null</code> otherwise.</p>
 <h3 id="reference-discovery">Reference Discovery<a class="headerlink" href="#reference-discovery" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>POST /api/data/reference
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>Content-Type: application/json
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a>
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4" href="#__codelineno-49-4"></a>{"genome": "hg38", "components": ["fasta", "gtf", "star_index"]}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>POST /api/data/reference
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>Content-Type: application/json
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>{"genome": "hg38", "components": ["fasta", "gtf", "star_index"]}
 </span></code></pre></div>
 Finds installed reference genome components and reports missing ones with download commands.</p>
 <h3 id="reference-status">Reference Status<a class="headerlink" href="#reference-status" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>GET /api/data/reference/status
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>GET /api/data/reference/status
 </span></code></pre></div>
 Which common reference genomes have their expected components present at the standard <code>/data/references/</code> locations — the deterministic counterpart to the POST discovery above. Probed components per genome: <code>hg38</code> and <code>mm10</code> check <code>genome.fa</code>, <code>star</code> (STAR index directory) and <code>genes.gtf</code>; <code>mm39</code> checks only <code>genome.fa</code> and <code>star</code> (the <code>[[references]]</code> auto-build needs no annotation to construct an index). A genome counts as <code>installed</code> only when at least one probed component exists; builds with nothing on disk are reported under <code>missing_genomes</code>. Response shape (<code>components</code> is a legacy alias of <code>found</code> — both carry the absolute paths that exist on disk):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>{
-</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>  "installed": [
-</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>    { "genome": "hg38", "components": ["/data/references/hg38/genome.fa", "..."],
-</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>      "found": ["..."], "missing_components": ["..."] }
-</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5" href="#__codelineno-51-5"></a>  ],
-</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6" href="#__codelineno-51-6"></a>  "missing_genomes": ["mm39"],
-</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7" href="#__codelineno-51-7"></a>  "missing": ["/data/references/mm39/genome.fa"],
-</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8" href="#__codelineno-51-8"></a>  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 (genome.fa, STAR index) ..."]
-</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9" href="#__codelineno-51-9"></a>}
+<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>{
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>  "installed": [
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>    { "genome": "hg38", "components": ["/data/references/hg38/genome.fa", "..."],
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4" href="#__codelineno-53-4"></a>      "found": ["..."], "missing_components": ["..."] }
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5" href="#__codelineno-53-5"></a>  ],
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6" href="#__codelineno-53-6"></a>  "missing_genomes": ["mm39"],
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7" href="#__codelineno-53-7"></a>  "missing": ["/data/references/mm39/genome.fa"],
+</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8" href="#__codelineno-53-8"></a>  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 (genome.fa, STAR index) ..."]
+</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9" href="#__codelineno-53-9"></a>}
 </span></code></pre></div>
 <p><code>download_commands</code> carries staging <em>guidance</em>, not fetchable URLs: oxo-flow hosts no reference mirror. Point users at <code>reference_dir</code> + <code>[[references]]</code> auto-build in the workflow format for index construction.</p>
 <h3 id="data-perception">Data Perception<a class="headerlink" href="#data-perception" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>POST /api/data/perceive
-</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a>Content-Type: application/json
-</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a>
-</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a>{"paths": ["/data/"], "description": "RNA-seq paired-end human samples"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>POST /api/data/perceive
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>Content-Type: application/json
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a>{"paths": ["/data/"], "description": "RNA-seq paired-end human samples"}
 </span></code></pre></div>
 Data-profiling report built from paths (the same scanner as <code>/api/data/analyze</code>) or from a natural-language description. Powers the "what data do I have" panel.</p>
 <h3 id="samplesheet-parsing">Samplesheet Parsing<a class="headerlink" href="#samplesheet-parsing" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>POST /api/data/samplesheet/parse
-</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>Content-Type: application/json
-</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>
-</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4" href="#__codelineno-53-4"></a>{"content": "sample,fastq_r1,fastq_r2,condition\nS1,a_R1.fastq.gz,a_R2.fastq.gz,ctrl"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>POST /api/data/samplesheet/parse
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>Content-Type: application/json
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>{"content": "sample,fastq_r1,fastq_r2,condition\nS1,a_R1.fastq.gz,a_R2.fastq.gz,ctrl"}
 </span></code></pre></div>
 Parses pasted CSV/TSV samplesheet content into the standard column structure (<code>sample</code>, <code>fastq_r1</code>, <code>fastq_r2</code>, <code>condition</code>). Returns <code>{ format, samples: [...] }</code> — the bridge from a spreadsheet to <code>[[sample_groups]]</code>.</p>
 <h3 id="verify-data">Verify Data<a class="headerlink" href="#verify-data" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>POST /api/data/verify
-</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>Content-Type: application/json
-</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a>
-</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a>{"tree": "inputs/delivery-2026-10", "md5_content": "d41d8cd98f00b204e9800998ecf8427e  raw/S1.fq\nd41d8cd98f00b204e9800998ecf8427e  raw/S2.fq\n"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>POST /api/data/verify
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a>Content-Type: application/json
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a>
+</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a>{"tree": "inputs/delivery-2026-10", "md5_content": "d41d8cd98f00b204e9800998ecf8427e  raw/S1.fq\nd41d8cd98f00b204e9800998ecf8427e  raw/S2.fq\n"}
 </span></code></pre></div>
 Audits a delivered data tree against a vendor md5 sidecar — the web slice of the CLI's <code>oxo-flow verify-data</code> command. <code>tree</code> is workspace-relative (uploads live under <code>inputs/</code>, run workdirs under <code>runs/&lt;id&gt;/</code>; absolute paths and <code>..</code> are rejected). The sidecar arrives inline in the standard <code>md5sum</code> text format and is staged server-side; the CLI subprocess streams an md5 over every file.</p>
 <p>Response is HTTP 200 even when drift is found — the counts ARE the finding:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>{
-</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>  "tree": "inputs/delivery-2026-10",
-</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>  "matched": 12, "mismatched": 1, "missing": 0, "extra": 1,
-</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>  "entries": [
-</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a>    {"file": "raw/S1.fq", "status": "matched", "expected": "d41d...", "actual": "d41d..."},
-</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a>    {"file": "raw/S2.fq", "status": "mismatched", "expected": "aa...", "actual": "bb..."},
-</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a>    {"file": "raw/unlisted.txt", "status": "extra", "actual": "cc..."}
-</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a>  ]
-</span><span id="__span-55-9"><a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a>}
+<div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>{
+</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>  "tree": "inputs/delivery-2026-10",
+</span><span id="__span-57-3"><a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a>  "matched": 12, "mismatched": 1, "missing": 0, "extra": 1,
+</span><span id="__span-57-4"><a id="__codelineno-57-4" name="__codelineno-57-4" href="#__codelineno-57-4"></a>  "entries": [
+</span><span id="__span-57-5"><a id="__codelineno-57-5" name="__codelineno-57-5" href="#__codelineno-57-5"></a>    {"file": "raw/S1.fq", "status": "matched", "expected": "d41d...", "actual": "d41d..."},
+</span><span id="__span-57-6"><a id="__codelineno-57-6" name="__codelineno-57-6" href="#__codelineno-57-6"></a>    {"file": "raw/S2.fq", "status": "mismatched", "expected": "aa...", "actual": "bb..."},
+</span><span id="__span-57-7"><a id="__codelineno-57-7" name="__codelineno-57-7" href="#__codelineno-57-7"></a>    {"file": "raw/unlisted.txt", "status": "extra", "actual": "cc..."}
+</span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8" href="#__codelineno-57-8"></a>  ]
+</span><span id="__span-57-9"><a id="__codelineno-57-9" name="__codelineno-57-9" href="#__codelineno-57-9"></a>}
 </span></code></pre></div>
 <p><code>status</code> vocabulary: <code>matched</code>, <code>mismatched</code> (includes unreadable files, with a <code>note</code>), <code>missing</code>, <code>extra</code> (present but unlisted — always non-compliant). An <code>extra</code> entry may carry a <code>note</code> instead of an <code>actual</code> checksum in two cases: the file could not be read for checksumming, or a subdirectory of the tree could not be traversed at all (<code>tree walk failed</code> note — the audit is incomplete, the named path may be a directory, and the verdict has already failed with exit-equivalent <code>extra &gt; 0</code>). An empty sidecar returns all-zero counts with <code>"note": "The md5 sidecar lists no files."</code> and no extras scan. A sidecar the CLI hard-rejects (malformed line, duplicate path, traversal) yields <code>400 INVALID_SIDECAR</code> with the CLI's stderr as detail. HTTP errors are otherwise reserved for infrastructure problems: <code>400 INVALID_TREE</code> (unknown path or traversal), <code>500 VERIFY_ERROR</code> (spawn failure or unparseable CLI output). Errors use the structured <code>{code, message, detail, suggestion}</code> shape. The inline sidecar counts against the server's default ~2 MiB JSON body limit (~50k entries); larger sidecars should be split by directory.</p>
 <hr />
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>GET    /api/templates
-</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a>POST   /api/templates
-</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a>GET    /api/templates/{id}
-</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a>DELETE /api/templates/{id}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>GET    /api/templates
+</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>POST   /api/templates
+</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>GET    /api/templates/{id}
+</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>DELETE /api/templates/{id}
 </span></code></pre></div>
 Built-in and user-created pipeline templates. System templates are read-only. The list endpoint does not accept filter query parameters.</p>
 <hr />
 <h2 id="plugins">Plugins<a class="headerlink" href="#plugins" title="Permanent link">#</a></h2>
 <h3 id="validate-plugin">Validate Plugin<a class="headerlink" href="#validate-plugin" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>POST /api/plugins/validate
-</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>Content-Type: application/json
-</span><span id="__span-57-3"><a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a>
-</span><span id="__span-57-4"><a id="__codelineno-57-4" name="__codelineno-57-4" href="#__codelineno-57-4"></a>{"manifest": {"name": "...", "version": "1.0", "plugin_type": "rule"}, "trusted_keys": {"key1": "hex..."}}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>POST /api/plugins/validate
+</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>Content-Type: application/json
+</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>
+</span><span id="__span-59-4"><a id="__codelineno-59-4" name="__codelineno-59-4" href="#__codelineno-59-4"></a>{"manifest": {"name": "...", "version": "1.0", "plugin_type": "rule"}, "trusted_keys": {"key1": "hex..."}}
 </span></code></pre></div>
 Validates a plugin manifest and optionally verifies its HMAC signature against trusted keys. Returns <code>{ valid, name, version, plugin_type, signature_valid, errors }</code>.</p>
 <hr />
 <h2 id="ai-phase-2-calls-deterministic-apis-above">AI (Phase 2 — calls deterministic APIs above)<a class="headerlink" href="#ai-phase-2-calls-deterministic-apis-above" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
-</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
-</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
-</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
-</span><span id="__span-58-5"><a id="__codelineno-58-5" name="__codelineno-58-5" href="#__codelineno-58-5"></a>POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
-</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6" href="#__codelineno-58-6"></a>GET  /api/ai/config             # Get AI provider configuration (public; authenticated admins see provider/model)
-</span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7" href="#__codelineno-58-7"></a>POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
-</span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8" href="#__codelineno-58-8"></a>POST /api/ai/test               # Test the provider (admin-only outside personal mode)
-</span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9" href="#__codelineno-58-9"></a>GET  /api/ai/config/user        # The acting user's private provider config
-</span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10" href="#__codelineno-58-10"></a>PUT  /api/ai/config/user        # Set the acting user's private provider config
-</span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11" href="#__codelineno-58-11"></a>GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
-</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12" href="#__codelineno-58-12"></a>PUT  /api/ai/config/server      # Set the server-level provider config
-</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13" href="#__codelineno-58-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
-</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14" href="#__codelineno-58-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
-</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15" href="#__codelineno-58-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
+<div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
+</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a>POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
+</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3" href="#__codelineno-60-3"></a>POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
+</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4" href="#__codelineno-60-4"></a>POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
+</span><span id="__span-60-5"><a id="__codelineno-60-5" name="__codelineno-60-5" href="#__codelineno-60-5"></a>POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
+</span><span id="__span-60-6"><a id="__codelineno-60-6" name="__codelineno-60-6" href="#__codelineno-60-6"></a>GET  /api/ai/config             # Get AI provider configuration (public; authenticated admins see provider/model)
+</span><span id="__span-60-7"><a id="__codelineno-60-7" name="__codelineno-60-7" href="#__codelineno-60-7"></a>POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
+</span><span id="__span-60-8"><a id="__codelineno-60-8" name="__codelineno-60-8" href="#__codelineno-60-8"></a>POST /api/ai/test               # Test the provider (admin-only outside personal mode)
+</span><span id="__span-60-9"><a id="__codelineno-60-9" name="__codelineno-60-9" href="#__codelineno-60-9"></a>GET  /api/ai/config/user        # The acting user's private provider config
+</span><span id="__span-60-10"><a id="__codelineno-60-10" name="__codelineno-60-10" href="#__codelineno-60-10"></a>PUT  /api/ai/config/user        # Set the acting user's private provider config
+</span><span id="__span-60-11"><a id="__codelineno-60-11" name="__codelineno-60-11" href="#__codelineno-60-11"></a>GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
+</span><span id="__span-60-12"><a id="__codelineno-60-12" name="__codelineno-60-12" href="#__codelineno-60-12"></a>PUT  /api/ai/config/server      # Set the server-level provider config
+</span><span id="__span-60-13"><a id="__codelineno-60-13" name="__codelineno-60-13" href="#__codelineno-60-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
+</span><span id="__span-60-14"><a id="__codelineno-60-14" name="__codelineno-60-14" href="#__codelineno-60-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
+</span><span id="__span-60-15"><a id="__codelineno-60-15" name="__codelineno-60-15" href="#__codelineno-60-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
 </span></code></pre></div>
 <p>Both knowledge endpoints accept <code>?q=&lt;query&gt;&amp;limit=&lt;1-50&gt;</code> (default 20).
 <code>/api/knowledge/tools</code> treats an empty <code>q</code> as a browse: it returns the
@@ -6625,9 +6675,9 @@ while it is set.</p>
 <p>See <a href="../ai-translation/">AI Translation Layer</a> for details.</p>
 <hr />
 <h2 id="chat-v08-ai-companion">Chat (v0.8 AI Companion)<a class="headerlink" href="#chat-v08-ai-companion" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>POST /api/chat/send        # Streamed chat over SSE
-</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>POST /api/chat/send/json   # Same, single JSON response
-</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
+<div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>POST /api/chat/send        # Streamed chat over SSE
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a>POST /api/chat/send/json   # Same, single JSON response
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
 </span></code></pre></div>
 <h3 id="intent-routing">Intent routing<a class="headerlink" href="#intent-routing" title="Permanent link">#</a></h3>
 <p>Chat requests are classified before any generation work happens, by a
@@ -6664,19 +6714,19 @@ hint only — it never changes the route, so the SPA's page name cannot turn
 conversational turns into pipelines.</p>
 <h3 id="post-apichatsendjson-response-shapes"><code>POST /api/chat/send/json</code> — response shapes<a class="headerlink" href="#post-apichatsendjson-response-shapes" title="Permanent link">#</a></h3>
 <p>Chat intent (one provider completion, no workflow):</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"chat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"OK"</span><span class="w"> </span><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"chat"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"OK"</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
 <p>Pipeline intent (the existing fields are unchanged; <code>mode</code> is added):</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a><span class="p">{</span>
-</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a><span class="w">  </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline"</span><span class="p">,</span>
-</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a><span class="w">  </span><span class="nt">"pipeline_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span>
-</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4" href="#__codelineno-61-4"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\n…"</span><span class="p">,</span>
-</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5" href="#__codelineno-61-5"></a><span class="w">  </span><span class="nt">"intent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RNA-seq analysis"</span><span class="p">,</span>
-</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6" href="#__codelineno-61-6"></a><span class="w">  </span><span class="nt">"data_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
-</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7" href="#__codelineno-61-7"></a><span class="w">  </span><span class="nt">"validation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8" href="#__codelineno-61-8"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span>
-</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9" href="#__codelineno-61-9"></a><span class="w">  </span><span class="nt">"dag"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"edges"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"parallel_groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10" href="#__codelineno-61-10"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a><span class="p">{</span>
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a><span class="w">  </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline"</span><span class="p">,</span>
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a><span class="w">  </span><span class="nt">"pipeline_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span>
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4" href="#__codelineno-63-4"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\n…"</span><span class="p">,</span>
+</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5" href="#__codelineno-63-5"></a><span class="w">  </span><span class="nt">"intent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RNA-seq analysis"</span><span class="p">,</span>
+</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6" href="#__codelineno-63-6"></a><span class="w">  </span><span class="nt">"data_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7" href="#__codelineno-63-7"></a><span class="w">  </span><span class="nt">"validation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-63-8"><a id="__codelineno-63-8" name="__codelineno-63-8" href="#__codelineno-63-8"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span>
+</span><span id="__span-63-9"><a id="__codelineno-63-9" name="__codelineno-63-9" href="#__codelineno-63-9"></a><span class="w">  </span><span class="nt">"dag"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"edges"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">],</span><span class="w"> </span><span class="nt">"parallel_groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-63-10"><a id="__codelineno-63-10" name="__codelineno-63-10" href="#__codelineno-63-10"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="post-apichatsend-sse-event-contract"><code>POST /api/chat/send</code> — SSE event contract<a class="headerlink" href="#post-apichatsend-sse-event-contract" title="Permanent link">#</a></h3>
 <p>The stream opens with a <code>ready</code> handshake, then forwards the real agent
@@ -6786,8 +6836,8 @@ never writes an <code>ai_sessions</code> archive, so repeated settings checks ca
 pollute the audit trail or trip the provider's rate limiter.</p>
 <hr />
 <h2 id="oauth">OAuth<a class="headerlink" href="#oauth" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2" href="#__codelineno-62-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
+<div class="language-text highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
+</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
 </span></code></pre></div>
 <p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
 fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
@@ -6804,10 +6854,10 @@ the callback answers <code>503 {code:"DB_ERROR"}</code> instead of minting a ses
 that would fail closed on every subsequent request.</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
-</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a>POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
-</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a>POST /api/pipelines/import       # Import from oxo+http(s):// share URL
-</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4" href="#__codelineno-63-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a>POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
+</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a>POST /api/pipelines/import       # Import from oxo+http(s):// share URL
+</span><span id="__span-65-4"><a id="__codelineno-65-4" name="__codelineno-65-4" href="#__codelineno-65-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 </span></code></pre></div>
 <code>GET /api/share/{token}</code> powers the share landing page: pipeline identity,
 DAG rule order, TOML, owner, expiry, and the most recent terminal run —
@@ -6820,22 +6870,31 @@ An override that carries its own mount path (e.g.
 local <code>--base-path</code> prefix instead of being appended to it.</p>
 <p>See <a href="../../how-to/collaboration/">Collaboration</a> for details.</p>
 <h3 id="version-history">Version History<a class="headerlink" href="#version-history" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
-</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
-</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3" href="#__codelineno-64-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
+</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
+</span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3" href="#__codelineno-66-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
 </span></code></pre></div>
 Every save/update snapshots the previous content; rollback preserves the
 current version as a new revision (nothing is lost).</p>
+<p>Snapshot insertion is transactional with the pipeline write (issue #1136):
+on create the row and its initial snapshot, and on update/rollback the row
+write and its pre-write snapshot (plus the 50-row retention prune), commit
+in one storage transaction. If the snapshot insert fails, the pipeline
+write rolls back and the request fails — a successful response can never
+be missing its revision row. The snapshots and the compare-and-swap both
+run on SQLite and PostgreSQL. (The pre-existing <code>save_pipeline</code> upsert
+used by fork/import does not write revision rows; fork/import copies carry
+<code>revision = 1</code> and no history.)</p>
 <h2 id="run-administration">Run Administration<a class="headerlink" href="#run-administration" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
+</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
 </span></code></pre></div>
 <code>resume-checkpoint</code> continues an unfinished run in place as a NEW run row
 (<code>{"max_jobs": 2}</code> optional). Both are ownership-checked like every other
 run endpoint.</p>
 <h2 id="webhooks">Webhooks<a class="headerlink" href="#webhooks" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>GET /api/webhook   # admin-only outside personal mode — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
-</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>GET /api/webhook   # admin-only outside personal mode — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
+</span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 </span></code></pre></div>
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:</p>
@@ -6869,9 +6928,9 @@ supplied — silently signing with an empty key would
 produce forgeable deliveries.</p>
 <p>Admin-only outside personal mode — the endpoint is shared infrastructure.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
-</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
-</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
+</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
 </span></code></pre></div>
 Machine credentials: send <code>X-API-Key: oxo_...</code> instead of a Bearer session.
 Keys resolve to the same ownership context (a key's requests see exactly
@@ -6881,16 +6940,16 @@ immediate.</p>
 <p>Runs pre-flight the quota tracker with the workflow's declared threads and
 memory; over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the violation
 list.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>GET  /api/quota           # current limits and usage
-</span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a>GET  /api/quota           # current limits and usage
+</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2" href="#__codelineno-70-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 </span></code></pre></div>
 <p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side).
 Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>).</p>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>GET    /api/clusters                  # configured SSH connections
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
-</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a>DELETE /api/clusters/{id}
-</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>GET    /api/clusters                  # configured SSH connections
+</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
+</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>DELETE /api/clusters/{id}
+</span><span id="__span-71-4"><a id="__codelineno-71-4" name="__codelineno-71-4" href="#__codelineno-71-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 </span></code></pre></div>
 The stored <code>ssh_key</code> is a secret: it is never returned by any
 response (including the upsert echo) — clients see <code>ssh_key_set: true |
@@ -6921,18 +6980,37 @@ rule subprocesses stop rather than being orphaned. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
 <hr />
 <h2 id="hpc">HPC<a class="headerlink" href="#hpc" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a>GET /api/hpc
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-72-1"><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a>GET /api/hpc
 </span></code></pre></div>
 Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. Nodes are deduplicated by name (SLURM lists a node once per partition it belongs to). This route is only mounted when the server runs in <code>hpc</code> mode, and the generated OpenAPI document only advertises it in that mode.</p>
 <hr />
 <h2 id="dag-editing">DAG Editing<a class="headerlink" href="#dag-editing" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
-</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
-</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
+<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
+</span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
+</span><span id="__span-73-3"><a id="__codelineno-73-3" name="__codelineno-73-3" href="#__codelineno-73-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
 </span></code></pre></div>
-<p><code>undo</code>/<code>redo</code> require a JSON body carrying the caller's current TOML; the
-stacked edit is applied only when it matches that state (otherwise <code>404</code>).
-See <a href="../dag-edit-api/">DAG Edit API</a> for the full command reference.</p>
+<p><code>undo</code>/<code>redo</code> require a JSON body carrying the caller's current TOML; a
+recorded transition is applied only when it matches that state exactly.</p>
+<p><strong>Scope, caps, and lifetime (issue #1137).</strong></p>
+<ul>
+<li><strong>Scope</strong> — history is keyed by the acting identity <em>and</em> the pipeline id.
+  The identity is the same <code>users.id</code> the other pipeline handlers resolve
+  (the authenticated session/API-key user; the <code>default</code> pseudo-user in
+  personal mode). Two users editing the same pipeline id own independent
+  stacks and cannot see or undo each other's edits.</li>
+<li><strong>Caps</strong> — at most <code>MAX_EDIT_HISTORY_DEPTH</code> (50) transitions per stack;
+  the oldest is dropped on overflow. At most <code>MAX_EDIT_HISTORY_PIPELINES</code>
+  (256) stacks are kept process-wide; recording an edit for a new
+  identity/pipeline pair evicts the least-recently-used stack.</li>
+<li><strong>Lifetime</strong> — history is in-memory only. A server restart empties every
+  stack, and <code>undo</code>/<code>redo</code> then fail closed with HTTP <code>409</code> and code
+  <code>EDIT_HISTORY_UNAVAILABLE</code> (with a suggestion to re-apply the change)
+  instead of silently no-opping or guessing an undo target. A client
+  document that is not the recorded history tip is refused with HTTP <code>409</code>
+  and <code>EDIT_HISTORY_STALE</code>; <code>404 NO_UNDO</code> / <code>NO_REDO</code> mean history exists
+  but that direction is exhausted.</li>
+</ul>
+<p>See <a href="../dag-edit-api/">DAG Edit API</a> for the full command reference.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>

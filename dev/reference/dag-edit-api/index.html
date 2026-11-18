@@ -3317,6 +3317,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#history-scope-caps-and-lifetime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History scope, caps, and lifetime
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4255,6 +4266,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#history-scope-caps-and-lifetime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History scope, caps, and lifetime
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4341,8 +4363,9 @@ enter the undo/redo history.</p>
 <p>All edit commands are sent to a single endpoint, with the pipeline ID in the URL path:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>POST /api/pipeline/{id}/command
 </span></code></pre></div>
-<p>The pipeline ID is a logical key for the undo/redo stacks — it does not need to
-reference a saved pipeline.</p>
+<p>The pipeline ID is a logical key for the undo/redo stacks (paired with the
+acting identity — see <a href="#history-scope-caps-and-lifetime">History scope, caps, and lifetime</a>)
+— it does not need to reference a saved pipeline.</p>
 <h2 id="commands">Commands<a class="headerlink" href="#commands" title="Permanent link">#</a></h2>
 <p>All commands share a common request envelope. The request body must include the
 current TOML content (<code>toml_content</code>) plus the command.</p>
@@ -4619,7 +4642,9 @@ into that table (comments preserved); everything else is replaced wholesale.</p>
 </span></code></pre></div>
 <hr />
 <h2 id="undo-redo">Undo &amp; Redo<a class="headerlink" href="#undo-redo" title="Permanent link">#</a></h2>
-<p>The DAG Edit API maintains an undo/redo stack per pipeline ID with a maximum depth of 50 entries.</p>
+<p>The DAG Edit API maintains one undo/redo stack per <strong>(acting identity,
+pipeline id)</strong> pair, with documented depth and pipeline caps (see
+<a href="#history-scope-caps-and-lifetime">History scope, caps, and lifetime</a>).</p>
 <h3 id="undo"><code>undo</code><a class="headerlink" href="#undo" title="Permanent link">#</a></h3>
 <p>Reverts the last edit, restoring the previous TOML state.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>POST /api/pipeline/{id}/undo
@@ -4629,10 +4654,35 @@ into that table (comments preserved); everything else is replaced wholesale.</p>
 </span></code></pre></div>
 <p>The request <strong>requires</strong> a JSON body with <code>toml_content</code> set to the caller's
 current TOML state. The undo stack's top transition is applied only when its
-resulting state matches that content exactly — a stale or out-of-sync client
-receives <code>404</code> with code <code>NO_UNDO</code> rather than a corrupted state. The same
-<code>404 NO_UNDO</code> is returned when the undo stack is empty (or, e.g., after a
-server restart, since stacks are in-memory).</p>
+resulting state matches that content exactly.</p>
+<p>Failure codes (all fail closed — no edit is produced and no history is
+consumed):</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>409</td>
+<td><code>EDIT_HISTORY_UNAVAILABLE</code></td>
+<td>No history exists for this identity/pipeline — the first edit has not happened, or the stack was lost to a server restart or LRU eviction. <code>suggestion</code> tells the caller to re-apply the change.</td>
+</tr>
+<tr>
+<td>409</td>
+<td><code>EDIT_HISTORY_STALE</code></td>
+<td>History exists, but the supplied <code>toml_content</code> is not the tip of the recorded history (stale or racing client).</td>
+</tr>
+<tr>
+<td>404</td>
+<td><code>NO_UNDO</code></td>
+<td>History exists but every recorded edit is already undone.</td>
+</tr>
+</tbody>
+</table>
 <p>Returns <code>{ "toml_content": "&lt;previous TOML&gt;" }</code> — i.e. the state <em>before</em> the
 last edit.</p>
 <h3 id="redo"><code>redo</code><a class="headerlink" href="#redo" title="Permanent link">#</a></h3>
@@ -4643,9 +4693,31 @@ last edit.</p>
 </span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
 </span></code></pre></div>
 <p>Same contract as <code>undo</code>: the JSON body is required, and <code>toml_content</code> must
-match the current state (the result of the last undo), otherwise <code>404</code> with
-code <code>NO_REDO</code>.</p>
+match the current state (the result of the last undo). The failure codes are
+the same: <code>409 EDIT_HISTORY_UNAVAILABLE</code>, <code>409 EDIT_HISTORY_STALE</code>, and
+<code>404 NO_REDO</code> when history exists but nothing was undone.</p>
 <p><strong>Note:</strong> Performing a new edit after an undo clears the redo stack (standard undo/redo semantics).</p>
+<h3 id="history-scope-caps-and-lifetime">History scope, caps, and lifetime<a class="headerlink" href="#history-scope-caps-and-lifetime" title="Permanent link">#</a></h3>
+<p>Defined in <code>crates/oxo-flow-web/src/domains/dag/service.rs</code> (issue #1137):</p>
+<ul>
+<li><strong>Scope</strong> — a stack is keyed by the acting identity <em>and</em> the pipeline id.
+  The identity is the <code>users.id</code> the auth middleware resolves for the request
+  (session or API key); personal mode has no auth middleware, so every
+  request falls back to the <code>default</code> pseudo-user. Two identities editing the
+  same pipeline id get independent stacks: neither can observe or undo the
+  other's edits.</li>
+<li><strong>Depth cap</strong> — <code>MAX_EDIT_HISTORY_DEPTH</code> = <strong>50</strong> transitions per stack.
+  Pushing past the cap drops the oldest transition, so undo can walk back at
+  most 50 edits.</li>
+<li><strong>Pipeline cap</strong> — <code>MAX_EDIT_HISTORY_PIPELINES</code> = <strong>256</strong> stacks
+  process-wide. Recording an edit for a new (identity, pipeline) pair evicts
+  the least-recently-used stack.</li>
+<li><strong>Lifetime</strong> — history lives in RAM only; it is not persisted. A server
+  restart (or LRU eviction) empties a stack, and a subsequent <code>undo</code>/<code>redo</code>
+  <strong>fails closed</strong> with <code>409 EDIT_HISTORY_UNAVAILABLE</code> and a remediation
+  suggestion. It never silently no-ops, and it never applies an edit to a
+  document the server no longer holds history for.</li>
+</ul>
 <hr />
 <h2 id="response-format">Response Format<a class="headerlink" href="#response-format" title="Permanent link">#</a></h2>
 <p>All edit commands return a <code>DagEditResponse</code>:</p>
@@ -4702,7 +4774,7 @@ atomically). See <a href="../dag-engine/">DAG Engine</a>.</p>
 <li>
 <p><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</p>
 </li>
-<li><strong>Undo/redo is in-memory.</strong> Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.</li>
+<li><strong>Undo/redo is in-memory, identity-scoped, and bounded.</strong> Stacks are keyed by (acting identity, pipeline id), capped at 50 transitions each and 256 stacks process-wide (LRU), and live only for the duration of the server process. They do not persist across server restarts; undo/redo after a restart fails closed with <code>409 EDIT_HISTORY_UNAVAILABLE</code> (see <a href="#history-scope-caps-and-lifetime">History scope, caps, and lifetime</a>).</li>
 </ul>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>

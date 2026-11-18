@@ -4776,7 +4776,17 @@ only present when a handler supplies them (e.g. <code>429</code> bodies carry
 <tr>
 <td><code>NO_UNDO</code> / <code>NO_REDO</code></td>
 <td>404</td>
-<td>DAG edit undo/redo stack empty</td>
+<td>DAG edit history exists but the requested direction is exhausted</td>
+</tr>
+<tr>
+<td><code>EDIT_HISTORY_UNAVAILABLE</code></td>
+<td>409</td>
+<td>No DAG edit history for this identity + pipeline (never edited, or lost to a server restart / LRU eviction); undo/redo fails closed</td>
+</tr>
+<tr>
+<td><code>EDIT_HISTORY_STALE</code></td>
+<td>409</td>
+<td>Supplied <code>toml_content</code> is not the tip of the recorded DAG edit history; nothing is applied</td>
 </tr>
 <tr>
 <td><code>RATE_LIMITED</code></td>
