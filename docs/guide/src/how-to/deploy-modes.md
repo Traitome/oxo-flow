@@ -292,9 +292,10 @@ server process's cwd):
   dir without touching `inputs/`)
 - `users/<username>/runs/<run_id>/` — each run's own immutable workdir
   (the spawned CLI runs here; the workflow snapshot, checkpoint, logs,
-  outputs, and envs live under it). Every run — including runs of a saved
-  pipeline — gets a fresh directory, so a later run can never overwrite an
-  earlier run's artifacts (issue #1130 / audit RB-02). A pre-upgrade
+  outputs, and envs live under it). Every create request — including for a
+  saved pipeline — gets a fresh directory, so a later run can never
+  overwrite an earlier run's artifacts (issue #1130 / audit RB-02); only
+  `retry`/`resume-checkpoint` continue their predecessor's directory. A pre-upgrade
   `users/<username>/pipelines/<pipeline_id>/` tree may still exist; it is
   no longer created or written and can be archived
 

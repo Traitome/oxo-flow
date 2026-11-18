@@ -567,11 +567,11 @@ same way they do on the CLI. Files already present in the workdir are never
 overwritten.
 
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
-the TOML still comes from `toml_content`. Every run, saved-pipeline or
-ad-hoc, gets its own immutable workdir (`workspace/users/<user>/runs/<run_id>/`):
-the workflow snapshot, `include_files`, staged inputs, checkpoint, logs, and
-outputs live there and are never shared with another run (issue #1130 /
-audit RB-02). The run's `pipeline_snapshot` column stores the exact TOML it
+the TOML still comes from `toml_content`. Every run created through this
+endpoint, saved-pipeline or ad-hoc, gets its own immutable workdir
+(`workspace/users/<user>/runs/<run_id>/`): the workflow snapshot,
+`include_files`, staged inputs, checkpoint, logs, and outputs live there and
+are never shared with another create (issue #1130 / audit RB-02). The run's `pipeline_snapshot` column stores the exact TOML it
 was created from, so later edits to the saved pipeline cannot change what an
 existing run executed or what `provenance verify` audits.
 

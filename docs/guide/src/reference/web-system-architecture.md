@@ -171,10 +171,13 @@ Server process environment:
 
 ### Run workdir lifecycle
 
-Every run owns `users/<u>/runs/<run_id>/` for its whole life. The workflow
-snapshot, staged `include_files`, uploaded inputs, `.oxo-flow/checkpoint.json`,
-logs, and outputs are written there and nowhere else; the directory name is
-the run id, so no other run can address it. A saved pipeline's `pipeline_id`
+Every run created through `POST /api/runs` owns `users/<u>/runs/<run_id>/`
+for its whole life. The workflow snapshot, staged `include_files`, uploaded
+inputs, `.oxo-flow/checkpoint.json`, logs, and outputs are written there and
+nowhere else; the directory name is the run id, so no other run can address
+it. `retry` and `resume-checkpoint` are explicit continuations of a
+predecessor's lineage and deliberately write into that predecessor's tree;
+they are not new run history. A saved pipeline's `pipeline_id`
 is an association (permissions, listing, admission ordering), never a
 workdir. This is what makes a run's recorded checksums and run history
 immutable (issue #1130 / audit RB-02). Admission is a single guarded

@@ -100,9 +100,11 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Fixed (2026-11-18) — every run now owns a unique `runs/<run_id>/`
-workdir and saved-pipeline admission is one atomic guarded insert keyed on
-`pipeline_id` (issue #1130, implementation commit `7bded48d`).
+**Maturity**: Fixed (2026-11-18) — every run created through `POST /api/runs`
+owns a unique `runs/<run_id>/` workdir (retry/resume are documented lineage
+continuations, see the limits below) and saved-pipeline admission is one
+atomic guarded insert keyed on `pipeline_id` (issue #1130, implementation
+commit `7bded48d`).
 
 Runs created from a saved pipeline shared the persistent pipeline directory
 as their `workdir`, so a later run overwrote an earlier run's workflow,
@@ -139,7 +141,9 @@ shared-workdir branch and the missing pipeline guard were re-confirmed on
 
 Required exit evidence (all produced):
 
-- Every run has a unique, immutable workdir or content-addressed snapshot.
+- Every run created through `POST /api/runs` has a unique, immutable workdir
+  (no create writes into another run's tree; retry/resume-checkpoint are
+  explicit continuations of a predecessor lineage, never new run history).
 - Two sequential runs leave all hashes and provenance records for the first
   run unchanged.
 - Concurrent creation from one saved pipeline yields one admitted run and one
@@ -837,7 +841,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
 | WEB-01 | P0 | No OS-level tenant execution boundary. | Planned / blocked | RB-01. |
-| WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir); saved-pipeline creates take an atomic `pipeline_id`-keyed guarded insert (one live run per pipeline, 409 otherwise), shared by create/retry/resume. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `pipeline_guard_*`. See RB-02. |
+| WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design); saved-pipeline creates take an atomic `pipeline_id`-keyed guarded insert (one live run per pipeline, 409 otherwise), shared by create/retry/resume. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `pipeline_guard_*`. See RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |
