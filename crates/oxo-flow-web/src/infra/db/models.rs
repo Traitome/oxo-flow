@@ -502,12 +502,15 @@ pub struct ApiKeyRow {
 }
 
 /// A pending OAuth CSRF state, bound at issuance to the provider and the
-/// redirect URI it authorizes (issue #1141).
+/// redirect URI it authorizes (issue #1141) and to the browser that started
+/// the flow (`binding_hash`, issue #1197). Historical rows default
+/// `binding_hash` to `''` and never verify.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OAuthStateRow {
     pub state: String,
     pub provider: String,
     pub redirect_uri: String,
+    pub binding_hash: String,
     pub created_at: String,
 }
 

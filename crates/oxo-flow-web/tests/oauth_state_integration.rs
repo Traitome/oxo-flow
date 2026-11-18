@@ -18,15 +18,23 @@ async fn ensure_db() {
 }
 
 async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
+    post_json_with_cookie(uri, body, None).await
+}
+
+async fn post_json_with_cookie(
+    uri: &str,
+    body: Value,
+    cookie: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
     let resp = server::build_router("team")
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(uri)
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
     let status = resp.status();
@@ -59,17 +67,24 @@ async fn callback_rejects_a_state_past_the_ten_minute_window() {
     // though the daily cleanup has not pruned it yet.
     let backend = oxo_flow_web::infra::db::global_backend().expect("storage backend");
     let stale = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
-    // Bindings match the presented callback so only the freshness gate can
-    // reject this state.
+    // Bindings match the presented callback (provider, redirect, and the
+    // browser cookie below) so only the freshness gate can reject this state.
     let redirect = oxo_flow_web::domains::auth::service::oauth_redirect_uri(None);
     backend
-        .store_oauth_state("state-expired", "attacker", &redirect, &stale)
+        .store_oauth_state(
+            "state-expired",
+            "attacker",
+            &redirect,
+            &oxo_flow_web::domains::auth::service::hash_binding("browser-a"),
+            &stale,
+        )
         .await
         .expect("store stale state");
 
-    let (status, body) = post_json(
+    let (status, body) = post_json_with_cookie(
         "/api/auth/oauth/callback",
         json!({"provider": "attacker", "code": "x", "state": "state-expired"}),
+        Some("oxoflow_oauth_binding=browser-a"),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
@@ -93,15 +108,17 @@ async fn callback_consumes_the_state_before_attempting_the_exchange() {
         "state-replayed-over-http",
         "attacker",
         &redirect,
+        "browser-a",
     )
     .await
     .expect("store state");
 
     // Unknown provider: the exchange fails offline, proving the valid state
     // reached the exchange step (not the state gate).
-    let (status, body) = post_json(
+    let (status, body) = post_json_with_cookie(
         "/api/auth/oauth/callback",
         json!({"provider": "attacker", "code": "x", "state": "state-replayed-over-http"}),
+        Some("oxoflow_oauth_binding=browser-a"),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
@@ -116,9 +133,10 @@ async fn callback_consumes_the_state_before_attempting_the_exchange() {
 
     // The same state replayed now fails the gate: it was consumed before
     // the exchange, so a failed exchange cannot be retried with it.
-    let (status, body) = post_json(
+    let (status, body) = post_json_with_cookie(
         "/api/auth/oauth/callback",
         json!({"provider": "attacker", "code": "x", "state": "state-replayed-over-http"}),
+        Some("oxoflow_oauth_binding=browser-a"),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
@@ -133,14 +151,27 @@ async fn issued_state_is_single_use() {
     ensure_db().await;
 
     let redirect = oxo_flow_web::domains::auth::service::oauth_redirect_uri(None);
-    oxo_flow_web::domains::auth::service::store_pending_state("state-1", "orcid", &redirect)
-        .await
-        .expect("store state");
-    oxo_flow_web::domains::auth::service::verify_and_consume_state("state-1", "orcid", &redirect)
-        .await
-        .expect("first use verifies");
+    oxo_flow_web::domains::auth::service::store_pending_state(
+        "state-1",
+        "orcid",
+        &redirect,
+        "browser-a",
+    )
+    .await
+    .expect("store state");
+    oxo_flow_web::domains::auth::service::verify_and_consume_state(
+        "state-1",
+        "orcid",
+        &redirect,
+        Some("browser-a"),
+    )
+    .await
+    .expect("first use verifies");
     let second = oxo_flow_web::domains::auth::service::verify_and_consume_state(
-        "state-1", "orcid", &redirect,
+        "state-1",
+        "orcid",
+        &redirect,
+        Some("browser-a"),
     )
     .await;
     assert!(second.is_err(), "state must be single-use");
@@ -148,6 +179,7 @@ async fn issued_state_is_single_use() {
         "never-issued",
         "orcid",
         &redirect,
+        Some("browser-a"),
     )
     .await;
     assert!(unknown.is_err(), "unissued state must fail");

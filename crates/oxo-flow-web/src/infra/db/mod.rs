@@ -60,7 +60,7 @@ pub async fn oauth_test_backend() -> std::sync::Arc<dyn StorageBackend> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, \
          provider TEXT NOT NULL DEFAULT '', redirect_uri TEXT NOT NULL DEFAULT '', \
-         created_at TEXT NOT NULL)",
+         binding_hash TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)",
     )
     .execute(&pool)
     .await
@@ -276,12 +276,15 @@ pub trait StorageBackend: Send + Sync {
     async fn delete_api_keys_for_user(&self, user_id: &str) -> Result<u64, String>;
 
     /// Persist a pending OAuth CSRF state bound to the `provider` and
-    /// `redirect_uri` it was issued for (issue #1141).
+    /// `redirect_uri` it was issued for (issue #1141) and to the initiating
+    /// browser via `binding_hash` (issue #1197). Only the digest of the
+    /// browser binding value is stored.
     async fn store_oauth_state(
         &self,
         state: &str,
         provider: &str,
         redirect_uri: &str,
+        binding_hash: &str,
         created_at: &str,
     ) -> Result<(), String>;
     /// Atomically consume (delete + return) a pending state. `None` means the

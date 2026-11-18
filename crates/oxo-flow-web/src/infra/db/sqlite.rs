@@ -412,6 +412,7 @@ impl StorageBackend for SqliteBackend {
                 state TEXT PRIMARY KEY,
                 provider TEXT NOT NULL DEFAULT '',
                 redirect_uri TEXT NOT NULL DEFAULT '',
+                binding_hash TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
 
@@ -585,6 +586,12 @@ impl StorageBackend for SqliteBackend {
         self.add_column_if_missing("oauth_states", "provider TEXT NOT NULL DEFAULT ''")
             .await;
         self.add_column_if_missing("oauth_states", "redirect_uri TEXT NOT NULL DEFAULT ''")
+            .await;
+        // Migration (issue #1197): bind a pending state to the browser that
+        // started the flow. Only the digest of the HttpOnly cookie value is
+        // stored. Historical rows default to '' and can never verify; they
+        // age out under the existing 24 h purge.
+        self.add_column_if_missing("oauth_states", "binding_hash TEXT NOT NULL DEFAULT ''")
             .await;
 
         // Migration: webhook signature scheme. Defaults to the legacy
@@ -1738,15 +1745,17 @@ impl StorageBackend for SqliteBackend {
         state: &str,
         provider: &str,
         redirect_uri: &str,
+        binding_hash: &str,
         created_at: &str,
     ) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO oauth_states (state, provider, redirect_uri, created_at) \
-             VALUES (?, ?, ?, ?)",
+            "INSERT INTO oauth_states (state, provider, redirect_uri, binding_hash, created_at) \
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(state)
         .bind(provider)
         .bind(redirect_uri)
+        .bind(binding_hash)
         .bind(created_at)
         .execute(&self.pool)
         .await
@@ -1763,7 +1772,7 @@ impl StorageBackend for SqliteBackend {
         // fails the callback closed instead of accepting a reusable state.
         let row: Option<models::OAuthStateRow> = sqlx::query_as(
             "DELETE FROM oauth_states WHERE state = ? \
-             RETURNING state, provider, redirect_uri, created_at",
+             RETURNING state, provider, redirect_uri, binding_hash, created_at",
         )
         .bind(state)
         .fetch_optional(&self.pool)
@@ -3259,7 +3268,13 @@ mod ai_provider_config_tests {
         let now = SqliteBackend::now();
 
         backend
-            .store_oauth_state("state-one", "orcid", "https://flows.example/cb", &now)
+            .store_oauth_state(
+                "state-one",
+                "orcid",
+                "https://flows.example/cb",
+                "binding-digest",
+                &now,
+            )
             .await
             .expect("store state");
         let consumed = backend
@@ -3270,6 +3285,7 @@ mod ai_provider_config_tests {
         assert_eq!(consumed.created_at, now);
         assert_eq!(consumed.provider, "orcid");
         assert_eq!(consumed.redirect_uri, "https://flows.example/cb");
+        assert_eq!(consumed.binding_hash, "binding-digest");
 
         // Single use
         let second = backend
@@ -3281,11 +3297,23 @@ mod ai_provider_config_tests {
         // Pruning
         let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
         backend
-            .store_oauth_state("state-old", "orcid", "https://flows.example/cb", &old)
+            .store_oauth_state(
+                "state-old",
+                "orcid",
+                "https://flows.example/cb",
+                "binding-digest",
+                &old,
+            )
             .await
             .expect("store old");
         backend
-            .store_oauth_state("state-fresh", "orcid", "https://flows.example/cb", &now)
+            .store_oauth_state(
+                "state-fresh",
+                "orcid",
+                "https://flows.example/cb",
+                "binding-digest",
+                &now,
+            )
             .await
             .expect("store fresh");
 
@@ -3321,6 +3349,7 @@ mod ai_provider_config_tests {
                 "concurrent-state",
                 "orcid",
                 "https://flows.example/cb",
+                "binding-digest",
                 &now,
             )
             .await

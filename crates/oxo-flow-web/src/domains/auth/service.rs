@@ -4,6 +4,7 @@
 //! Suitable for reuse from handlers, CLI commands, or tests without
 //! coupling to axum or any web framework.
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::types::*;
@@ -275,6 +276,10 @@ pub enum OAuthStateError {
     ProviderMismatch { expected: String, actual: String },
     /// Issued for a different redirect URI.
     RedirectMismatch { expected: String, actual: String },
+    /// Issued to a different browser (missing, wrong, or legacy row with no
+    /// stored binding). Deliberately carries no detail: the response must
+    /// not reveal which part of the state binding failed (issue #1197).
+    BindingMismatch,
 }
 
 impl OAuthStateError {
@@ -286,8 +291,12 @@ impl OAuthStateError {
             // code (the expiry detail stays in the message).
             Self::Invalid | Self::Expired => "OAUTH_INVALID_STATE",
             // A state that this server did issue, but not for this
-            // provider/redirect, is a distinct, actionable failure.
-            Self::ProviderMismatch { .. } | Self::RedirectMismatch { .. } => "OAUTH_STATE_MISMATCH",
+            // provider/redirect/browser, is a distinct, actionable failure.
+            // The browser-binding mismatch shares the code so a callback
+            // cannot probe which part of the binding failed.
+            Self::ProviderMismatch { .. }
+            | Self::RedirectMismatch { .. }
+            | Self::BindingMismatch => "OAUTH_STATE_MISMATCH",
         }
     }
 
@@ -303,6 +312,12 @@ impl OAuthStateError {
             Self::RedirectMismatch { expected, actual } => format!(
                 "OAuth state was issued for redirect URI '{expected}', not '{actual}' — restart the sign-in flow"
             ),
+            // Generic on purpose: never disclose which binding component
+            // failed (provider/redirect/browser) — issue #1197.
+            Self::BindingMismatch => {
+                "OAuth state does not match this sign-in flow — restart the sign-in flow"
+                    .to_string()
+            }
         }
     }
 }
@@ -430,12 +445,35 @@ fn redirect_allowed_within(redirect_uri: &str, allowed_origins: &[String]) -> bo
         .any(|allowed| url_origin(allowed).as_deref() == Some(origin.as_str()))
 }
 
-/// Persist a pending OAuth CSRF state, bound to the provider and redirect
-/// URI it was issued for (issue #1141).
+/// Name of the cookie that binds a pending OAuth flow to the browser that
+/// started it (issue #1197).
+pub const OAUTH_BINDING_COOKIE: &str = "oxoflow_oauth_binding";
+
+/// A CSRF state is short-lived by design: the daily cleanup prunes the
+/// table, but without a consumption-time freshness check a leaked state
+/// would stay replayable for up to that full 24h window.
+const OAUTH_STATE_TTL_MINS: i64 = 10;
+
+/// Max-Age of the browser-binding cookie. It never outlives the state it
+/// binds to.
+pub const OAUTH_BINDING_COOKIE_MAX_AGE_SECS: i64 = OAUTH_STATE_TTL_MINS * 60;
+
+/// Hash a browser-binding value for storage. Only the digest is persisted,
+/// so a reader of the `oauth_states` table cannot mint a matching cookie
+/// (the raw value lives only in the browser's HttpOnly cookie).
+#[must_use]
+pub fn hash_binding(binding: &str) -> String {
+    hex::encode(Sha256::digest(binding.as_bytes()))
+}
+
+/// Persist a pending OAuth CSRF state, bound to the provider, redirect URI
+/// (issue #1141), and browser binding value it was issued for (issue #1197).
+/// Only [`hash_binding`] is stored server-side.
 pub async fn store_pending_state(
     state: &str,
     provider: &str,
     redirect_uri: &str,
+    binding: &str,
 ) -> Result<(), String> {
     let backend =
         crate::infra::db::global_backend().ok_or_else(|| "Database unavailable".to_string())?;
@@ -445,26 +483,31 @@ pub async fn store_pending_state(
             state,
             &normalize_provider(provider),
             redirect_uri.trim(),
+            &hash_binding(binding),
             &now,
         )
         .await
 }
 
-/// A CSRF state is short-lived by design: the daily cleanup prunes the
-/// table, but without a consumption-time freshness check a leaked state
-/// would stay replayable for up to that full 24h window.
-const OAUTH_STATE_TTL_MINS: i64 = 10;
-
-/// Verify a callback's CSRF state was issued by this server, is fresh, and
-/// was issued for THIS provider and redirect URI — then consume it.
+/// Verify a callback's CSRF state was issued by this server, is fresh, was
+/// issued for THIS provider and redirect URI, and was issued to the browser
+/// presenting `presented_binding` — then consume it.
 ///
 /// Consumption happens first and unconditionally (`DELETE … RETURNING`), so
-/// a state is single-use even when the binding check rejects it: a replayed
+/// a state is single-use even when a binding check rejects it: a replayed
 /// state can never be retried, and concurrent callbacks cannot both win.
+/// An implementation that checked before consuming would let two concurrent
+/// callbacks both pass a read-then-check.
+///
+/// The browser binding is checked FIRST among the binding checks so a
+/// callback from another browser cannot learn which provider or redirect
+/// URI the state was issued for (issue #1197). A row without a stored
+/// binding (written before the binding migration) never verifies.
 pub async fn verify_and_consume_state(
     state: &str,
     provider: &str,
     redirect_uri: &str,
+    presented_binding: Option<&str>,
 ) -> Result<(), OAuthStateError> {
     let backend = crate::infra::db::global_backend().ok_or(OAuthStateError::Invalid)?;
     let row = backend
@@ -474,6 +517,15 @@ pub async fn verify_and_consume_state(
     let Some(row) = row else {
         return Err(OAuthStateError::Invalid);
     };
+    // Browser binding (issue #1197): the cookie value must hash to the
+    // value stored next to the state. Empty stored bindings are historical
+    // rows that predate the migration — they fail closed.
+    let presented_binding = presented_binding.map(str::trim).filter(|v| !v.is_empty());
+    let binding_ok = !row.binding_hash.is_empty()
+        && presented_binding.is_some_and(|binding| hash_binding(binding) == row.binding_hash);
+    if !binding_ok {
+        return Err(OAuthStateError::BindingMismatch);
+    }
     let created_ts = chrono::DateTime::parse_from_rfc3339(&row.created_at)
         .map_err(|_| OAuthStateError::Invalid)?;
     if chrono::Utc::now() - created_ts.with_timezone(&chrono::Utc)
@@ -498,14 +550,93 @@ pub async fn verify_and_consume_state(
     Ok(())
 }
 
+/// Cookie `Path` scoping the binding cookie to the OAuth route prefix: the
+/// parent path of the request, so `/api/auth/oauth/authorize` and
+/// `/api/auth/oauth/callback` both yield `/api/auth/oauth` (base-path
+/// mounts included). Anything without a parent falls back to `/`.
+#[must_use]
+pub fn oauth_cookie_path(request_path: &str) -> String {
+    let path = request_path.split(['?', '#']).next().unwrap_or("");
+    match path.rsplit_once('/') {
+        Some((parent, _)) if !parent.is_empty() => parent.to_string(),
+        _ => "/".to_string(),
+    }
+}
+
+/// Whether the browser-binding cookie must carry `Secure`.
+///
+/// Derived from the browser-facing callback URI (falling back to the
+/// operator-declared `OXO_FLOW_PUBLIC_URL` origin): https → `Secure`.
+/// A plain-http callback — the localhost fallback and local development —
+/// never gets `Secure`, because browsers drop `Secure` cookies on http and
+/// the whole sign-in flow would break.
+#[must_use]
+pub fn oauth_cookie_secure(redirect_uri: &str) -> bool {
+    match url_origin(redirect_uri) {
+        Some(origin) if origin.starts_with("http://") => false,
+        Some(origin) if origin.starts_with("https://") => true,
+        _ => crate::server::declared_public_origin()
+            .and_then(|origin| url_origin(&origin))
+            .is_some_and(|origin| origin.starts_with("https://")),
+    }
+}
+
+/// Build the `Set-Cookie` value that installs the browser binding.
+///
+/// `HttpOnly` keeps the value away from scripts; `SameSite=Lax` is what
+/// lets the cookie ride the provider's top-level redirect back to the
+/// callback while blocking cross-site subresource leakage; the `Path` is
+/// scoped to the OAuth routes and the lifetime to the state TTL.
+#[must_use]
+pub fn oauth_binding_set_cookie(value: &str, path: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "{OAUTH_BINDING_COOKIE}={value}; Path={path}; Max-Age={OAUTH_BINDING_COOKIE_MAX_AGE_SECS}; HttpOnly; SameSite=Lax{secure}"
+    )
+}
+
+/// Build the `Set-Cookie` value that clears the browser binding. Sent on
+/// every callback response (success and failure) so a spent flow leaves no
+/// cookie behind. The `Path` must match [`oauth_binding_set_cookie`]'s or
+/// the browser keeps the old cookie.
+#[must_use]
+pub fn oauth_binding_clear_cookie(path: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{OAUTH_BINDING_COOKIE}=; Path={path}; Max-Age=0; HttpOnly; SameSite=Lax{secure}")
+}
+
+/// Extract the binding cookie value from one `Cookie` request header.
+#[must_use]
+pub fn binding_from_cookie_header(header: &str) -> Option<&str> {
+    header.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name.trim() == OAUTH_BINDING_COOKIE)
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// A freshly initiated OAuth flow.
+///
+/// The `binding` value is a secret delivered ONLY through the HttpOnly
+/// cookie; it is never serialized into the response body.
+#[derive(Debug, Clone)]
+pub struct InitiatedOAuthFlow {
+    /// The public authorize response (URL + CSRF state).
+    pub response: OAuthAuthorizeResponse,
+    /// The browser-binding value to set as a cookie.
+    pub binding: String,
+}
+
 /// Initiate an OAuth2 authorization flow.
 ///
-/// Returns the provider's authorization URL and a CSRF state token bound to
-/// `(provider, redirect_uri)`.
+/// Returns the provider's authorization URL, a CSRF state token bound to
+/// `(provider, redirect_uri)`, and the per-flow browser binding value the
+/// caller must deliver as the [`OAUTH_BINDING_COOKIE`] cookie.
 pub async fn initiate_oauth(
     provider: &str,
     redirect_uri: &str,
-) -> Result<OAuthAuthorizeResponse, String> {
+) -> Result<InitiatedOAuthFlow, String> {
     // Defense in depth: callers gate this too (with the structured
     // OAUTH_REDIRECT_NOT_ALLOWED code), but a bound state must never be
     // issued for a target the callback would refuse.
@@ -517,14 +648,18 @@ pub async fn initiate_oauth(
     let provider = normalize_provider(provider);
     let config = oauth_config_from_env(&provider, redirect_uri)?;
     let state = generate_token();
+    let binding = generate_token();
     let authorize_url = config.authorize_url(&state);
 
     // Persist the pending state so the callback can verify it (CSRF defense).
-    store_pending_state(&state, &provider, redirect_uri).await?;
+    store_pending_state(&state, &provider, redirect_uri, &binding).await?;
 
-    Ok(OAuthAuthorizeResponse {
-        authorize_url,
-        state,
+    Ok(InitiatedOAuthFlow {
+        response: OAuthAuthorizeResponse {
+            authorize_url,
+            state,
+        },
+        binding,
     })
 }
 
@@ -822,17 +957,32 @@ mod tests {
         let backend = crate::infra::db::oauth_test_backend().await;
         crate::infra::db::set_global_backend(backend.clone());
 
-        store_pending_state("state-fresh", "orcid", "https://flows.example/cb")
-            .await
-            .expect("store fresh");
-        verify_and_consume_state("state-fresh", "orcid", "https://flows.example/cb")
-            .await
-            .expect("a fresh state verifies");
+        store_pending_state(
+            "state-fresh",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .expect("store fresh");
+        verify_and_consume_state(
+            "state-fresh",
+            "orcid",
+            "https://flows.example/cb",
+            Some("browser-a"),
+        )
+        .await
+        .expect("a fresh state verifies");
         // Single use: the row is gone.
         assert!(
-            verify_and_consume_state("state-fresh", "orcid", "https://flows.example/cb")
-                .await
-                .is_err(),
+            verify_and_consume_state(
+                "state-fresh",
+                "orcid",
+                "https://flows.example/cb",
+                Some("browser-a"),
+            )
+            .await
+            .is_err(),
             "a consumed state must not verify twice"
         );
 
@@ -844,13 +994,19 @@ mod tests {
                 "state-stale",
                 "orcid",
                 "https://flows.example/cb",
+                &hash_binding("browser-a"),
                 &stale_time,
             )
             .await
             .unwrap();
-        let err = verify_and_consume_state("state-stale", "orcid", "https://flows.example/cb")
-            .await
-            .expect_err("a stale state must be rejected");
+        let err = verify_and_consume_state(
+            "state-stale",
+            "orcid",
+            "https://flows.example/cb",
+            Some("browser-a"),
+        )
+        .await
+        .expect_err("a stale state must be rejected");
         assert_eq!(err, OAuthStateError::Expired, "unexpected error: {err}");
         assert!(err.message().contains("expired"));
     }
@@ -859,14 +1015,25 @@ mod tests {
     async fn test_oauth_state_binding_rejects_provider_and_redirect_mismatch() {
         let backend = crate::infra::db::oauth_test_backend().await;
         crate::infra::db::set_global_backend(backend.clone());
+        let binding = Some("browser-a");
 
         // Issued for orcid + R1, presented on github's callback.
-        store_pending_state("bound-provider", "orcid", "https://flows.example/cb")
-            .await
-            .unwrap();
-        let err = verify_and_consume_state("bound-provider", "github", "https://flows.example/cb")
-            .await
-            .expect_err("a provider mismatch must be rejected");
+        store_pending_state(
+            "bound-provider",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        let err = verify_and_consume_state(
+            "bound-provider",
+            "github",
+            "https://flows.example/cb",
+            binding,
+        )
+        .await
+        .expect_err("a provider mismatch must be rejected");
         assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
         assert!(
             matches!(err, OAuthStateError::ProviderMismatch { .. }),
@@ -875,18 +1042,33 @@ mod tests {
         // The mismatch consumed the state: it cannot be retried with the
         // right provider afterwards (fail closed, single use).
         assert!(
-            verify_and_consume_state("bound-provider", "orcid", "https://flows.example/cb")
-                .await
-                .is_err()
+            verify_and_consume_state(
+                "bound-provider",
+                "orcid",
+                "https://flows.example/cb",
+                binding,
+            )
+            .await
+            .is_err()
         );
 
         // Issued for R1, presented with R2.
-        store_pending_state("bound-redirect", "orcid", "https://flows.example/cb")
-            .await
-            .unwrap();
-        let err = verify_and_consume_state("bound-redirect", "orcid", "https://other.example/cb")
-            .await
-            .expect_err("a redirect mismatch must be rejected");
+        store_pending_state(
+            "bound-redirect",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        let err = verify_and_consume_state(
+            "bound-redirect",
+            "orcid",
+            "https://other.example/cb",
+            binding,
+        )
+        .await
+        .expect_err("a redirect mismatch must be rejected");
         assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
         assert!(
             matches!(err, OAuthStateError::RedirectMismatch { .. }),
@@ -895,12 +1077,226 @@ mod tests {
 
         // Provider normalization: an upper-case name for the SAME provider
         // still verifies (the contract is case-insensitive).
-        store_pending_state("bound-case", "orcid", "https://flows.example/cb")
+        store_pending_state(
+            "bound-case",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        verify_and_consume_state(
+            "bound-case",
+            "ORCID",
+            "https://flows.example/cb",
+            Some("browser-a"),
+        )
+        .await
+        .expect("provider names are case-insensitive");
+    }
+
+    #[tokio::test]
+    async fn test_oauth_state_is_bound_to_the_initiating_browser() {
+        let backend = crate::infra::db::oauth_test_backend().await;
+        crate::infra::db::set_global_backend(backend.clone());
+
+        // Missing cookie (callback from another browser context).
+        store_pending_state(
+            "browser-missing",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        let err =
+            verify_and_consume_state("browser-missing", "orcid", "https://flows.example/cb", None)
+                .await
+                .expect_err("a callback without the binding cookie must be rejected");
+        assert_eq!(err, OAuthStateError::BindingMismatch);
+        assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
+        assert!(
+            !err.message().contains("orcid") && !err.message().contains("flows.example"),
+            "the binding error must not leak which part failed: {err}"
+        );
+        // The mismatch consumed the state: the original browser cannot
+        // retry it afterwards.
+        assert!(
+            verify_and_consume_state(
+                "browser-missing",
+                "orcid",
+                "https://flows.example/cb",
+                Some("browser-a"),
+            )
+            .await
+            .is_err(),
+            "a rejected cross-browser callback must consume the state"
+        );
+
+        // A different browser's cookie.
+        store_pending_state(
+            "browser-other",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        let err = verify_and_consume_state(
+            "browser-other",
+            "orcid",
+            "https://flows.example/cb",
+            Some("browser-b"),
+        )
+        .await
+        .expect_err("another browser's binding must be rejected");
+        assert_eq!(err, OAuthStateError::BindingMismatch);
+
+        // An empty cookie value is treated as missing, never as a match.
+        store_pending_state(
+            "browser-empty",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        let err = verify_and_consume_state(
+            "browser-empty",
+            "orcid",
+            "https://flows.example/cb",
+            Some(""),
+        )
+        .await
+        .expect_err("an empty binding cookie must be rejected");
+        assert_eq!(err, OAuthStateError::BindingMismatch);
+
+        // Same browser: the bare value verifies.
+        store_pending_state(
+            "browser-same",
+            "orcid",
+            "https://flows.example/cb",
+            "browser-a",
+        )
+        .await
+        .unwrap();
+        verify_and_consume_state(
+            "browser-same",
+            "orcid",
+            "https://flows.example/cb",
+            Some("browser-a"),
+        )
+        .await
+        .expect("the initiating browser must complete the flow");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_state_rows_without_a_binding_never_verify() {
+        let backend = crate::infra::db::oauth_test_backend().await;
+        crate::infra::db::set_global_backend(backend.clone());
+
+        // A row written before the binding migration (binding_hash = ''),
+        // otherwise perfectly valid: provider, redirect and freshness all
+        // match. It must still fail closed — a legacy row cannot be
+        // completed by ANY browser.
+        backend
+            .store_oauth_state(
+                "legacy-state",
+                "orcid",
+                "https://flows.example/cb",
+                "",
+                &chrono::Utc::now().to_rfc3339(),
+            )
             .await
             .unwrap();
-        verify_and_consume_state("bound-case", "ORCID", "https://flows.example/cb")
-            .await
-            .expect("provider names are case-insensitive");
+        let err = verify_and_consume_state(
+            "legacy-state",
+            "orcid",
+            "https://flows.example/cb",
+            Some("anything"),
+        )
+        .await
+        .expect_err("a legacy row without a binding must never verify");
+        assert_eq!(err, OAuthStateError::BindingMismatch);
+        assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
+    }
+
+    #[test]
+    fn test_oauth_binding_cookie_contract() {
+        // Path is scoped to the OAuth routes (base-path mounts included).
+        assert_eq!(
+            oauth_cookie_path("/api/auth/oauth/authorize"),
+            "/api/auth/oauth"
+        );
+        assert_eq!(
+            oauth_cookie_path("/api/auth/oauth/callback"),
+            "/api/auth/oauth"
+        );
+        assert_eq!(
+            oauth_cookie_path("/oxo-flow/api/auth/oauth/authorize"),
+            "/oxo-flow/api/auth/oauth"
+        );
+        assert_eq!(oauth_cookie_path("/authorize"), "/");
+        assert_eq!(oauth_cookie_path("authorize"), "/");
+        assert_eq!(oauth_cookie_path("/api/x?y=1"), "/api");
+
+        // HttpOnly + SameSite=Lax always; Secure only on https origins;
+        // Max-Age bounded by the 10-minute state TTL.
+        let plain = oauth_binding_set_cookie("value", "/api/auth/oauth", false);
+        assert!(plain.starts_with("oxoflow_oauth_binding=value; Path=/api/auth/oauth;"));
+        assert!(plain.contains("Max-Age=600"));
+        assert!(plain.contains("HttpOnly"));
+        assert!(plain.contains("SameSite=Lax"));
+        assert!(!plain.contains("Secure"), "{plain}");
+
+        let secure = oauth_binding_set_cookie("value", "/api/auth/oauth", true);
+        assert!(secure.ends_with("; Secure"), "{secure}");
+
+        let clear = oauth_binding_clear_cookie("/api/auth/oauth", false);
+        assert!(clear.starts_with("oxoflow_oauth_binding=;"));
+        assert!(clear.contains("Max-Age=0"));
+        assert!(!clear.contains("Secure"), "{clear}");
+        let clear_secure = oauth_binding_clear_cookie("/api/auth/oauth", true);
+        assert!(clear_secure.ends_with("; Secure"), "{clear_secure}");
+
+        // Secure follows the browser-facing callback scheme: plain-http
+        // localhost must never carry it (the browser would drop the cookie).
+        assert!(!oauth_cookie_secure(
+            "http://localhost:3000/api/auth/oauth/callback"
+        ));
+        assert!(!oauth_cookie_secure(
+            "http://localhost:5173/api/auth/oauth/callback"
+        ));
+        assert!(oauth_cookie_secure(
+            "https://flows.example.com/api/auth/oauth/callback"
+        ));
+        assert!(!oauth_cookie_secure("not a url"));
+
+        // Cookie parsing picks the binding out of a multi-cookie header and
+        // treats blank values as absent.
+        assert_eq!(
+            binding_from_cookie_header("a=1; oxoflow_oauth_binding=abc-123; b=2"),
+            Some("abc-123")
+        );
+        assert_eq!(
+            binding_from_cookie_header("oxoflow_oauth_binding=abc-123"),
+            Some("abc-123")
+        );
+        assert_eq!(
+            binding_from_cookie_header("oxoflow_oauth_binding=; a=1"),
+            None
+        );
+        assert_eq!(binding_from_cookie_header("other=abc-123"), None);
+        assert_eq!(binding_from_cookie_header(""), None);
+
+        // Stored digests are deterministic 64-char hex and never the raw
+        // value.
+        let digest = hash_binding("browser-a");
+        assert_eq!(digest, hash_binding("browser-a"));
+        assert_ne!(digest, hash_binding("browser-b"));
+        assert_ne!(digest, "browser-a");
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]

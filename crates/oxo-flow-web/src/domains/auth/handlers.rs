@@ -4,7 +4,11 @@
 //! Zero business logic here — all logic lives in `service.rs`.
 
 use crate::extract::ApiJson;
-use axum::{Extension, Json, http::StatusCode};
+use axum::extract::OriginalUri;
+use axum::http::header::{COOKIE, HeaderValue, SET_COOKIE};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 
 use super::service;
 use super::types::*;
@@ -669,10 +673,12 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
 /// POST /api/auth/oauth/authorize
 ///
 /// Initiates an OAuth2 authorization flow. Returns the provider's
-/// authorization URL that the user should be redirected to.
+/// authorization URL that the user should be redirected to, and installs
+/// the HttpOnly browser-binding cookie the callback will require.
 pub async fn oauth_authorize(
+    OriginalUri(uri): OriginalUri,
     ApiJson(req): ApiJson<OAuthAuthorizeRequest>,
-) -> ApiResult<OAuthAuthorizeResponse> {
+) -> Result<(HeaderMap, Json<OAuthAuthorizeResponse>), (StatusCode, Json<ApiError>)> {
     // Same resolution as the callback's token exchange: an explicit request
     // value, then OXO_FLOW_OAUTH_REDIRECT_URI, then the documented fallback.
     // The two steps must agree or the provider rejects the code exchange.
@@ -691,10 +697,29 @@ pub async fn oauth_authorize(
         ));
     }
 
-    super::service::initiate_oauth(&req.provider, &redirect_uri)
+    let flow = super::service::initiate_oauth(&req.provider, &redirect_uri)
         .await
-        .map(Json)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))?;
+
+    // Browser binding (issue #1197): the flow is bound to this browser by a
+    // random value delivered ONLY through an HttpOnly, SameSite=Lax cookie
+    // scoped to the OAuth routes. The callback must present it back.
+    let path = super::service::oauth_cookie_path(uri.path());
+    let secure = super::service::oauth_cookie_secure(&redirect_uri);
+    let cookie = super::service::oauth_binding_set_cookie(&flow.binding, &path, secure);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "OAUTH_ERROR",
+                "Failed to build the OAuth browser-binding cookie".into(),
+            )
+        })?,
+    );
+
+    Ok((headers, Json(flow.response)))
 }
 
 #[utoipa::path(
@@ -711,8 +736,46 @@ pub async fn oauth_authorize(
 ///
 /// Handles the OAuth2 callback after the user authorizes the application.
 /// Exchanges the authorization code for an access token and creates a session.
+/// Requires the browser-binding cookie issued by `/oauth/authorize` (issue
+/// #1197) and always clears it on the way out.
 pub async fn oauth_callback(
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     ApiJson(req): ApiJson<OAuthCallbackRequest>,
+) -> Response {
+    let redirect_uri = super::service::oauth_redirect_uri(req.redirect_uri.as_deref());
+    let path = super::service::oauth_cookie_path(uri.path());
+    let secure = super::service::oauth_cookie_secure(&redirect_uri);
+    let clear_cookie = super::service::oauth_binding_clear_cookie(&path, secure);
+    let presented_binding = binding_cookie_value(&headers);
+
+    let mut response = match oauth_callback_inner(req, presented_binding).await {
+        Ok(json) => json.into_response(),
+        Err(error) => error.into_response(),
+    };
+    // A binding cookie is per-flow: never leave a spent one behind, whether
+    // the callback succeeded or was rejected.
+    if let Ok(value) = HeaderValue::from_str(&clear_cookie) {
+        response.headers_mut().append(SET_COOKIE, value);
+    }
+    response
+}
+
+/// Extract the browser-binding value from the request's `Cookie` header(s).
+fn binding_cookie_value(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(super::service::binding_from_cookie_header)
+        .map(str::to_string)
+}
+
+/// Body of [`oauth_callback`] without the cookie bookkeeping, so every
+/// outcome can share the same `Set-Cookie` clearing step.
+async fn oauth_callback_inner(
+    req: OAuthCallbackRequest,
+    presented_binding: Option<String>,
 ) -> ApiResult<OAuthCallbackResponse> {
     let provider = super::service::normalize_provider(req.provider.as_deref().unwrap_or("orcid"));
     // Same precedence as `/oauth/authorize`: an explicit request value (the
@@ -722,10 +785,12 @@ pub async fn oauth_callback(
     let redirect_uri = super::service::oauth_redirect_uri(req.redirect_uri.as_deref());
 
     // Verify CSRF state: the state issued at authorization time was
-    // persisted server-side (`store_pending_state`) BOUND to this provider
-    // and redirect URI (issue #1141), and here it is consumed single-use —
-    // before any token exchange — after an `OAUTH_STATE_TTL_MINS`
-    // (10-minute) freshness window. A mismatch or replay is rejected.
+    // persisted server-side (`store_pending_state`) BOUND to this provider,
+    // redirect URI (issue #1141), and the browser that started the flow
+    // (the HttpOnly binding cookie, issue #1197), and here it is consumed
+    // single-use — before any token exchange — after an
+    // `OAUTH_STATE_TTL_MINS` (10-minute) freshness window. A mismatch or
+    // replay is rejected.
     if req.state.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -734,10 +799,17 @@ pub async fn oauth_callback(
         ));
     }
     // Verify + consume the CSRF state issued at authorization time, BEFORE
-    // any token exchange (single use).
-    super::service::verify_and_consume_state(&req.state, &provider, &redirect_uri)
-        .await
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
+    // any token exchange (single use). A missing/mismatched binding cookie
+    // is the same structured OAUTH_STATE_MISMATCH as a provider/redirect
+    // mismatch, and it still consumes the state.
+    super::service::verify_and_consume_state(
+        &req.state,
+        &provider,
+        &redirect_uri,
+        presented_binding.as_deref(),
+    )
+    .await
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
     // Defense in depth: the authorize step already gated the target, but a
     // config change between issue and callback must not let an off-list
     // redirect through.
@@ -1252,9 +1324,11 @@ mod tests {
 
     // ---- #1141: a well-formed flow still mints a session ----
 
-    /// The state binding and redirect allowlist must not break the happy
-    /// path. The `stub` provider is compiled in only under `cfg(test)`, so
-    /// no network I/O happens: authorize → callback → persisted session.
+    /// The state binding, browser binding, and redirect allowlist must not
+    /// break the happy path. The `stub` provider is compiled in only under
+    /// `cfg(test)`, so no network I/O happens: authorize (which issues the
+    /// HttpOnly binding cookie) → callback presenting that cookie → persisted
+    /// session (issue #1141 + #1197).
     ///
     /// The test presents the server's own resolved redirect URI
     /// (`oauth_redirect_uri(None)`) explicitly: its origin is always on the
@@ -1266,13 +1340,16 @@ mod tests {
         crate::infra::db::set_global_backend(backend.clone());
         let redirect = service::oauth_redirect_uri(None);
 
-        let authorize = match oauth_authorize(ApiJson(OAuthAuthorizeRequest {
-            provider: "stub".into(),
-            redirect_uri: Some(redirect.clone()),
-        }))
+        let (authorize_headers, Json(authorize)) = match oauth_authorize(
+            OriginalUri("/api/auth/oauth/authorize".parse().unwrap()),
+            ApiJson(OAuthAuthorizeRequest {
+                provider: "stub".into(),
+                redirect_uri: Some(redirect.clone()),
+            }),
+        )
         .await
         {
-            Ok(Json(response)) => response,
+            Ok(value) => value,
             Err((status, Json(err))) => {
                 panic!("authorize failed: {status} {}: {}", err.code, err.message)
             }
@@ -1284,20 +1361,65 @@ mod tests {
         );
         assert!(!authorize.state.is_empty());
 
-        let callback = match oauth_callback(ApiJson(OAuthCallbackRequest {
-            code: "auth-code".into(),
-            state: authorize.state,
-            provider: Some("stub".into()),
-            redirect_uri: Some(redirect),
-        }))
-        .await
-        {
-            Ok(Json(response)) => response,
-            Err((status, Json(err))) => panic!(
-                "a well-formed callback must mint a session: {status} {}: {}",
-                err.code, err.message
-            ),
-        };
+        // The browser binding arrives ONLY as an HttpOnly, SameSite=Lax
+        // cookie scoped to the OAuth routes (issue #1197).
+        let binding_cookie = authorize_headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(|cookie| {
+                cookie
+                    .strip_prefix("oxoflow_oauth_binding=")
+                    .and_then(|rest| rest.split(';').next())
+                    .map(str::to_string)
+            })
+            .expect("authorize must issue the binding cookie");
+        let raw_cookie = authorize_headers
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .expect("raw Set-Cookie value");
+        assert!(
+            raw_cookie.contains("; Path=/api/auth/oauth"),
+            "{raw_cookie}"
+        );
+        assert!(raw_cookie.contains("; Max-Age=600"), "{raw_cookie}");
+        assert!(raw_cookie.contains("; HttpOnly"), "{raw_cookie}");
+        assert!(raw_cookie.contains("; SameSite=Lax"), "{raw_cookie}");
+
+        // Same browser: the callback presents the cookie and completes.
+        let mut callback_headers = HeaderMap::new();
+        callback_headers.insert(
+            COOKIE,
+            HeaderValue::from_str(&format!("oxoflow_oauth_binding={binding_cookie}")).unwrap(),
+        );
+        let response = oauth_callback(
+            callback_headers,
+            OriginalUri("/api/auth/oauth/callback".parse().unwrap()),
+            ApiJson(OAuthCallbackRequest {
+                code: "auth-code".into(),
+                state: authorize.state,
+                provider: Some("stub".into()),
+                redirect_uri: Some(redirect),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // The callback always clears the per-flow cookie.
+        let cleared = response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|cookie| {
+                cookie.starts_with("oxoflow_oauth_binding=;") && cookie.contains("Max-Age=0")
+            });
+        assert!(cleared, "the callback must clear the binding cookie");
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("callback body");
+        let callback: OAuthCallbackResponse =
+            serde_json::from_slice(&bytes).expect("callback JSON");
+
         assert!(!callback.token.is_empty());
         assert_eq!(callback.provider_user_id, "0000-0000-0000-0000");
         assert_eq!(callback.role, "user");
