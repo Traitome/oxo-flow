@@ -1176,7 +1176,46 @@ POST /api/auth/oauth/callback    # Provider callback → session token
 
 The redirect URI is `OXO_FLOW_OAUTH_REDIRECT_URI` when set, with a fixed
 fallback of `http://localhost:3000/api/auth/oauth/callback` (see the
-environment table in `AGENTS.md`).
+environment table in `AGENTS.md`). Both endpoints resolve it with the same
+precedence — an explicit request value, then the environment variable, then
+the fallback — and the callback may echo it as `redirect_uri`; whichever
+value the callback presents must equal the one the state was issued for.
+
+### State binding and single use (issue #1141)
+
+`POST /api/auth/oauth/authorize` issues a CSRF `state` bound server-side to
+`(provider, redirect URI, issued-at timestamp)`. The callback verifies AND
+consumes it in one atomic delete, before any token exchange:
+
+- unknown, malformed, or already-consumed (replayed) state →
+  `400 {code:"OAUTH_INVALID_STATE"}`;
+- a state older than the 10-minute TTL → `400 {code:"OAUTH_INVALID_STATE"}`
+  with an "expired" message;
+- a state issued for a different provider or a different redirect URI →
+  `400 {code:"OAUTH_STATE_MISMATCH"}`.
+
+A mismatched binding still consumes the state: it can never be retried, and
+two concurrent callbacks can never both validate the same value.
+
+### Redirect allowlist
+
+The redirect target's **origin** must appear in a server-side allowlist
+derived from the origin configuration the server already trusts — there is
+no separate OAuth-redirect setting:
+
+- `OXO_FLOW_ALLOWED_ORIGINS` (comma-separated), or the built-in localhost
+  origins when it is unset — the same list the CORS layer uses;
+- the origin of the server-configured `OXO_FLOW_OAUTH_REDIRECT_URI` (or the
+  documented fallback), which every working deployment needs;
+- the origin declared by `OXO_FLOW_PUBLIC_URL`, when set (reverse-proxy
+  deployments).
+
+Paths are not constrained — the provider's registered callback URI pins the
+path, while the origin is what stops a crafted authorize request from
+sending the authorization code to another host. An off-list target is
+rejected with `400 {code:"OAUTH_REDIRECT_NOT_ALLOWED"}` at authorize time,
+and again at callback time (defense in depth) if the configuration changed
+between issue and callback.
 
 The local user record is idempotent on the provider identity: the canonical
 users row is keyed by the namespaced id `oauth:{provider}:{provider_user_id}`

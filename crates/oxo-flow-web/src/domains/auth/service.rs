@@ -242,16 +242,212 @@ pub fn oauth_config_from_env(
                 redirect_uri,
             ))
         }
+        // Test-only provider (issue #1141): lets the full authorize →
+        // callback flow run without network I/O. Compiled out of every
+        // production build, exactly like the AI `scripted` backend
+        // (#1040 B3).
+        #[cfg(test)]
+        "stub" => Ok(super::oauth::OAuthConfig::stub(redirect_uri)),
         _ => Err(format!("Unsupported OAuth provider: {provider}")),
     }
 }
 
-/// Persist a pending OAuth CSRF state so the callback can verify it.
-pub async fn store_pending_state(state: &str) -> Result<(), String> {
+// ---------------------------------------------------------------------------
+// OAuth state binding and redirect allowlist (issue #1141, audit WEB-16)
+// ---------------------------------------------------------------------------
+
+/// Normalize a provider name for binding and config resolution: the OAuth
+/// contract is case-insensitive (`ORCID` == `orcid`), and whitespace never
+/// changes the provider a state was issued for.
+#[must_use]
+pub fn normalize_provider(provider: &str) -> String {
+    provider.trim().to_ascii_lowercase()
+}
+
+/// Why a callback's OAuth CSRF state was rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OAuthStateError {
+    /// Missing, never issued, malformed, or already consumed (replay).
+    Invalid,
+    /// Issued by this server but past the 10-minute state TTL.
+    Expired,
+    /// Issued for a different provider.
+    ProviderMismatch { expected: String, actual: String },
+    /// Issued for a different redirect URI.
+    RedirectMismatch { expected: String, actual: String },
+}
+
+impl OAuthStateError {
+    /// Structured API error code for this rejection.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            // Unknown, replayed, and expired states keep the historical
+            // code (the expiry detail stays in the message).
+            Self::Invalid | Self::Expired => "OAUTH_INVALID_STATE",
+            // A state that this server did issue, but not for this
+            // provider/redirect, is a distinct, actionable failure.
+            Self::ProviderMismatch { .. } | Self::RedirectMismatch { .. } => "OAUTH_STATE_MISMATCH",
+        }
+    }
+
+    /// Human-readable message (surfaced as the API error's `message`).
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::Invalid => "Invalid or expired CSRF state".to_string(),
+            Self::Expired => "OAuth state expired — restart the sign-in flow".to_string(),
+            Self::ProviderMismatch { expected, actual } => format!(
+                "OAuth state was issued for provider '{expected}', not '{actual}' — restart the sign-in flow"
+            ),
+            Self::RedirectMismatch { expected, actual } => format!(
+                "OAuth state was issued for redirect URI '{expected}', not '{actual}' — restart the sign-in flow"
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for OAuthStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+/// Normalize an absolute `http`/`https` URL to its origin
+/// (`scheme://host[:port]`): scheme and host lowercased, default ports
+/// dropped, path/query/fragment ignored.
+///
+/// Returns `None` for anything that is not an absolute http(s) URL, and for
+/// authorities carrying userinfo — `https://trusted.example@evil.example/`
+/// must never resolve to `trusted.example`.
+#[must_use]
+pub fn url_origin(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let (scheme, rest) = raw.split_once("://")?;
+    let scheme = scheme.trim().to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let (host, port) = split_host_port(authority)?;
+    if host.is_empty() {
+        return None;
+    }
+    let host = host.to_ascii_lowercase();
+    // A bracketed IPv6 literal arrives without its brackets; re-bracket it
+    // so the normalized origin stays parseable.
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    let port = match port {
+        Some(p) => Some(p.parse::<u16>().ok()?),
+        None => None,
+    };
+    // Default ports are equivalent to no port (`https://x` == `https://x:443`).
+    let port = match (scheme.as_str(), port) {
+        ("http", Some(80)) | ("https", Some(443)) => None,
+        (_, p) => p,
+    };
+    Some(match port {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+/// Split an authority into `(host, port)`.
+///
+/// IPv6 literals must be bracketed (`[::1]`, `[::1]:3000`); an unbracketed
+/// literal is ambiguous with a port and is rejected — the allowlist must
+/// never guess at the host it is matching.
+fn split_host_port(authority: &str) -> Option<(&str, Option<&str>)> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        return match tail {
+            "" => Some((host, None)),
+            _ => Some((host, Some(tail.strip_prefix(':')?))),
+        };
+    }
+    if authority.matches(':').count() > 1 {
+        return None;
+    }
+    match authority.split_once(':') {
+        Some((host, port)) if !port.is_empty() => Some((host, Some(port))),
+        Some(_) => None, // a trailing colon with no port
+        None => Some((authority, None)),
+    }
+}
+
+/// Server-side origins a post-callback redirect may target.
+///
+/// Derived from the origin configuration the server already trusts — there
+/// is deliberately no parallel allowlist setting:
+///
+/// - `OXO_FLOW_ALLOWED_ORIGINS` (comma-separated), or the built-in
+///   localhost origins when it is unset — the very list the CORS layer uses
+///   ([`crate::server::configured_origins`]).
+/// - the origin of the server-configured `OXO_FLOW_OAUTH_REDIRECT_URI` (or
+///   the documented fallback), which a working deployment always needs.
+/// - the origin declared by `OXO_FLOW_PUBLIC_URL` (reverse-proxy
+///   deployments).
+#[must_use]
+pub fn oauth_redirect_allowlist() -> Vec<String> {
+    let mut origins: Vec<String> = crate::server::configured_origins()
+        .iter()
+        .filter_map(|origin| url_origin(origin))
+        .collect();
+    origins.extend(url_origin(&oauth_redirect_uri(None)));
+    origins.extend(crate::server::declared_public_origin().and_then(|origin| url_origin(&origin)));
+    origins.sort_unstable();
+    origins.dedup();
+    origins
+}
+
+/// True when `redirect_uri` is an absolute http(s) URL whose origin appears
+/// in the server-side allowlist.
+///
+/// The path is deliberately not constrained: the provider's registered
+/// callback URI pins the path, while the origin is what stops a crafted
+/// start request from steering the authorization code to another host.
+#[must_use]
+pub fn oauth_redirect_allowed(redirect_uri: &str) -> bool {
+    redirect_allowed_within(redirect_uri, &oauth_redirect_allowlist())
+}
+
+/// Pure core of [`oauth_redirect_allowed`] for tests and callers that
+/// already hold the allowlist.
+fn redirect_allowed_within(redirect_uri: &str, allowed_origins: &[String]) -> bool {
+    let Some(origin) = url_origin(redirect_uri) else {
+        return false;
+    };
+    allowed_origins
+        .iter()
+        .any(|allowed| url_origin(allowed).as_deref() == Some(origin.as_str()))
+}
+
+/// Persist a pending OAuth CSRF state, bound to the provider and redirect
+/// URI it was issued for (issue #1141).
+pub async fn store_pending_state(
+    state: &str,
+    provider: &str,
+    redirect_uri: &str,
+) -> Result<(), String> {
     let backend =
         crate::infra::db::global_backend().ok_or_else(|| "Database unavailable".to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
-    backend.store_oauth_state(state, &now).await
+    backend
+        .store_oauth_state(
+            state,
+            &normalize_provider(provider),
+            redirect_uri.trim(),
+            &now,
+        )
+        .await
 }
 
 /// A CSRF state is short-lived by design: the daily cleanup prunes the
@@ -260,37 +456,71 @@ pub async fn store_pending_state(state: &str) -> Result<(), String> {
 const OAUTH_STATE_TTL_MINS: i64 = 10;
 
 /// Verify a callback's CSRF state was issued by this server, is fresh, and
-/// consume it (single use).
-pub async fn verify_and_consume_state(state: &str) -> Result<(), String> {
-    let backend =
-        crate::infra::db::global_backend().ok_or_else(|| "Database unavailable".to_string())?;
-    let created = backend.consume_oauth_state(state).await?;
-    let Some(created) = created else {
-        return Err("Invalid or expired CSRF state".into());
+/// was issued for THIS provider and redirect URI — then consume it.
+///
+/// Consumption happens first and unconditionally (`DELETE … RETURNING`), so
+/// a state is single-use even when the binding check rejects it: a replayed
+/// state can never be retried, and concurrent callbacks cannot both win.
+pub async fn verify_and_consume_state(
+    state: &str,
+    provider: &str,
+    redirect_uri: &str,
+) -> Result<(), OAuthStateError> {
+    let backend = crate::infra::db::global_backend().ok_or(OAuthStateError::Invalid)?;
+    let row = backend
+        .consume_oauth_state(state)
+        .await
+        .map_err(|_| OAuthStateError::Invalid)?;
+    let Some(row) = row else {
+        return Err(OAuthStateError::Invalid);
     };
-    let created_ts = chrono::DateTime::parse_from_rfc3339(&created)
-        .map_err(|_| "Invalid or expired CSRF state".to_string())?;
+    let created_ts = chrono::DateTime::parse_from_rfc3339(&row.created_at)
+        .map_err(|_| OAuthStateError::Invalid)?;
     if chrono::Utc::now() - created_ts.with_timezone(&chrono::Utc)
         > chrono::Duration::minutes(OAUTH_STATE_TTL_MINS)
     {
-        return Err("OAuth state expired — restart the sign-in flow".into());
+        return Err(OAuthStateError::Expired);
+    }
+    let provider = normalize_provider(provider);
+    if row.provider != provider {
+        return Err(OAuthStateError::ProviderMismatch {
+            expected: row.provider,
+            actual: provider,
+        });
+    }
+    let redirect_uri = redirect_uri.trim();
+    if row.redirect_uri != redirect_uri {
+        return Err(OAuthStateError::RedirectMismatch {
+            expected: row.redirect_uri,
+            actual: redirect_uri.to_string(),
+        });
     }
     Ok(())
 }
 
 /// Initiate an OAuth2 authorization flow.
 ///
-/// Returns the provider's authorization URL and a CSRF state token.
+/// Returns the provider's authorization URL and a CSRF state token bound to
+/// `(provider, redirect_uri)`.
 pub async fn initiate_oauth(
     provider: &str,
     redirect_uri: &str,
 ) -> Result<OAuthAuthorizeResponse, String> {
-    let config = oauth_config_from_env(provider, redirect_uri)?;
+    // Defense in depth: callers gate this too (with the structured
+    // OAUTH_REDIRECT_NOT_ALLOWED code), but a bound state must never be
+    // issued for a target the callback would refuse.
+    if !oauth_redirect_allowed(redirect_uri) {
+        return Err(format!(
+            "OAuth redirect target '{redirect_uri}' is not in the server allowlist"
+        ));
+    }
+    let provider = normalize_provider(provider);
+    let config = oauth_config_from_env(&provider, redirect_uri)?;
     let state = generate_token();
     let authorize_url = config.authorize_url(&state);
 
     // Persist the pending state so the callback can verify it (CSRF defense).
-    store_pending_state(&state).await?;
+    store_pending_state(&state, &provider, redirect_uri).await?;
 
     Ok(OAuthAuthorizeResponse {
         authorize_url,
@@ -352,7 +582,6 @@ pub async fn ensure_oauth_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::db::StorageBackend;
 
     fn auth_env(dev_mode: bool) -> AuthEnv {
         AuthEnv {
@@ -590,27 +819,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_state_single_use_and_freshness() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("in-memory pool");
-        sqlx::query("CREATE TABLE oauth_states (state TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let backend = std::sync::Arc::new(crate::infra::db::sqlite::SqliteBackend::from_pool(pool));
+        let backend = crate::infra::db::oauth_test_backend().await;
         crate::infra::db::set_global_backend(backend.clone());
 
-        store_pending_state("state-fresh")
+        store_pending_state("state-fresh", "orcid", "https://flows.example/cb")
             .await
             .expect("store fresh");
-        verify_and_consume_state("state-fresh")
+        verify_and_consume_state("state-fresh", "orcid", "https://flows.example/cb")
             .await
             .expect("a fresh state verifies");
         // Single use: the row is gone.
         assert!(
-            verify_and_consume_state("state-fresh").await.is_err(),
+            verify_and_consume_state("state-fresh", "orcid", "https://flows.example/cb")
+                .await
+                .is_err(),
             "a consumed state must not verify twice"
         );
 
@@ -618,12 +840,137 @@ mod tests {
         // consumption rejects anything older than the TTL.
         let stale_time = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
         backend
-            .store_oauth_state("state-stale", &stale_time)
+            .store_oauth_state(
+                "state-stale",
+                "orcid",
+                "https://flows.example/cb",
+                &stale_time,
+            )
             .await
             .unwrap();
-        let err = verify_and_consume_state("state-stale")
+        let err = verify_and_consume_state("state-stale", "orcid", "https://flows.example/cb")
             .await
             .expect_err("a stale state must be rejected");
-        assert!(err.contains("expired"), "unexpected error: {err}");
+        assert_eq!(err, OAuthStateError::Expired, "unexpected error: {err}");
+        assert!(err.message().contains("expired"));
+    }
+
+    #[tokio::test]
+    async fn test_oauth_state_binding_rejects_provider_and_redirect_mismatch() {
+        let backend = crate::infra::db::oauth_test_backend().await;
+        crate::infra::db::set_global_backend(backend.clone());
+
+        // Issued for orcid + R1, presented on github's callback.
+        store_pending_state("bound-provider", "orcid", "https://flows.example/cb")
+            .await
+            .unwrap();
+        let err = verify_and_consume_state("bound-provider", "github", "https://flows.example/cb")
+            .await
+            .expect_err("a provider mismatch must be rejected");
+        assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
+        assert!(
+            matches!(err, OAuthStateError::ProviderMismatch { .. }),
+            "unexpected error: {err}"
+        );
+        // The mismatch consumed the state: it cannot be retried with the
+        // right provider afterwards (fail closed, single use).
+        assert!(
+            verify_and_consume_state("bound-provider", "orcid", "https://flows.example/cb")
+                .await
+                .is_err()
+        );
+
+        // Issued for R1, presented with R2.
+        store_pending_state("bound-redirect", "orcid", "https://flows.example/cb")
+            .await
+            .unwrap();
+        let err = verify_and_consume_state("bound-redirect", "orcid", "https://other.example/cb")
+            .await
+            .expect_err("a redirect mismatch must be rejected");
+        assert_eq!(err.code(), "OAUTH_STATE_MISMATCH");
+        assert!(
+            matches!(err, OAuthStateError::RedirectMismatch { .. }),
+            "unexpected error: {err}"
+        );
+
+        // Provider normalization: an upper-case name for the SAME provider
+        // still verifies (the contract is case-insensitive).
+        store_pending_state("bound-case", "orcid", "https://flows.example/cb")
+            .await
+            .unwrap();
+        verify_and_consume_state("bound-case", "ORCID", "https://flows.example/cb")
+            .await
+            .expect("provider names are case-insensitive");
+    }
+
+    #[test]
+    fn test_url_origin_normalization() {
+        assert_eq!(
+            url_origin("https://Flows.Example.com/cb?x=1#f"),
+            Some("https://flows.example.com".into())
+        );
+        assert_eq!(
+            url_origin("https://flows.example.com:443/cb"),
+            Some("https://flows.example.com".into())
+        );
+        assert_eq!(
+            url_origin("http://flows.example.com:80"),
+            Some("http://flows.example.com".into())
+        );
+        assert_eq!(
+            url_origin("http://localhost:3000/api/auth/oauth/callback"),
+            Some("http://localhost:3000".into())
+        );
+        assert_eq!(
+            url_origin("http://[::1]:8080/cb"),
+            Some("http://[::1]:8080".into())
+        );
+        // Not absolute http(s), or not a URL we may match.
+        assert_eq!(url_origin("flows.example.com/cb"), None);
+        assert_eq!(url_origin("ftp://flows.example.com/cb"), None);
+        assert_eq!(
+            url_origin("https://flows.example.com@evil.example/cb"),
+            None
+        );
+        assert_eq!(url_origin("https:///cb"), None);
+        assert_eq!(url_origin("https://::1/cb"), None);
+    }
+
+    #[test]
+    fn test_redirect_allowlist_matches_origins_not_paths() {
+        let allowed = vec![
+            "https://flows.example.com".to_string(),
+            "http://localhost:3000".to_string(),
+        ];
+        assert!(redirect_allowed_within(
+            "https://flows.example.com/api/auth/oauth/callback",
+            &allowed
+        ));
+        assert!(redirect_allowed_within(
+            "https://flows.example.com:443/anything?x=1",
+            &allowed
+        ));
+        assert!(redirect_allowed_within(
+            "http://localhost:3000/cb",
+            &allowed
+        ));
+        // Different origin, scheme, or host must fail.
+        assert!(!redirect_allowed_within(
+            "https://evil.example.com/cb",
+            &allowed
+        ));
+        assert!(!redirect_allowed_within(
+            "http://flows.example.com/cb",
+            &allowed
+        ));
+        assert!(!redirect_allowed_within(
+            "https://flows.example.com.evil.example/cb",
+            &allowed
+        ));
+        assert!(!redirect_allowed_within(
+            "https://flows.example.com@evil.example/cb",
+            &allowed
+        ));
+        assert!(!redirect_allowed_within("", &allowed));
     }
 }

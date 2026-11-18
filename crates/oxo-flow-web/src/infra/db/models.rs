@@ -501,9 +501,13 @@ pub struct ApiKeyRow {
     pub revoked: i64,
 }
 
+/// A pending OAuth CSRF state, bound at issuance to the provider and the
+/// redirect URI it authorizes (issue #1141).
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OAuthStateRow {
     pub state: String,
+    pub provider: String,
+    pub redirect_uri: String,
     pub created_at: String,
 }
 

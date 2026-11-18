@@ -78,6 +78,11 @@ pub struct OAuthCallbackRequest {
     pub state: String,
     /// Which provider: "orcid" or "github".
     pub provider: Option<String>,
+    /// The redirect URI used for the authorization request. When omitted,
+    /// the server resolves it exactly like `/oauth/authorize` does
+    /// (`OXO_FLOW_OAUTH_REDIRECT_URI`, then the documented fallback). When
+    /// present it must equal the URI the state was issued for (issue #1141).
+    pub redirect_uri: Option<String>,
 }
 
 /// Response after successful OAuth2 callback.

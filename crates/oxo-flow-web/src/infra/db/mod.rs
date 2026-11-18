@@ -26,6 +26,67 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
     None
 }
 
+/// Test-only: an in-memory backend carrying the tables the OAuth unit tests
+/// share through the process-global storage handle (which is set once per
+/// test process, so every OAuth unit test must use this same schema).
+#[cfg(test)]
+pub async fn oauth_test_backend() -> std::sync::Arc<dyn StorageBackend> {
+    // The global handle is set-once, so every caller must get the SAME
+    // backend — otherwise a caller that loses the set race would write rows
+    // into its private pool while verification reads the global one.
+    static INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static BACKEND: std::sync::OnceLock<std::sync::Arc<dyn StorageBackend>> =
+        std::sync::OnceLock::new();
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let _guard = INIT.lock().await;
+    if let Some(backend) = BACKEND.get() {
+        return backend.clone();
+    }
+    if let Some(backend) = global_backend() {
+        let _ = BACKEND.set(backend.clone());
+        return backend;
+    }
+    // File-backed, like `tests/common`: each `#[tokio::test]` runs on its
+    // own runtime, so connections to a `sqlite::memory:` pool die with the
+    // first test's runtime and the next test would see an empty database.
+    let dir = DIR.get_or_init(|| tempfile::tempdir().expect("oauth test temp dir"));
+    let path = dir.path().join("oauth-unit-test.db");
+    let url = format!("sqlite:{}?mode=rwc", path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .expect("oauth test pool");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, \
+         provider TEXT NOT NULL DEFAULT '', redirect_uri TEXT NOT NULL DEFAULT '', \
+         created_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("oauth_states schema");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, \
+         role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, \
+         password_hash TEXT, created_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("users schema");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
+         created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("sessions schema");
+    let backend: std::sync::Arc<dyn StorageBackend> =
+        std::sync::Arc::new(sqlite::SqliteBackend::from_pool(pool));
+    let _ = BACKEND.set(backend.clone());
+    set_global_backend(backend.clone());
+    backend
+}
+
 #[derive(Debug, Clone)]
 pub struct Pagination {
     pub page: usize,
@@ -214,8 +275,21 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<Option<(String, String)>, String>;
     async fn delete_api_keys_for_user(&self, user_id: &str) -> Result<u64, String>;
 
-    async fn store_oauth_state(&self, state: &str, created_at: &str) -> Result<(), String>;
-    async fn consume_oauth_state(&self, state: &str) -> Result<Option<String>, String>;
+    /// Persist a pending OAuth CSRF state bound to the `provider` and
+    /// `redirect_uri` it was issued for (issue #1141).
+    async fn store_oauth_state(
+        &self,
+        state: &str,
+        provider: &str,
+        redirect_uri: &str,
+        created_at: &str,
+    ) -> Result<(), String>;
+    /// Atomically consume (delete + return) a pending state. `None` means the
+    /// state was never issued or was already consumed (replay).
+    async fn consume_oauth_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<models::OAuthStateRow>, String>;
     async fn cleanup_stale_oauth_states(&self, older_than: &str) -> Result<u64, String>;
 
     async fn ensure_env_user(
