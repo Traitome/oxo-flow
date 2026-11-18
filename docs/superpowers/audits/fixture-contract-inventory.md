@@ -19,8 +19,8 @@ binary produces it.
 | Verdict | Meaning |
 | :--- | :--- |
 | **traceable** | Every expectation was traced to a named contract (docs, schema, manifest, or the fixture's own declared generator) and verified in this audit. A row marked traceable may still carry a documented boundary in the trace column. |
-| **annotated** | The fixture family is valid within a stated limit (measurement harness with no independent oracle, inline test corpus that duplicates rather than references its source), or a suspect expectation is explicitly justified in place. |
-| **suspect** | At least one expected value does **not** trace to a contract — it traces only to current engine output or is under-specified such that it passes vacuously. Either corrected in this audit, or left open with the derivation and remediation recorded. |
+| **annotated** | The fixture family is valid within a stated limit (measurement harness with no independent oracle, inline test corpus that duplicates rather than references its source); there is no open traceability failure. |
+| **suspect** | At least one expected value does **not** trace to a contract — it traces only to current engine output or is under-specified such that it passes vacuously. Either corrected in this audit (then counted as traceable) or left open with the derivation and remediation recorded. |
 
 Corrected rows are counted as traceable (post-audit state); the remediation
 column records that they were suspect at audit time.
