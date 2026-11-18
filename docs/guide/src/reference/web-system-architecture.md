@@ -163,11 +163,34 @@ Server process environment:
   logged at startup (from which the source is inferable) and a major/minor
   mismatch between the server and the spawned CLI is warned.
 - `OXO_FLOW_WORKSPACE` — root directory for all user-scoped server data
-  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`,
-  `users/<u>/pipelines/<pipeline_id>/`). Defaults to a relative
-  `workspace/` under the process cwd; container deployments should point
-  it at a persistent volume. Path components are traversal-validated
-  before use.
+  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`; a legacy
+  `users/<u>/pipelines/<pipeline_id>/` tree from pre-#1130 releases is no
+  longer written). Defaults to a relative `workspace/` under the process
+  cwd; container deployments should point it at a persistent volume. Path
+  components are traversal-validated before use.
+
+### Run workdir lifecycle
+
+Every run created through `POST /api/runs` owns `users/<u>/runs/<run_id>/`
+for its whole life. The workflow snapshot, staged `include_files`, uploaded
+inputs, `.oxo-flow/checkpoint.json`, logs, and outputs are written there and
+nowhere else; the directory name is the run id, so no other run can address
+it. `retry` and `resume-checkpoint` are explicit continuations of a
+predecessor's lineage and deliberately write into that predecessor's tree;
+they are not new run history. A saved pipeline's `pipeline_id`
+is an association (permissions, listing, admission ordering), never a
+workdir. This is what makes a run's recorded checksums and run history
+immutable (issue #1130 / audit RB-02). Admission is a single guarded
+`INSERT ... SELECT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` keyed on
+`pipeline_id` for saved pipelines and on `workdir` for ad-hoc runs, backed by
+partial unique indexes (`idx_runs_live_pipeline`, `idx_runs_live_workdir`) on
+both SQLite and PostgreSQL. The indexes are the guarantee PostgreSQL needs:
+under READ COMMITTED two concurrent transactions can both pass `NOT EXISTS`,
+and only `ON CONFLICT` decides the loser (zero rows affected → the documented
+`409 RUN_NOT_TERMINAL`). The saved-pipeline slot is global to the pipeline,
+not per user, so a `workspace`-shared pipeline admits one live run across all
+its readers. `retry` and `resume-checkpoint` are the only paths that
+deliberately continue a predecessor's workdir.
 
 ---
 

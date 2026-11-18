@@ -259,32 +259,10 @@ fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> bool {
     }
 }
 
-/// Retrieve the persistent working directory of a saved pipeline (issue #69).
-///
-/// Runs targeting a saved pipeline execute here — the same directory across
-/// runs — so `.oxo-flow/checkpoint.json` survives between web re-runs and the
-/// CLI's config-change impact analysis + input manifests deliver precise
-/// rebuilds (affected rules re-run, the rest are reused).
-pub fn get_pipeline_directory(username: &str, pipeline_id: &str) -> Result<PathBuf> {
-    validate_path_component(username, "username")?;
-    validate_path_component(pipeline_id, "pipeline_id")?;
-    Ok(base_workspace()
-        .join("users")
-        .join(username)
-        .join("pipelines")
-        .join(pipeline_id))
-}
-
-/// Create the pipeline working directory if it does not exist yet.
-pub fn setup_pipeline_directory(username: &str, pipeline_id: &str) -> Result<PathBuf> {
-    validate_path_component(username, "username")?;
-    validate_path_component(pipeline_id, "pipeline_id")?;
-
-    let dir = get_pipeline_directory(username, pipeline_id)?;
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create pipeline directory: {:?}", dir))?;
-    Ok(dir)
-}
+// Saved pipelines no longer own a shared on-disk workdir: every create-run
+// is isolated under `users/<u>/runs/<run_id>/` (audit RB-02; retry/resume
+// continue a predecessor lineage), so the old `pipelines/<pipeline_id>/`
+// helpers were removed. `pipeline_id` is a DB association only.
 
 #[cfg(test)]
 mod tests {
@@ -294,21 +272,6 @@ mod tests {
     /// `stage_user_inputs` resolves `workspace/…` relative to the process
     /// cwd, so two concurrent cwd-dancing tests would stomp each other.
     static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn get_pipeline_directory_returns_persistent_path() {
-        // Issue #69: pipeline runs share one directory across runs so the
-        // checkpoint (and with it precise invalidation) survives.
-        let path = get_pipeline_directory("alice", "pl-123").unwrap();
-        assert!(path.ends_with("workspace/users/alice/pipelines/pl-123"));
-    }
-
-    #[test]
-    fn setup_pipeline_directory_rejects_traversal() {
-        assert!(setup_pipeline_directory("alice", "../etc").is_err());
-        assert!(setup_pipeline_directory("alice", "a/b").is_err());
-        assert!(setup_pipeline_directory("", "pl-1").is_err());
-    }
 
     #[test]
     fn setup_run_directory_creates_path() {
@@ -560,12 +523,5 @@ mod tests {
         let run_dir = tmp.path().join("runs/r3");
         std::fs::create_dir_all(&run_dir).unwrap();
         assert!(stage_user_inputs("../alice", &run_dir).is_err());
-    }
-
-    #[test]
-    fn get_pipeline_directory_rejects_traversal_ids() {
-        // Arrange / Act / Assert
-        assert!(get_pipeline_directory("alice", "../p1").is_err());
-        assert!(get_pipeline_directory("alice", "p1").is_ok());
     }
 }

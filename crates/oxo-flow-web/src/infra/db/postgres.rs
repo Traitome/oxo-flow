@@ -76,6 +76,42 @@ impl PostgresBackend {
         chrono::Utc::now().to_rfc3339()
     }
 
+    /// Insert a queued run row only while no live run holds the same value of
+    /// `guard_column` — the PostgreSQL twin of the SQLite guarded insert
+    /// (audit RB-02). Returns `false` when the guard rejects the insert.
+    async fn insert_run_guarded(
+        &self,
+        run: &models::RunRow,
+        guard_column: &str,
+        guard_value: Option<&str>,
+    ) -> Result<bool, String> {
+        // Only internal constants and the compile-time guard column name
+        // are interpolated; every value is bound.
+        let result = sqlx::query(sqlx::AssertSqlSafe(
+            crate::infra::db::guarded_run_insert_sql(guard_column, |i| format!("${i}")),
+        ))
+        .bind(&run.id)
+        .bind(&run.user_id)
+        .bind(&run.pipeline_id)
+        .bind(&run.pipeline_snapshot)
+        .bind(&run.workflow_name)
+        .bind(&run.status)
+        .bind(&run.phase)
+        .bind(run.dry_run)
+        .bind(run.pid)
+        .bind(&run.workdir)
+        .bind(&run.config_overrides)
+        .bind(&run.artifacts_incomplete)
+        .bind(&run.started_at)
+        .bind(&run.finished_at)
+        .bind(&run.created_at)
+        .bind(guard_value)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Insert one `pipeline_revisions` row on `conn` and prune that
     /// pipeline's history to the newest 50 — the PostgreSQL twin of
     /// `SqliteBackend::insert_revision_row` (issue #1136), shared by the
@@ -439,6 +475,99 @@ impl StorageBackend for PostgresBackend {
             .execute(&mut *tx)
             .await
             .map_err(|e| format!("PG migration legacy run status: {e}"))?;
+
+        // Admission invariant (audit RB-02): at most one LIVE run per saved
+        // pipeline and per workdir. Runs after every table migration. A
+        // pre-fix database could hold two live rows for one scope — the old
+        // `NOT EXISTS` guarded insert races under READ COMMITTED — so demote
+        // all but the earliest live row before pinning the invariant with
+        // the partial unique indexes. A clean database demotes nothing.
+        //
+        // Block concurrent writers for the duration of the repair + index
+        // creation: without the lock, a live server (multi-instance upgrade)
+        // could insert a duplicate scope between the demote and the unique
+        // index, making bootstrap fail. The lock is released at commit.
+        sqlx::query("LOCK TABLE runs IN SHARE ROW EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG admission migration (lock): {e}"))?;
+
+        let demoted_pipeline = sqlx::query(
+            r#"UPDATE runs
+                  SET status = 'failed', phase = 'failed',
+                      finished_at = COALESCE(finished_at,
+                          to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+                WHERE status IN ('queued', 'running', 'paused')
+                  AND pipeline_id IS NOT NULL
+                  AND id NOT IN (
+                      SELECT id FROM (
+                          SELECT id,
+                                 ROW_NUMBER() OVER (
+                                     PARTITION BY pipeline_id ORDER BY created_at, id
+                                 ) AS rn
+                            FROM runs
+                           WHERE status IN ('queued', 'running', 'paused')
+                             AND pipeline_id IS NOT NULL
+                      ) ranked
+                     WHERE rn = 1
+                  )"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG admission migration (pipeline demote): {e}"))?
+        .rows_affected();
+
+        let demoted_workdir = sqlx::query(
+            r#"UPDATE runs
+                  SET status = 'failed', phase = 'failed',
+                      finished_at = COALESCE(finished_at,
+                          to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+                WHERE status IN ('queued', 'running', 'paused')
+                  AND workdir IS NOT NULL
+                  AND id NOT IN (
+                      SELECT id FROM (
+                          SELECT id,
+                                 ROW_NUMBER() OVER (
+                                     PARTITION BY workdir ORDER BY created_at, id
+                                 ) AS rn
+                            FROM runs
+                           WHERE status IN ('queued', 'running', 'paused')
+                             AND workdir IS NOT NULL
+                      ) ranked
+                     WHERE rn = 1
+                  )"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG admission migration (workdir demote): {e}"))?
+        .rows_affected();
+
+        if demoted_pipeline + demoted_workdir > 0 {
+            tracing::warn!(
+                "PG admission migration demoted {demoted_pipeline} duplicate live pipeline \
+                 run(s) and {demoted_workdir} duplicate live workdir run(s) to 'failed'"
+            );
+        }
+
+        // The unique partial indexes are what make the guarded insert atomic
+        // under READ COMMITTED (paired with ON CONFLICT DO NOTHING in
+        // `guarded_run_insert_sql`).
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_live_pipeline \
+             ON runs(pipeline_id) \
+             WHERE status IN ('queued', 'running', 'paused') AND pipeline_id IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG admission index (pipeline): {e}"))?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_live_workdir \
+             ON runs(workdir) \
+             WHERE status IN ('queued', 'running', 'paused') AND workdir IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG admission index (workdir): {e}"))?;
 
         // AI config flags are part of the public model as i64 (matching
         // SQLite); PostgreSQL INT4 columns cannot decode into that type.
@@ -855,9 +984,9 @@ impl StorageBackend for PostgresBackend {
             },
         };
 
-        sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
-        )
+        sqlx::query(sqlx::AssertSqlSafe(crate::infra::db::plain_run_insert_sql(
+            |i| format!("${i}"),
+        )))
         .bind(&row.id)
         .bind(&row.user_id)
         .bind(&row.pipeline_id)
@@ -881,31 +1010,17 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
-        let result = sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) \
-             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15 \
-             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = $16 AND status IN ('queued', 'running', 'paused'))",
-        )
-        .bind(&run.id)
-        .bind(&run.user_id)
-        .bind(&run.pipeline_id)
-        .bind(&run.pipeline_snapshot)
-        .bind(&run.workflow_name)
-        .bind(&run.status)
-        .bind(&run.phase)
-        .bind(run.dry_run)
-        .bind(run.pid)
-        .bind(&run.workdir)
-        .bind(&run.config_overrides)
-        .bind(&run.artifacts_incomplete)
-        .bind(&run.started_at)
-        .bind(&run.finished_at)
-        .bind(&run.created_at)
-        .bind(&run.workdir)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(result.rows_affected() == 1)
+        self.insert_run_guarded(run, "workdir", run.workdir.as_deref())
+            .await
+    }
+
+    async fn create_run_if_pipeline_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        let pipeline_id = run
+            .pipeline_id
+            .as_deref()
+            .ok_or_else(|| "pipeline guard requires run.pipeline_id".to_string())?;
+        self.insert_run_guarded(run, "pipeline_id", Some(pipeline_id))
+            .await
     }
 
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
@@ -2316,8 +2431,10 @@ async fn read_quota_usage(
 // a scratch database — CI wires that env to a `services: postgres` container,
 // while a local `make ci` without the env var stays green because the tests
 // return early. They pin the schema bootstrap + core StorageBackend CRUD
-// against a real server; concurrency, crash-recovery, and multi-instance
-// behavior remain out of scope here.
+// against a real server, plus the admission-claim race (audit RB-02): two
+// truly concurrent guarded inserts must admit exactly one run, which the
+// partial unique indexes + `ON CONFLICT DO NOTHING` enforce under READ
+// COMMITTED. Crash recovery and multi-instance behavior remain out of scope.
 #[cfg(all(test, feature = "postgres"))]
 mod tests {
     use super::*;
@@ -2359,7 +2476,9 @@ mod tests {
             phase: "parsing".to_string(),
             dry_run: true,
             pid: None,
-            workdir: Some("/tmp/smoke-run".to_string()),
+            // Unique per call: a persistent smoke database must not trip the
+            // live-workdir admission index across test invocations.
+            workdir: Some(format!("/tmp/smoke-run-{}", Uuid::new_v4().simple())),
             config_overrides: Some(r#"["threads=4"]"#.to_string()),
             artifacts_incomplete: None,
             started_at: None,
@@ -2604,5 +2723,112 @@ mod tests {
                 .is_none(),
             "swept session no longer resolves"
         );
+    }
+
+    /// Audit RB-02, live PostgreSQL: two truly concurrent guarded inserts for
+    /// one saved pipeline must admit exactly one run. The guarded statement's
+    /// `NOT EXISTS` alone races under READ COMMITTED; the unique partial
+    /// index + `ON CONFLICT DO NOTHING` is what decides the loser.
+    #[tokio::test]
+    async fn test_concurrent_pipeline_admission_admits_exactly_one() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+        let user = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create_user");
+        let pipeline_id = Uuid::new_v4().to_string();
+        let now = PostgresBackend::now();
+        backend
+            .create_pipeline_with_revision(&models::PipelineRow {
+                id: pipeline_id.clone(),
+                user_id: user.id.clone(),
+                name: "smoke-admission".to_string(),
+                version: "1.0.0".to_string(),
+                toml_content: "[workflow]".to_string(),
+                rules_count: 0,
+                forked_from: None,
+                visibility: "private".to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+                revision: 1,
+            })
+            .await
+            .expect("create pipeline");
+
+        let mut first = sample_run(&user.id);
+        first.id = Uuid::new_v4().to_string();
+        first.pipeline_id = Some(pipeline_id.clone());
+        first.workdir = Some(format!("/tmp/smoke-adm-a-{}", Uuid::new_v4().simple()));
+        let mut second = first.clone();
+        second.id = Uuid::new_v4().to_string();
+        second.workdir = Some(format!("/tmp/smoke-adm-b-{}", Uuid::new_v4().simple()));
+
+        let (a, b) = tokio::join!(
+            backend.create_run_if_pipeline_idle(&first),
+            backend.create_run_if_pipeline_idle(&second)
+        );
+        let admitted = [a.expect("first claim"), b.expect("second claim")];
+        assert_eq!(
+            admitted.iter().filter(|admitted| **admitted).count(),
+            1,
+            "exactly one concurrent create may be admitted: {admitted:?}"
+        );
+
+        let live: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs WHERE pipeline_id = $1 \
+             AND status IN ('queued', 'running', 'paused')",
+        )
+        .bind(&pipeline_id)
+        .fetch_one(&backend.pool)
+        .await
+        .expect("count live runs");
+        assert_eq!(live, 1, "only one live row may exist for the pipeline");
+
+        backend.delete_user(&user.id).await.expect("cleanup user");
+    }
+
+    /// Audit RB-02, live PostgreSQL: the same single-winner contract for the
+    /// workdir claim used by ad-hoc creates, retry, and resume.
+    #[tokio::test]
+    async fn test_concurrent_workdir_admission_admits_exactly_one() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+        let user = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create_user");
+        let shared_workdir = format!("/tmp/smoke-adm-wd-{}", Uuid::new_v4().simple());
+
+        let mut first = sample_run(&user.id);
+        first.id = Uuid::new_v4().to_string();
+        first.workdir = Some(shared_workdir.clone());
+        let mut second = first.clone();
+        second.id = Uuid::new_v4().to_string();
+
+        let (a, b) = tokio::join!(
+            backend.create_run_if_workdir_idle(&first),
+            backend.create_run_if_workdir_idle(&second)
+        );
+        let admitted = [a.expect("first claim"), b.expect("second claim")];
+        assert_eq!(
+            admitted.iter().filter(|admitted| **admitted).count(),
+            1,
+            "exactly one concurrent workdir claim may be admitted: {admitted:?}"
+        );
+
+        let live: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs WHERE workdir = $1 \
+             AND status IN ('queued', 'running', 'paused')",
+        )
+        .bind(&shared_workdir)
+        .fetch_one(&backend.pool)
+        .await
+        .expect("count live runs");
+        assert_eq!(live, 1, "only one live row may exist for the workdir");
+
+        backend.delete_user(&user.id).await.expect("cleanup user");
     }
 }

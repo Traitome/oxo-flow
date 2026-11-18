@@ -36,10 +36,13 @@ async fn insert_run_row(run_id: &str, status: &str) {
     let pool = oxo_flow_web::infra::db::sqlite::pool();
     sqlx::query(
         "INSERT INTO runs (id, user_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, created_at)
-         VALUES (?, 'default', '', 'control-test', ?, 'executing', NULL, '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+         VALUES (?, 'default', '', 'control-test', ?, 'executing', NULL, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
     )
     .bind(run_id)
     .bind(status)
+    // Unique per run: the admission invariant allows only one LIVE run per
+    // workdir (audit RB-02), and these fixtures insert several live rows.
+    .bind(format!("/tmp/control-{run_id}"))
     .execute(pool)
     .await
     .unwrap();

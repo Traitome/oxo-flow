@@ -567,13 +567,29 @@ same way they do on the CLI. Files already present in the workdir are never
 overwritten.
 
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
-the TOML still comes from `toml_content`. It makes the run execute in the
-pipeline's **persistent working directory** (`workspace/users/<user>/pipelines/<id>`),
-so the checkpoint survives across re-runs. Re-running with a changed config
-rebuilds exactly the rules referencing the changed keys (plus their DAG
-downstream) — the rest keep their checkpoint records and are skipped. Runs
-without `pipeline_id` get a fresh per-run sandbox and execute everything.
-Malformed or unknown pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
+the TOML still comes from `toml_content`. Every run created through this
+endpoint, saved-pipeline or ad-hoc, gets its own immutable workdir
+(`workspace/users/<user>/runs/<run_id>/`): the workflow snapshot,
+`include_files`, staged inputs, checkpoint, logs, and outputs live there and
+are never shared with another create (issue #1130 / audit RB-02). The run's `pipeline_snapshot` column stores the exact TOML it
+was created from, so later edits to the saved pipeline cannot change what an
+existing run executed or what `provenance verify` audits.
+
+Saved-pipeline runs are admitted **one live run at a time** per pipeline: a
+second `POST /api/runs` while a run of that pipeline is `queued`/`running`/
+`paused` answers `409 RUN_NOT_TERMINAL`; a terminal (completed, failed,
+cancelled) run releases the slot. The slot is global to the pipeline, not
+per user: a `workspace`-shared pipeline admits one live run across all its
+readers, so another identity's create gets the same 409 while the owner's run
+is live. Pinned by `shared_pipeline_slot_is_global_across_identities`. This replaces the old checkpoint-reuse
+across re-runs: a fresh create executes the whole pipeline. For
+checkpoint-driven partial re-execution use
+[retry](#smart-retry) (`POST /api/runs/{id}/retry`, re-executes in the
+predecessor run's workdir) or `POST /api/runs/{id}/resume-checkpoint` —
+those are explicit continuations of an
+existing run lineage, not new run history. Ad-hoc runs are isolated by
+their unique workdir and may run concurrently. Malformed or unknown
+pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
 `404 PIPELINE_NOT_FOUND`).
 
 **Typed-workflow admission limit:** directly submitted typed workflows are
@@ -760,7 +776,7 @@ Audit the output-file checksums a run recorded into its checkpoint (CLI→web pa
 - `ok` — `true` only when `mismatched == 0 && missing == 0` (mirrors the CLI's exit 1 = drift policy; drift is a 200 finding here, not an HTTP error).
 - `note` — present only when the checkpoint carries no stored checksums (the run was created without `provenance: true`): the CLI's hint to re-run with `--provenance`, plus `matched: 0` and empty `entries` (`ok: true`).
 
-Checksum tracking is opt-in: pass `"provenance": true` on Create Run (forwarded as the CLI's `--provenance`) so the run records `sha256` checksums of its outputs into the checkpoint. The endpoint is **read-only** — verification never mutates the checkpoint. Errors: `404 NOT_FOUND` (unknown/foreign run), `404 NO_WORKDIR` (run has no workdir), `404 NO_CHECKPOINT` (no checkpoint under the workdir), `400 INVALID_CHECKPOINT` (the CLI rejected the checkpoint as malformed), `500 PROVENANCE_VERIFY_ERROR` (CLI output unparseable — usually a stale binary; set `OXO_FLOW_BIN` to the current one), `503` when runs are not available on this backend.
+Checksum tracking is opt-in: pass `"provenance": true` on Create Run (forwarded as the CLI's `--provenance`) so the run records `sha256` checksums of its outputs into the checkpoint. The endpoint is **read-only** — verification never mutates the checkpoint. The checkpoint lives in the run's own workdir (`runs/<run_id>/.oxo-flow/checkpoint.json`), which no later run writes to, so a run's recorded checksums stay auditable for the life of the run tree (issue #1130 / audit RB-02); only `retry` and `resume-checkpoint` continue in that directory, by design. Errors: `404 NOT_FOUND` (unknown/foreign run), `404 NO_WORKDIR` (run has no workdir), `404 NO_CHECKPOINT` (no checkpoint under the workdir), `400 INVALID_CHECKPOINT` (the CLI rejected the checkpoint as malformed), `500 PROVENANCE_VERIFY_ERROR` (CLI output unparseable — usually a stale binary; set `OXO_FLOW_BIN` to the current one), `503` when runs are not available on this backend.
 
 ### AI Status
 ```
@@ -804,7 +820,12 @@ Content-Type: application/json
 ```
 The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the same atomic quota admission as run creation — a retry that
-exceeds the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
+exceeds the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`. It
+executes in the **predecessor run's workdir** (like `resume-checkpoint`):
+retry is an explicit continuation of one run lineage, not a new entry in run
+history, so it is the one path that writes into an existing run tree by
+design. A fresh `POST /api/runs` never does — it always gets its own workdir
+(issue #1130).
 The endpoint accepts **no repair payload**: the diagnostics `fix_action`
 shown by the monitor is advisory (placeholder values, nothing applies it),
 so the web UI labels its action "Retry unchanged" rather than claiming a
