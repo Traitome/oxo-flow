@@ -43,6 +43,13 @@ const MAX_TOOL_PAGES: usize = 50;
 /// registry also hands each entry to the human approver, so past a few
 /// thousand nothing is usable anyway.
 const MAX_TOTAL_TOOLS: usize = 10_000;
+/// Environment variable listing the origins allowed to receive the GENERIC
+/// MCP bearer token (#1123): comma-separated exact origins
+/// (`scheme://host[:port]`). The `mcp://` spelling is accepted and denotes
+/// the plain-HTTP endpoint `mcp://` URLs resolve to. Unset/empty = no origin
+/// is approved, so the generic token is never released. Per-server tokens are
+/// destination-scoped and do not consult this list.
+const GENERIC_TOKEN_TRUST_ENV: &str = "OXO_FLOW_MCP_TRUSTED_ORIGINS";
 
 // ── MCP Client trait ───────────────────────────────────────────────────────
 
@@ -204,24 +211,135 @@ fn pick_bearer_token<'a>(generic: &'a str, specific: &'a str) -> Option<&'a str>
     None
 }
 
-/// Resolve the MCP bearer token for a server (#948 P3-7d): the per-server
-/// `OXO_FLOW_MCP_TOKEN_<SERVER>` first, then the generic
-/// `OXO_FLOW_MCP_TOKEN`. Auth material lives in the environment, never in
+/// Environment-sourced auth inputs for one MCP client, captured at
+/// construction so selection stays pure: this crate forbids `unsafe`, so
+/// tests cannot mutate process env and must drive both branches through an
+/// explicit struct (#1123).
+struct McpTokenEnv {
+    /// `OXO_FLOW_MCP_TOKEN` — shared default, released only to approved
+    /// origins.
+    generic: String,
+    /// `OXO_FLOW_MCP_TOKEN_<SERVER>` — destination-scoped.
+    specific: String,
+    /// Canonical origins approved for generic-token release.
+    trusted_origins: Vec<String>,
+}
+
+impl McpTokenEnv {
+    fn from_env(server_name: &str) -> Self {
+        let specific_var = token_env_var(server_name);
+        let specific = std::env::var(&specific_var).unwrap_or_default();
+        let generic = std::env::var("OXO_FLOW_MCP_TOKEN").unwrap_or_default();
+        let trusted = std::env::var(GENERIC_TOKEN_TRUST_ENV).unwrap_or_default();
+        // Log the variable NAMES only — never the values (single log site
+        // for the whole consult, per the re-review NIT: the constructor no
+        // longer duplicates it).
+        tracing::debug!(
+            var = %specific_var,
+            generic_var = "OXO_FLOW_MCP_TOKEN",
+            trust_var = GENERIC_TOKEN_TRUST_ENV,
+            "MCP auth: token variables consulted (names only, never values)"
+        );
+        Self {
+            generic,
+            specific,
+            trusted_origins: trusted_origins_from(&trusted),
+        }
+    }
+}
+
+/// Canonicalize one operator-supplied origin entry. `mcp://` is accepted
+/// because that is the spelling skill manifests use (and the endpoint it
+/// denotes is plain HTTP), and everything is reduced to
+/// `scheme://host[:port]` by [`origin_of`]. Paths, queries and fragments are
+/// dropped — an entry approves exactly one origin. `None` for anything that
+/// is not an absolute `http(s)://` URL (`example.com`, a bare `host:port`,
+/// other schemes): those can never match a screened MCP endpoint.
+fn canonical_trusted_origin(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let url = match trimmed.strip_prefix("mcp://") {
+        Some(rest) => format!("http://{rest}"),
+        None => trimmed,
+    };
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return None;
+    }
+    origin_of(&url)
+}
+
+/// Parse `OXO_FLOW_MCP_TRUSTED_ORIGINS` into canonical origins, reusing the
+/// `OXO_FLOW_AI_FETCH_ALLOW` comma/trim/lowercase convention. An entry that
+/// cannot be canonicalized is dropped with a warning — a typo must not
+/// silently approve anything, and the generic token simply stays unreleased
+/// (fail closed).
+fn trusted_origins_from(raw: &str) -> Vec<String> {
+    crate::tools::builtin::parse_allowlist(raw)
+        .into_iter()
+        .filter_map(|entry| {
+            let origin = canonical_trusted_origin(&entry);
+            if origin.is_none() {
+                tracing::warn!(
+                    entry = %entry,
+                    "OXO_FLOW_MCP_TRUSTED_ORIGINS entry is not a valid origin \
+                     (expected scheme://host[:port]) — ignored"
+                );
+            }
+            origin
+        })
+        .collect()
+}
+
+/// Whether `origin` is explicitly approved to receive the generic token.
+/// Exact match only: no suffix/wildcard matching, so approving one origin
+/// cannot leak the credential to a lookalike.
+fn origin_is_trusted(origin: Option<&str>, trusted: &[String]) -> bool {
+    match origin {
+        Some(origin) => trusted.iter().any(|approved| approved == origin),
+        None => false,
+    }
+}
+
+/// Bearer-token decision: the token to attach (if any), plus whether a
+/// configured generic token was withheld because the endpoint's origin is
+/// not operator-approved (#1123). The per-server token is destination-scoped
+/// — its variable name is derived from the endpoint identity — so setting it
+/// IS the operator's decision for that endpoint, and it never consults the
+/// trust list.
+struct TokenDecision<'a> {
+    token: Option<&'a str>,
+    generic_withheld: bool,
+}
+
+/// Precedence (#1123): per-server token first, then the generic token — but
+/// only when the exact origin is approved. A configured generic token with
+/// no approval is withheld (never sent) and flagged so the constructor can
+/// log the fact without ever touching the value.
+fn select_bearer_token<'a>(
+    generic: &'a str,
+    specific: &'a str,
+    origin_trusted: bool,
+) -> TokenDecision<'a> {
+    if specific.trim().is_empty() && !generic.trim().is_empty() && !origin_trusted {
+        return TokenDecision {
+            token: None,
+            generic_withheld: true,
+        };
+    }
+    TokenDecision {
+        token: pick_bearer_token(generic, specific),
+        generic_withheld: false,
+    }
+}
+
+/// Resolve the bearer token for one endpoint: origin trust first, then
+/// [`select_bearer_token`]. Auth material lives in the environment, never in
 /// a skill manifest — the manifest is attacker-influenced text (#518).
-/// Returns `None` when nothing is set.
-fn resolve_bearer_token(server_name: &str) -> Option<String> {
-    let specific_var = token_env_var(server_name);
-    let specific = std::env::var(&specific_var).unwrap_or_default();
-    let generic = std::env::var("OXO_FLOW_MCP_TOKEN").unwrap_or_default();
-    // Log the variable NAMES only — never the values (single log site for
-    // the whole consult, per the re-review NIT: the constructor no longer
-    // duplicates it).
-    tracing::debug!(
-        var = %specific_var,
-        generic_var = "OXO_FLOW_MCP_TOKEN",
-        "MCP auth: token variables consulted (names only, never values)"
-    );
-    pick_bearer_token(&generic, &specific).map(str::to_string)
+fn resolve_bearer_token<'a>(env: &'a McpTokenEnv, base_url: &str) -> TokenDecision<'a> {
+    let trusted = origin_is_trusted(origin_of(base_url).as_deref(), &env.trusted_origins);
+    select_bearer_token(&env.generic, &env.specific, trusted)
 }
 
 /// Derive the endpoint identity used for per-server token variables and
@@ -280,10 +398,10 @@ pub struct McpHttpClient {
     /// collided with the pagination ids and defeated the replay guard.
     next_id: std::sync::atomic::AtomicU64,
     /// Optional bearer token sent as `Authorization: Bearer …` on every
-    /// request (#948 P3-7d). Resolved from the per-server
-    /// `<OXO_FLOW_MCP_TOKEN_<SERVER>>` first, then the generic
-    /// `<OXO_FLOW_MCP_TOKEN>` (server name uppercased, non-word runs →
-    /// `_`) so per-server credentials stay out of skill manifests.
+    /// request (#948 P3-7d). A per-server `<OXO_FLOW_MCP_TOKEN_<SERVER>>`
+    /// always applies (destination-scoped operator decision); the generic
+    /// `<OXO_FLOW_MCP_TOKEN>` is released only when the endpoint's exact
+    /// origin is listed in `<OXO_FLOW_MCP_TRUSTED_ORIGINS>` (#1123).
     /// Never logged; empty = no header.
     bearer_token: Option<String>,
     http: reqwest::Client,
@@ -473,7 +591,7 @@ impl McpHttpClient {
         // with the client (#948 P2-1): DNS-resolved endpoints connect to
         // the exact address that was screened.
         let pin = screen_mcp_endpoint(&base_url, &allow)?;
-        Self::build(url, base_url, allow, pin)
+        Self::build(url, base_url, allow, pin, None)
     }
 
     /// Async variant of [`McpHttpClient::new_with_allowlist`] using
@@ -482,7 +600,20 @@ impl McpHttpClient {
     pub async fn new_with_allowlist_async(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
         let base_url = normalize_mcp_url(url)?;
         let pin = screen_mcp_endpoint_async(&base_url, &allow).await?;
-        Self::build(url, base_url, allow, pin)
+        Self::build(url, base_url, allow, pin, None)
+    }
+
+    /// Test seam (#1123): explicit auth inputs, because this crate forbids
+    /// `unsafe` and tests cannot mutate the process environment.
+    #[cfg(test)]
+    fn new_with_token_env(
+        url: &str,
+        allow: Vec<String>,
+        token_env: McpTokenEnv,
+    ) -> Result<Self, AiError> {
+        let base_url = normalize_mcp_url(url)?;
+        let pin = screen_mcp_endpoint(&base_url, &allow)?;
+        Self::build(url, base_url, allow, pin, Some(token_env))
     }
 
     /// Shared constructor after URL normalization and SSRF screening:
@@ -493,6 +624,7 @@ impl McpHttpClient {
         base_url: String,
         allow: Vec<String>,
         pin: Option<(String, std::net::SocketAddr)>,
+        token_env: Option<McpTokenEnv>,
     ) -> Result<Self, AiError> {
         // Identity used for the per-server token variable and error
         // messages: the URL minus scheme and trailing slash. The whole tail
@@ -510,7 +642,24 @@ impl McpHttpClient {
         // gets its pin baked into the shared client; redirect hops rebuild
         // short-lived clients in `rpc` for their own (re-screened) pins.
         let http = pinned_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)))?;
-        let bearer_token = resolve_bearer_token(&server_name);
+        let token_env = match token_env {
+            Some(env) => env,
+            None => McpTokenEnv::from_env(&server_name),
+        };
+        let decision = resolve_bearer_token(&token_env, &base_url);
+        if decision.generic_withheld {
+            // Operational signal, not a failure: an operator may set the
+            // shared default for one approved server while the agent also
+            // talks to third-party ones. Names and origin only — never the
+            // token or any prefix of it (#1123).
+            tracing::debug!(
+                server = %server_name,
+                origin = %origin_of(&base_url).unwrap_or_default(),
+                trust_var = GENERIC_TOKEN_TRUST_ENV,
+                "MCP auth: generic bearer token withheld (origin not approved)"
+            );
+        }
+        let bearer_token = decision.token.map(str::to_string);
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
@@ -581,7 +730,8 @@ impl McpHttpClient {
             req = req.header("MCP-Protocol-Version", pv);
         }
         // Bearer auth (#948 P3-7d): token resolved from the environment at
-        // construction — never logged, never stored in manifests.
+        // construction and, for the generic token, already past the origin
+        // trust gate (#1123) — never logged, never stored in manifests.
         if let Some(token) = &self.bearer_token {
             req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -1062,6 +1212,26 @@ mod tests {
     /// crate forbids unsafe code, so tests cannot mutate the process env.
     fn client_with_allow(url: &str, allow: &[&str]) -> Result<McpHttpClient, AiError> {
         McpHttpClient::new_with_allowlist(url, allow.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// Auth inputs for the test seam — mirrors what [`McpTokenEnv::from_env`]
+    /// captures, canonicalizing the trust list through the same parser.
+    fn token_env(generic: &str, specific: &str, trusted_raw: &str) -> McpTokenEnv {
+        McpTokenEnv {
+            generic: generic.to_string(),
+            specific: specific.to_string(),
+            trusted_origins: trusted_origins_from(trusted_raw),
+        }
+    }
+
+    /// Build a client with explicit auth inputs (the crate forbids `unsafe`,
+    /// so process-env mutation is not available inside the library tests).
+    fn client_with_auth(
+        url: &str,
+        allow: &[&str],
+        env: McpTokenEnv,
+    ) -> Result<McpHttpClient, AiError> {
+        McpHttpClient::new_with_token_env(url, allow.iter().map(|s| s.to_string()).collect(), env)
     }
 
     /// A test MCP client that serves static tools.
@@ -1833,6 +2003,218 @@ mod tests {
         assert_eq!(pick_bearer_token("  ", ""), None);
         // Whitespace is trimmed off the winner.
         assert_eq!(pick_bearer_token("  tok  ", ""), Some("tok"));
+    }
+
+    #[test]
+    fn generic_token_requires_an_approved_origin() {
+        // #1123 live half: the generic token is released only to an
+        // explicitly approved origin; otherwise it is withheld.
+        let untrusted = select_bearer_token("generic", "", false);
+        assert_eq!(untrusted.token, None);
+        assert!(untrusted.generic_withheld);
+
+        let trusted = select_bearer_token("generic", "", true);
+        assert_eq!(trusted.token, Some("generic"));
+        assert!(!trusted.generic_withheld);
+
+        // The per-server token is destination-scoped: it applies without an
+        // approval entry and never reports a withheld generic token.
+        let per_server = select_bearer_token("generic", "specific", false);
+        assert_eq!(per_server.token, Some("specific"));
+        assert!(!per_server.generic_withheld);
+
+        // Nothing configured: no token, no withheld signal.
+        let none = select_bearer_token("  ", "", false);
+        assert_eq!(none.token, None);
+        assert!(!none.generic_withheld);
+    }
+
+    #[test]
+    fn trusted_origins_are_canonicalized_and_invalid_entries_ignored() {
+        let origins = trusted_origins_from(
+            " HTTPS://MCP.Example.com:443/path , mcp://fs-gdrive:9000/ ,, \
+             not-an-origin , ftp://mirror.example ,",
+        );
+        assert_eq!(
+            origins,
+            vec![
+                "https://mcp.example.com".to_string(),
+                "http://fs-gdrive:9000".to_string(),
+            ],
+            "default ports are normalized, `mcp://` maps to http, and \
+             unusable entries are dropped"
+        );
+        assert!(trusted_origins_from("").is_empty());
+    }
+
+    #[test]
+    fn origin_trust_requires_an_exact_match() {
+        let approved = vec!["https://mcp.example.com".to_string()];
+        assert!(origin_is_trusted(
+            Some("https://mcp.example.com"),
+            &approved
+        ));
+        // No suffix/prefix/wildcard matching — lookalikes are not approved.
+        assert!(!origin_is_trusted(
+            Some("https://mcp.example.com.evil.io"),
+            &approved
+        ));
+        assert!(!origin_is_trusted(
+            Some("https://mcp.example.com:8443"),
+            &approved
+        ));
+        // The scheme is part of the origin: an https approval never
+        // authorizes cleartext.
+        assert!(!origin_is_trusted(
+            Some("http://mcp.example.com"),
+            &approved
+        ));
+        assert!(!origin_is_trusted(None, &approved));
+        assert!(!origin_is_trusted(Some("https://mcp.example.com"), &[]));
+    }
+
+    /// Fixture responder for the trust-gate wire tests: a bare handshake.
+    fn bare_mcp_responder(req: &serde_json::Value) -> serde_json::Value {
+        let id = req["id"].clone();
+        match req["method"].as_str().unwrap_or("") {
+            "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                "protocolVersion":"2025-03-26"}}),
+            _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_token_is_not_sent_to_an_unapproved_origin() {
+        // #1123 live half, wire-level: a manifest can point the agent at any
+        // public MCP endpoint; the generic token must not travel there
+        // without an explicit operator decision. A temporary revert of the
+        // gate makes this test fail with the header on the wire.
+        let (url, headers) = raw_header_fixture(bare_mcp_responder);
+        let client = client_with_auth(
+            &url,
+            &["127.0.0.1"],
+            token_env("leaky-generic-token", "", ""),
+        )
+        .unwrap();
+        assert!(
+            client.bearer_token.is_none(),
+            "unapproved origin must get no bearer token"
+        );
+        client.list_tools().await.unwrap();
+        let hdrs = headers.lock().unwrap().clone();
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("authorization:")),
+            "generic token must not be attached without an approved origin: {hdrs:?}"
+        );
+        assert!(
+            !hdrs.iter().any(|h| h.contains("leaky-generic-token")),
+            "no token material may reach the wire: {hdrs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generic_token_is_sent_to_an_approved_origin() {
+        let (url, headers) = raw_header_fixture(bare_mcp_responder);
+        // The endpoint is mcp://127.0.0.1:PORT; approving the same origin in
+        // the manifest spelling must canonicalize to http://127.0.0.1:PORT.
+        let client = client_with_auth(
+            &url,
+            &["127.0.0.1"],
+            token_env("approved-generic-token", "", &url),
+        )
+        .unwrap();
+        client.list_tools().await.unwrap();
+        let hdrs = headers.lock().unwrap().clone();
+        let auth: Vec<&String> = hdrs
+            .iter()
+            .filter(|h| h.starts_with("authorization:"))
+            .collect();
+        assert!(
+            !auth.is_empty(),
+            "approved origin must receive the generic token: {hdrs:?}"
+        );
+        assert!(
+            auth.iter()
+                .all(|h| h == &&"authorization:Bearer approved-generic-token".to_string()),
+            "every request to the approved origin carries the generic token: {auth:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_server_token_is_sent_without_an_approved_origin() {
+        // The per-server variable name is derived from the endpoint identity,
+        // so setting it is itself the operator's per-destination decision —
+        // no trust entry required (#1123).
+        let (url, headers) = raw_header_fixture(bare_mcp_responder);
+        let client = client_with_auth(
+            &url,
+            &["127.0.0.1"],
+            token_env("generic-ignored", "per-server-token", ""),
+        )
+        .unwrap();
+        client.list_tools().await.unwrap();
+        let hdrs = headers.lock().unwrap().clone();
+        let auth: Vec<&String> = hdrs
+            .iter()
+            .filter(|h| h.starts_with("authorization:"))
+            .collect();
+        assert!(
+            !auth.is_empty(),
+            "per-server token must still be attached: {hdrs:?}"
+        );
+        assert!(
+            auth.iter()
+                .all(|h| h == &&"authorization:Bearer per-server-token".to_string()),
+            "the destination-scoped token wins over the generic one: {auth:?}"
+        );
+    }
+
+    #[test]
+    fn trusted_origin_does_not_bypass_the_ssrf_screen() {
+        // Trust governs credential release, never reachability: an approved
+        // origin on a loopback address still needs the separate
+        // OXO_FLOW_AI_FETCH_ALLOW exemption.
+        let err = match McpHttpClient::new_with_token_env(
+            "mcp://127.0.0.1:8080",
+            Vec::new(),
+            token_env("generic", "", "http://127.0.0.1:8080"),
+        ) {
+            Ok(_) => panic!("trust must not bypass the SSRF screen"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("refused"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn mcp_failure_does_not_leak_token_material() {
+        // Probe a failing request with a token attached: neither transport
+        // error text nor its Debug form may contain the token or any part
+        // of it.
+        let secret = "sk-mcp-super-secret-1234567890";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener); // nothing listens here → connect fails
+        let url = format!("mcp://{addr}");
+        let client = client_with_auth(
+            &url,
+            &["127.0.0.1"],
+            token_env(secret, "", &format!("http://{addr}")),
+        )
+        .unwrap();
+        assert!(
+            client.bearer_token.is_some(),
+            "token must be attached for this probe to mean anything"
+        );
+        let err = client.list_tools().await.unwrap_err();
+        let rendered = format!("{err} {err:?}");
+        assert!(
+            !rendered.contains(secret) && !rendered.contains("sk-mcp"),
+            "error leaked token material: {rendered}"
+        );
+        assert!(
+            !rendered.to_ascii_lowercase().contains("bearer"),
+            "error exposed auth header structure: {rendered}"
+        );
     }
 
     #[test]
