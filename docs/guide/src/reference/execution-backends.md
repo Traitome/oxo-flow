@@ -46,8 +46,11 @@ pub trait ExecutorBackend: Send + Sync {
         // default None — terminal record from the scheduler's accounting
         // store; None keeps the job in flight
     fn polls_elements_directly(&self) -> bool
-        // default false — SLURM's squeue reports array elements by their
-        // `{base}_{index}` ids (true); PBS/SGE/LSF list only the base id
+        // default false — true when poll resolves individual array
+        // elements: SLURM's `{base}_{index}` ids, Kubernetes Indexed Job
+        // completion indexes, AWS Batch child job ids, GCP Batch task
+        // indexes. PBS/SGE/LSF list only the base id through this
+        // adapter's invocations (issue #136 H4)
 }
 ```
 
@@ -142,10 +145,24 @@ the adapter paths executed; they are not a current commit-bound campaign,
 a designated-host qualification, or proof of production behavior. LSF
 cannot be stood up the same way (the community edition is IBMid-gated);
 its directive and status semantics are cross-checked against IBM's bsub
-reference and the jokergoo/bsub client. Re-attach to in-flight jobs,
-cancellation reconciliation, per-element accounting, and crash recovery
-remain evidence gaps. See the audit ledger before describing any backend
-as production-ready.
+reference and the jokergoo/bsub client.
+
+Per-element settlement is implemented for every backend that exposes
+element-level status: SLURM polls `{base}_{index}` ids, a Kubernetes
+Indexed Job is resolved from its completed/failed completion indexes, AWS
+Batch array elements are their real child job ids, and GCP Batch elements
+are task indexes read with `gcloud batch tasks list`. PBS/LSF/SGE are
+polled by the array base id in this adapter (issue #136 H4); their
+expanded element records carry the aggregate verdict's provenance in
+`skip_reason` and no base-level exit code or resource numbers, so an
+array-level verdict is never presented as an independently observed
+element outcome. Missing accounting/status data is reported as unknown:
+a Completed job with no accounting record has `exit_code: null`, never
+`0`. Kubernetes, AWS Batch, and GCP Batch remain **Prototype** (CLI
+wrappers with mock/wire tests only): their per-backend live campaigns,
+re-attach to in-flight jobs, cancellation reconciliation across process
+restarts, and crash recovery remain evidence gaps (CL-05 / #1158). See
+the audit ledger before describing any backend as production-ready.
 
 Freshness note (2026-11-07): this evidence is a point-in-time campaign —
 the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a

@@ -23,15 +23,19 @@ There are two ways to reach a scheduler, and they suit different jobs:
 
 ## Supported Schedulers
 
-| Scheduler | Status | Directive prefix |
-|---|---|---|
-| **SLURM** | Supported | `#SBATCH` |
-| **PBS/Torque** | Supported | `#PBS` |
-| **SGE** | Supported | `#$` |
-| **LSF** | Supported | `#BSUB` |
-| **Kubernetes** | Supported (spec generation) | `k8s Job` |
-| **AWS Batch** | Supported (spec generation) | `aws-batch` |
-| **GCP Batch** | Supported (spec generation) | `gcp-batch` |
+| Scheduler | Status | Maturity | Directive prefix |
+|---|---|---|---|
+| **SLURM** | Supported | Production deployments + CI mock scheduler (operational evidence; not a per-commit live campaign) | `#SBATCH` |
+| **PBS/Torque** | Supported | Real-scheduler matrix, OpenPBS 23.06 (2026-09-22/23 campaign; not re-run per commit) | `#PBS` |
+| **SGE** | Supported | Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit) | `#$` |
+| **LSF** | Supported | Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference | `#BSUB` |
+| **Kubernetes** | Supported (spec generation) | Prototype — CLI wrapper (`kubectl`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `k8s Job` |
+| **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `aws-batch` |
+| **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `gcp-batch` |
+
+**Per-element outcomes.** Array elements settle on their own scheduler record whenever the backend exposes one: SLURM `squeue` element ids, Kubernetes Indexed Job completion indexes (`status.completedIndexes` / `status.failedIndexes`), AWS Batch child job ids (`{parent}:{arrayIndex}`), and GCP Batch task indexes (`gcloud batch tasks list`). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting `0`. PBS/LSF/SGE are polled by the array base id in this adapter; their per-instance records name that aggregate provenance in `skip_reason` and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.
+
+None of the cloud backends is qualified by a live campaign: their maturity label stays **Prototype** until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.
 
 ---
 

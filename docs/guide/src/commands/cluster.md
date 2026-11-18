@@ -554,6 +554,16 @@ max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
   as single jobs — heterogeneity degrades gracefully.
 - Arrays are transport-level: the JobRecord set, checkpoint, and resume
   semantics are identical to per-job submission.
+- Each element settles on its own scheduler record where the backend
+  exposes one — SLURM element ids, Kubernetes Indexed Job completion
+  indexes, AWS Batch child job ids, GCP Batch task indexes — so one
+  element's failure never marks its successful siblings failed. PBS/LSF/SGE
+  report only the array base id through this adapter; those element records
+  name that aggregate provenance in `skip_reason` and carry no base-level
+  exit code, and a Successful job with no accounting record records an
+  unknown (`null`) exit code rather than `0`. See
+  [Run on a Cluster](../how-to/run-on-cluster.md#supported-schedulers) for
+  the per-backend maturity labels.
 
 Element-wise `aftercorr` chaining is not part of the run-path slice:
 downstream instances submit in ready batches as array elements finish,

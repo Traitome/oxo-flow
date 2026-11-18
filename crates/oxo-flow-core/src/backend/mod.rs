@@ -385,11 +385,18 @@ pub trait ExecutorBackend: Send + Sync {
         None
     }
 
-    /// True when `poll` reports ARRAY ELEMENTS by their `{base}_{index}`
-    /// ids (SLURM's squeue does). Schedulers that list only the array's
-    /// base id (PBS/LSF/SGE) return false — the driver then polls and
-    /// cancels by base id and expands the verdict to every element
-    /// (issue #136 H4).
+    /// True when `poll` can answer for individual ARRAY ELEMENTS by the ids
+    /// [`array_element_id`](Self::array_element_id) mints — SLURM's squeue
+    /// lists `{jobid}_{index}`, a Kubernetes Indexed Job reports its
+    /// completed/failed indexes, and AWS Batch / GCP Batch expose one child
+    /// job or task per element. The driver then settles each element on its
+    /// own verdict.
+    ///
+    /// Schedulers this adapter only ever queries by the array's base id
+    /// (PBS/LSF/SGE, issue #136 H4) return false — the driver polls and
+    /// cancels by base id, expands the aggregate verdict to every element,
+    /// and marks each record with that provenance instead of presenting the
+    /// aggregate as an independently observed outcome (issue #1132 / RB-06).
     fn polls_elements_directly(&self) -> bool {
         false
     }

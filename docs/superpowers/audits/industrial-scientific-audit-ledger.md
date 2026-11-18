@@ -251,27 +251,44 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype; mock and CLI-wrapper evidence only
+**Maturity**: Partial (2026-11-18) — the three code-level defects are fixed and covered by fail-first unit/wire tests (issue #1132); cloud live campaigns remain open under CL-05 (#1158), so Kubernetes/AWS Batch/GCP Batch stay **Prototype** and no live verification is claimed here
 
-Cancellation errors can be discarded, missing accounting data can be converted to exit code `0`, and a non-element backend can expand one array-base verdict across all elements. Cloud executors shell out through `kubectl`, `aws`, and `gcloud`; they are not direct API clients.
+At the audit baseline the driver discarded cancellation errors (`let _ = backend.cancel(...)`), a Completed job with no accounting record was stamped `exit_code: 0`, and every non-SLURM array backend copied one base-job verdict onto all elements.
 
-Evidence:
+What changed:
 
-- `crates/oxo-flow-core/src/backend/driver.rs:194`
-- `crates/oxo-flow-core/src/backend/driver.rs:203`
-- `crates/oxo-flow-core/src/backend/driver.rs:760`
-- `crates/oxo-flow-core/src/backend/driver.rs:769`
-- `crates/oxo-flow-core/src/backend/driver.rs:991`
-- `crates/oxo-flow-core/src/backend/k8s.rs:242`
-- `crates/oxo-flow-core/src/backend/aws_batch.rs:201`
-- `crates/oxo-flow-core/src/backend/gcp_batch.rs:218`
+- **Cancellation is surfaced and reconciled** — already shipped by #1188 / CL-01 and re-confirmed here: `BackendDriver::cancel_inflight` attempts every target (arrays by base id, deduped) and returns an error naming exactly the unresolved scheduler ids with the scheduler's own error; `fail_with_cancel` appends that outcome to the original failure. Every post-submit error path (artifact writes, poll failure, poll timeout, interrupt, required-rule failure) cancels the accepted jobs; an unconfirmed cancel is never reported as cancelled.
+- **Missing accounting is unknown, never success** — the driver's Completed branch now records `exit_code: acct.and_then(|a| a.exit_code)` (was `Some(...unwrap_or(0))`), matching the Failed branch's existing rule. The Kubernetes poller asks for pipe-separated status fields (so a missing field is an empty cell, not a shifted column) and keeps an unparseable job out of `statuses` (Unknown, guard-settled) instead of fabricating `Running`; the GCP poller maps empty/unrecognised `status.state` to Unknown instead of Pending (which polled forever). Base-level accounting numbers are no longer copied onto array elements.
+- **Per-element outcomes are independent where the scheduler exposes them** — the cloud array backends now poll elements directly (`ClusterExecutor::polls_elements_directly` = true for SLURM, Kubernetes, AWS Batch, GCP Batch):
+  - Kubernetes Indexed Jobs: one base-Job probe per array reads `status.completedIndexes` / `status.failedIndexes`; each element gets its own verdict, missing `failedIndexes` (Kubernetes < 1.31) yields Unknown for unattributable elements, and the aggregate counts are only a fallback for clusters without `completedIndexes`.
+  - AWS Batch: element handles are the real child job ids (`{parent}:{zeroBasedArrayIndex}`); `describe-jobs` answers per child. `--jobs` is now passed as separate argv entries (a space-joined single argument was one invalid id) and chunked at DescribeJobs' 100-id per-call cap (`AWS_DESCRIBE_JOBS_MAX_IDS`), with per-call answers merged — `max_submitted` has no 100 ceiling, and one oversized call would fail, warn "treating ids as absent", and (AWS having no accounting store) leave every element to blind-settle as Failed despite AWS-side success. Both the driver poller and the standalone `cluster status` invocations chunk. `submit-job` asks for the bare id (`--query jobId --output text`, with a JSON `jobId` fallback for wrapped CLIs) instead of returning the whole response document as the job id.
+  - GCP Batch: element handles are zero-based task indexes resolved through `gcloud batch tasks list`; each task index gets its own state, and an undescribed task is Unknown. `submit` returns the minted id it passed positionally (gcloud prints the submitted Job resource, not the id), so tracking and task handles are keyed on a real job id.
+  - PBS/LSF/SGE remain base-polled: this adapter's live-verified invocations list only the array base id (issue #136 H4). Their expanded element records now carry `skip_reason: "array base <id> verdict <status>: per-element outcome unavailable from <backend>"` and no base-level accounting/exit code, so the aggregate is never presented as an independently observed per-element outcome.
+- **Live campaigns (exit evidence #4) are NOT run** — Kubernetes/AWS Batch/GCP Batch remain CLI wrappers (`kubectl` / `aws` / `gcloud`) with mock/wire evidence only. Per-backend submit/queue/run/cancel/fail/retry/artifact-retrieval campaigns are tracked by CL-05 (#1158); the maturity label stays Prototype.
+
+Evidence (current `main` sites):
+
+- `crates/oxo-flow-core/src/backend/driver.rs` (`cancel_inflight`, `fail_with_cancel`, Completed-branch exit code, base-only-array provenance)
+- `crates/oxo-flow-core/src/backend/cluster.rs` (`ClusterExecutor::poll` Kubernetes/AWS/GCP arms, `polls_elements_directly`, `array_element_id`, `k8s_element_index`, `gcp_element_index`)
+- `crates/oxo-flow-core/src/backend/k8s.rs` (`parse_index_list`, `indexed_element_status`)
+- `crates/oxo-flow-core/src/backend/aws_batch.rs` (`array_child_id`)
+- `crates/oxo-flow-core/src/backend/gcp_batch.rs` (`task_element_id`, `parse_task_states`)
+
+Tests (issue #1132; fail-first verified by temporary reverts, not committed):
+
+- Cancellation (shipped by #1188, re-run): `backend::driver::tests::{cancel_inflight_reports_unresolved_jobs_only, cancel_failure_after_post_submit_write_error_reports_unresolved_job, cancel_failure_after_array_index_write_reports_unresolved_base, post_submit_artifact_write_failures_cancel_accepted_jobs}`.
+- Missing accounting/status (fail-first verified by reverts): `backend::driver::tests::completed_job_without_accounting_reports_unknown_exit_code` (fails pre-fix with `Some(0)` vs `None`), `backend::cluster::tests::{kubernetes_empty_status_answer_stays_unknown, kubernetes_missing_failed_indexes_are_unknown_not_guessed, gcp_batch_missing_state_is_unknown_not_pending}`. Spec pin only (also passes on the old parser — it pins the pipe-template contract the old whitespace parser cannot represent, not a regression): `backend::cluster::tests::kubernetes_unset_counters_do_not_shift_columns`.
+- Per-element outcomes: `backend::driver::tests::{direct_backend_settles_array_elements_independently, kubernetes_indexed_array_settles_elements_independently, non_element_backends_poll_by_base_and_expand_to_elements}`, `backend::cluster::tests::{kubernetes_indexed_elements_report_independent_statuses, aws_batch_child_jobs_report_independent_statuses, aws_batch_poll_chunks_past_the_describe_jobs_100_id_cap, aws_status_invocations_chunk_past_the_describe_jobs_cap, gcp_batch_tasks_report_independent_statuses, array_element_ids_match_each_scheduler, status_invocations_match_each_scheduler_cli}`, `backend::k8s::tests::{parse_index_list_reads_the_indexed_job_status_format, indexed_element_status_is_per_element_and_never_fabricates}`, `backend::aws_batch::tests::array_child_ids_are_zero_based_real_job_ids`, `backend::gcp_batch::tests::{task_element_ids_are_zero_based, parse_task_states_reads_per_element_outcomes}`. The end-to-end Kubernetes test fails pre-fix with the successful element recorded `Failed`.
+- Submit-id handles (prerequisite for the child/task handles above): `backend::cluster::tests::{aws_batch_submit_returns_the_bare_job_id, gcp_batch_submit_returns_the_minted_job_id, parse_job_id_aws_extracts_the_json_job_id}`.
+
+Docs: `docs/guide/src/how-to/run-on-cluster.md` (Supported Schedulers maturity table + per-element settlement), `docs/guide/src/reference/execution-backends.md` (trait capability + per-element boundary).
 
 Required exit evidence:
 
-- Cancellation failure is surfaced and reconciled.
-- Missing accounting is unknown, not success.
-- Per-element outcomes are represented independently where the scheduler exposes them.
-- At least one live campaign covers submit, queue, run, cancel, fail, retry, and artifact retrieval for each claimed backend.
+- Cancellation failure is surfaced and reconciled. [DONE — #1188 / CL-01; re-confirmed and listed above.]
+- Missing accounting is unknown, not success. [DONE — Completed-branch exit code, cloud pollers' missing-data handling; tests above.]
+- Per-element outcomes are represented independently where the scheduler exposes them. [DONE for SLURM, Kubernetes Indexed Jobs, AWS Batch child jobs, and GCP Batch tasks. PBS/LSF/SGE expose only the array base id through this adapter's invocations; their records name that aggregate provenance explicitly instead of fabricating per-element detail.]
+- At least one live campaign covers submit, queue, run, cancel, fail, retry, and artifact retrieval for each claimed backend. [OPEN — CL-05 (#1158). No credentials for Kubernetes/AWS Batch/GCP Batch were available; no campaign was run or claimed. Maturity remains Prototype for those backends.]
 
 ### RB-07: Run lifecycle state can contradict the process and database
 
@@ -764,7 +781,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | :--- | :---: | :--- | :--- | :--- |
 | CL-01 | P1 | Post-submit failures could orphan accepted jobs before local job registration. | Fixed (#1188) | Code commit a0f0885: every fallible step after the scheduler accepts a job now cancels the accepted job(s) by scheduler id and fails the run naming them — non-array `jobs/<rule>/job.id` and `status.json` writes, array `index.json` plus per-element `status.json` writes. `cancel_inflight` attempts every target (arrays by base id, deduped) and returns the unresolved ids with the scheduler's own error instead of swallowing it; `fail_with_cancel` appends that outcome to the original failure, so an unconfirmed cancel is never reported as cancelled and a poll-timeout/interrupt/required-failure path surfaces it too. Tests (mock scheduler, fail-first verified against a0f0885^): `backend::driver::tests::post_submit_artifact_write_failures_cancel_accepted_jobs`, `backend::driver::tests::driver_errors_when_index_json_is_not_writable`, `backend::driver::tests::array_element_status_write_failure_cancels_accepted_array`, `backend::driver::tests::cancel_failure_after_post_submit_write_error_reports_unresolved_job`, `backend::driver::tests::cancel_failure_after_array_index_write_reports_unresolved_base`, `backend::driver::tests::cancel_inflight_reports_unresolved_jobs_only`. Docs: `docs/guide/src/how-to/run-on-cluster.md` → "Submission failure semantics". Remaining boundary (documented): a job the scheduler accepts but prints no parseable id for has no cancel handle; the run fails with the scheduler output quoted for manual cleanup. |
 | CL-02 | P1 | Cluster artifacts and commands could expose sensitive values. | Implemented but unproven | Artifact permissions tightened and command logging masked; scheduler/container secret artifacts remain RB-12. |
-| CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Planned / blocked | See RB-06. |
+| CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Partial (#1132) | Cancellation errors are surfaced/reconciled (#1188) and per-element settlement now applies to every backend that exposes element status (SLURM, Kubernetes Indexed Jobs, AWS Batch child jobs, GCP Batch tasks); PBS/LSF/SGE stay base-polled with explicit aggregate provenance. Cloud live campaigns remain CL-05. See RB-06. |
 | CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Partial (#1189) | A failed result pull fails the run and records `artifacts_incomplete` (#1112). Extraction runs through `oxo-flow-core::archive::extract_tar_requiring`: absolute/`..` members and link targets that are absolute or contain any `..` component (including the `x -> .` + `y -> x/..` chain) are rejected by name, every extracted member is re-verified on disk, and the pull requires `execution.log` + `.exit-code` + a run-id completion record tarred after the tree, so a truncated stream fails the run. Still open: declared output paths are not re-verified locally after the pull (output existence remains the remote engine's exit-0 contract). Tests: `archive::tests::*`, `result_extraction_*`, `bundle_with_*_is_rejected`, `bundle_missing_a_declared_member_fails_naming_it`. See RB-05. |
 | CL-05 | P2 | Cloud backend tests are mostly mock and CLI-wrapper tests. | Prototype | Live cloud campaigns are required before cloud-native claims. |
 
@@ -778,7 +795,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |
 | WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
-| WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Planned / blocked | RB-06. |
+| WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Partial (#1132) | The core scheduler path no longer discards cancellation errors, fabricates exit code 0, or expands a base array verdict across elements that expose their own status. Cloud live campaigns remain CL-05. See RB-06. |
 | WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Checker parity fixed (#1118); resolved admission open | Direct TOML routes now report TYPE-008/009 for untyped-producer and build-incomplete edges (advisory at the admission gate); the resolved include/override admission seam remains RB-04. |
 | WEB-09 | P1 | Quotas are racy and process-local. | Partially fixed (#1133) | RB-09. Admission is one atomic storage CAS + reservation insert and quota state is durable/shared through `StorageBackend` (SQLite+PostgreSQL); declared memory is OS-enforced for local Linux runs (`RLIMIT_DATA`). Non-Linux and remote cluster runs stay advisory (follow-up #1221). |
 | WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Planned / blocked | Fail closed or use a durable revoke/retry protocol. Evidence: `crates/oxo-flow-web/src/domains/auth/handlers.rs:760`, `:454`. |
