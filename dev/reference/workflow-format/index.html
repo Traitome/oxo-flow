@@ -4289,6 +4289,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#generated-rule-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated-Rule Semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6695,6 +6706,17 @@
     <span class="md-ellipsis">
       
         Expanded Rule Naming
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-rule-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated-Rule Semantics
       
     </span>
   </a>
@@ -11011,6 +11033,74 @@ literal. <code>n = "3"</code> alone does neither.</p>
 <li>Map rules: <code>{rule_name}_{split_value}</code> (e.g., <code>variant_calling_chr1</code>)</li>
 <li>Combine rule: <code>{rule_name}_combine</code> (e.g., <code>variant_calling_combine</code>)</li>
 </ul>
+<h3 id="generated-rule-semantics">Generated-Rule Semantics<a class="headerlink" href="#generated-rule-semantics" title="Permanent link">#</a></h3>
+<p>The engine does not synthesize map/combine rules from a default rule: each
+generated rule is a <strong>clone of the authored rule</strong>, with only the fields the
+operator owns replaced (issue #1154, ledger WF-03). Every other field an
+author set survives onto every generated rule unchanged — including
+<code>environment</code> and <code>env_group</code>, the hooks <code>pre_exec</code> / <code>on_success</code> /
+<code>on_failure</code>, <code>retries</code> / <code>retry_delay</code>, staging (<code>staging_mode</code>, <code>pipe</code>),
+<code>tags</code>, <code>benchmark</code>, <code>log</code>, <code>report</code>, <code>group</code>, <code>priority</code>, <code>target</code>,
+<code>optional</code>, <code>required</code>, <code>depends_on</code>, <code>extends</code>, <code>temporary</code>, <code>scratch</code>,
+<code>singleton</code>, <code>temp_output</code>, <code>protected_output</code>, <code>input_function</code>, <code>envvars</code>,
+<code>checkpoint</code> / <code>checkpoint_manifest</code>, <code>params</code>, the resource shorthand and
+<code>resources</code>, <code>resource_hint</code>, <code>rule_metadata</code>, <code>cache_key</code>, <code>interpreter</code>,
+<code>format_hint</code>, <code>checksum</code>, <code>script</code>, and <code>types</code>.</p>
+<p>Only these fields are replaced on generated rules:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Map rule</th>
+<th>Combine rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td><code>{rule}_{value}</code></td>
+<td><code>{rule}_combine</code></td>
+</tr>
+<tr>
+<td><code>input</code></td>
+<td>authored <code>input</code> with the split variable substituted (other placeholders stay literal)</td>
+<td>every chunk output</td>
+</tr>
+<tr>
+<td><code>output</code></td>
+<td>the authored output with the split variable substituted when it references one; otherwise the per-chunk path <code>.oxo-flow/chunks/{by}/{value}.&lt;ext&gt;</code></td>
+<td>the authored output</td>
+</tr>
+<tr>
+<td><code>shell</code></td>
+<td><code>transform.map</code> with the split variable substituted</td>
+<td><code>transform.combine.shell</code> (or the generated aggregate command)</td>
+</tr>
+<tr>
+<td><code>cleanup_chunks</code></td>
+<td><code>false</code></td>
+<td><code>transform.cleanup</code></td>
+</tr>
+<tr>
+<td><code>transform</code></td>
+<td>cleared</td>
+<td>cleared</td>
+</tr>
+<tr>
+<td><code>scatter</code>, <code>output_pattern</code></td>
+<td>cleared — neither can reach the transform branch (<code>scatter</code> wins the branch, <code>output_pattern</code> is a validated exclusion)</td>
+<td>cleared</td>
+</tr>
+</tbody>
+</table>
+<p><code>expand_inputs</code> is carried over and materialized independently on each
+generated rule; the expanded literals are appended after the transformed
+inputs.</p>
+<p>The exhaustive contract is pinned by <code>config::transform_semantics_tests</code>
+(<code>crates/oxo-flow-core/src/config/transform_semantics_tests.rs</code>): the test
+factory fills every <code>Rule</code> field, and the assertion helper destructures the
+struct without a rest pattern, so adding a field to <code>Rule</code> fails that suite
+at compile time until the new field is covered.</p>
 <hr />
 <h2 id="multi-line-strings">Multi-line Strings<a class="headerlink" href="#multi-line-strings" title="Permanent link">#</a></h2>
 <p>Use triple quotes for multi-line shell commands:</p>
