@@ -735,26 +735,47 @@ impl LocalExecutor {
     }
 
     /// Move a rule command's sensitive values from the command line into the
-    /// child environment (audit A1). Container backends are skipped: their
-    /// wrapper does not forward the host environment, so a substituted
-    /// reference would reach the tool empty — the leak there needs the
-    /// engine-level `docker -e` / singularity `--env` plumbing instead.
+    /// child environment (audit A1). Container backends route the same way
+    /// (issue #1120, audit RB-12): the docker wrapper in `environment.rs`
+    /// scans the wrapped command for the `OXO_FLOW_SENSITIVE_` references
+    /// this pass splices in and forwards those names into the container
+    /// (`docker run -e VAR`), so the reference resolves inside the container
+    /// exactly as it does on the bare-local path. The wrap happens later (in
+    /// `resolve_command`), so every container-routed command text here still
+    /// carries the substituted value — the container prelude must run BEFORE
+    /// the wrap so the value is off the command line by the time the wrapper
+    /// string is built.
+    ///
+    /// singularity/apptainer read their per-container environment from HOST
+    /// variables carrying the `APPTAINERENV_`/`SINGULARITYENV_` prefix, so
+    /// this pass also exports both prefixed copies into the child
+    /// environment. Doing it here (rather than as an inline
+    /// `NAME="${NAME}" singularity …` assignment in the wrapper) keeps the
+    /// command's first word a real program: `numactl … -- <cmd>` execs that
+    /// first word directly, and a shell assignment sent to `execve` fails
+    /// with ENOENT — while also re-exposing the expanded value in the
+    /// numactl argv (/proc/<pid>/cmdline).
     fn route_sensitive_values(&self, cmd: &str, rule: &Rule) -> (String, HashMap<String, String>) {
         if self.config.sensitive_values.is_empty() {
             return (cmd.to_string(), HashMap::new());
         }
-        match rule.environment.kind() {
-            "docker" | "singularity" => {
-                tracing::warn!(
-                    rule = %rule.name,
-                    environment = rule.environment.kind(),
-                    "sensitive config values stay on the command line for container backends \
-                     (the wrapper does not forward the host environment)"
-                );
-                (cmd.to_string(), HashMap::new())
-            }
-            _ => route_sensitive_values_through_env(cmd, &self.config.sensitive_values),
+        let (routed, mut envs) =
+            route_sensitive_values_through_env(cmd, &self.config.sensitive_values);
+        if rule.environment.kind() == "singularity" {
+            // Both prefixes: apptainer honors SINGULARITYENV_ (deprecated
+            // but supported) and singularity ignores APPTAINERENV_.
+            let prefixed: Vec<(String, String)> = envs
+                .iter()
+                .flat_map(|(name, value)| {
+                    [
+                        (format!("APPTAINERENV_{name}"), value.clone()),
+                        (format!("SINGULARITYENV_{name}"), value.clone()),
+                    ]
+                })
+                .collect();
+            envs.extend(prefixed);
         }
+        (routed, envs)
     }
 
     /// Snapshot of the in-flight child pid per rule (issue #131). The
@@ -4508,6 +4529,33 @@ fn sensitive_env_name(index: usize) -> String {
     format!("{SENSITIVE_ENV_BASE}_{index}")
 }
 
+/// The sensitive-routing variable names a rendered command references
+/// (issue #1120, audit RB-12).
+///
+/// After [`route_sensitive_values_through_env`] rewrites a command, every
+/// routed secret is referenced as `${OXO_FLOW_SENSITIVE_n}`. Container and
+/// cloud artifacts cannot carry the value, so each backend's artifact
+/// builder (docker `-e`, singularity/apptainer `*ENV_` prefix, k8s
+/// `secretKeyRef`, GCP `secretVariables`) must first discover which names
+/// to forward. This is the ONE scanner they all share — a per-backend copy
+/// would drift from the numbering [`route_sensitive_values_through_env`]
+/// assigns. Returned in sorted order so generated manifests are
+/// order-independent (BTreeSet, not HashSet).
+pub(crate) fn sensitive_env_refs(cmd: &str) -> Vec<String> {
+    let needle = format!("{SENSITIVE_ENV_BASE}_");
+    let mut names = std::collections::BTreeSet::new();
+    let mut rest = cmd;
+    while let Some(pos) = rest.find(&needle) {
+        let after = &rest[pos + needle.len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        rest = &after[digits.len()..];
+        if !digits.is_empty() {
+            names.insert(format!("{SENSITIVE_ENV_BASE}_{digits}"));
+        }
+    }
+    names.into_iter().collect()
+}
+
 /// Route declared sensitive values out of a rendered command and into the
 /// child process environment (audit A1).
 ///
@@ -4527,24 +4575,53 @@ pub(crate) fn route_sensitive_values_through_env(
     cmd: &str,
     values: &[String],
 ) -> (String, HashMap<String, String>) {
-    // Longest first so a value that contains another claims its own
-    // occurrences before the shorter one does, then lexically for
-    // deterministic numbering.
+    let bindings = sensitive_bindings(values);
+    route_sensitive_values_with_bindings(cmd, &bindings)
+}
+
+/// The stable `VAR -> value` bindings for a run's declared sensitive values.
+///
+/// Numbering is derived from the VALUE LIST, not from what happens to appear
+/// in one command, so the same value keeps the same variable name in every
+/// rule, every array element, and every artifact (issue #1120 / RB-12). A
+/// per-command numbering would let two instances bind `OXO_FLOW_SENSITIVE_0`
+/// to different values once a backend projects the name into a shared Secret.
+///
+/// Longest first so a value that contains another claims its own occurrences
+/// before the shorter one does, then lexically for deterministic numbering.
+/// Values shorter than the `MASK_VARIANT_MIN_LEN` floor are excluded (they
+/// stay on the command line: they collide with ordinary command text too
+/// easily to rewrite safely).
+pub fn sensitive_bindings(values: &[String]) -> Vec<(String, String)> {
     let mut ordered: Vec<&String> = values
         .iter()
         .filter(|value| value.len() >= MASK_VARIANT_MIN_LEN)
         .collect();
     ordered.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| (sensitive_env_name(index), value.clone()))
+        .collect()
+}
 
+/// Rewrite `cmd` with a precomputed binding table ([`sensitive_bindings`]).
+///
+/// Only bindings whose value actually occurs in `cmd` are spliced in and
+/// returned; the numbering itself always comes from the shared table, so two
+/// commands that use different subsets still agree on every variable name.
+pub fn route_sensitive_values_with_bindings(
+    cmd: &str,
+    bindings: &[(String, String)],
+) -> (String, HashMap<String, String>) {
     let mut envs: HashMap<String, String> = HashMap::new();
     let mut rewritten = cmd.to_string();
-    for value in ordered {
+    for (var, value) in bindings {
         if !rewritten.contains(value.as_str()) {
             continue;
         }
-        let var = sensitive_env_name(envs.len());
         envs.insert(var.clone(), value.clone());
-        rewritten = splice_out_value(&rewritten, value, &var);
+        rewritten = splice_out_value(&rewritten, value, var);
     }
     (rewritten, envs)
 }
@@ -6652,6 +6729,51 @@ mod tests {
             envs.get(&sensitive_env_name(0)).map(String::as_str),
             Some("s3cr3t-token-42")
         );
+    }
+
+    /// singularity/apptainer only inject host variables carrying the
+    /// `APPTAINERENV_`/`SINGULARITYENV_` prefix. The engine exports both
+    /// copies into the child environment (never as an inline assignment in
+    /// the wrapped command, which `numactl … --` would exec as a program).
+    #[test]
+    fn singularity_rules_get_prefixed_sensitive_env_names() {
+        let executor = LocalExecutor::new(ExecutorConfig {
+            sensitive_values: vec!["s3cr3t-token-42".to_string()],
+            ..Default::default()
+        });
+        let rule = Rule {
+            environment: crate::rule::EnvironmentSpec {
+                singularity: Some("img.sif".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (routed, env) = executor.route_sensitive_values("tool --token s3cr3t-token-42", &rule);
+        assert!(routed.contains("${OXO_FLOW_SENSITIVE_0}"), "{routed}");
+        assert!(!routed.contains("s3cr3t-token-42"), "{routed}");
+        for prefix in ["APPTAINERENV_", "SINGULARITYENV_"] {
+            assert_eq!(
+                env.get(&format!("{prefix}OXO_FLOW_SENSITIVE_0"))
+                    .map(String::as_str),
+                Some("s3cr3t-token-42"),
+                "missing {prefix} copy"
+            );
+        }
+    }
+
+    /// A bare (non-container) rule must not gain the container-only
+    /// prefixes — the docker/singularity forwarding contract is scoped to
+    /// the backends that consume it.
+    #[test]
+    fn bare_rules_get_no_prefixed_sensitive_env_names() {
+        let executor = LocalExecutor::new(ExecutorConfig {
+            sensitive_values: vec!["s3cr3t-token-42".to_string()],
+            ..Default::default()
+        });
+        let (_, env) =
+            executor.route_sensitive_values("tool --token s3cr3t-token-42", &Rule::default());
+        assert!(env.keys().all(|k| !k.starts_with("APPTAINERENV_")));
+        assert!(env.keys().all(|k| !k.starts_with("SINGULARITYENV_")));
     }
 
     #[test]

@@ -10,6 +10,24 @@
 //! (InstanceTemplate or `installGpus`), not the task payload's
 //! `computeResource` — GPU provisioning stays operator infrastructure.
 
+//! # Sensitive config values (issue #1120 / ledger RB-12)
+//!
+//! A `sensitive = true` config value is routed out of `shell_cmd` into an
+//! `OXO_FLOW_SENSITIVE_<n>` reference before this generator runs
+//! (`ScheduledPlan::route_sensitive_values`, called from `run_cluster.rs`), so
+//! a generated job body carries only the reference.
+//!
+//! This generator cannot emit the matching `environment.secretVariables`
+//! entry by itself: GCP requires the full resource path
+//! `projects/PROJECT/secrets/SECRET/versions/VERSION`, and the engine does not
+//! know the operator's project. The operator must therefore inject each
+//! routed name at submission time (a `gcloud batch` config that sets
+//! `taskSpec.environment.secretVariables`), pointing it at a Secret Manager
+//! version and granting the Batch service account
+//! `roles/secretmanager.secretAccessor`. Until that is done the reference
+//! expands empty and the rule fails — the failure is loud rather than a
+//! silent credential leak.
+
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
@@ -48,17 +66,19 @@ pub fn generate_gcp_batch_job_spec(
         });
     }
 
+    let task_spec = json!({
+        "runnables": [runnable],
+        "computeResource": {
+            "cpuMilli": threads * 1000,
+            "memoryMib": mem_mb
+        },
+        "maxRetryCount": 0
+    });
+
     let payload = json!({
         "taskGroups": [
             {
-                "taskSpec": {
-                    "runnables": [runnable],
-                    "computeResource": {
-                        "cpuMilli": threads * 1000,
-                        "memoryMib": mem_mb
-                    },
-                    "maxRetryCount": 0
-                }
+                "taskSpec": task_spec
             }
         ],
         "logsPolicy": {
@@ -195,5 +215,43 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(text.contains("BATCH_TASK_INDEX"));
+    }
+
+    /// Sentinel regression (ledger RB-12): after the plan routes a
+    /// `sensitive = true` value out of the command, no GCP Batch body carries
+    /// the literal — only the `OXO_FLOW_SENSITIVE_<n>` reference, which the
+    /// operator maps in `taskSpec.environment.secretVariables` at submission
+    /// (the engine cannot know the project, so it does not guess a path).
+    #[test]
+    fn test_sensitive_value_never_in_gcp_batch_body() {
+        let sentinel = "SENTINEL_SECRET_VALUE_E5";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --api-key {sentinel} --run"),
+            &[sentinel.to_string()],
+        );
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let rule = Rule {
+            name: "call_variants".into(),
+            ..Default::default()
+        };
+        let single = generate_gcp_batch_job_spec(&rule, &routed, &test_config()).unwrap();
+        assert!(
+            !single.contains(sentinel),
+            "sentinel leaked into the GCP Batch body: {single}"
+        );
+        assert!(
+            single.contains("OXO_FLOW_SENSITIVE_0"),
+            "the routed reference must survive into the body: {single}"
+        );
+
+        let array = generate_gcp_batch_array_spec(&rule, "runs/cmds", 4, &test_config()).unwrap();
+        assert!(
+            !array.contains(sentinel),
+            "sentinel leaked into the GCP Batch array body: {array}"
+        );
     }
 }
