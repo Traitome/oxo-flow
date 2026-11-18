@@ -139,7 +139,7 @@ pub fn generate_submit_script_with_secrets(
 ///
 /// The script carries the backend's array-range directive and dispatches on
 /// the backend's task-index variable to per-index command files the driver
-/// writes next to the script — `sh '<cmd_dir>/cmd.${INDEX}.sh'`. Per-index
+/// writes next to the script — `bash '<cmd_dir>/cmd.${INDEX}.sh'`. Per-index
 /// files (rather than an inline case table) keep arbitrary multi-line
 /// commands (shell preludes, environment-wrapped commands) valid.
 pub fn generate_array_submit_script(
@@ -241,9 +241,10 @@ pub fn generate_array_submit_script_with_secrets(
     // literal `${INDEX}` to sh). The run dir is engine-generated and never
     // contains shell metacharacters. Isolated like the command line so array
     // elements do not inherit the submitting shell's environment either.
-    lines.push(isolate_dispatch_line(&format!(
-        "sh \"{cmd_dir}/cmd.${{INDEX}}.sh\""
-    )));
+    lines.push(isolate_dispatch_line(
+        &format!("bash \"{cmd_dir}/cmd.${{INDEX}}.sh\""),
+        rule.environment.is_container_runtime(),
+    ));
 
     // Per-element logs (issue #142 M5): a shared output/error path would
     // interleave every element's output into one file. SLURM interpolates
@@ -409,23 +410,42 @@ fn gpu_count_requested(count: u32) -> bool {
 /// hand `ANTHROPIC_AUTH_TOKEN`, `OXO_FLOW_MASTER_KEY` and every other
 /// ambient credential to a shared or imported rule. The allowlist reuses
 /// the exact same policy as the local spawn path —
-/// [`crate::executor::process::RULE_ENV_ALLOWLIST`], every `LC_*`, and the
-/// operator's `OXO_FLOW_ENV_PASSTHROUGH` names — so the local and HPC paths
-/// cannot drift (invariant "Reuse, never retype").
+/// [`crate::executor::process::RULE_ENV_ALLOWLIST`], every `LC_*`, the
+/// operator's `OXO_FLOW_ENV_PASSTHROUGH` names, and
+/// [`crate::executor::process::CONTAINER_DAEMON_ENV_VARS`] when the rule
+/// runs through a local container CLI (`rule.environment.
+/// is_container_runtime()`, issue #1173: the engine invokes docker/
+/// apptainer from the job's shell, and a scheduler that forwarded
+/// `DOCKER_HOST`/`APPTAINER_CACHEDIR` before the isolation change must not
+/// silently drop them now) — so the local and HPC paths cannot drift
+/// (invariant "Reuse, never retype").
 ///
 /// Applied inside the script body rather than as a submit flag: SLURM
 /// rejects `--export=NONE` combined with an explicit `--export=<list>`, the
 /// other schedulers spell the equivalent differently (`-V`/`-v`/`-env`),
 /// and one body-level mechanism covers all four HPC backends with a single
 /// shared implementation.
-fn env_isolation_prefix() -> String {
+fn env_isolation_prefix(container_daemon: bool) -> String {
+    env_isolation_prefix_with(container_daemon, &|name| std::env::var_os(name))
+}
+
+/// [`env_isolation_prefix`] with the ambient lookup injected, mirroring the
+/// local path's `apply_rule_env_allowlist_from` split: tests pass a
+/// synthetic map because this crate forbids `unsafe` (and `std::env::set_var`
+/// is unsafe in edition 2024), while production always reads the process
+/// environment.
+fn env_isolation_prefix_with(
+    container_daemon: bool,
+    ambient: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> String {
     let mut names: Vec<String> = crate::executor::process::RULE_ENV_ALLOWLIST
         .iter()
         .map(|name| (*name).to_string())
         .collect();
-    // Locale family, matched by prefix exactly as the local path does. Sorted
-    // and deduped so the generated script is deterministic (invariant
-    // "Persisted artifacts are order-independent").
+    // Locale family, matched by prefix exactly as the local path does, and
+    // sorted so the generated script is deterministic per host (invariant
+    // "Persisted artifacts are order-independent"); the base allowlist and
+    // the passthrough names keep their declaration/ambient order.
     let mut locale: Vec<String> = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
         .filter(|key| key.starts_with("LC_"))
@@ -434,10 +454,17 @@ fn env_isolation_prefix() -> String {
     locale.dedup();
     names.extend(locale);
     names.extend(crate::executor::process::env_passthrough_names());
+    if container_daemon {
+        names.extend(
+            crate::executor::process::CONTAINER_DAEMON_ENV_VARS
+                .iter()
+                .map(|name| (*name).to_string()),
+        );
+    }
 
     let mut prefix = String::from("env -i");
     for name in names {
-        if let Some(value) = std::env::var_os(&name) {
+        if let Some(value) = ambient(&name) {
             let value = value.to_string_lossy();
             prefix.push_str(&format!(
                 " {name}='{}'",
@@ -451,36 +478,48 @@ fn env_isolation_prefix() -> String {
 
 /// Append the isolated command line for a generated job script: the
 /// [`env_isolation_prefix`] followed by the shell command run through
-/// `sh -c` — the exact shape the local spawn path uses
-/// (`shell_command("sh", cmd, …)`) — or nothing when there is no command of
-/// its own (an array base script leaves the command slot empty; its
-/// per-index files carry the commands).
+/// `bash -c` — bash-first, matching the local spawn path
+/// (`spawn_rule_shell`, which falls back to `sh` only when the *submit*
+/// host lacks bash) — or nothing when there is no command of its own (an
+/// array base script leaves the command slot empty; its per-index files
+/// carry the commands). `container_daemon` is
+/// `rule.environment.is_container_runtime()`, exactly as the local spawn
+/// path computes it.
 ///
-/// The command travels as one `sh -c` argument rather than as a bare prefix
-/// because the prefix must wrap the whole command: `env -i … cd dir && cmd`
-/// changes the working directory only inside the ephemeral `env` child, so a
-/// bare prefix silently runs `cmd` in the submit directory. Passing the
-/// command as a single quoted argument keeps the `cd` guard (and any shell
-/// prelude) in effect inside the isolated shell.
+/// bash, not sh: before the isolation wrapper the command ran as a bare
+/// line under the script's `#!/bin/bash`, and upstream workflows rely on
+/// bash features (process substitution `<(…)`, brace expansion, `[[ ]]`)
+/// that POSIX sh — dash on Debian/Ubuntu compute nodes — rejects. The
+/// script header already requires bash, so no runtime fallback is needed
+/// here: a compute node without bash cannot run the script at all.
+///
+/// The command travels as one `bash -c` argument rather than as a bare
+/// prefix because the prefix must wrap the whole command: `env -i … cd dir
+/// && cmd` changes the working directory only inside the ephemeral `env`
+/// child, so a bare prefix silently runs `cmd` in the submit directory.
+/// Passing the command as a single quoted argument keeps the `cd` guard
+/// (and any shell prelude) in effect inside the isolated shell.
 ///
 /// Declared per-rule `envvars` are re-exported by the command itself
 /// (`export K='V' && …`), so they survive the outer `env -i`.
-fn push_isolated_command(lines: &mut Vec<String>, shell_cmd: &str) {
+fn push_isolated_command(lines: &mut Vec<String>, shell_cmd: &str, container_daemon: bool) {
     if shell_cmd.trim().is_empty() {
         return;
     }
     lines.push(format!(
-        "{}sh -c '{}'",
-        env_isolation_prefix(),
+        "{}bash -c '{}'",
+        env_isolation_prefix(container_daemon),
         crate::environment::escape_for_sh_single_quote(shell_cmd)
     ));
 }
 
-/// Wrap a dispatch line (`sh "<cmd_dir>/cmd.${INDEX}.sh"`) in the same
+/// Wrap a dispatch line (`bash "<cmd_dir>/cmd.${INDEX}.sh"`) in the same
 /// allowlist isolation, so array elements — whose real commands live in the
-/// per-index files — are isolated too.
-fn isolate_dispatch_line(line: &str) -> String {
-    format!("{}{line}", env_isolation_prefix())
+/// per-index files — are isolated too. bash for the same reason as
+/// [`push_isolated_command`]: the per-index commands used to run under the
+/// script's bash and may use bashisms.
+fn isolate_dispatch_line(line: &str, container_daemon: bool) -> String {
+    format!("{}{line}", env_isolation_prefix(container_daemon))
 }
 
 fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) -> String {
@@ -554,7 +593,11 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
     // to avoid duplication with conda/docker/singularity environments
-    push_isolated_command(&mut lines, shell_cmd);
+    push_isolated_command(
+        &mut lines,
+        shell_cmd,
+        rule.environment.is_container_runtime(),
+    );
     lines.join("\n")
 }
 
@@ -661,7 +704,11 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    push_isolated_command(&mut lines, shell_cmd);
+    push_isolated_command(
+        &mut lines,
+        shell_cmd,
+        rule.environment.is_container_runtime(),
+    );
     lines.join("\n")
 }
 
@@ -730,7 +777,11 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    push_isolated_command(&mut lines, shell_cmd);
+    push_isolated_command(
+        &mut lines,
+        shell_cmd,
+        rule.environment.is_container_runtime(),
+    );
     lines.join("\n")
 }
 
@@ -839,7 +890,11 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    push_isolated_command(&mut lines, shell_cmd);
+    push_isolated_command(
+        &mut lines,
+        shell_cmd,
+        rule.environment.is_container_runtime(),
+    );
     lines.join("\n")
 }
 
@@ -981,8 +1036,8 @@ mod tests {
                     panic!("{backend:?}: no env -i isolated command line: {script}")
                 });
             assert!(
-                cmd_line.ends_with("sh -c 'bwa mem ref.fa in.fq'"),
-                "{backend:?}: command must be wrapped in a single sh -c argument after the prefix: {cmd_line}"
+                cmd_line.ends_with("bash -c 'bwa mem ref.fa in.fq'"),
+                "{backend:?}: command must be wrapped in a single bash -c argument after the prefix: {cmd_line}"
             );
 
             // Every name the prefix admits is proof-carrying: it comes from
@@ -1036,8 +1091,93 @@ mod tests {
                 "{backend:?}: dispatch line not isolated: {dispatch}"
             );
             assert!(
-                dispatch.ends_with("sh \"/run/jobs/align/cmd.${INDEX}.sh\""),
+                dispatch.ends_with("bash \"/run/jobs/align/cmd.${INDEX}.sh\""),
                 "{backend:?}: dispatch line body altered: {dispatch}"
+            );
+        }
+    }
+
+    /// A docker/singularity rule's job script re-admits the exact
+    /// container-daemon names (#1173), the same way the local spawn path
+    /// does — the scheduler used to forward `DOCKER_HOST` etc. via
+    /// `--export=ALL`, and the isolation change must not silently drop them
+    /// for remote-daemon setups. A bare rule's prefix never widens, and a
+    /// secret that is not on either list stays out even when ambient.
+    #[test]
+    fn container_rules_admit_daemon_env_like_the_local_path() {
+        let ambient: std::collections::HashMap<&str, &str> = [
+            ("DOCKER_HOST", "tcp://10.0.0.5:2375"),
+            ("ANTHROPIC_AUTH_TOKEN", "leaked-secret"),
+        ]
+        .into_iter()
+        .collect();
+        let lookup = |name: &str| {
+            ambient
+                .get(name)
+                .map(|value| std::ffi::OsString::from(*value))
+        };
+        let mut rule = make_rule("align", 4, Some("8G"));
+        rule.environment = EnvironmentSpec::default();
+        // A docker environment (the shared `is_container_runtime` predicate
+        // decides, exactly as the local spawn path computes it).
+        rule.environment.docker = Some("python:3.12".into());
+        assert!(rule.environment.is_container_runtime());
+
+        let prefix = env_isolation_prefix_with(rule.environment.is_container_runtime(), &lookup);
+        assert!(
+            prefix.contains("DOCKER_HOST='tcp://10.0.0.5:2375'"),
+            "docker rules must re-admit the daemon endpoint like the local path: {prefix}"
+        );
+        assert!(
+            !prefix.contains("leaked-secret") && !prefix.contains("ANTHROPIC_AUTH_TOKEN"),
+            "secrets are never admitted by the daemon branch: {prefix}"
+        );
+
+        // The bare path is unchanged: no daemon names even when ambient.
+        rule.environment = EnvironmentSpec::default();
+        assert!(!rule.environment.is_container_runtime());
+        let prefix = env_isolation_prefix_with(rule.environment.is_container_runtime(), &lookup);
+        assert!(
+            !prefix.contains("DOCKER_HOST"),
+            "a bare rule's allowlist must never widen: {prefix}"
+        );
+        assert!(
+            !prefix.contains("leaked-secret"),
+            "secrets stay out of the bare prefix: {prefix}"
+        );
+    }
+
+    /// The isolated command must run under bash, not POSIX sh: before the
+    /// RB-15 wrapper the command was a bare line under the script's
+    /// `#!/bin/bash`, so workflows using bashisms (`[[ ]]`, brace
+    /// expansion, `<(...)`) executed fine on the cluster. Wrapping in
+    /// `sh -c` (dash on Debian/Ubuntu) would silently break them.
+    #[test]
+    fn isolated_commands_run_under_bash_not_sh() {
+        for backend in [
+            ClusterBackend::Slurm,
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let script = generate_submit_script(
+                &backend,
+                &make_rule("align", 4, Some("8G")),
+                "if [[ -d ref.fa ]]; then echo dir; fi",
+                &make_config(),
+            )
+            .unwrap();
+            let cmd_line = script
+                .lines()
+                .find(|l| l.contains("[[ -d ref.fa ]]"))
+                .unwrap_or_else(|| panic!("{backend:?}: no isolated command line: {script}"));
+            assert!(
+                cmd_line.contains("bash -c '"),
+                "{backend:?}: bashism must run under bash -c, not sh -c: {cmd_line}"
+            );
+            assert!(
+                script.starts_with("#!/bin/bash"),
+                "{backend:?}: script must keep the bash shebang the wrapper assumes"
             );
         }
     }
