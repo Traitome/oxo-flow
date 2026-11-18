@@ -999,8 +999,16 @@ pub(crate) async fn run_on_cluster(
         Err(oxo_flow_core::error::OxoFlowError::Cancelled {
             records: interrupted,
             exit_code,
+            message,
             ..
         }) => {
+            // Surface the cancellation detail (including "may still be
+            // running: <ids>" when a cancel itself failed) at ERROR level:
+            // the per-target WARNs are suppressed by --quiet / RUST_LOG=error,
+            // and that detail must never be silent (review of #1188, D2).
+            if !message.trim().is_empty() {
+                eprintln!("{} {}", "Cancelled:".red().bold(), message);
+            }
             summary.interrupt_exit_code = Some(exit_code);
             interrupted
         }

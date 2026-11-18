@@ -1046,8 +1046,17 @@ impl BackendDriver {
                 // consistent with each other instead of drifting apart by
                 // however long the writes took.
                 let observed_at = Utc::now();
+                // Pre-remove EVERY settled id before any bookkeeping write.
+                // Removing one at a time left same-round siblings in
+                // `inflight`; a write failure then made `fail_with_cancel`
+                // try to cancel jobs the scheduler had just reported
+                // terminal, and a scheduler that rejects cancelling a
+                // finished job would produce a false "may still be running"
+                // message (review of #1188, D1).
+                for (job_id, _, _) in &settled {
+                    inflight.remove(job_id);
+                }
                 for (job_id, f, status) in settled {
-                    inflight.remove(&job_id);
                     let acct = accounting.get(&job_id).copied();
                     // The driver only ever sees submit-to-settle. When the
                     // store reports how long the job RAN, the start time is
