@@ -87,6 +87,31 @@ pub fn generate_submit_script(
     shell_cmd: &str,
     cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
+    generate_submit_script_with_secrets(
+        backend,
+        rule,
+        shell_cmd,
+        &std::collections::BTreeMap::new(),
+        cluster_config,
+    )
+}
+
+/// [`generate_submit_script`] with the operator's secret-reference mapping
+/// (issue #1120 / ledger RB-12).
+///
+/// Only GCP Batch consumes the map here: it is the one cloud backend whose
+/// submission payload carries a secret-reference field
+/// (`taskSpec.environment.secretVariables`). Kubernetes builds its
+/// `secretKeyRef` block from the routed names themselves, and AWS Batch's
+/// `SubmitJob` has no secrets field at all (the job definition owns it — see
+/// [`crate::backend::aws_batch`]).
+pub fn generate_submit_script_with_secrets(
+    backend: &ClusterBackend,
+    rule: &Rule,
+    shell_cmd: &str,
+    secret_refs: &std::collections::BTreeMap<String, String>,
+    cluster_config: &ClusterJobConfig,
+) -> Result<String> {
     match backend {
         ClusterBackend::Slurm => Ok(generate_slurm_script(rule, shell_cmd, cluster_config)),
         ClusterBackend::Pbs => Ok(generate_pbs_script(rule, shell_cmd, cluster_config)),
@@ -99,7 +124,12 @@ pub fn generate_submit_script(
             crate::backend::aws_batch::generate_aws_batch_job_spec(rule, shell_cmd, cluster_config)
         }
         ClusterBackend::GcpBatch => {
-            crate::backend::gcp_batch::generate_gcp_batch_job_spec(rule, shell_cmd, cluster_config)
+            crate::backend::gcp_batch::generate_gcp_batch_job_spec_with_secrets(
+                rule,
+                shell_cmd,
+                secret_refs,
+                cluster_config,
+            )
         }
     }
 }
@@ -123,6 +153,29 @@ pub fn generate_array_submit_script(
     sensitive_refs: &[String],
     config: &ClusterJobConfig,
 ) -> Result<String> {
+    generate_array_submit_script_with_secrets(
+        backend,
+        rule,
+        cmd_dir,
+        count,
+        sensitive_refs,
+        &std::collections::BTreeMap::new(),
+        config,
+    )
+}
+
+/// [`generate_array_submit_script`] with the operator's secret-reference
+/// mapping (issue #1120 / ledger RB-12); see
+/// [`generate_submit_script_with_secrets`] for which backend consumes it.
+pub fn generate_array_submit_script_with_secrets(
+    backend: &ClusterBackend,
+    rule: &Rule,
+    cmd_dir: &str,
+    count: usize,
+    sensitive_refs: &[String],
+    secret_refs: &std::collections::BTreeMap<String, String>,
+    config: &ClusterJobConfig,
+) -> Result<String> {
     match backend {
         ClusterBackend::Kubernetes => {
             return crate::backend::k8s::generate_k8s_array_job_manifest(
@@ -139,8 +192,13 @@ pub fn generate_array_submit_script(
             );
         }
         ClusterBackend::GcpBatch => {
-            return crate::backend::gcp_batch::generate_gcp_batch_array_spec(
-                rule, cmd_dir, count, config,
+            return crate::backend::gcp_batch::generate_gcp_batch_array_spec_with_secrets(
+                rule,
+                cmd_dir,
+                count,
+                sensitive_refs,
+                secret_refs,
+                config,
             );
         }
         _ => {}

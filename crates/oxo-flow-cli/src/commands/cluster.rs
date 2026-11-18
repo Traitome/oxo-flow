@@ -887,25 +887,33 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 &cluster_workdir,
             )?;
 
-            // Sensitive config values (issue #1120, audit RB-12): the cloud
-            // backends render a job body from each rule's expanded command,
-            // so `cluster submit` must route the same
+            // Sensitive config values (issue #1120, audit RB-12): every
+            // backend renders a job artifact from each rule's expanded
+            // command, so `cluster submit` routes the same
             // `OXO_FLOW_SENSITIVE_<n>` references the live run path does —
-            // otherwise the literal lands in the generated manifest. One
-            // binding table for the whole command keeps the names consistent
-            // across every rule. HPC scripts are intentionally left on the
-            // pre-#1120 behavior (that half of RB-12 is still open).
-            let cloud_routing = matches!(
-                cluster_backend,
-                ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch
+            // before the environment wrapper is built, so docker/singularity
+            // forward by name. One binding table for the whole command keeps
+            // the names consistent across every rule. HPC scripts then source
+            // a private (0o600) env file beside the script; cloud bodies
+            // carry the reference into their own secret channel.
+            let sensitive_bindings = oxo_flow_core::executor::process::sensitive_bindings(
+                &crate::commands::run::findings::sensitive_values_of(&config),
             );
-            let sensitive_bindings = if cloud_routing {
-                oxo_flow_core::executor::process::sensitive_bindings(
-                    &crate::commands::run::findings::sensitive_values_of(&config),
-                )
-            } else {
-                Vec::new()
-            };
+            // Script-based schedulers copy the script into scheduler-visible
+            // storage, so the value can only travel in the sidecar env file.
+            let hpc_scripts = matches!(
+                cluster_backend,
+                ClusterBackend::Slurm
+                    | ClusterBackend::Pbs
+                    | ClusterBackend::Sge
+                    | ClusterBackend::Lsf
+            );
+            let mut secret_env_files: Vec<std::path::PathBuf> = Vec::new();
+            let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
+                cluster_backend,
+                cluster_config.clone(),
+            )
+            .with_secret_refs(oxo_flow_core::backend::secret_refs_from_env());
 
             for rule_name in &order {
                 let rule = config
@@ -971,10 +979,38 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         &cluster_workdir,
                     )
                     .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
-                let wrapped_cmd = match tmp_dir.as_deref() {
+                let mut wrapped_cmd = match tmp_dir.as_deref() {
                     Some(tmp) => oxo_flow_core::backend::with_tmp_dir_exports(&wrapped_cmd, tmp),
                     None => wrapped_cmd,
                 };
+                // HPC: the value rides a private env file beside the script,
+                // which the job shell sources before the wrapped command. The
+                // script itself carries only the reference. A dry run renders
+                // the very script a submit would but never writes the secret
+                // file (a preview must not persist values).
+                if hpc_scripts {
+                    let refs = oxo_flow_core::executor::process::sensitive_env_refs(&wrapped_cmd);
+                    if !refs.is_empty() {
+                        let env_path = output.join(format!("{rule_name}.secrets.env"));
+                        if !dry_run {
+                            oxo_flow_core::backend::write_sensitive_env_file(
+                                &env_path,
+                                &sensitive_bindings,
+                                &refs,
+                                rule.environment.kind(),
+                            )
+                            .map_err(|e| {
+                                anyhow::anyhow!("cannot write {}: {e}", env_path.display())
+                            })?;
+                            secret_env_files.push(env_path.clone());
+                        }
+                        wrapped_cmd = format!(
+                            "{} && {}",
+                            oxo_flow_core::backend::source_sensitive_env_file(&env_path),
+                            wrapped_cmd
+                        );
+                    }
+                }
                 let scheduled = oxo_flow_core::backend::ScheduledRule {
                     rule: rule.clone(),
                     // The standalone `cluster submit` command has no
@@ -986,15 +1022,32 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     dependencies: dag.dependencies(rule_name).unwrap_or_default(),
                     wildcard_values: wildcard_values.clone(),
                 };
-                let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
-                    cluster_backend,
-                    cluster_config.clone(),
-                );
                 let script = executor.render_script(&scheduled)?;
 
                 let script_path = output.join(format!("{rule_name}.sh"));
                 std::fs::write(&script_path, &script)?;
                 eprintln!("  {} {}", "✓".green(), script_path.display());
+            }
+
+            // The sidecar files hold the routed values until the operator
+            // removes them: this path has no driver to notice job completion.
+            // The `run --profile` path deletes its own copy as each job
+            // settles (issue #1120 / RB-12).
+            if !secret_env_files.is_empty() {
+                eprintln!(
+                    "\n{} {} secret env file(s) written with mode 0600: {}",
+                    "Warning:".bold().yellow(),
+                    secret_env_files.len(),
+                    secret_env_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                eprintln!(
+                    "  The job shells source them; remove them after the run finishes \
+                     (nothing deletes them automatically on this path)."
+                );
             }
 
             // Generate dependency-aware submit script if requested

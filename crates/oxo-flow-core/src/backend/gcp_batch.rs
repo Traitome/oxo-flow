@@ -14,25 +14,26 @@
 //!
 //! A `sensitive = true` config value is routed out of `shell_cmd` into an
 //! `OXO_FLOW_SENSITIVE_<n>` reference before this generator runs
-//! (`ScheduledPlan::route_sensitive_values`, called from `run_cluster.rs`), so
-//! a generated job body carries only the reference.
+//! (`ScheduledPlan::build_with_sensitive`, called from `run_cluster.rs`), so a
+//! generated job body carries only the reference.
 //!
-//! This generator cannot emit the matching `environment.secretVariables`
-//! entry by itself: GCP requires the full resource path
-//! `projects/PROJECT/secrets/SECRET/versions/VERSION`, and the engine does not
-//! know the operator's project. The operator must therefore inject each
-//! routed name at submission time (a `gcloud batch` config that sets
-//! `taskSpec.environment.secretVariables`), pointing it at a Secret Manager
-//! version and granting the Batch service account
-//! `roles/secretmanager.secretAccessor`. Until that is done the reference
-//! expands empty and the rule fails — the failure is loud rather than a
-//! silent credential leak.
+//! GCP Batch resolves the value at submission time through
+//! `taskSpec.environment.secretVariables`, whose value is a Secret Manager
+//! resource path (`projects/PROJECT/secrets/SECRET/versions/VERSION`). The
+//! engine cannot invent that path, so the operator supplies the mapping in
+//! `OXO_FLOW_SECRET_REFS` (`NAME=projects/.../versions/...` pairs); the
+//! generator emits an entry only for routed names that job actually uses —
+//! unused mappings never reach a manifest. Without a mapping the reference
+//! expands empty and the rule fails: loud rather than a silent credential
+//! leak. The Batch service account needs
+//! `roles/secretmanager.secretAccessor` on each referenced secret.
 
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 /// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric
 /// and hyphens, max 63 chars).
@@ -40,10 +41,47 @@ pub fn sanitize_gcp_batch_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
 }
 
+/// `taskSpec.environment` for the routed names that have an operator-supplied
+/// reference. `None` when no used name is mapped — the historical, mapping-free
+/// body (the operator injects out of band).
+///
+/// Only `secretVariables` is emitted: a plaintext `environment.variables`
+/// entry would put the value (or a useless reference string) in the job body,
+/// which is exactly what RB-12 forbids.
+fn secret_variables(
+    used: &[String],
+    secret_refs: &BTreeMap<String, String>,
+) -> Option<serde_json::Value> {
+    let vars: serde_json::Map<String, serde_json::Value> = used
+        .iter()
+        .filter_map(|name| {
+            secret_refs
+                .get(name)
+                .map(|reference| (name.clone(), json!(reference)))
+        })
+        .collect();
+    if vars.is_empty() {
+        None
+    } else {
+        Some(json!({ "secretVariables": vars }))
+    }
+}
+
 /// Generate a Google Cloud Batch job JSON configuration.
 pub fn generate_gcp_batch_job_spec(
     rule: &Rule,
     shell_cmd: &str,
+    cluster_config: &ClusterJobConfig,
+) -> Result<String> {
+    generate_gcp_batch_job_spec_with_secrets(rule, shell_cmd, &BTreeMap::new(), cluster_config)
+}
+
+/// [`generate_gcp_batch_job_spec`] with the operator's `OXO_FLOW_SECRET_REFS`
+/// mapping (issue #1120 / ledger RB-12).
+pub fn generate_gcp_batch_job_spec_with_secrets(
+    rule: &Rule,
+    shell_cmd: &str,
+    secret_refs: &BTreeMap<String, String>,
     // Kept for dispatch uniformity; GCP Batch specs currently derive
     // everything from the rule itself (GPU stays in operator infrastructure,
     // see the module docs).
@@ -66,7 +104,7 @@ pub fn generate_gcp_batch_job_spec(
         });
     }
 
-    let task_spec = json!({
+    let mut task_spec = json!({
         "runnables": [runnable],
         "computeResource": {
             "cpuMilli": threads * 1000,
@@ -74,6 +112,12 @@ pub fn generate_gcp_batch_job_spec(
         },
         "maxRetryCount": 0
     });
+    if let Some(environment) = secret_variables(
+        &crate::executor::process::sensitive_env_refs(shell_cmd),
+        secret_refs,
+    ) {
+        task_spec["environment"] = environment;
+    }
 
     let payload = json!({
         "taskGroups": [
@@ -94,6 +138,28 @@ pub fn generate_gcp_batch_array_spec(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
+    cluster_config: &ClusterJobConfig,
+) -> Result<String> {
+    generate_gcp_batch_array_spec_with_secrets(
+        rule,
+        cmd_dir,
+        count,
+        &[],
+        &BTreeMap::new(),
+        cluster_config,
+    )
+}
+
+/// [`generate_gcp_batch_array_spec`] with the per-index command files'
+/// routed names and the operator's `OXO_FLOW_SECRET_REFS` mapping (issue
+/// #1120 / ledger RB-12). The dispatch line carries no reference itself, so
+/// the driver passes the union of the command files' names in.
+pub fn generate_gcp_batch_array_spec_with_secrets(
+    rule: &Rule,
+    cmd_dir: &str,
+    count: usize,
+    sensitive_refs: &[String],
+    secret_refs: &BTreeMap<String, String>,
     _cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
     let (threads, mem_mb) = scheduled_resources(rule);
@@ -116,19 +182,24 @@ pub fn generate_gcp_batch_array_spec(
         });
     }
 
+    let mut task_spec = json!({
+        "runnables": [runnable],
+        "computeResource": {
+            "cpuMilli": threads * 1000,
+            "memoryMib": mem_mb
+        },
+        "maxRetryCount": 0
+    });
+    if let Some(environment) = secret_variables(sensitive_refs, secret_refs) {
+        task_spec["environment"] = environment;
+    }
+
     let payload = json!({
         "taskGroups": [
             {
                 "taskCount": count,
                 "parallelism": count.min(64),
-                "taskSpec": {
-                    "runnables": [runnable],
-                    "computeResource": {
-                        "cpuMilli": threads * 1000,
-                        "memoryMib": mem_mb
-                    },
-                    "maxRetryCount": 0
-                }
+                "taskSpec": task_spec
             }
         ],
         "logsPolicy": {
@@ -266,5 +337,75 @@ mod tests {
             !array.contains(sentinel),
             "sentinel leaked into the GCP Batch array body: {array}"
         );
+    }
+
+    /// Ledger RB-12, injection half: with the operator's
+    /// `OXO_FLOW_SECRET_REFS` mapping, the body carries submission-time
+    /// `taskSpec.environment.secretVariables` entries — one per routed name
+    /// the job actually uses — and never the value. Unused mappings never
+    /// reach a manifest (least privilege).
+    #[test]
+    fn test_gcp_batch_emits_secret_variables_from_the_operator_mapping() {
+        let sentinel = "SENTINEL_SECRET_VALUE_G6";
+        let (routed, _env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --api-key {sentinel} --run"),
+            &[sentinel.to_string()],
+        );
+        let refs = std::collections::BTreeMap::from([
+            (
+                "OXO_FLOW_SENSITIVE_0".to_string(),
+                "projects/my-proj/secrets/api-key/versions/latest".to_string(),
+            ),
+            (
+                "OXO_FLOW_SENSITIVE_9".to_string(),
+                "projects/my-proj/secrets/unused/versions/1".to_string(),
+            ),
+        ]);
+        let rule = Rule {
+            name: "call_variants".into(),
+            ..Default::default()
+        };
+
+        let single =
+            generate_gcp_batch_job_spec_with_secrets(&rule, &routed, &refs, &test_config())
+                .unwrap();
+        assert!(
+            !single.contains(sentinel),
+            "sentinel leaked into the GCP Batch body: {single}"
+        );
+        let val: Value = serde_json::from_str(&single).unwrap();
+        let vars = &val["taskGroups"][0]["taskSpec"]["environment"]["secretVariables"];
+        assert_eq!(
+            vars["OXO_FLOW_SENSITIVE_0"],
+            "projects/my-proj/secrets/api-key/versions/latest"
+        );
+        assert!(
+            vars["OXO_FLOW_SENSITIVE_9"].is_null(),
+            "an unused mapping must not reach the body: {single}"
+        );
+
+        // Array bodies dispatch to per-index files; the driver passes the
+        // union of their references in.
+        let array = generate_gcp_batch_array_spec_with_secrets(
+            &rule,
+            "runs/cmds",
+            4,
+            &["OXO_FLOW_SENSITIVE_0".to_string()],
+            &refs,
+            &test_config(),
+        )
+        .unwrap();
+        assert!(!array.contains(sentinel));
+        let val: Value = serde_json::from_str(&array).unwrap();
+        assert_eq!(
+            val["taskGroups"][0]["taskSpec"]["environment"]["secretVariables"]["OXO_FLOW_SENSITIVE_0"],
+            "projects/my-proj/secrets/api-key/versions/latest"
+        );
+
+        // Without a mapping the historical body is unchanged: no environment
+        // channel at all (the value would fail loudly rather than leak).
+        let unmapped = generate_gcp_batch_job_spec(&rule, &routed, &test_config()).unwrap();
+        let val: Value = serde_json::from_str(&unmapped).unwrap();
+        assert!(val["taskGroups"][0]["taskSpec"]["environment"].is_null());
     }
 }

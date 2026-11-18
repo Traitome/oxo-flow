@@ -440,9 +440,20 @@ paths, and `when` conditions:
 > path — and a value embedded inside a longer path is skipped (with a
 > warning) instead of re-materializing the value literally.
 > Without the operator-side secret the reference expands empty and the rule
-> fails — loudly, instead of leaking the value into the artifact. HPC
-> job-script bodies (SLURM/PBS/SGE/LSF) are **not** covered yet; that half of
-> RB-12 remains open.
+> fails — loudly, instead of leaking the value into the artifact.
+>
+> The **HPC scheduler backends** (`slurm`, `pbs`, `sge`, `lsf`) route the
+> same way, through a channel of their own: before a rule is submitted the
+> driver writes a private `0o600` env file next to the run
+> (`<rule>.<n>.secrets.env`) holding only the references that rule's command
+> actually uses, and the generated job script sources it inside the
+> `env -i` wrapper before running the command. The scheduler script body
+> therefore carries `$OXO_FLOW_SENSITIVE_<n>`, never the literal, and the
+> value is never visible to `squeue`/`qstat`/`bjobs` or to the batch system's
+> own logs. Array jobs get one env file per rule (shared across the array's
+> elements), refreshed on resubmission and removed when the chunk settles. A
+> `sensitive = true` value that is also shorter than 4 characters still stays
+> literal on the command line, exactly as on the cloud path.
 
 ```toml
 [[rules]]

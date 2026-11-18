@@ -452,8 +452,9 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Partial (2026-11-18) — local container argv and cloud job bodies route values through
-references; HPC script bodies and live artifact-inspection proof remain.
+**Maturity**: Partial (2026-11-18) — local container argv, cloud job bodies, and HPC scheduler
+scripts all route values through references; live artifact-inspection proof on real infrastructure
+remains.
 
 Cluster command files contain the fully expanded shell command. Kubernetes, AWS Batch, and GCP
 Batch manifests embed that command, and Docker/Singularity execution keeps sensitive values in
@@ -476,7 +477,11 @@ Required exit evidence:
   job bodies of Kubernetes / AWS Batch / GCP Batch — both the `run --profile` driver and
   `cluster submit` route each value to an `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is
   built (issue #1120), with one shared binding table per run. HPC script bodies
-  (SLURM/PBS/SGE/LSF) still materialize the literal — open. Residual found by PR
+  (SLURM/PBS/SGE/LSF) now route the same way through a private `0o600` env file
+  written beside the run (`<rule>.<n>.secrets.env`, sourced inside the `env -i`
+  wrapper) so the scheduler-visible script carries `$OXO_FLOW_SENSITIVE_<n>`
+  and never the value; the env file holds only the references that rule uses,
+  is refreshed on resubmission, and is removed when the chunk settles. Residual found by PR
   #1176's review and fixed in `dea4ee73` (issue #1177): a path-valued sensitive
   value keeps its docker auto-bind mount — mounts are discovered from the
   PRE-routing command and a sensitive path is expanded host-side from its routed
