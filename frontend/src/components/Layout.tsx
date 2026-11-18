@@ -350,7 +350,11 @@ export default function Layout() {
             ref={drawerToggleRef}
             onClick={() => setDrawerOpen(true)}
             aria-label={t('login.openMenu')}
-            aria-controls="app-sidebar"
+            aria-expanded={drawerOpen}
+            // The mobile drawer is mounted only while open; pointing
+            // aria-controls at a missing id is an axe aria-valid-attr-value
+            // violation at phone widths (issue #1151).
+            aria-controls={drawerOpen ? 'app-sidebar' : undefined}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -369,10 +373,13 @@ export default function Layout() {
             className="cmd-trigger"
             onClick={() => { setCmdOpen(true); setCmdQuery(''); }}
             title={t('cmd.button')}
-            aria-label={t('cmd.button')}
+            aria-label={`${t('cmd.button')} ⌘K`}
           >
             <Search size={13} />
             <span>{t('cmd.button')}</span>
+            {/* The visible shortcut is part of the accessible name: an
+                aria-label that omitted it failed axe's
+                label-content-name-mismatch rule (issue #1151). */}
             <kbd className="cmd-kbd">⌘K</kbd>
           </button>
         </div>

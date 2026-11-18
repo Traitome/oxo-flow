@@ -45,8 +45,8 @@ function Section({ title, icon, children }: { title: string; icon: React.ReactNo
   );
 }
 
-function SettingLabel({ text }: { text: string }) {
-  return <label style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>{text}</label>;
+function SettingLabel({ text, htmlFor }: { text: string; htmlFor?: string }) {
+  return <label htmlFor={htmlFor} style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>{text}</label>;
 }
 
 function SettingInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -208,8 +208,8 @@ export default function Settings() {
             </div>
             <div className="settings-form">
               <div>
-                <SettingLabel text={t('settings.ai.provider')} />
-                <select value={provider} onChange={(e) => setProvider(e.target.value)}
+                <SettingLabel text={t('settings.ai.provider')} htmlFor="settings-ai-provider" />
+                <select id="settings-ai-provider" value={provider} onChange={(e) => setProvider(e.target.value)}
                   className="search-input" style={{ width: '100%' }}>
                   <option value="openai">OpenAI / DeepSeek / Groq</option>
                   <option value="deepseek">DeepSeek (native)</option>
@@ -248,8 +248,8 @@ export default function Settings() {
                 <input type="checkbox" checked={adv.auto_retry_enabled} onChange={(e) => setAdv({ ...adv, auto_retry_enabled: e.target.checked })} /> {t('settings.ai.autoRetry')}
               </label>
               <div style={{ marginTop: '6px' }}>
-                <SettingLabel text={t('settings.ai.maxRounds')} />
-                <select value={adv.max_correction_rounds} onChange={(e) => setAdv({ ...adv, max_correction_rounds: Number(e.target.value) })}
+                <SettingLabel text={t('settings.ai.maxRounds')} htmlFor="settings-ai-max-rounds" />
+                <select id="settings-ai-max-rounds" value={adv.max_correction_rounds} onChange={(e) => setAdv({ ...adv, max_correction_rounds: Number(e.target.value) })}
                   className="search-input">
                   {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
@@ -362,23 +362,23 @@ export default function Settings() {
               <div style={{ color: 'var(--color-text-secondary)', fontWeight: 600, marginBottom: '0.5rem' }}>{t('settings.quota.usage')}</div>
               <div className="settings-form" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 <div>
-                  <SettingLabel text={t('settings.quota.maxConcurrent')} />
-                  <SettingInput type="number" min={1} value={quotaForm.max_concurrent_runs}
+                  <SettingLabel text={t('settings.quota.maxConcurrent')} htmlFor="settings-quota-max-concurrent" />
+                  <SettingInput id="settings-quota-max-concurrent" type="number" min={1} value={quotaForm.max_concurrent_runs}
                     onChange={(e) => setQuotaForm({ ...quotaForm, max_concurrent_runs: Math.max(1, Number(e.target.value)) })} />
                 </div>
                 <div>
-                  <SettingLabel text={t('settings.quota.maxThreads')} />
-                  <SettingInput type="number" min={1} value={quotaForm.max_total_threads}
+                  <SettingLabel text={t('settings.quota.maxThreads')} htmlFor="settings-quota-max-threads" />
+                  <SettingInput id="settings-quota-max-threads" type="number" min={1} value={quotaForm.max_total_threads}
                     onChange={(e) => setQuotaForm({ ...quotaForm, max_total_threads: Math.max(1, Number(e.target.value)) })} />
                 </div>
                 <div>
-                  <SettingLabel text={t('settings.quota.maxMemory')} />
-                  <SettingInput type="number" min={1} value={quotaForm.max_total_memory_mb}
+                  <SettingLabel text={t('settings.quota.maxMemory')} htmlFor="settings-quota-max-memory" />
+                  <SettingInput id="settings-quota-max-memory" type="number" min={1} value={quotaForm.max_total_memory_mb}
                     onChange={(e) => setQuotaForm({ ...quotaForm, max_total_memory_mb: Math.max(1, Number(e.target.value)) })} />
                 </div>
                 <div>
-                  <SettingLabel text={t('settings.quota.maxDaily')} />
-                  <SettingInput type="number" min={1} value={quotaForm.max_runs_per_day}
+                  <SettingLabel text={t('settings.quota.maxDaily')} htmlFor="settings-quota-max-daily" />
+                  <SettingInput id="settings-quota-max-daily" type="number" min={1} value={quotaForm.max_runs_per_day}
                     onChange={(e) => setQuotaForm({ ...quotaForm, max_runs_per_day: Math.max(1, Number(e.target.value)) })} />
                 </div>
               </div>
@@ -449,8 +449,8 @@ export default function Settings() {
           <SettingInput placeholder="https://example.com/oxo-webhook" value={webhook.url}
             onChange={(e) => setWebhook({ ...webhook, url: e.target.value })} />
           <div style={{ marginTop: '0.5rem' }}>
-            <SettingLabel text={t('settings.webhook.scheme')} />
-            <select value={webhook.signature_scheme}
+            <SettingLabel text={t('settings.webhook.scheme')} htmlFor="settings-webhook-scheme" />
+            <select id="settings-webhook-scheme" value={webhook.signature_scheme}
               onChange={(e) => setWebhook({ ...webhook, signature_scheme: e.target.value })}
               className="search-input" style={{ width: '100%' }}>
               <option value="hmac-sha256">{t('settings.webhook.schemeHmac')}</option>

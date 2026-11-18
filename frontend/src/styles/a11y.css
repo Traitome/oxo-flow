@@ -1,0 +1,49 @@
+/*
+ * Accessibility corrections surfaced by the axe WCAG gate (issue #1151).
+ *
+ * Imported after index.css in main.tsx; the equal-specificity rules below
+ * therefore win the cascade without editing the main stylesheet. Each block
+ * records the measured contrast ratio that motivated it.
+ */
+
+/* Light theme: #0F9D6E on #E9F9F2 measured 3.18:1; #0B7A55 measures 4.9:1.
+   Dark theme keeps its own --color-success through the more specific
+   selectors in index.css. */
+:root {
+  --color-success: #0B7A55;
+}
+
+/* Error text uses --color-error on --color-error-bg (.status-badge.failed,
+   .result-bar.error): #D63A3A on #FDF0F0 measured 4.18:1 — below AA, and
+   the AI-disabled Settings state renders exactly that badge. #C42B2B
+   measures 5.07:1 there and 5.63:1 on white. */
+:root {
+  --color-error: #C42B2B;
+}
+
+/* Dark theme tertiary text: #64748B on #0F172A measured 3.75:1 (and 3.93:1
+   on #0B1220); #7D8BA1 measures 5.1:1. Both the explicit theme toggle and
+   the OS-preference block need the override. */
+:root[data-theme="dark"] {
+  --color-text-tertiary: #7D8BA1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --color-text-tertiary: #7D8BA1;
+  }
+}
+
+/* Active nav item: --color-primary on --color-primary-light measured
+   3.79:1 in the dark palette; the hover shade passes in both themes. */
+.nav-item.active {
+  color: var(--color-primary-hover);
+}
+
+/* Active filter chip: white text on --color-primary measured 3.75:1 in the
+   dark palette (and the same pairing in light). Pairing the hover shade with
+   the page background clears AA in both themes. */
+.pill-chip.active {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+  color: var(--color-bg);
+}

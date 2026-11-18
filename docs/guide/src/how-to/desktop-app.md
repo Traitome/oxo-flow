@@ -236,6 +236,37 @@ codesign -dv --verbose=4 oxo-flow.app        # Signature=adhoc
 plutil -lint oxo-flow.app/Contents/Info.plist
 ```
 
+### Lifecycle smoke test
+
+`scripts/desktop-smoke.sh` (also `make desktop-smoke`) proves the shell
+lifecycle without touching your real data directory:
+
+```bash
+make desktop-smoke          # builds crates/oxo-flow-desktop, then runs the smoke
+```
+
+It launches the binary with `HOME` pointed at a temporary directory and
+asserts, in order:
+
+1. the shell creates `~/.oxo-flow/desktop/oxo-flow.desktop.lock` and
+   `oxo-flow.db` (the embedded server reached its startup path);
+2. a second launch against the same data directory exits non-zero with
+   `another oxo-flow desktop instance is already running`;
+3. `SIGTERM` terminates the shell with exit code 0 and leaves no orphaned
+   embedded server.
+
+A logged-in desktop session is required. On headless Linux the script starts
+a private Xvfb display (so the `SIGTERM` still reaches the desktop process
+itself) and exits 77 (skip, never a silent pass) when no display tooling is
+available. CI runs the same script in the `desktop` job
+on `ubuntu-latest` with WebKitGTK and xvfb installed; that job is
+path-gated to `crates/oxo-flow-desktop/**` and `scripts/desktop-smoke.sh`.
+
+What this smoke does **not** verify: the rendered webview content or any
+pixel, the `.app`/`.deb` packaging, WebKit version compatibility, or
+Windows. Window content is covered indirectly by the Playwright browser
+suite against the same SPA; packaging is exercised by the release jobs.
+
 ## GitHub Release Assets
 
 Each tagged release publishes the desktop bundles alongside the raw

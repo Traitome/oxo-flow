@@ -312,6 +312,7 @@ jobs:
     outputs:
       extension: ${{ steps.filter.outputs.extension }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      desktop: ${{ steps.filter.outputs.desktop }}
       docker: ${{ steps.filter.outputs.docker }}
       eval: ${{ steps.filter.outputs.eval }}
     steps:
@@ -326,6 +327,9 @@ jobs:
               - 'scripts/bump-version.sh'
             frontend:
               - 'frontend/**'
+            desktop:
+              - 'crates/oxo-flow-desktop/**'
+              - 'scripts/desktop-smoke.sh'
             docker:
               - 'Dockerfile'
               - 'Dockerfile.release'
@@ -657,6 +661,52 @@ jobs:
           path: editors/vscode/oxo-flow-*.vsix
           retention-days: 7
           if-no-files-found: error
+
+  # ─── Desktop shell lifecycle (wry/tao) ────────────────────────────────────
+  # Ledger UX-09 (#1151): the desktop binary is a published surface built
+  # outside the workspace, and release CI only compiled it. This job proves
+  # the lifecycle contract headlessly (`make desktop-smoke` is the same script
+  # for a local GUI session): launch against an isolated HOME, the embedded
+  # server comes up, a second instance is refused, SIGTERM exits 0.
+  desktop:
+    name: Desktop shell lifecycle (headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [changes, test]
+    if: >-
+      always() &&
+      needs.test.result == 'success' &&
+      (needs.changes.outputs.desktop == 'true' ||
+       needs.changes.result != 'success' ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (registry + build artifacts)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/oxo-flow-desktop
+
+      # wry needs WebKitGTK 4.1; xvfb provides the display the shell expects.
+      - name: Install WebKitGTK + xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev xvfb
+
+      - name: Build desktop shell
+        working-directory: crates/oxo-flow-desktop
+        run: cargo build
+
+      - name: Lifecycle smoke (launch, single-instance, SIGTERM)
+        run: bash scripts/desktop-smoke.sh
 
   # ─── Build Linux binaries ──────────────────────────────────────────────────
   build-linux:

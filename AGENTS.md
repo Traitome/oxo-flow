@@ -31,7 +31,7 @@ Before concluding any task, the following suite **must** pass:
 ```bash
 make ci
 ```
-*Included in `make ci` (all gates are mandatory): `fmt`, `clippy` (`--workspace --all-targets -D warnings`), `build`, `test`, `schema-drift`, `skill-drift`, `version-check`, `audit`, `deny`, `aws-legacy-tripwire`, `issue-id-tripwire`, `npmmirror-tripwire`, `secrets`, `docs`, `frontend-lint`, `eval-tests`, `eval-lint`, and the extension fast gate `extension-test` (npm ci + compile + unit tests + `vsce package` for `editors/vscode`). Headless VS Code integration tests are a separate target: `make extension-integration`.*
+*Included in `make ci` (all gates are mandatory): `fmt`, `clippy` (`--workspace --all-targets -D warnings`), `build`, `test`, `schema-drift`, `skill-drift`, `version-check`, `audit`, `deny`, `aws-legacy-tripwire`, `issue-id-tripwire`, `npmmirror-tripwire`, `secrets`, `docs`, `frontend-lint`, `eval-tests`, `eval-lint`, and the extension fast gate `extension-test` (npm ci + compile + unit tests + `vsce package` for `editors/vscode`). Headless VS Code integration tests are a separate target: `make extension-integration`. Desktop shell lifecycle (launch → embedded server → single-instance refusal → clean SIGTERM exit, ledger UX-09) is a separate target too: `make desktop-smoke`, run by the CI `desktop` job; it stays out of `make ci` because the wry/tao GUI toolchain is deliberately outside the workspace gate.*
 
 ## Key Design Principles
 1. **DAG-First Execution:** Everything is a graph. Validate dependencies before execution.

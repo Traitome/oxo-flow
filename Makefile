@@ -1,4 +1,4 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
@@ -128,6 +128,16 @@ extension-test:
 extension-integration:
 	cargo build -p oxo-flow-cli
 	cd editors/vscode && OXOFLOW_TEST_BIN="$(CURDIR)/target/debug/oxo-flow" npm run integration-test
+
+## Desktop shell lifecycle smoke (ledger UX-09, #1151): launch the excluded
+## wry/tao shell against an isolated HOME, prove the embedded server came up and
+## a second instance is refused, then require a clean SIGTERM exit. Needs a
+## logged-in display; on headless Linux xvfb + WebKitGTK are required. Not in
+## `make ci` — GUI toolchains stay out of the workspace gate (AGENTS.md); the
+## CI `desktop` job runs this same script.
+desktop-smoke:
+	cd crates/oxo-flow-desktop && cargo build
+	bash scripts/desktop-smoke.sh
 
 ## Single-source rule: the CLI-embedded workflow schema must match the
 ## docs copy (the docs copy is canonical; `oxo-flow schema` serves the

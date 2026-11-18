@@ -37,6 +37,9 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
         // TOML syntax highlighting (issue #82 P2-2): previously the core
         // editor rendered as one flat color.
         StreamLanguage.define(toml),
+        // CodeMirror renders a role="textbox" with no name unless one is
+        // supplied; axe reports aria-input-field-name without this (#1151).
+        EditorView.contentAttributes.of({ 'aria-label': 'Workflow TOML' }),
         updateListener,
         EditorView.exceptionSink.of((error) => {
           console.error('[TomlEditor] CodeMirror plugin crashed:', error);
