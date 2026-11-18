@@ -4809,6 +4809,11 @@ only present when a handler supplies them (e.g. <code>429</code> bodies carry
 <td>Request rate exceeded</td>
 </tr>
 <tr>
+<td><code>AUDIT_WRITE_FAILED</code></td>
+<td>500</td>
+<td>A REQUIRED audit row for a security-relevant action could not be persisted; the request fails closed (WEB-15 / issue #1140)</td>
+</tr>
+<tr>
 <td><code>DB_ERROR</code></td>
 <td>500</td>
 <td>Internal database error</td>

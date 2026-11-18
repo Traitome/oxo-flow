@@ -4050,6 +4050,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#provider-metadata-is-role-gated-web-15-issue-1140" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider metadata is role-gated (WEB-15 / issue #1140)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pinned-disabled-ai-oxo_flow_ai_providerdisabled" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5589,6 +5600,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#provider-metadata-is-role-gated-web-15-issue-1140" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider metadata is role-gated (WEB-15 / issue #1140)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pinned-disabled-ai-oxo_flow_ai_providerdisabled" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5963,6 +5985,55 @@ Returns paginated structured audit entries:
 </span></code></pre></div>
 <code>page</code> defaults to 1 and <code>per_page</code> defaults to 50 (max 200). <strong>Team/hpc modes: admin-only</strong> (the trail spans every user's actions; personal mode keeps the localhost trust model).</p>
 <p><code>user</code> is the actor's canonical <code>users.id</code>, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (<code>user</code>, <code>viewer</code>) and the <code>default</code> personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through <code>GET /api/users</code> when one is needed (admin-only).</p>
+<h4 id="audit-durability-web-15-issue-1140">Audit durability (WEB-15 / issue #1140)<a class="headerlink" href="#audit-durability-web-15-issue-1140" title="Permanent link">#</a></h4>
+<p>Every audit write is explicitly classified, and the class is part of the
+route contract:</p>
+<ul>
+<li><strong>Required</strong> — security-relevant actions: authentication attempts
+  (<code>POST /api/auth/login</code>, logout, OAuth), user/role management
+  (<code>POST /api/users</code>, <code>DELETE /api/users/{id}</code>), machine-key changes
+  (<code>POST /api/auth/keys</code>, <code>DELETE /api/auth/keys/{id}</code>), run lifecycle
+  control (<code>POST /api/runs</code> and <code>/{cancel,pause,resume,retry,resume-checkpoint,clean}</code>),
+  pipeline deletion and share grants
+  (<code>DELETE /api/pipelines/{id}</code>, <code>POST /api/pipelines/{id}/share</code>), AI
+  provider key changes (<code>POST /api/ai/config</code>, <code>PUT /api/ai/config/server</code>,
+  <code>PUT /api/ai/config/user</code>), cluster connection secrets
+  (<code>POST /api/clusters</code>, <code>DELETE /api/clusters/{id}</code>), webhook configuration
+  (<code>PUT /api/webhook</code>), and license upload (<code>POST /api/license/upload</code>).
+  If the row cannot be written, the request <strong>fails closed</strong> with
+  <code>500 {code: "AUDIT_WRITE_FAILED"}</code> carrying the storage error in
+  <code>detail</code> and a remediation in <code>suggestion</code>. Exception: a response that is
+  already a server error (5xx) is preserved, so the documented runs-domain
+  <code>503 RUNS_REQUIRE_STORAGE_BACKEND</code> boundary still reaches the client on a
+  deployment with no initialized storage backend.</li>
+<li><strong>Best-effort</strong> — informational mutations (AI generation, parsing,
+  validation, DAG edits, chat, pipeline create/update/fork/rollback,
+  template writes, quota and event-ticket requests). A failed write is
+  logged as a warning and the request answers normally.</li>
+</ul>
+<p><strong>The audit row is not written in the same transaction as the mutation.</strong>
+The handler runs first; the audit insert is attempted afterwards. A
+REQUIRED-audit failure therefore does <strong>not</strong> roll the action back — the
+pipeline may already be deleted, the run retry may already have spawned,
+the key revocation may already be applied, the account may already exist.
+The <code>500 AUDIT_WRITE_FAILED</code> body says the action "may already have been
+applied" and its <code>suggestion</code> tells the caller to verify the affected
+resource (list/inspect it) before retrying, because a blind retry can
+duplicate the effect (e.g. a second forked/deleted resource or a second
+run). Writing the audit row in the mutation's transaction is tracked as
+remaining work in the WEB-15 ledger entry. Per-route implication: every
+REQUIRED route listed above can answer this 500 <strong>after</strong> applying its
+change; treat the 500 as "state unknown", not as "nothing happened".</p>
+<p>Both classes share one writer (the storage backend's <code>record_audit_log</code>).
+The middleware emits a structured <code>audit</code> event for every mutation it
+handles, including when the database insert fails, so machine consumers
+still see the attempt. The successful-login path is the exception: the
+login handler returns before the middleware's event emission and owns its
+own best-effort row, so a successful login on broken storage leaves
+<strong>neither a row nor a structured event</strong>. Failed login attempts are
+REQUIRED rows written by the middleware. Migration of the successful-login
+row to <code>audit_required</code> is tracked follow-up work in the WEB-15 ledger
+entry.</p>
 <h3 id="server-sent-events">Server-Sent Events<a class="headerlink" href="#server-sent-events" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/events
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Accept: text/event-stream
@@ -6680,7 +6751,7 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 </span><span id="__span-60-10"><a id="__codelineno-60-10" name="__codelineno-60-10" href="#__codelineno-60-10"></a>PUT  /api/ai/config/user        # Set the acting user's private provider config
 </span><span id="__span-60-11"><a id="__codelineno-60-11" name="__codelineno-60-11" href="#__codelineno-60-11"></a>GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
 </span><span id="__span-60-12"><a id="__codelineno-60-12" name="__codelineno-60-12" href="#__codelineno-60-12"></a>PUT  /api/ai/config/server      # Set the server-level provider config
-</span><span id="__span-60-13"><a id="__codelineno-60-13" name="__codelineno-60-13" href="#__codelineno-60-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
+</span><span id="__span-60-13"><a id="__codelineno-60-13" name="__codelineno-60-13" href="#__codelineno-60-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain (endpoint/model redacted for non-admins)
 </span><span id="__span-60-14"><a id="__codelineno-60-14" name="__codelineno-60-14" href="#__codelineno-60-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
 </span><span id="__span-60-15"><a id="__codelineno-60-15" name="__codelineno-60-15" href="#__codelineno-60-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
 </span></code></pre></div>
@@ -6714,6 +6785,36 @@ valid credential opts the request into normal authentication, so an admin
 sees the configured provider, model, and URL (never the API key); an invalid
 credential is rejected with <code>401</code> rather than silently downgraded to the
 masked anonymous payload.</p>
+<h3 id="provider-metadata-is-role-gated-web-15-issue-1140">Provider metadata is role-gated (WEB-15 / issue #1140)<a class="headerlink" href="#provider-metadata-is-role-gated-web-15-issue-1140" title="Permanent link">#</a></h3>
+<p>Outside personal mode, provider metadata is admin-only:</p>
+<ul>
+<li><code>GET /api/ai/config</code> is the public discoverability surface and stays the
+  strictest mask: anonymous and non-admin callers receive only
+  <code>is_configured</code> (<code>provider: ""</code>, <code>model: null</code>, <code>api_url: null</code>);
+  authenticated admins see the full resolved configuration.</li>
+<li><code>GET /api/ai/config/effective</code> is authenticated. Non-admin
+  <code>user</code>/<code>viewer</code> callers receive the resolution chain's provider NAMES and
+  enabled state, but <code>effective.model</code>, <code>effective.api_url</code>,
+  <code>tiers.env_model</code>, <code>tiers.env_url</code>, <code>tiers.server_model</code>,
+  <code>tiers.user_model</code>, and <code>tiers.user_api_url</code> are <code>null</code> — the endpoint
+  URL identifies the internal AI proxy/gateway and the model id discloses
+  the provider's shape. Admins receive the full chain.</li>
+<li><code>GET /api/ai/config/user</code> returns a row the caller saved themselves in
+  full (it is their own configuration). When no per-user row exists, the
+  endpoint mirrors the SHARED runtime; that mirrored <code>api_url</code> and <code>model</code>
+  are redacted for non-admins the same way.</li>
+<li><code>GET /api/ai/config/server</code> and <code>PUT /api/ai/config/server</code> stay
+  admin-only (403 <code>ACCESS_DENIED</code> otherwise), as does the runtime-only
+  <code>POST /api/ai/config</code>. <code>PUT /api/ai/config/user</code> is <strong>not</strong> admin-gated:
+  it writes only the acting user's own row (outside personal mode a
+  non-admin's save is persisted but not applied to the shared runtime —
+  <code>applied_to_runtime: false</code>).</li>
+<li>API keys and key prefixes are never returned by any of these endpoints.</li>
+</ul>
+<p>Personal mode is loopback single-user (no roles), so its local callers keep
+the unmasked view — the exception the SPA settings page relies on.
+<code>GET /api/ai/config/effective</code> rejects an unauthenticated caller with the
+normal <code>401</code> auth gate.</p>
 <p>The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. <code>GET /api/ai/config/effective</code> shows the resolved result and
@@ -6773,6 +6874,14 @@ while it is set.</p>
 </span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a>POST /api/chat/send/json   # Same, single JSON response
 </span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
 </span></code></pre></div>
+<p><strong>Chat session persistence is best-effort</strong> (WEB-15 / issue #1140): a
+completed reply is persisted to the chat session store and the endpoint
+still succeeds if that write fails — the failure is logged as a warning.
+<code>GET /api/chat/sessions</code> returns an empty list when session storage is
+unavailable or a read fails, so an empty history is not proof that no
+conversation happened. The SSE/JSON response remains the source of truth
+for the current turn; <code>message</code> on the <code>done</code> event repeats the chat-mode
+reply so a lost stream frame cannot leave an empty bubble.</p>
 <h3 id="intent-routing">Intent routing<a class="headerlink" href="#intent-routing" title="Permanent link">#</a></h3>
 <p>Chat requests are classified before any generation work happens, by a
 deterministic keyword/pattern classifier (<code>domains/chat/intent.rs</code>) — no

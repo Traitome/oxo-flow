@@ -4456,13 +4456,31 @@ automatic fallback chain between mechanisms.</p>
 <p><strong>User management</strong>: beyond the env-var credentials, accounts created on
 the <strong>Users</strong> page (or <code>POST /api/users</code>) carry a bcrypt-hashed password in
 the database and sign in through the same <code>/api/auth/login</code> endpoint.
-State-changing requests attempt an audit entry visible on the <strong>Audit</strong> page
-or through <code>GET /api/audit</code>, with the acting user and recorded outcome. Audit
-writes are not yet a durable, fail-closed compliance ledger: a failed insert
-is logged and the request still succeeds, so do not treat a missing entry as
-proof that no action occurred (the structured event stream still emits an
-<code>audit</code> event for machine consumers when the database insert fails). The
-trail spans all users and is admin-only outside personal mode.</p>
+State-changing requests write an audit entry visible on the <strong>Audit</strong> page
+or through <code>GET /api/audit</code>, with the acting user and recorded outcome. The
+entry's durability is explicit per action (WEB-15 / issue #1140):</p>
+<ul>
+<li><strong>Security-relevant actions</strong> — authentication attempts, user/role
+  changes, machine-key changes, run creation and lifecycle control,
+  pipeline deletion and share grants, AI provider key changes, cluster
+  connection secrets, webhook configuration, and license upload — <strong>fail
+  closed</strong>: if the row cannot be written the request answers
+  <code>500 AUDIT_WRITE_FAILED</code> instead of acknowledging the action.</li>
+<li><strong>Informational mutations</strong> — AI generation, parsing/validation, DAG
+  edits, chat, and pipeline create/update/fork — log a warning and still
+  answer normally if the write fails.</li>
+</ul>
+<p>The audit row is written after the handler, not in the same transaction, so
+a REQUIRED-audit <code>500</code> means the action <strong>may already have been applied</strong> —
+verify the affected resource before retrying, since a blind retry can
+duplicate the effect. For every mutation the middleware handles, the
+structured event stream emits an <code>audit</code> event even when the database insert
+fails. The successful-login path is the exception: the login handler owns
+that best-effort row and emits no structured event, so a successful login on
+broken storage leaves neither a row nor an event (failed logins are
+REQUIRED middleware rows). Do not treat a missing entry as proof that no
+action occurred; check the structured event stream as well. The trail spans
+all users and is admin-only outside personal mode.</p>
 <p><strong>Workspace isolation</strong>:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>workspace/
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>└── users/
