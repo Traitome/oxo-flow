@@ -31,7 +31,12 @@ pub fn parse_pipeline(
             shell: r.shell.clone(),
             inputs: r.input.iter().map(|p| p.to_string()).collect(),
             outputs: r.output.iter().map(|p| p.to_string()).collect(),
-            environment: Some(r.environment.kind().to_string()),
+            // The EFFECTIVE environment (`env_group` → inline → `[defaults]`),
+            // resolved through the same `resolve_environment` the run/dry-run
+            // and DAG-status paths use — never the raw authored inline value
+            // (issue #1220). An unset environment stays `None` so the editor
+            // can distinguish "no environment" from "system".
+            environment: config.resolve_environment(r).map(|e| e.kind().to_string()),
             threads: Some(r.effective_threads()),
         })
         .collect();
@@ -367,7 +372,11 @@ fn dag_json(config: &WorkflowConfig, dag: &WorkflowDag) -> DagJsonResponse {
         .rules
         .iter()
         .map(|r| {
-            let env_str = r.environment.kind();
+            // Effective environment via the shared resolver (issue #1220) so an
+            // `env_group`-selected backend paints here as it does in the
+            // run/dry-run/DAG-status paths.
+            let resolved_env = config.resolve_environment(r);
+            let env_str = resolved_env.as_ref().map(|e| e.kind()).unwrap_or("system");
             let color = if env_str == "conda" {
                 "#3B82F6"
             } else if env_str == "docker" {

@@ -1948,6 +1948,33 @@ pub fn lint_format(
             });
         }
 
+        // W043 (issue #1220): a rule selects an `[env_groups.<g>]` that is
+        // empty. `resolve_environment` returns `Some(empty spec)`, so W008
+        // above stays silent (the rule is not un-resolvable) yet the group
+        // contributes nothing and the rule silently runs in `system` — the
+        // group name reads as if it isolates an environment while the shell
+        // gets the bare host. Statically decidable: an empty group is always
+        // author error, so warn once per selecting rule.
+        if let Some(group_name) = rule.env_group.as_deref()
+            && let Some(group) = config.env_groups.get(group_name)
+            && group.is_empty()
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "rule selects env_group '{group_name}', but [env_groups.{group_name}] \
+                     is empty — the rule will silently run in the system environment"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W043".to_string(),
+                suggestion: Some(format!(
+                    "populate [env_groups.{group_name}] with a backend (conda/mamba/pixi/\
+                     docker/singularity/venv/modules) or remove env_group from rule '{}'",
+                    rule.name
+                )),
+            });
+        }
+
         // W019: Rule executes a command but declares no outputs. The engine's
         // correctness machinery is output-driven — freshness checks, dataflow
         // edges, failure invalidation (issue #118) — so an empty output list
@@ -5307,6 +5334,57 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
     fn secret_scanning_clean_config() {
         let diags = scan_for_secrets("reference = /data/hg38.fa\nthreads = 8");
         assert!(diags.is_empty());
+    }
+
+    // ---- W043: empty env_group selected by a rule (issue #1220) -------------
+
+    #[test]
+    fn lint_w043_fires_for_a_rule_selecting_an_empty_env_group() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [env_groups.qc]
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+            env_group = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w043 = diagnostics
+            .iter()
+            .find(|d| d.code == "W043")
+            .expect("W043 for a rule selecting an empty env_group");
+        assert_eq!(w043.rule.as_deref(), Some("step1"));
+        assert_eq!(w043.severity, Severity::Warning, "{w043:?}");
+    }
+
+    #[test]
+    fn lint_w043_silent_for_a_non_empty_env_group() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [env_groups.qc]
+            conda = "envs/qc.yaml"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+            env_group = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W043"),
+            "a populated env_group must not raise W043: {diagnostics:?}"
+        );
     }
 
     // ---- E007: depends_on references non-existent rule ----------------------
