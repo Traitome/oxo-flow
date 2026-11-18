@@ -745,6 +745,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | EV-04 | P1 | Cohort DAG counts were not derived from the real plan. | Implemented and verified for fail-closed parsing | Real `dry-run --json` plans are required; the current pilot is `N=10`, 30 nodes. |
 | EV-05 | P1 | The implementation checklist marked unverified cloud, hardware, UX, and manuscript work complete. | Fixed in this audit wave | Replaced with maturity-labeled, unchecked gates. |
 | EV-06 | P1 | Synthetic superiority and human-factors claims appeared in reports. | Fixed in this audit wave | Reports are now evidence-status documents, not result claims. |
+| EV-07 | P1 | Fixtures could encode stale semantics: a passing suite certifies expectations that trace only to current engine output, not to a contract (audit wave 4). | Audited 2026-11-18 (#1168); three stale families corrected, one open suspect justified | Inventory: `docs/superpowers/audits/fixture-contract-inventory.md` — 20 fixture families, 17 traceable / 2 annotated / 1 suspect (open: `eval/gold/workflow.csv` `wf-004`, whose empty edge list traces to the unexpanded `graph -f dot` surface while the `scatter`/`gather` reference carries five runtime edges; fixing it needs the checker to use `--expanded` plus a human-attested evidence re-mint). Demonstrated stale fixture: `eval/interpretation/seeds/s04-silent-failure` expected `run` exit 0, but the fail-closed missing-source-input contract makes the silent exit-0 pipeline unreachable (the engine aborts with exit 1) and the benchmark runner marked the seed `broken` (excluded from the denominator) instead of failing. Corrected by producing the declared input upstream and planting the fault on an undeclared read (`gzip -cd {input[0]} data/reads/sample_R2.fastq.gz | wc -l`); the new provider-free gate `crates/oxo-flow-cli/tests/interpretation_seeds.rs` fails on the pre-fix seed (proven) and passes 12/12 after. Also corrected stale stated counts against their fixtures: `eval/frontier/README.md` 29→36 intents / 10→12 domains, now gated by `eval/frontier/test_intents_contract.py` (fails on the old text; proven), and `benches/comparative/README.md` Snakefile 34→41 lines. Boundary: historical benchmark numbers (AI hit-rates, comparative timings, j-suggestion makespans) were not re-measured and no provider was called; the inventory records them as historical. Commit binding: 570d16b7e8c8125b629c55b3ddfd18d1cd6fa178 (PR #1214). |
 
 ### 5.6 CLI, AI, Provider, and MCP
 
@@ -825,6 +826,15 @@ execution or approval has occurred.
 - False-positive and false-negative analysis for every static contract.
 - Reproduction on an independent host and software environment.
 
+Wave-4 fixture evidence (2026-11-18, #1168): the fixture-contract inventory
+(`docs/superpowers/audits/fixture-contract-inventory.md`) traces every
+fixture family's expected value to its contract instead of to engine output.
+False-positive/false-negative status per static contract is unchanged and
+still requires the dedicated campaign above; what the inventory establishes
+is narrower — that the fixtures which measure those contracts still reach
+them. One open suspect (`wf-004` scatter/gather edge) is documented, not
+silently accepted.
+
 ### Gate 4: Publication
 
 - Measured hardware and cohort study, not projections.
@@ -844,7 +854,7 @@ The following work remains serial and must not be hidden behind roadmap completi
 3. CLI/AI remediation wave: block partial-file repair, isolate secrets and ambient environment,
    bind MCP credentials to trusted endpoints, close read-to-fetch egress, enforce `auto_fix`, and
    test provider precedence plus recovery through verified rerun.
-4. Tests/benches/examples wave: proof that fixtures exercise real contracts and do not encode stale semantics.
+4. Tests/benches/examples wave: proof that fixtures exercise real contracts and do not encode stale semantics. **Audited 2026-11-18 (#1168).** Artifact: `docs/superpowers/audits/fixture-contract-inventory.md` (20 families: 17 traceable, 2 annotated, 1 open suspect). Four families were suspect at audit time; three were corrected against their contracts (`eval/frontier/README.md` counts, `eval/interpretation/seeds/s04-silent-failure`, `benches/comparative/README.md` Snakefile line count) and one (`eval/gold/workflow.csv` `wf-004`) is annotated open because its correction needs a checker-surface change plus a human evidence re-attestation under #172. Demonstrated stale fixture and fail-first regression: `EV-07` in §5.5; gate `crates/oxo-flow-cli/tests/interpretation_seeds.rs`. Commit binding: 570d16b7e8c8125b629c55b3ddfd18d1cd6fa178 (PR #1214).
 5. Scripts/data wave: provenance, reproducible regeneration, and removal of synthetic claims from publication-facing artifacts.
 6. Linux qualification wave through the designated `tx-ubuntu` host only.
 7. Scientific campaign design review before any large-scale compute or human-subjects expenditure.
