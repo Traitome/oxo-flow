@@ -173,8 +173,11 @@ pub fn generate_array_submit_script(
     lines.push(format!("INDEX=\"${task_var}\""));
     // Double quotes so ${INDEX} expands (single quotes would pass the
     // literal `${INDEX}` to sh). The run dir is engine-generated and never
-    // contains shell metacharacters.
-    lines.push(format!("sh \"{cmd_dir}/cmd.${{INDEX}}.sh\""));
+    // contains shell metacharacters. Isolated like the command line so array
+    // elements do not inherit the submitting shell's environment either.
+    lines.push(isolate_dispatch_line(&format!(
+        "sh \"{cmd_dir}/cmd.${{INDEX}}.sh\""
+    )));
 
     // Per-element logs (issue #142 M5): a shared output/error path would
     // interleave every element's output into one file. SLURM interpolates
@@ -332,6 +335,88 @@ fn gpu_count_requested(count: u32) -> bool {
     count > 0
 }
 
+/// Build the `env -i NAME='VALUE' …` isolation prefix for a generated
+/// cluster job script (issue #1108, RB-15).
+///
+/// A scheduler forwards the submitting shell's environment to every job by
+/// default (SLURM `--export=ALL`, PBS/SGE `-V`, LSF `-env`), which would
+/// hand `ANTHROPIC_AUTH_TOKEN`, `OXO_FLOW_MASTER_KEY` and every other
+/// ambient credential to a shared or imported rule. The allowlist reuses
+/// the exact same policy as the local spawn path —
+/// [`crate::executor::process::RULE_ENV_ALLOWLIST`], every `LC_*`, and the
+/// operator's `OXO_FLOW_ENV_PASSTHROUGH` names — so the local and HPC paths
+/// cannot drift (invariant "Reuse, never retype").
+///
+/// Applied inside the script body rather than as a submit flag: SLURM
+/// rejects `--export=NONE` combined with an explicit `--export=<list>`, the
+/// other schedulers spell the equivalent differently (`-V`/`-v`/`-env`),
+/// and one body-level mechanism covers all four HPC backends with a single
+/// shared implementation.
+fn env_isolation_prefix() -> String {
+    let mut names: Vec<String> = crate::executor::process::RULE_ENV_ALLOWLIST
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    // Locale family, matched by prefix exactly as the local path does. Sorted
+    // and deduped so the generated script is deterministic (invariant
+    // "Persisted artifacts are order-independent").
+    let mut locale: Vec<String> = std::env::vars_os()
+        .map(|(key, _)| key.to_string_lossy().into_owned())
+        .filter(|key| key.starts_with("LC_"))
+        .collect();
+    locale.sort();
+    locale.dedup();
+    names.extend(locale);
+    names.extend(crate::executor::process::env_passthrough_names());
+
+    let mut prefix = String::from("env -i");
+    for name in names {
+        if let Some(value) = std::env::var_os(&name) {
+            let value = value.to_string_lossy();
+            prefix.push_str(&format!(
+                " {name}='{}'",
+                crate::environment::escape_for_sh_single_quote(&value)
+            ));
+        }
+    }
+    prefix.push(' ');
+    prefix
+}
+
+/// Append the isolated command line for a generated job script: the
+/// [`env_isolation_prefix`] followed by the shell command run through
+/// `sh -c` — the exact shape the local spawn path uses
+/// (`shell_command("sh", cmd, …)`) — or nothing when there is no command of
+/// its own (an array base script leaves the command slot empty; its
+/// per-index files carry the commands).
+///
+/// The command travels as one `sh -c` argument rather than as a bare prefix
+/// because the prefix must wrap the whole command: `env -i … cd dir && cmd`
+/// changes the working directory only inside the ephemeral `env` child, so a
+/// bare prefix silently runs `cmd` in the submit directory. Passing the
+/// command as a single quoted argument keeps the `cd` guard (and any shell
+/// prelude) in effect inside the isolated shell.
+///
+/// Declared per-rule `envvars` are re-exported by the command itself
+/// (`export K='V' && …`), so they survive the outer `env -i`.
+fn push_isolated_command(lines: &mut Vec<String>, shell_cmd: &str) {
+    if shell_cmd.trim().is_empty() {
+        return;
+    }
+    lines.push(format!(
+        "{}sh -c '{}'",
+        env_isolation_prefix(),
+        crate::environment::escape_for_sh_single_quote(shell_cmd)
+    ));
+}
+
+/// Wrap a dispatch line (`sh "<cmd_dir>/cmd.${INDEX}.sh"`) in the same
+/// allowlist isolation, so array elements — whose real commands live in the
+/// per-index files — are isolated too.
+fn isolate_dispatch_line(line: &str) -> String {
+    format!("{}{line}", env_isolation_prefix())
+}
+
 fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) -> String {
     let mut lines = vec!["#!/bin/bash".to_string()];
     lines.push(format!("#SBATCH --job-name={}", rule.name));
@@ -403,7 +488,7 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
     // to avoid duplication with conda/docker/singularity environments
-    lines.push(shell_cmd.to_string());
+    push_isolated_command(&mut lines, shell_cmd);
     lines.join("\n")
 }
 
@@ -510,7 +595,7 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    lines.push(shell_cmd.to_string());
+    push_isolated_command(&mut lines, shell_cmd);
     lines.join("\n")
 }
 
@@ -579,7 +664,7 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    lines.push(shell_cmd.to_string());
+    push_isolated_command(&mut lines, shell_cmd);
     lines.join("\n")
 }
 
@@ -688,7 +773,7 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push("mkdir -p logs".to_string());
 
     // Note: Module loading is handled by EnvironmentResolver.wrap_command()
-    lines.push(shell_cmd.to_string());
+    push_isolated_command(&mut lines, shell_cmd);
     lines.join("\n")
 }
 
@@ -759,6 +844,131 @@ mod tests {
                 .unwrap();
             assert!(s2.contains(range), "{backend:?}: {s2}");
             assert!(s2.contains(var), "{backend:?}: {s2}");
+        }
+    }
+
+    /// The admitted-variable names carried by the `env -i` prefix of a
+    /// generated line: `env -i NAME='VALUE' NAME='VALUE' <cmd>`.
+    fn admitted_names(line: &str) -> Vec<String> {
+        let rest = line
+            .strip_prefix("env -i ")
+            .expect("line must open with the env -i isolation prefix");
+        let mut names = Vec::new();
+        for token in rest.split(' ') {
+            match token.split_once('=') {
+                Some((name, _)) => names.push(name.to_string()),
+                None => break, // first non-assignment token is the command
+            }
+        }
+        names
+    }
+
+    /// Issue #1108 (RB-15): a scheduler forwards the submitting shell's
+    /// environment to every job by default, so the generated script must
+    /// isolate the command behind the SAME allowlist the local spawn path
+    /// enforces — an ambient credential on the submit host must not reach a
+    /// rule running on the node. Asserted on the generated text only (no
+    /// live scheduler needed).
+    #[test]
+    fn generated_scripts_isolate_the_ambient_environment() {
+        let rule = make_rule("align", 4, Some("8G"));
+        let config = make_config();
+
+        // Secret-shaped ambient names must never be re-admitted. They are
+        // matched as whole tokens (boundary-safe) so `PATH` does not match a
+        // longer name and `LC_ALL` is still allowed.
+        const SECRETS: &[&str] = &[
+            "ANTHROPIC_AUTH_TOKEN",
+            "OXO_FLOW_MASTER_KEY",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "OXO_FLOW_AI_API_KEY",
+        ];
+        // The policy bound, reused from the local path (not retyped): the
+        // ambient allowlist constant plus every `LC_*` plus the operator's
+        // `OXO_FLOW_ENV_PASSTHROUGH` names.
+        let allowlisted = |name: &str| {
+            crate::executor::process::RULE_ENV_ALLOWLIST.contains(&name)
+                || name.starts_with("LC_")
+                || crate::executor::process::env_passthrough_names()
+                    .iter()
+                    .any(|n| n == name)
+        };
+
+        for backend in [
+            ClusterBackend::Slurm,
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let script =
+                generate_submit_script(&backend, &rule, "bwa mem ref.fa in.fq", &config).unwrap();
+
+            // The command runs behind `env -i`, not bare.
+            let cmd_line = script
+                .lines()
+                .find(|l| l.trim_start().starts_with("env -i "))
+                .unwrap_or_else(|| {
+                    panic!("{backend:?}: no env -i isolated command line: {script}")
+                });
+            assert!(
+                cmd_line.ends_with("sh -c 'bwa mem ref.fa in.fq'"),
+                "{backend:?}: command must be wrapped in a single sh -c argument after the prefix: {cmd_line}"
+            );
+
+            // Every name the prefix admits is proof-carrying: it comes from
+            // the shared allowlist — nothing else can pass through, whatever
+            // the submit host happens to export.
+            for name in admitted_names(cmd_line) {
+                assert!(
+                    allowlisted(&name),
+                    "{backend:?}: non-allowlisted variable {name:?} admitted: {cmd_line}"
+                );
+                assert!(
+                    !SECRETS.contains(&name.as_str()),
+                    "{backend:?}: secret {name:?} leaked into the job environment"
+                );
+            }
+            for secret in SECRETS {
+                assert!(
+                    !cmd_line.contains(secret),
+                    "{backend:?}: {secret} present in generated script"
+                );
+            }
+        }
+    }
+
+    /// The array dispatch line is isolated too: elements run their real
+    /// commands from per-index files, so without the prefix they would
+    /// inherit the submit host's environment via the scheduler default.
+    #[test]
+    fn array_dispatch_line_is_isolated() {
+        for backend in [
+            ClusterBackend::Slurm,
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let script = generate_array_submit_script(
+                &backend,
+                &make_rule("align", 4, Some("8G")),
+                "/run/jobs/align",
+                3,
+                &make_config(),
+            )
+            .unwrap();
+            let dispatch = script
+                .lines()
+                .find(|l| l.contains("/run/jobs/align/cmd."))
+                .unwrap_or_else(|| panic!("{backend:?}: no dispatch line: {script}"));
+            assert!(
+                dispatch.trim_start().starts_with("env -i "),
+                "{backend:?}: dispatch line not isolated: {dispatch}"
+            );
+            assert!(
+                dispatch.ends_with("sh \"/run/jobs/align/cmd.${INDEX}.sh\""),
+                "{backend:?}: dispatch line body altered: {dispatch}"
+            );
         }
     }
 

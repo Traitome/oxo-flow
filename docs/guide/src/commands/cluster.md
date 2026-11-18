@@ -508,8 +508,10 @@ because its output file exists (a killed job can leave a partial file).
 The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
 #907) travels onto the cluster too: every submitted job script exports
 `TMPDIR`/`TMP`/`TEMP` to the resolved directory before the rule's command
-runs (issue #1013). Cluster jobs start from the scheduler's clean
-environment, so the exports are baked into each job's rendered command —
+runs (issue #1013). Each job script isolates itself behind the same
+environment allowlist as the local path (issue #1108, RB-15), so a job
+never inherits the submit host's environment; the exports are baked into
+each job's rendered command —
 after the workdir `cd` guard and outside the environment wrapper, so
 wrapped child processes (`conda run`, `pixi run`, venv activation) and
 tools honoring `TMPDIR` all land in the scratch volume. The directory must

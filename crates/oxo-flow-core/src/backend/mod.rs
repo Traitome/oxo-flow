@@ -296,8 +296,9 @@ impl ScheduledPlan {
 
     /// Build the plan with the run's scratch directory exported into every
     /// job shell (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issues #907 +
-    /// #1013 C2). Cluster job scripts start from the scheduler's clean
-    /// environment, so the scratch exports must be part of the rendered
+    /// #1013 C2). Cluster jobs do not inherit the submit host's `TMPDIR`
+    /// (the generated job script admits only the env allowlist — issue
+    /// #1108, RB-15), so the scratch exports must be part of the rendered
     /// command itself — placed after the `cd` guard and OUTSIDE the
     /// environment wrapper so wrapped child processes (conda/pixi/venv
     /// run, containers with host mounts) inherit `TMPDIR`. The local

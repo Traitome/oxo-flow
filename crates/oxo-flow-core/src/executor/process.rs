@@ -388,8 +388,9 @@ pub struct ExecutorConfig {
     /// Workflow-global scratch directory (`[engine] tmp_dir`, issue #907):
     /// injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell so tools
     /// that honor the POSIX/C_RUNTIME temp convention write their caches
-    /// somewhere with room instead of the system default. `None` keeps the
-    /// ambient environment untouched.
+    /// somewhere with room instead of the system default. `None` injects no
+    /// temp variables; rule shells still run under the cleared-environment
+    /// allowlist (issue #1108) either way.
     pub tmp_dir: Option<PathBuf>,
     /// Hardware topology for NUMA-aware scheduling and node binding.
     pub hardware_topology: Option<crate::hardware::HardwareTopology>,
@@ -3808,6 +3809,108 @@ fn build_execution_command_inner(
     Ok(Some(base_cmd))
 }
 
+/// Ambient variables re-admitted from the engine process into every rule
+/// (and hook) shell (issue #1108, RB-15). Rule shells do NOT inherit the
+/// engine's environment: `apply_rule_env_allowlist` clears it, so a
+/// workflow cannot read the engine's own credentials, proxy settings, or
+/// arbitrary host state. `PATH`/`HOME`/`LANG` are the minimum a POSIX
+/// shell and the tooling it invokes need to function; `LC_*` is handled
+/// separately by dynamic prefix so a new locale variable needs no edit
+/// here.
+pub(crate) const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
+
+/// Escape hatch for ambient variables a workflow legitimately needs
+/// (issue #1108): a comma-separated list of names, each re-admitted from
+/// the engine's environment into rule shells.
+///
+/// An environment variable rather than a new `[engine]` TOML key: the need
+/// is host/invocation-specific (site modules, `LD_LIBRARY_PATH`, a
+/// license-server variable), so it belongs to the operator's environment
+/// rather than a portable workflow file, and it mirrors the existing
+/// `OXO_FLOW_*` override pattern (`OXO_FLOW_TMPDIR`,
+/// `OXO_FLOW_HOOK_TIMEOUT_SECS`). Names that are not set in the engine's
+/// environment are silently ignored.
+const ENV_PASSTHROUGH_ENV: &str = "OXO_FLOW_ENV_PASSTHROUGH";
+
+/// Parse the comma-separated `OXO_FLOW_ENV_PASSTHROUGH` list: trim
+/// whitespace, drop empty entries. Extracted as a pure function so tests
+/// exercise it without process-global mutation.
+fn parse_env_passthrough(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The operator's `OXO_FLOW_ENV_PASSTHROUGH` names, as `Vec<String>`.
+/// `pub(crate)` so the cluster script generators reuse the exact same list
+/// instead of retyping it (issue #1108, RB-15; invariant "Reuse, never
+/// retype").
+pub(crate) fn env_passthrough_names() -> Vec<String> {
+    parse_env_passthrough(std::env::var(ENV_PASSTHROUGH_ENV).ok().as_deref())
+}
+
+/// Rebuild a rule/hook shell's environment from scratch (issue #1108,
+/// RB-15): `env_clear()` drops everything the engine process carries —
+/// API tokens, cloud credentials, proxy settings, the operator's shell —
+/// and only three things reach the child:
+///
+/// 1. the ambient allowlist ([`RULE_ENV_ALLOWLIST`] plus every `LC_*`),
+/// 2. any [`ENV_PASSTHROUGH_ENV`] names the operator opted in, and
+/// 3. the declared `envs` map last, so a rule's own `envvars`
+///    (and the sensitive-value + `TMPDIR`/`TMP`/`TEMP` injection layered
+///    onto it by the caller) always wins over the ambient allowlist.
+///
+/// Shared by every rule-shell spawn site: [`spawn_rule_shell`] is the one
+/// choke point covering the rule command, `pre_exec`, rule-level hooks,
+/// and workflow-level hooks, so this policy is defined exactly once
+/// (invariant "Reuse, never retype"). Env setup/teardown/verify commands
+/// (`sh -c` for conda/pixi/venv tooling) deliberately do NOT go through
+/// this helper — they are engine tooling, not workflow-authored commands.
+pub(super) fn apply_rule_env_allowlist(cmd: &mut Command, envs: &HashMap<String, String>) {
+    apply_rule_env_allowlist_with(cmd, envs, &env_passthrough_names());
+}
+
+/// The policy body of [`apply_rule_env_allowlist`], with the operator
+/// passthrough list passed in explicitly. Split out so tests can assert the
+/// re-admission rule against a synthetic list — `std::env::set_var` is
+/// process-wide, and this crate is `#![forbid(unsafe_code)]`, so tests may
+/// not mutate the ambient environment to drive the escape hatch. Production
+/// always reaches this through [`apply_rule_env_allowlist`].
+pub(super) fn apply_rule_env_allowlist_with(
+    cmd: &mut Command,
+    envs: &HashMap<String, String>,
+    passthrough: &[String],
+) {
+    cmd.env_clear();
+    // Ambient allowlist: the bare minimum a POSIX shell needs. `var_os`
+    // (not `var`) so a non-UTF-8 value is passed through verbatim.
+    for key in RULE_ENV_ALLOWLIST {
+        if let Some(value) = std::env::var_os(key) {
+            cmd.env(key, value);
+        }
+    }
+    // Locale family (`LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, …): matched by
+    // prefix so a new `LC_*` variable needs no edit here.
+    for (key, value) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("LC_") {
+            cmd.env(&key, value);
+        }
+    }
+    // Operator escape hatch: re-admit named ambient variables.
+    for name in passthrough {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
+    }
+    // Declared environment last — it overrides the ambient allowlist.
+    cmd.envs(envs);
+}
+
 /// Spawn a rule command under `bash -c`, falling back to `sh -c` on
 /// systems without bash (minimal containers). Upstream workflows rely on
 /// bash features (process substitution `<(…)`, brace expansion) that
@@ -3833,7 +3936,10 @@ pub(super) fn spawn_rule_shell(
         // active_pids for the explicit tree kill; this is the
         // task-lifetime backstop that also covers pre_exec and hooks.
         c.kill_on_drop(true);
-        c.arg("-c").arg(cmd).current_dir(workdir).envs(envs);
+        c.arg("-c").arg(cmd).current_dir(workdir);
+        // Issue #1108 (RB-15): rule shells get a cleared environment plus
+        // the shared allowlist — never the engine's ambient environment.
+        apply_rule_env_allowlist(&mut c, envs);
         // stdin is explicitly null (issue #101): tokio's default is INHERIT,
         // so a TTY-launched `oxo-flow run` would hand the terminal to every
         // rule — stdin-polling tools can park forever on it. Null stdin is
@@ -4671,8 +4777,9 @@ pub fn expand_placeholders(cmd: &str, values: &HashMap<String, String>) -> Strin
 /// Execute a workflow-level terminal hook (`on_complete` / `on_error`) in
 /// the workflow root. Best-effort like rule hooks: a failing hook is a
 /// warning, never a run-status change. `tmp_dir` routes the hook's scratch
-/// the same way as rule shells (issue #907) — pass `None` to leave the
-/// ambient environment untouched.
+/// the same way as rule shells (issue #907) — pass `None` to inject no temp
+/// variables. Either way the hook runs under the cleared-environment
+/// allowlist (issue #1108), not the engine's ambient environment.
 pub async fn run_workflow_hook(
     cmd: &str,
     workdir: &std::path::Path,
@@ -6301,6 +6408,227 @@ mod tests {
                 .contains("s3cr3t-token-42"),
             "the recorded command must not carry the secret: {:?}",
             record.command
+        );
+    }
+
+    /// Issue #1108 (RB-15): the shared helper clears the ambient environment.
+    /// Only the base allowlist (`PATH`/`HOME`/`LANG`/`LC_*`) plus an explicit
+    /// passthrough list may survive into the child command — never the
+    /// engine's credentials. Driven at the `Command`-builder level (not by
+    /// mutating `std::env`, which is `unsafe` in edition 2024 and forbidden
+    /// here): whatever this test process carries, nothing outside the allowed
+    /// families may appear.
+    #[test]
+    fn apply_rule_env_allowlist_clears_ambient_environment() {
+        let envs = HashMap::new();
+        let mut cmd = Command::new("sh");
+        apply_rule_env_allowlist_with(&mut cmd, &envs, &[]);
+        // `env_clear()` + re-add: `get_envs()` exposes the exact set handed
+        // to the child. Any name outside {PATH, HOME, LANG, LC_*} proves the
+        // clear did not happen (or leaked an unlisted credential such as
+        // ANTHROPIC_AUTH_TOKEN).
+        let kept: Vec<String> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for name in &kept {
+            let allowed =
+                matches!(name.as_str(), "PATH" | "HOME" | "LANG") || name.starts_with("LC_");
+            assert!(
+                allowed,
+                "an ambient variable outside the allowlist reached the child: {kept:?}"
+            );
+        }
+        // No credential canary may appear regardless of what this process
+        // happens to carry.
+        assert!(
+            !kept.iter().any(|k| k == "ANTHROPIC_AUTH_TOKEN"),
+            "an ambient credential must never reach the child: {kept:?}"
+        );
+    }
+
+    /// Issue #1108: the declared `envs` map always reaches the child and is
+    /// applied last, so it overrides the ambient allowlist. Asserted on the
+    /// command's final environment rather than an executed shell so the test
+    /// stays independent of any particular shell being installed.
+    #[test]
+    fn apply_rule_env_allowlist_keeps_declared_and_tmpdir_vars() {
+        let envs = HashMap::from([
+            ("MY_DECLARED_VAR".to_string(), "declared-value".to_string()),
+            ("TMPDIR".to_string(), "/scratch/oxo".to_string()),
+            ("TMP".to_string(), "/scratch/oxo".to_string()),
+            ("TEMP".to_string(), "/scratch/oxo".to_string()),
+        ]);
+        let mut cmd = Command::new("sh");
+        apply_rule_env_allowlist_with(&mut cmd, &envs, &[]);
+        let found: HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            found.get("MY_DECLARED_VAR").map(String::as_str),
+            Some("declared-value"),
+            "a declared env var must reach the child"
+        );
+        for key in ["TMPDIR", "TMP", "TEMP"] {
+            assert_eq!(
+                found.get(key).map(String::as_str),
+                Some("/scratch/oxo"),
+                "the tmp-dir triple must reach the child: {found:?}"
+            );
+        }
+    }
+
+    /// Issue #1108: the `OXO_FLOW_ENV_PASSTHROUGH` escape hatch re-admits a
+    /// listed ambient variable; a name not listed stays hidden. The
+    /// passthrough list is passed in explicitly (production derives it from
+    /// the env var) so no unsafe process-global mutation is needed.
+    #[test]
+    fn apply_rule_env_allowlist_honours_passthrough_list() {
+        // `PWD` is set in every spawned process but is NOT in the base
+        // allowlist, so its presence or absence is decided solely by the
+        // passthrough list — exactly the rule under test.
+        let ambient_name = "PWD";
+        if std::env::var_os(ambient_name).is_none() {
+            // No such ambient variable in this process; the re-admission
+            // rule is vacuously satisfied and there is nothing to assert.
+            return;
+        }
+        let envs = HashMap::new();
+
+        let mut listed = Command::new("sh");
+        apply_rule_env_allowlist_with(&mut listed, &envs, &[ambient_name.to_string()]);
+        let kept: Vec<String> = listed
+            .as_std()
+            .get_envs()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            kept.iter().any(|k| k == ambient_name),
+            "a passthrough-listed ambient variable must be re-admitted: {kept:?}"
+        );
+
+        let mut unlisted = Command::new("sh");
+        apply_rule_env_allowlist_with(&mut unlisted, &envs, &[]);
+        let hidden: Vec<String> = unlisted
+            .as_std()
+            .get_envs()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !hidden.iter().any(|k| k == ambient_name),
+            "an ambient variable that is not listed must stay hidden: {hidden:?}"
+        );
+    }
+
+    /// Issue #1108: the allowlist still admits the minimum a POSIX shell
+    /// needs — `PATH` must reach the rule or no tool could be found.
+    #[tokio::test]
+    async fn rule_shell_keeps_allowlisted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+        let rule = crate::RuleBuilder::new("path_probe")
+            .shell("printf '%s' \"${PATH-unset}\" > out.txt")
+            .output(vec!["out.txt".to_string()])
+            .build();
+        // The rule shells out to `printf` via the shell, which needs PATH.
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            record.status,
+            JobStatus::Success,
+            "stderr: {:?}",
+            record.stderr
+        );
+        let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+        assert_ne!(written, "unset", "an allowlisted PATH must reach the shell");
+        assert!(!written.is_empty(), "PATH must not be empty");
+    }
+
+    /// Issue #1108: a variable a rule declares explicitly still reaches it —
+    /// the declared map is applied last and overrides the ambient allowlist.
+    #[tokio::test]
+    async fn rule_declared_env_still_reaches_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+        let rule = crate::RuleBuilder::new("declared_env_probe")
+            .shell("printf '%s' \"$MY_DECLARED_VAR\" > out.txt")
+            .envvars(HashMap::from([(
+                "MY_DECLARED_VAR".to_string(),
+                "declared-value".to_string(),
+            )]))
+            .output(vec!["out.txt".to_string()])
+            .build();
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            record.status,
+            JobStatus::Success,
+            "stderr: {:?}",
+            record.stderr
+        );
+        let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+        assert_eq!(
+            written, "declared-value",
+            "a declared env var must reach the shell"
+        );
+    }
+
+    /// Issue #1108: the tmp-dir triple from `[engine] tmp_dir` survives the
+    /// environment clear (it is layered onto the declared map by the
+    /// caller), end to end through a real rule shell.
+    #[tokio::test]
+    async fn rule_shell_receives_configured_tmpdir_under_cleared_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let executor = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            tmp_dir: Some(scratch.clone()),
+            ..Default::default()
+        });
+        let rule = crate::RuleBuilder::new("tmp_probe")
+            .shell("printf '%s' \"$TMPDIR\" > out.txt")
+            .output(vec!["out.txt".to_string()])
+            .build();
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            record.status,
+            JobStatus::Success,
+            "stderr: {:?}",
+            record.stderr
+        );
+        let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+        assert_eq!(
+            written,
+            scratch.to_string_lossy(),
+            "the configured tmp_dir must reach the shell under a cleared environment"
+        );
+    }
+
+    /// The passthrough list is comma-separated, whitespace-trimmed, and
+    /// tolerates empty / unset values (pure derivation, no env mutation).
+    #[test]
+    fn parse_env_passthrough_list() {
+        assert!(parse_env_passthrough(None).is_empty());
+        assert!(parse_env_passthrough(Some("")).is_empty());
+        assert!(parse_env_passthrough(Some(" , ,")).is_empty());
+        assert_eq!(
+            parse_env_passthrough(Some("A, B ,C")),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()]
         );
     }
 

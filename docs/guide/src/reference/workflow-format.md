@@ -3560,6 +3560,35 @@ Notes:
   absolute, `~` and `..` are not expanded, and a relative value anchors to
   the process working directory — unlike the config value, which anchors
   to the workflow file's directory.
+- **Rule shells run under a cleared environment (issue #1108, RB-15).**
+  Every rule shell, `pre_exec` hook, rule-level `on_success`/`on_failure`
+  hook, and workflow-level `on_complete`/`on_error` hook starts from an
+  empty environment plus a fixed allowlist — it never inherits the
+  engine's ambient environment. The allowlist is `PATH`, `HOME`, `LANG`,
+  every `LC_*` variable, the rule's own declared `envvars` (applied last,
+  so they win), and the `TMPDIR`/`TMP`/`TEMP` triple from `tmp_dir`. This
+  closes the credential-leak channel where a rule with no declared
+  environment could read the engine's API keys and cloud tokens straight
+  out of its process environment. Workflows that legitimately need an
+  ambient variable opt it back in per invocation with
+  `OXO_FLOW_ENV_PASSTHROUGH` (comma-separated names, e.g.
+  `OXO_FLOW_ENV_PASSTHROUGH=SLURM_JOB_ID,USER`); it is a host/invocation
+  concern rather than a portable workflow property, so it is deliberately
+  an environment variable and not a `[engine]` key. Names not listed
+  stay hidden. Engine tooling commands (conda/pixi/venv env setup,
+  teardown, and `env_verify`) spawn through a different path and keep the
+  ambient environment.
+- **HPC job scripts apply the same allowlist (issue #1108, RB-15).**
+  `oxo-flow cluster submit` wraps the rule command — and the array
+  dispatch line — in an explicit `env -i` prefix admitting only the
+  allowlisted names and the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, so
+  SLURM/PBS/SGE/LSF jobs do not inherit the submitting shell's environment
+  through the schedulers' export-by-default behavior (`--export=ALL`,
+  `-V`, `-env`). See
+  [the run command reference](../commands/run.md#hpc-cluster-submissions).
+  Container and cloud backends (docker, singularity, Kubernetes, AWS
+  Batch, GCP Batch) do **not** yet route through the shared policy — they
+  are clean only because they forward no ambient environment.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from
