@@ -3171,6 +3171,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-error-recovery-ai-recover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI error recovery (--ai-recover)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#exit-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5166,6 +5177,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-error-recovery-ai-recover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI error recovery (--ai-recover)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#exit-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5403,7 +5425,13 @@ keys matching nothing declared keep the literal spelling.</p>
 <td><code>--ai-recover</code></td>
 <td>—</td>
 <td>—</td>
-<td>Enable AI error recovery on rule failure</td>
+<td>Enable AI error recovery on rule failure (see <a href="#ai-error-recovery-ai-recover">AI error recovery</a>)</td>
+</tr>
+<tr>
+<td><code>--no-ai-recover</code></td>
+<td>—</td>
+<td>—</td>
+<td>Disable AI error recovery for this invocation, including the workflow's <code>[ai] enabled</code> auto-detect. The verified-repair loop passes this flag to its verification rerun so a fixed run can never start another repair cycle (see <a href="#ai-error-recovery-ai-recover">AI error recovery</a>)</td>
 </tr>
 <tr>
 <td><code>--ai-max-retries</code></td>
@@ -5496,6 +5524,13 @@ appends the summary, it does not switch the run to machine-only mode.</p>
 as the report's Benchmarks table; it is empty on aborted paths and on
 cluster runs (use the report's sacct-based Resource Accounting section
 there).</p>
+<p>When the verified-repair loop applied an AI fix and ran its verification
+rerun (see <a href="#ai-error-recovery-ai-recover">AI error recovery</a>), the document
+also carries a <code>repair</code> object (<code>applied</code>, <code>session_id</code>, <code>rerun_attempted</code>,
+<code>rerun_succeeded</code>). On a verified repair (<code>rerun_succeeded: true</code>) the status
+is the normal <code>"completed"</code> — the rerun finished the workflow with zero
+failures — with the counters describing the final state (failed <code>0</code>, blocked
+<code>0</code>); <code>repair</code> is what distinguishes a verified-repair run from a clean pass.</p>
 <h3 id="quick-reference">Quick reference<a class="headerlink" href="#quick-reference" title="Permanent link">#</a></h3>
 <p>Common flags at a glance — every flag is documented in the
 <a href="#options">Options</a> table above and the sections below.</p>
@@ -6928,6 +6963,52 @@ the same plan; invalidating the checkpoint rule revokes its samples until it
 re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
+<h2 id="ai-error-recovery-ai-recover">AI error recovery (<code>--ai-recover</code>)<a class="headerlink" href="#ai-error-recovery-ai-recover" title="Permanent link">#</a></h2>
+<p><code>--ai-recover</code> turns a rule failure into a bounded diagnose → apply →
+verify loop. AI can also activate implicitly: a workflow with
+<code>[ai] enabled = true</code> runs recovery on failure without the flag. The write
+authorization comes from <code>[ai] auto_fix</code> (see
+<a href="../../reference/workflow-format/#ai--ai-companion-settings">workflow-format</a>);
+in every mode the model's own safety verdict and full workflow validation
+gate the write, and an unauthorized or refused fix never touches the file.</p>
+<p>When a required rule aborts the run and recovery is active:</p>
+<ol>
+<li>The failure is diagnosed (<code>--ai-max-retries</code> bounds failed diagnosis
+   calls) and a fix is proposed.</li>
+<li>The resolved <code>auto_fix</code> mode decides whether the fix is written: <code>always</code>
+   applies safe fixes automatically; <code>ask</code> prompts y/N on an interactive
+   terminal and is denied headless; <code>never</code> only reports. The generated TOML
+   must still validate as a complete workflow before it lands.</li>
+<li>When the fix is applied, the engine prints <code>REPAIR_APPLIED session_id=&lt;id&gt;</code>
+   — one line, on stderr and in the run log. These <code>REPAIR_*</code> prefixes are a
+   stable machine-readable contract (automation and eval harnesses parse
+   them verbatim; they are never colored or reworded).</li>
+<li>The engine then attempts <strong>one</strong> verification rerun with the updated
+   workflow: a subprocess <code>oxo-flow run &lt;workflow&gt; --resume-failed
+   --no-ai-recover</code> against the same checkpoint — succeeded rules stay
+   skipped, failed rules re-run, logs interleave with the parent's. The
+   rerun's outcome is narrated as <code>REPAIR_RERUN_SUCCEEDED &lt;detail&gt;</code>,
+   <code>REPAIR_RERUN_FAILED &lt;detail&gt;</code> (exit code included), or
+   <code>REPAIR_RERUN_SKIPPED &lt;reason&gt;</code> (e.g. the loop guard, or the binary
+   could not be resolved).</li>
+<li>The outcome is recorded in the checkpoint's <code>repair_record</code>:
+   <code>{applied, session_id, rerun_attempted, rerun_succeeded, detail,
+   timestamp}</code>. Legacy checkpoints without the field load unchanged, and
+   the report's <code>ai-repair</code> section surfaces the record (see
+   <a href="../report/"><code>report</code></a>).</li>
+</ol>
+<p>Outcome semantics: a rerun that completes the workflow exits <strong>0</strong> — the
+run finishes successfully (<code>✓ repair verified — rerun succeeded</code>, and the
+<code>--json</code> summary carries <code>"status": "completed"</code> with a <code>repair</code> object);
+a failed rerun keeps the ordinary failure path (non-zero exit,
+<code>REPAIR_RERUN_FAILED</code>).</p>
+<p>The loop is bounded by construction: at most one verification rerun per run
+invocation, enforced by the <code>--no-ai-recover</code> flag the rerun child receives
+and an internal <code>OXO_FLOW_REPAIR_RERUN</code> guard variable. A rerun therefore
+never diagnoses, never rewrites the workflow, and never starts another
+rerun — it only verifies the fix that was already authorized. <code>--no-ai-recover</code>
+also disables recovery for a normal invocation (including the <code>[ai] enabled</code>
+auto-detect).</p>
 <h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h2>
 <table>
 <thead>

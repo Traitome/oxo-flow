@@ -4322,7 +4322,10 @@ ends with a <strong>Done when</strong> condition — do not proceed without it.<
 <li>On failure: read structured diagnostics, diagnose, fix, re-run the static
   gates, then resume — <code>oxo-flow resume &lt;checkpoint&gt;</code> (or <code>run --resume-failed</code>)
   (checkpoint avoids recompute). Optional AI recovery:
-  <code>run --ai-recover --ai-max-retries 3</code>.</li>
+  <code>run --ai-recover --ai-max-retries 3</code>. An applied fix is verified by one
+  automatic rerun: the engine emits <code>REPAIR_APPLIED</code> then
+  <code>REPAIR_RERUN_SUCCEEDED</code>/<code>REPAIR_RERUN_FAILED</code>/<code>REPAIR_RERUN_SKIPPED</code>
+  contract lines and records <code>repair_record</code> in the checkpoint.</li>
 <li>Retry budget: max 3 correction loops, then escalate to the human.</li>
 <li>Done when: all rules complete, evidenced by checkpoint state.</li>
 </ul>

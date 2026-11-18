@@ -5148,6 +5148,10 @@ fix is written atomically with a <code>&lt;workflow&gt;.bak</code> guard beside 
   safety assessment is only displayed, never written)</li>
 <li><code>never</code> — only report, never modify</li>
 </ul>
+<p>An applied fix triggers the verified-repair loop regardless of the mode that
+authorized it: one bounded verification rerun with the updated workflow, then
+the outcome lands in the checkpoint's <code>repair_record</code> (see the recovery flow
+below and <a href="../../commands/run/#ai-error-recovery-ai-recover"><code>run --ai-recover</code></a>).</p>
 <p>Workflow-level provider/model selection is still not guaranteed to reconfigure
 the CLI runtime — treat that setting as advisory until the remaining audit
 gates close.</p>
@@ -5661,6 +5665,18 @@ unchanged.</p>
    (<code>archive_before_modify</code>) and a sibling <code>&lt;workflow&gt;.bak</code>. A repair is not
    described as fixed until the complete workflow validates, the applied diff
    is reviewed, and a rerun verifies its outputs</li>
+<li><strong>Verified repair (issue #1164)</strong>: when the fix is written, the engine
+   prints <code>REPAIR_APPLIED session_id=&lt;id&gt;</code> and attempts ONE bounded
+   verification rerun with the updated workflow
+   (<code>run &lt;workflow&gt; --resume-failed --no-ai-recover</code> — succeeded rules stay
+   skipped, failed rules re-run). The rerun outcome is narrated with the
+   stable <code>REPAIR_RERUN_SUCCEEDED</code> / <code>REPAIR_RERUN_FAILED</code> /
+   <code>REPAIR_RERUN_SKIPPED</code> prefixes and recorded in the checkpoint's
+   <code>repair_record</code> (<code>{applied, session_id, rerun_attempted, rerun_succeeded,
+   detail, timestamp}</code>); a rerun that completes the workflow exits 0, a
+   failed one keeps the ordinary failure path. The rerun carries
+   <code>--no-ai-recover</code>, so it can never start another repair cycle — the
+   <code>REPAIR_*</code> prefixes are a machine-readable contract, never reworded</li>
 </ol>
 <p>See the CLI/AI blockers in
 <code>docs/superpowers/audits/industrial-scientific-audit-ledger.md</code>.</p>
