@@ -482,6 +482,16 @@ impl StorageBackend for PostgresBackend {
         // `NOT EXISTS` guarded insert races under READ COMMITTED — so demote
         // all but the earliest live row before pinning the invariant with
         // the partial unique indexes. A clean database demotes nothing.
+        //
+        // Block concurrent writers for the duration of the repair + index
+        // creation: without the lock, a live server (multi-instance upgrade)
+        // could insert a duplicate scope between the demote and the unique
+        // index, making bootstrap fail. The lock is released at commit.
+        sqlx::query("LOCK TABLE runs IN SHARE ROW EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG admission migration (lock): {e}"))?;
+
         let demoted_pipeline = sqlx::query(
             r#"UPDATE runs
                   SET status = 'failed', phase = 'failed',
