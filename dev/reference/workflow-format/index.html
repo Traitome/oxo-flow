@@ -8332,6 +8332,31 @@ the container when the image provides it (falling back to <code>sh</code> otherw
 nf-core-derived images ship bash, and their scripts rely on bash features
 (<code>set -o pipefail</code>, <code>[[ ]]</code>) that the container default <code>sh</code> (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.</p>
+<p><strong>Container daemon configuration (issue #1173):</strong> rule shells run under a
+cleared environment (see
+<a href="#engine-runtime-disk-pressure-guard"><code>[engine]</code> — Runtime Disk-Pressure Guard</a>),
+and the local <code>docker run</code> / <code>apptainer exec</code> wrapper executes inside that
+shell. So that a remote docker daemon, an operator-configured image cache,
+or site bind mounts keep working, a rule whose environment kind is
+<code>docker</code> or <code>singularity</code> automatically re-admits these ambient variables
+(when set):</p>
+<ul>
+<li>Docker CLI: <code>DOCKER_HOST</code>, <code>DOCKER_CONFIG</code>, <code>DOCKER_CERT_PATH</code>,
+  <code>DOCKER_TLS_VERIFY</code>, <code>DOCKER_BUILDKIT</code></li>
+<li>Apptainer/Singularity: <code>APPTAINER_CACHEDIR</code>, <code>SINGULARITY_CACHEDIR</code>,
+  <code>APPTAINER_BIND</code>, <code>SINGULARITY_BIND</code>, <code>APPTAINER_TMPDIR</code>,
+  <code>SINGULARITY_TMPDIR</code>, <code>APPTAINER_LOCALCACHEDIR</code>,
+  <code>SINGULARITY_LOCALCACHEDIR</code></li>
+</ul>
+<p>The list is exact-name, never a <code>DOCKER_*</code>/<code>APPTAINER_*</code> prefix — an
+unknown future credential-bearing variable is not admitted by accident —
+and it applies only to container rules: the bare (non-container) path's
+allowlist is unchanged. The rule's declared
+<a href="#environment-variables-envvars"><code>envvars</code></a> still win over the ambient
+copy. Anything else a container tool needs (a proxy setting, a private
+registry token, a site variable) requires a rule-level <code>envvars</code> entry or
+the operator-level <code>OXO_FLOW_ENV_PASSTHROUGH</code> list. No <code>podman</code> backend is
+wired, so <code>PODMAN_*</code> is not admitted.</p>
 <p><strong>Stale pixi.lock fallback:</strong> a rule declared with
 <code>environment = { pixi = "envs/pixi.toml" }</code> installs from the committed
 <code>pixi.lock</code> beside that manifest. When the pinned package builds have
@@ -9149,6 +9174,11 @@ antibody is wanted:</p>
 </span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13" href="#__codelineno-47-13"></a><span class="k">[rules.resources]</span>
 </span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14" href="#__codelineno-47-14"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span><span class="w">  </span><span class="c1"># Override inherited value</span>
 </span></code></pre></div>
+<p><code>extends</code> chains may be multi-level: base rules are resolved first, so a
+grandchild receives values its parent only inherits. The base rule may live in
+an <code>[[include]]</code>d file; when that include declares a <code>namespace</code>, <code>extends</code>
+references to rules inside the same module are qualified automatically
+(<code>base</code> → <code>&lt;namespace&gt;::base</code>).</p>
 <h3 id="priority-and-targeting">Priority and Targeting<a class="headerlink" href="#priority-and-targeting" title="Permanent link">#</a></h3>
 <table>
 <thead>
