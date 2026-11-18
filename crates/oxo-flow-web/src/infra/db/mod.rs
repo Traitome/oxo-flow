@@ -288,6 +288,13 @@ pub trait StorageBackend: Send + Sync {
     /// carries the reason. Returns `true` when a row was updated (issue
     /// #1112 / audit RB-05).
     async fn record_artifacts_incomplete(&self, id: &str, reason: &str) -> Result<bool, String>;
+    /// Delete a run row outright (RB-03 / #1131). A create-run whose
+    /// pre-spawn staging fails after the row was inserted compensates by
+    /// removing the row, so a run that never started cannot survive as a
+    /// ghost `queued` row that the list/cancel endpoints see but nothing
+    /// executes. Dependents with a FK (`run_nodes`) cascade; the durable
+    /// quota reservation has no FK and is released separately by the caller.
+    async fn delete_run(&self, id: &str) -> Result<(), String>;
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String>;
     async fn list_runs_cursor(
         &self,

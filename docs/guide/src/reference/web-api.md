@@ -584,6 +584,32 @@ working directory, so `metadata_file` and relative input paths resolve the
 same way they do on the CLI. Files already present in the workdir are never
 overwritten.
 
+Run creation fails **closed** before the executor is spawned (issue #1131 /
+audit RB-03). A create whose pre-spawn staging cannot complete answers
+non-2xx instead of starting a run with missing sources, and compensates so
+no ghost `queued` row survives:
+
+- A failure to materialize the workflow source, any `include_files`
+  entry beside `workflow.oxoflow`, or the effective resolved-workflow
+  snapshot answers
+  `500 {"code": "RUN_ERROR", "message": "Failed to materialize …"}`, and a
+  failure to stage uploaded inputs answers
+  `500 {"code": "RUN_ERROR", "message": "Failed to stage uploaded inputs for run <id>"}`.
+- On any of those failures the handler releases the admitted spawn
+  reservation, deletes the just-inserted run row, and removes the run's
+  workdir — so a failed admission leaves no trace. The same compensation
+  covers the cluster-resolution paths: a `cluster_id` that fails to load
+  (`500 DB_ERROR`) or resolves to no enabled cluster (`404 CLUSTER_NOT_FOUND`)
+  also removes the row and workdir rather than leaving a ghost `queued` run
+  nothing will ever execute. (Orphan recovery scans `running`/`paused`
+  rows only; a `queued` row that never spawned would otherwise be
+  unreachable, which is why the row is removed rather than left behind.)
+- The spawn happens only after the workflow, its includes, the resolved
+  snapshot, the staged inputs, and the run row are durably committed, so a
+  client never sees a `2xx` for a run whose workdir is incomplete. A losing
+  concurrent create still answers `409` with no trace (see the
+  saved-pipeline slot rule above).
+
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
 the TOML still comes from `toml_content`. Every run created through this
 endpoint, saved-pipeline or ad-hoc, gets its own immutable workdir
