@@ -485,7 +485,7 @@ Required exit evidence:
 
 - A rule with no declared environment cannot observe sentinel ambient secrets.
 - Explicit declarations expose only the named variables.
-- Local, container, HPC, and cloud execution paths share the same tested allowlist policy.
+- Local and HPC execution paths share the same tested allowlist policy. Container (docker/singularity) and cloud (k8s/aws-batch/gcp-batch) dispatch paths do NOT yet route through the shared allowlist and are clean only by omission — bringing them under the same policy is still required.
 
 ---
 
