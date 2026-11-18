@@ -4994,6 +4994,24 @@ job. A run stopped by SIGINT/SIGTERM/SIGHUP exits <code>128 + signum</code>
 interrupted rule is <code>required = false</code> — an interrupt is never
 reported as a completed run.</p>
 </div>
+<div class="admonition warning">
+<p class="admonition-title"><code>sensitive = true</code> values need an operator-side secret on cloud backends</p>
+<p>Cloud runs (<code>run --profile &lt;NAME&gt;</code> with <code>[cluster] backend = "kubernetes"</code>,
+<code>"aws-batch"</code>, or <code>"gcp-batch"</code>, and <code>cluster submit -b</code> with the same
+backends) route every <code>sensitive = true</code> config value out of the job body
+before the manifest is generated: the body carries only an
+<code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> reference. Names are assigned longest-value-first
+(then lexically; values under 4 characters stay on the command line), and
+the same names are used across all rules and array elements. Supply the
+value through the backend's own secret channel — a Kubernetes Secret
+named <code>oxoflow-secrets</code> (one key per variable name), the AWS Batch job
+definition's <code>containerProperties.secrets</code>, or GCP Batch
+<code>taskSpec.environment.secretVariables</code> — or the reference expands empty
+and the rule fails. Details:
+<a href="../../reference/workflow-format/#config-configuration-variables">workflow-format: <code>[config]</code></a>.
+HPC scheduler scripts (SLURM/PBS/SGE/LSF) still materialize the value in
+the generated script; that half of the hardening is not yet done.</p>
+</div>
 <div class="admonition tip">
 <p class="admonition-title">Check resource availability</p>
 <p>Use <code>sinfo</code> (SLURM), <code>pbsnodes</code> (PBS), or <code>qhost</code> (SGE) to verify available resources before submitting.</p>

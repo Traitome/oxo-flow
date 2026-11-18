@@ -7456,6 +7456,41 @@ carry metadata:</p>
 <h3 id="usage-in-rules">Usage in Rules<a class="headerlink" href="#usage-in-rules" title="Permanent link">#</a></h3>
 <p>Values are accessible as <code>{config.&lt;name&gt;}</code> in shell commands, input/output
 paths, and <code>when</code> conditions:</p>
+<blockquote>
+<p><strong><code>sensitive = true</code> and execution artifacts (issue #1120).</strong> A sensitive
+value is not only masked in captured output — on the cloud cluster backends
+(<code>run --profile &lt;NAME&gt;</code> with <code>[cluster] backend = "kubernetes"</code>,
+<code>"aws-batch"</code>, or <code>"gcp-batch"</code>, and the same backends via
+<code>cluster submit -b …</code>) it is also routed out of the rendered job body
+before any manifest is built. Each value becomes a numbered
+<code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> environment reference, identical across every rule
+and every array element. Names are assigned once per run: values are
+ordered longest-first (then lexically), and values shorter than 4
+characters stay on the command line because they cannot be replaced
+safely. The value itself must come from the backend's secret channel:</p>
+<ul>
+<li><strong>Kubernetes</strong> — the manifest attaches <code>env[].valueFrom.secretKeyRef</code>
+  pointing at the Secret <code>oxoflow-secrets</code> (key = the variable name).
+  Create it in the job's namespace before submitting:
+  <code>kubectl create secret generic oxoflow-secrets --from-literal=OXO_FLOW_SENSITIVE_0=&lt;value&gt;</code>.</li>
+<li><strong>AWS Batch</strong> — the SubmitJob payload has no secrets field; map each
+  <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> name on the job definition's
+  <code>containerProperties.secrets</code> (or <code>environment</code>).</li>
+<li><strong>GCP Batch</strong> — set <code>taskSpec.environment.secretVariables</code> at submission,
+  pointing each name at
+  <code>projects/&lt;PROJECT&gt;/secrets/&lt;SECRET&gt;/versions/&lt;VERSION&gt;</code> and granting the
+  Batch service account <code>roles/secretmanager.secretAccessor</code>. The engine
+  does not know the project, so it does not invent a path; a hand-kept
+  submission wrapper is the place to add it.</li>
+</ul>
+<p>Local <code>docker</code>/<code>singularity</code> runs forward the same variables by name
+(<code>docker run -e NAME</code>, and <code>APPTAINERENV_NAME</code>/<code>SINGULARITYENV_NAME</code> in the
+child environment), so the value never enters the container argv either.
+Without the operator-side secret the reference expands empty and the rule
+fails — loudly, instead of leaking the value into the artifact. HPC
+job-script bodies (SLURM/PBS/SGE/LSF) are <strong>not</strong> covered yet; that half of
+RB-12 remains open.</p>
+</blockquote>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"blast"</span>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"blastn -db {config.database} -evalue {config.threshold} -query {input} -out {output}"</span>
