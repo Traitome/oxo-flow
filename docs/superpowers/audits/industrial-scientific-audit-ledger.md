@@ -396,7 +396,7 @@ Evidence tests:
 Docs: `docs/guide/src/reference/web-api.md` → "Quota" (durable/atomic
 semantics + "Declared-resource enforcement"); 
 `docs/guide/src/reference/web-system-architecture.md` → "Durable runtime
-state". Commit binding: __COMMIT__.
+state". Commit binding: `4dedcbee4418c37672d589d55bbb63938779734c`.
 
 ### RB-10: Cross-platform editing can silently destroy scientific semantics
 
