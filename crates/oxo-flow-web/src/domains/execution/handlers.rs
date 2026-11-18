@@ -94,19 +94,48 @@ pub(crate) fn require_run_mutator(
 /// (issue #738).
 fn quota_usage_for(toml: &str) -> (u32, u64) {
     oxo_flow_core::config::WorkflowConfig::parse(toml)
-        .map(|wf| {
-            let threads: u32 = wf.rules.iter().map(|r| r.effective_threads().max(1)).sum();
-            let memory_mb: u64 = wf
-                .rules
-                .iter()
-                .filter_map(|r| {
-                    r.effective_memory()
-                        .and_then(oxo_flow_core::scheduler::parse_memory_mb)
-                })
-                .sum();
-            (threads.max(1), memory_mb)
-        })
+        .map(|wf| quota_usage_for_config(&wf))
         .unwrap_or((1, 0))
+}
+
+/// Declared resources of an already-resolved [`WorkflowConfig`].
+///
+/// Used where the resolved graph is available (include expansion) so the
+/// quota and the OS memory ceiling account for rules declared by included
+/// modules — deriving from the host TOML alone under-budgets (and would
+/// under-enforce) any workflow whose includes carry their own
+/// `[rules.resources]` (AGENTS invariant: expand before deriving).
+fn quota_usage_for_config(wf: &oxo_flow_core::config::WorkflowConfig) -> (u32, u64) {
+    // Saturating: a hostile or generated workflow must not overflow the
+    // budget arithmetic (the limit comparison would then wrap).
+    let threads = wf.rules.iter().fold(0u32, |acc, r| {
+        acc.saturating_add(r.effective_threads().max(1))
+    });
+    let memory_mb = wf.rules.iter().fold(0u64, |acc, r| {
+        let declared = r
+            .effective_memory()
+            .and_then(oxo_flow_core::scheduler::parse_memory_mb)
+            .unwrap_or(0);
+        acc.saturating_add(declared)
+    });
+    (threads.max(1), memory_mb)
+}
+
+/// Budget a retried/resumed run from its workdir's workflow file when one
+/// is present: that file resolves the same includes the original run
+/// materialized, so included rules' resource declarations are counted. Any
+/// read/parse failure falls back to the stored host snapshot (the run
+/// would fail in the CLI for the same reason, so an under-budgeted fallback
+/// is not the error to surface).
+fn quota_usage_for_run(run: &models::RunRow) -> (u32, u64) {
+    run.workdir
+        .as_deref()
+        .map(std::path::Path::new)
+        .map(|dir| dir.join("workflow.oxoflow"))
+        .filter(|path| path.is_file())
+        .and_then(|path| oxo_flow_core::config::WorkflowConfig::from_file(&path).ok())
+        .map(|wf| quota_usage_for_config(&wf))
+        .unwrap_or_else(|| quota_usage_for(&run.pipeline_snapshot))
 }
 
 /// Light shape gate for `config_overrides` (full semantics live in the
@@ -216,6 +245,69 @@ memory = \"64G\"
         let (_threads, memory_mb) = quota_usage_for(toml_resources_only);
         assert_eq!(memory_mb, 64 * 1024, "resources-only rules must count");
     }
+
+    /// RB-09 (#1133): included modules can declare their own resources, so
+    /// the quota charge and the OS memory ceiling must be derived from the
+    /// RESOLVED workflow. Budgeting the host TOML alone under-counts (and,
+    /// with enforcement, would install a ceiling below the included rules'
+    /// declaration).
+    #[test]
+    fn resolved_quota_counts_include_declared_resources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("module.oxoflow"),
+            "\
+[workflow]
+name = \"quota-module\"
+version = \"1.0.0\"
+description = \"include module\"
+author = \"tests\"
+
+[[rules]]
+name = \"module_rule\"
+output = [\"m.txt\"]
+shell = \"echo m\"
+
+[rules.resources]
+memory = \"2G\"
+threads = 3
+",
+        )
+        .expect("write module");
+        let host = "\
+[workflow]
+name = \"quota-include\"
+version = \"1.0.0\"
+description = \"include fixture\"
+author = \"tests\"
+
+[[include]]
+path = \"module.oxoflow\"
+
+[[rules]]
+name = \"host_rule\"
+output = [\"h.txt\"]
+shell = \"echo h\"
+
+[rules.resources]
+memory = \"1G\"
+threads = 2
+";
+        let host_path = dir.path().join("workflow.oxoflow");
+        std::fs::write(&host_path, host).expect("write host");
+
+        // The host-only parse is what the pre-#1133 budget used; it misses
+        // the module's 2 GB / 3 threads entirely.
+        assert_eq!(quota_usage_for(host), (2, 1024));
+
+        let resolved =
+            oxo_flow_core::config::WorkflowConfig::from_file(&host_path).expect("includes resolve");
+        assert_eq!(
+            quota_usage_for_config(&resolved),
+            (5, 3 * 1024),
+            "included rules' declared resources must count"
+        );
+    }
 }
 
 /// Structured 429 for a run-creation budget breach (issue #213).
@@ -242,18 +334,24 @@ fn rate_limited_error(wait_secs: u64, limit: u32) -> (StatusCode, Json<ApiError>
     )
 }
 
-/// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
-/// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
-/// real run, so all of them must respect the same budgets, #519).
+/// Apply the #213 per-minute run-creation limiter to a spawn path
+/// (create_run, retry, resume-checkpoint — all of them spawn a real run, so
+/// all of them must respect the same budgets, #519).
 ///
 /// The limiter instance arrives as a request extension installed by
 /// `server::build_router`. A missing instance is a layer-order wiring bug,
 /// not a license to skip the budget: fail loud and closed, the same
 /// contract as the request-rate middleware (issue #79 P1-04).
-fn check_spawn_budget(
+///
+/// This is deliberately the ONLY budget check that runs before request
+/// validation: it is cheap (in-process) and stateless, so burning allowance
+/// on a request that later fails validation matches the documented
+/// contract. The quota check cannot be split like that — it mutates durable
+/// state — so it goes through [`admit_spawn_budget`] immediately before the
+/// run row is claimed.
+fn check_run_rate_limit(
     limiter: Option<&RunRateLimiter>,
     user_id: &str,
-    usage: (u32, u64),
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     let Some(limiter) = limiter else {
         tracing::error!(
@@ -269,18 +367,51 @@ fn check_spawn_budget(
     if let Err(wait_secs) = limiter.check(user_id) {
         return Err(rate_limited_error(wait_secs, limiter.limit()));
     }
-    let quota = crate::infra::quota::global_quota_tracker().check(user_id, usage.0, usage.1);
-    if !quota.allowed {
+    Ok(())
+}
+
+/// Atomically admit a spawn against the durable quota (RB-09 / #1133): the
+/// limits check and the run's resource reservation are ONE storage
+/// operation, so two concurrent requests can never both pass a limit of
+/// one. On success the run id owns a reservation that every terminal path
+/// releases (idempotently) through `quota::release_and_complete`.
+///
+/// Callers must release with [`release_spawn_budget`] on any error path
+/// after a successful admission but before the run reaches execution.
+async fn admit_spawn_budget(
+    backend: &dyn crate::infra::db::StorageBackend,
+    run_id: &str,
+    user_id: &str,
+    usage: (u32, u64),
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let admission = crate::infra::quota::admit(Some(backend), run_id, user_id, usage.0, usage.1)
+        .await
+        .map_err(|e| {
+            tracing::error!("Quota admission failed for user {user_id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "Server resource quota store unavailable".into(),
+            )
+        })?;
+    if !admission.allowed {
         return Err(err(
             StatusCode::TOO_MANY_REQUESTS,
             "QUOTA_EXCEEDED",
             format!(
                 "Quota exceeded: {} — see /api/quota for limits",
-                quota.violations.join("; ")
+                admission.violations.join("; ")
             ),
         ));
     }
     Ok(())
+}
+
+/// Give back an admission that will not spawn (a later 4xx/5xx path).
+async fn release_spawn_budget(backend: &dyn crate::infra::db::StorageBackend, run_id: &str) {
+    if let Err(e) = crate::infra::quota::release(Some(backend), run_id).await {
+        tracing::warn!("Failed to release quota reservation for run {run_id}: {e}");
+    }
 }
 
 /// Override the process-global run-creation budget without mutating the
@@ -435,15 +566,15 @@ pub async fn create_run(
     // Issue #213: dedicated budget for expensive run creation — separate
     // from the global per-minute request limiter so health checks / reads
     // cannot crowd it out (and vice versa). Checked through the same
-    // `check_spawn_budget` the retry/resume paths use: a hand-rolled copy
+    // `check_run_rate_limit` the retry/resume paths use: a hand-rolled copy
     // here keyed every personal-mode call into an "anonymous" bucket while
     // retry/resume keyed the user id, so the per-minute limits stacked.
-    let quota_usage = quota_usage_for(toml);
-    check_spawn_budget(
-        limiter.as_ref().map(|Extension(l)| &**l),
-        &user.id,
-        quota_usage,
-    )?;
+    // The quota admission (durable, mutating) runs later — see
+    // `admit_spawn_budget` right before the run-row claim.
+    // Re-budgeted from the resolved config below when the workflow has
+    // includes (they can declare their own resources).
+    let mut quota_usage = quota_usage_for(toml);
+    check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
         max_jobs: Some(max_jobs),
@@ -481,8 +612,8 @@ pub async fn create_run(
         ));
     }
 
-    // Quota enforcement (issue #82 P1-9) rides the shared check_spawn_budget
-    // above; the hand-rolled copy that lived here is gone.
+    // Quota enforcement (issue #82 P1-9) is the atomic admission right
+    // before the workdir claim below (RB-09 / #1133).
 
     // Validate BEFORE anything is persisted: `validate_config_overrides`
     // and the two pure include-key gates below answer 400s, and a 400 must
@@ -611,6 +742,11 @@ pub async fn create_run(
                         format!("resolved workflow parse failed: {e}"),
                     )
                 })?;
+            // Expand before deriving (AGENTS invariant): included modules
+            // may declare their own resources, so the quota charge and the
+            // enforced memory ceiling must cover the resolved rule set, not
+            // just the host TOML.
+            quota_usage = quota_usage_for_config(&resolved_config);
             let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
                 &resolved_config.rules,
                 &resolved_config.config_placeholder_values(),
@@ -657,6 +793,12 @@ pub async fn create_run(
             created_at: now_iso(),
             workflow_name: Some(workflow_name),
         };
+        // RB-09 (#1133): the quota check and the reservation are ONE atomic
+        // storage operation, placed after every validation so a 4xx never
+        // has to undo an admission, and before the workdir claim so the
+        // admitted run id is known. A rejected request answers 429 here.
+        admit_spawn_budget(backend.as_ref(), &resp.run_id, &user.id, quota_usage).await?;
+
         // The guarded insert is the atomic workdir claim (same contract as
         // retry/resume-checkpoint): a saved pipeline reuses its persistent
         // workdir, so two concurrent "run again" clicks used to produce two
@@ -674,6 +816,8 @@ pub async fn create_run(
                 materialize_run_sources(&run_dir, &workflow_path, &include_paths).await;
             }
             Ok(false) => {
+                // The run never starts; give the reservation back now.
+                release_spawn_budget(backend.as_ref(), &run.id).await;
                 return Err(err(
                     StatusCode::CONFLICT,
                     "RUN_NOT_TERMINAL",
@@ -686,6 +830,7 @@ pub async fn create_run(
             }
             Err(e) => {
                 tracing::error!("DB error inserting run {}: {e}", run.id);
+                release_spawn_budget(backend.as_ref(), &run.id).await;
                 return Err(err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
@@ -727,14 +872,8 @@ pub async fn create_run(
             Err(e) => tracing::warn!("Could not stage user inputs for run {}: {e}", resp.run_id),
         }
 
-        // Reserve the run's resources in the quota tracker; the executor
-        // releases them on the terminal state.
-        crate::infra::quota::global_quota_tracker().record_start(
-            &user.id,
-            quota_usage.0,
-            quota_usage.1,
-        );
-        crate::infra::quota::reserve(&resp.run_id, &user.id, quota_usage.0, quota_usage.1);
+        // The run's resources were recorded atomically with the admission
+        // above; every terminal path releases them (RB-09 / #1133).
 
         // Remote execution: the local workdir is the staging area; the
         // remote host runs the CLI and its results are pulled back.
@@ -744,13 +883,16 @@ pub async fn create_run(
                 .await
                 .map_err(|e| db_err(format!("DB error loading cluster {cid}: {e}")))?
                 .filter(|c| c.enabled);
-            let cluster_row = cluster_row.ok_or_else(|| {
-                err(
+            let Some(cluster_row) = cluster_row else {
+                // The run row exists but nothing will execute: release the
+                // reservation before the 404 leaves a ghost claim behind.
+                release_spawn_budget(backend.as_ref(), &resp.run_id).await;
+                return Err(err(
                     StatusCode::NOT_FOUND,
                     "CLUSTER_NOT_FOUND",
                     format!("Cluster {cid} not found or disabled"),
-                )
-            })?;
+                ));
+            };
             crate::domains::clusters::remote::spawn_remote_run(
                 resp.run_id.clone(),
                 user.id.clone(),
@@ -790,6 +932,9 @@ pub async fn create_run(
                 // no checkpoint to invalidate. Mid-chain re-entry lives on
                 // the retry path only (issue #1017).
                 from_rule: None,
+                // RB-09 (#1133): the declared total is the OS ceiling the
+                // executor enforces on the spawned tree.
+                memory_limit_mb: quota_usage.1,
             },
         );
     }
@@ -1448,13 +1593,10 @@ pub async fn retry_run(
 
     // A retry spawns a REAL run — it pays the same limiter + quota
     // pre-flight as create_run (#519); looping retry on a cheap failed run
-    // must not buy unbounded process spawns.
-    let quota_usage = quota_usage_for(&run.pipeline_snapshot);
-    check_spawn_budget(
-        limiter.as_ref().map(|Extension(l)| &**l),
-        &user.id,
-        quota_usage,
-    )?;
+    // must not buy unbounded process spawns. The quota admission (durable,
+    // atomic) runs right before the run-row claim below.
+    let quota_usage = quota_usage_for_run(&run);
+    check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
 
     // The retry re-executes in the SAME workdir; an active run would put
     // two CLIs on one checkpoint concurrently (corrupted state, duplicated
@@ -1563,6 +1705,9 @@ pub async fn retry_run(
         finished_at: None,
         created_at: now.clone(),
     };
+    // RB-09 (#1133): atomic durable admission before the claim.
+    admit_spawn_budget(backend.as_ref(), &new_run_id, &user.id, quota_usage).await?;
+
     // The terminal-state check above is TOCTOU: two concurrent retries both
     // read the old row as terminal and both spawn into the same workdir.
     // The guarded insert makes the claim atomic — the loser gets 409.
@@ -1570,6 +1715,7 @@ pub async fn retry_run(
     match claim {
         Ok(true) => {}
         Ok(false) => {
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
             return Err(err(
                 StatusCode::CONFLICT,
                 "RUN_NOT_TERMINAL",
@@ -1581,6 +1727,7 @@ pub async fn retry_run(
         }
         Err(e) => {
             tracing::error!("DB error inserting retry run {new_run_id}: {e}");
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DB_ERROR",
@@ -1588,13 +1735,6 @@ pub async fn retry_run(
             ));
         }
     }
-
-    crate::infra::quota::global_quota_tracker().record_start(
-        &user.id,
-        quota_usage.0,
-        quota_usage.1,
-    );
-    crate::infra::quota::reserve(&new_run_id, &user.id, quota_usage.0, quota_usage.1);
 
     // Issue #1017: when `from_rule` is set the retry semantics change from
     // "re-run the failed set" to "re-run from this rule downstream". The
@@ -1644,6 +1784,8 @@ pub async fn retry_run(
             // Issue #1017: forward the from-rule origin so the CLI's
             // closure invalidation runs before the freshness gate.
             from_rule,
+            // RB-09 (#1133): enforce the declared memory of the retried run.
+            memory_limit_mb: quota_usage.1,
         },
     );
 
@@ -1687,7 +1829,7 @@ pub async fn cancel_run(
     // instead of a 200 the row does not reflect.
     // The quota reservation is released here — the executor's finalize path
     // early-returns for cancelled runs and never reaches its own release.
-    crate::infra::quota::release_and_complete(&id);
+    crate::infra::quota::release_and_complete(&id).await;
     let now = now_iso();
     let cancelled = backend
         .record_run_terminal(&id, "cancelled", "cancelled", &now)
@@ -3103,13 +3245,10 @@ pub async fn resume_checkpoint(
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // A checkpoint resume spawns a REAL run — same budgets as create_run
-    // and retry (#519).
-    let quota_usage = quota_usage_for(&run.pipeline_snapshot);
-    check_spawn_budget(
-        limiter.as_ref().map(|Extension(l)| &**l),
-        &user.id,
-        quota_usage,
-    )?;
+    // and retry (#519). The quota admission (durable, atomic) runs right
+    // before the run-row claim below.
+    let quota_usage = quota_usage_for_run(&run);
+    check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
 
     // The resume spawns a second CLI into the SAME workdir; an active run
     // would put two CLIs on one checkpoint concurrently — the exact hazard
@@ -3169,11 +3308,15 @@ pub async fn resume_checkpoint(
         finished_at: None,
         created_at: now.clone(),
     };
+    // RB-09 (#1133): atomic durable admission before the claim.
+    admit_spawn_budget(backend.as_ref(), &new_run_id, &user.id, quota_usage).await?;
+
     // Same TOCTOU as retry_run: claim the workdir atomically at insert.
     let claim = backend.create_run_if_workdir_idle(&new_run).await;
     match claim {
         Ok(true) => {}
         Ok(false) => {
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
             return Err(err(
                 StatusCode::CONFLICT,
                 "RUN_NOT_TERMINAL",
@@ -3185,6 +3328,7 @@ pub async fn resume_checkpoint(
         }
         Err(e) => {
             tracing::error!("DB error inserting resume run: {e}");
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DB_ERROR",
@@ -3201,12 +3345,6 @@ pub async fn resume_checkpoint(
         "-j".into(),
         jobs.to_string().into(),
     ];
-    crate::infra::quota::global_quota_tracker().record_start(
-        &user.id,
-        quota_usage.0,
-        quota_usage.1,
-    );
-    crate::infra::quota::reserve(&new_run_id, &user.id, quota_usage.0, quota_usage.1);
     crate::executor::spawn_background_run_with_args(
         new_run_id.clone(),
         user.id.clone(),
@@ -3214,6 +3352,7 @@ pub async fn resume_checkpoint(
         "local".to_string(),
         Some(std::path::PathBuf::from(workdir)),
         args,
+        quota_usage.1,
     );
 
     Ok(Json(serde_json::json!({

@@ -795,7 +795,7 @@ async fn mark_failed(run_id: &str, message: &str) {
     tracing::error!("{message}");
     // Quota release must happen even without the SQLite pool — it is
     // in-memory state and leaking it pins resources until restart.
-    crate::infra::quota::release_and_complete(run_id);
+    crate::infra::quota::release_and_complete(run_id).await;
     let end = chrono::Utc::now();
     let end_str = end.to_rfc3339();
     // One backend for the whole helper (mirrors executor::mark_run_failed):

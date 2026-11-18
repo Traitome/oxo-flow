@@ -133,13 +133,20 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
 )]
 /// GET /api/quota — resource quota status for team mode: limits plus the
 /// acting user's current usage, so a quota rejection is explainable.
+///
+/// RB-09 (#1133): when a storage backend is active the durable row is the
+/// source — usage survives restart and is what every instance enforces.
 pub async fn quota_status(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
-    let tracker = crate::infra::quota::global_quota_tracker();
-    let config = tracker.config();
+    let backend = crate::infra::db::global_backend();
+    let config = crate::infra::quota::limits(backend.as_deref())
+        .await
+        .map_err(|e| db_err(format!("DB error reading quota limits: {e}")))?;
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
-    let usage = tracker.get_usage(&user.id);
+    let usage = crate::infra::quota::usage(backend.as_deref(), &user.id)
+        .await
+        .map_err(|e| db_err(format!("DB error reading quota usage: {e}")))?;
     Ok(Json(serde_json::json!({
         "enabled": true,
         "limits": {
@@ -168,12 +175,19 @@ pub async fn quota_status(
     )
 )]
 /// PUT /api/quota — update resource quota limits (admin only).
+///
+/// Persisted through the storage backend when one is active (RB-09 /
+/// #1133): every instance enforces the same limits and they survive
+/// restart. Without a backend the update is process-local only.
 pub async fn update_quota_status(
     headers: axum::http::HeaderMap,
     ApiJson(body): ApiJson<crate::infra::quota::QuotaConfig>,
 ) -> ApiResult<serde_json::Value> {
     crate::domains::auth::handlers::require_admin(&headers).await?;
-    crate::infra::quota::global_quota_tracker().update_config(body.clone());
+    let backend = crate::infra::db::global_backend();
+    crate::infra::quota::save_limits(backend.as_deref(), body.clone())
+        .await
+        .map_err(|e| db_err(format!("DB error persisting quota limits: {e}")))?;
     Ok(Json(serde_json::json!({
         "updated": true,
         "limits": {

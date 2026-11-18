@@ -803,8 +803,8 @@ Content-Type: application/json
 {"skip_succeeded": true}
 ```
 The retry spawns a real run, so it pays the same runs-per-minute
-limiter and the quota pre-flight as run creation — a retry that exceeds
-the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
+limiter and the same atomic quota admission as run creation — a retry that
+exceeds the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
 The endpoint accepts **no repair payload**: the diagnostics `fix_action`
 shown by the monitor is advisory (placeholder values, nothing applies it),
 so the web UI labels its action "Retry unchanged" rather than claiming a
@@ -1535,17 +1535,41 @@ immediate.
 
 ## Quota
 
-Runs pre-flight the quota tracker with the workflow's declared threads and
-memory; over-limit requests get `429 QUOTA_EXCEEDED` with the violation
-list.
+Runs are admitted against a **durable, atomic** per-user quota. The limits
+check and the run's resource reservation commit together in the storage
+backend (SQLite/PostgreSQL), so two concurrent `POST /api/runs` can never
+both pass a limit of one; counters survive server restart, and every server
+instance pointed at the same database enforces the same numbers (RB-09 /
+issue #1133). Over-limit requests get `429 QUOTA_EXCEEDED` with the
+violation list, and a rejected request never inserts a run row.
 
 ```
 GET  /api/quota           # current limits and usage
 PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 ```
 
-`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }` — all four fields are required (no defaults applied server-side).
-Usage is visible at `GET /api/quota` (`{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }`).
+`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }` — all four fields are required (no defaults applied server-side). The limits are persisted through the storage backend (one singleton row), so they survive restart and apply to every instance; on a server running without storage the update stays process-local.
+Usage is visible at `GET /api/quota` (`{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }`) and is read from the durable counters. `runs_today` is a rolling 24-hour window that restarts lazily on the next admission (a restart does not reset it). Every terminal path (completed/failed/cancelled) releases the run's reservation idempotently; reservations whose run row is terminal or missing are reclaimed at server startup.
+
+### Declared-resource enforcement
+
+Declared resources are enforced, not only counted:
+
+- **Memory, Linux local runs**: when a workflow declares memory
+  (`[rules.resources] memory`, or the deprecated per-rule `memory`), the
+  executor installs `RLIMIT_DATA` on the spawned CLI and every rule
+  subprocess at the run's declared total (with a 512 MB floor so the engine
+  itself can start). A process that allocates past the ceiling fails the
+  allocation, so the rule dies and the run fails — observable rejection,
+  not an advisory overage. Runs that declare no memory have no claim to
+  enforce.
+- **Other platforms**: Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` changes with
+  `EINVAL`; there the ceiling remains advisory (the quota counters still
+  apply). See the follow-up tracking issue for portable and remote
+  enforcement.
+- **Remote (cluster) runs**: the local process-tree rlimit does not travel
+  to the cluster host; quota admission still counts them, but the ceiling
+  itself is not yet enforced remotely.
 
 ## Cluster Connections & Remote Execution
 
