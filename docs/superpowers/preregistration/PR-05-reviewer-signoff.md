@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-05 (Task 4.0 required artifact 5 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN (sign-off fields deliberately PENDING) |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -71,7 +72,7 @@ Each campaign needs its own completed row. All fields are mandatory.
 | Field | Value |
 | :--- | :--- |
 | Campaign | #1163 — BioTypes broad truth-set validation |
-| Artifacts reviewed (version) | PR-01 1.0.0, PR-02 1.0.0, PR-03 1.0.0, PR-04 1.0.0, PR-06 1.0.0 |
+| Artifacts reviewed (version) | PR-01 1.0.1, PR-02 1.0.1, PR-03 1.0.1, PR-04 1.0.1, PR-06 1.0.1 |
 | Manifest hash reviewed | PENDING |
 | Reviewer role | Independent scientific reviewer — BioTypes/bioinformatics |
 | Reviewer name | PENDING |
@@ -88,7 +89,7 @@ Each campaign needs its own completed row. All fields are mandatory.
 | Field | Value |
 | :--- | :--- |
 | Campaign | #1164 — applied-repair verified by successful reruns |
-| Artifacts reviewed (version) | PR-01 1.0.0, PR-02 1.0.0, PR-03 1.0.0, PR-04 1.0.0, PR-06 1.0.0 |
+| Artifacts reviewed (version) | PR-01 1.0.1, PR-02 1.0.1, PR-03 1.0.1, PR-04 1.0.1, PR-06 1.0.1 |
 | Manifest hash reviewed | PENDING |
 | Reviewer role | Independent scientific reviewer — AI repair / statistics |
 | Reviewer name | PENDING |
@@ -105,7 +106,7 @@ Each campaign needs its own completed row. All fields are mandatory.
 | Field | Value |
 | :--- | :--- |
 | Campaign | #1165 — corpus-wide Nextflow/Snakemake semantic equivalence |
-| Artifacts reviewed (version) | PR-01 1.0.0, PR-02 1.0.0, PR-03 1.0.0, PR-04 1.0.0, PR-06 1.0.0 |
+| Artifacts reviewed (version) | PR-01 1.0.1, PR-02 1.0.1, PR-03 1.0.1, PR-04 1.0.1, PR-06 1.0.1 |
 | Manifest hash reviewed | PENDING |
 | Reviewer role | Independent scientific reviewer — workflow engines |
 | Reviewer name | PENDING |
@@ -122,7 +123,7 @@ Each campaign needs its own completed row. All fields are mandatory.
 | Field | Value |
 | :--- | :--- |
 | Campaign | #1166 — cross-architecture reproduction measurement |
-| Artifacts reviewed (version) | PR-01 1.0.0, PR-02 1.0.0, PR-03 1.0.0, PR-04 1.0.0, PR-06 1.0.0 |
+| Artifacts reviewed (version) | PR-01 1.0.1, PR-02 1.0.1, PR-03 1.0.1, PR-04 1.0.1, PR-06 1.0.1 |
 | Manifest hash reviewed | PENDING |
 | Reviewer role | Independent scientific reviewer — reproducibility / systems |
 | Reviewer name | PENDING |

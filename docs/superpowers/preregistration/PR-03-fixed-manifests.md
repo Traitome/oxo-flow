@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-03 (Task 4.0 required artifact 3 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN (values marked TBD are deliberately open) |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -62,7 +63,7 @@ without an amendment makes the campaign non-compliant.
 | :--- | :--- | :--- |
 | Model | Provider family: GLM served through the school proxy (OpenAI-compatible route, as in the 2026-11-18 pilot). Exact model identifier was **not recorded** in the pilot and must be recorded for the confirmatory run | Exact identifier TBD — owner: campaign lead; deadline: before data collection |
 | Prompt | The engine's in-repo recovery prompt, identified by source path and SHA-256, plus the `--ai-recover` orchestration policy at the frozen engine commit. No hand-edited prompt is permitted mid-campaign | Source path FIXED by the engine commit; hash recorded in the pre-run manifest |
-| Tool | `oxo-flow` binary at the frozen engine commit; `eval/frontier/fault_injection.py` at its frozen commit; the harness `stubbin/` tools (`samtools`, `gatk`, `bcftools`, `bwa`, `vep`, `tabix`, `featureCounts`, `simtool`) are deterministic stub scripts created by the harness | FIXED for the harness; binary commit recorded pre-run |
+| Tool | `oxo-flow` binary at the frozen engine commit; `eval/frontier/fault_injection.py` at its frozen commit; the harness `stubbin/` tools (nine: `samtools`, `gatk`, `bcftools`, `bwa`, `bwa-mem2`, `vep`, `tabix`, `featureCounts`, `simtool`) are deterministic stub scripts created by the harness | FIXED for the harness; binary commit recorded pre-run |
 | Seed | No provider seed: the Anthropic Messages API (and compatible endpoints) has no seed field, as documented in `eval/frontier/run_eval.py`. Set `[ai] temperature = 0` where the endpoint honors it; measure within-case agreement over R repeats | Temperature FIXED at 0 requested; R and the repeat policy TBD — owner: campaign lead; deadline: before data collection |
 | Hardware | A single named measurement host per confirmatory campaign. The pilot ran on macOS and `tx-ubuntu`; the confirmatory host(s) and whether both are used must be declared. Host identity, kernel, CPU, RAM recorded per case | TBD — owner: campaign lead + infrastructure owner; deadline: before data collection |
 | Dataset | Seeded fault cases with declared runtime class, expected diagnostic code, and executable reference repair. The confirmatory set must be held out from the 2026-11-18 pilot (PR-01 §C2). Stub-tool file-creation behavior is part of the fixed tool manifest | Case set TBD by hash — owner: campaign lead; deadline: before data collection |
@@ -78,7 +79,7 @@ identifier are recorded.
 | :--- | :--- | :--- |
 | Model | None — import and execution are deterministic | FIXED |
 | Prompt | None | FIXED |
-| Tool | Three engines: `oxo-flow` at the frozen engine commit, Nextflow, and Snakemake. Reference-engine versions must be pinned and recorded. Repository evidence already cites Snakemake 9.19.0 in `benches/comparative/README.md`; the Nextflow version used there is not recorded and must be pinned for the campaign | Nextflow version TBD — owner: campaign lead; deadline: before data collection |
+| Tool | Three engines: `oxo-flow` at the frozen engine commit, Nextflow, and Snakemake. The repository reference numbers in `benches/comparative/README.md` record **Nextflow 25.10.4** and **Snakemake 9.19.0**; those are the reference pins. The campaign must additionally record the exact build and container digest used per case | Reference pins 25.10.4 / 9.19.0 FIXED; per-case build/digest pin TBD — owner: campaign lead; deadline: before data collection |
 | Seed | Run-order randomization seed recorded before the first run. Each case's arm order is derived deterministically from that seed | Seed value TBD — owner: campaign lead; deadline: before data collection |
 | Hardware | One host for all arms of a case; same OS, CPU, RAM, storage, scheduler state, and filesystem. Host identity and versions recorded per case | TBD — owner: campaign lead + infrastructure owner; deadline: before data collection |
 | Dataset | Frozen corpus of Nextflow-origin and Snakemake-origin workflows inside the documented supported subset, each with an independently reviewed `.oxoflow` counterpart, inputs, references, container digests or environment locks, and expected declared outputs. Corpus bodies and expected artifact hashes sealed before the run | Corpus composition and size TBD — owner: campaign lead; deadline: before data collection |

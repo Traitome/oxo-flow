@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-02 (Task 4.0 required artifact 2 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -22,7 +23,7 @@ pilot was already observed before this freeze; its disclosure in PR-01
 A case is included only when all of the following hold:
 
 1. It is listed in the pre-run case manifest, whose SHA-256 is sealed
-   before the first confirmatory run (PR-04 §3).
+   before the first confirmatory run (PR-04 §2.2).
 2. Its expected outcome or reference result was authored or independently
    reviewed before the run, with a recorded rationale.
 3. It exercises a capability the campaign names, and its provenance
@@ -198,6 +199,11 @@ replicates.
 - Origin engine and version, container digests or environment locks,
   inputs, reference data, resource limits, and expected declared outputs
   are recorded in the case manifest.
+- The case declares **at least one output**. A workflow with zero declared
+  outputs cannot be counted as vacuously equivalent; it is excluded before
+  the run as INVALID for this endpoint (PR-01 §C3), with the exclusion
+  recorded. If one nevertheless enters the analysis, it counts as
+  non-equivalent.
 - The corpus must include workflows whose sources are Nextflow and
   workflows whose sources are Snakemake; the existing
   `benches/comparative` echo chain is **not** a sufficient corpus (it is

@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-04 (Task 4.0 required artifact 4 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -71,7 +72,7 @@ recorded:
 
 | Check | Command or method | Expected result |
 | :--- | :--- | :--- |
-| Gold-set provenance and negative-name leakage | `make eval-lint` (`python3 eval/scripts/check_gold.py --no-fetch-community`) | Exit 0; no findings |
+| Gold-set provenance and negative-name leakage | `make eval-lint` (`python3 eval/scripts/check_gold.py --no-fetch-community`); requires a built engine binary at `target/debug/oxo-flow` or `--oxo-flow <path>` — run `cargo build -p oxo-flow-cli` first | Exit 0; no findings |
 | Gold evidence integrity (where the campaign touches gold rows) | `python3 eval/scripts/verify_gold.py` | Exit 0; hash consistency holds |
 | Case-text leak into knowledge | Grep the knowledge JSONL and every prompt/skill source for each sealed case ID and a distinctive body fingerprint; record the command and the hit count | Zero hits |
 | Case-text leak into prompts | Grep generation/recovery prompt sources for sealed fingerprints; hash the prompt sources and compare to the manifest | Zero hits; hashes match |

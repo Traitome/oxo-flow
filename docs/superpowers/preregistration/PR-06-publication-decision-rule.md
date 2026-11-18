@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-06 (Task 4.0 required artifact 6 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -22,16 +23,57 @@ pre-registered primary endpoint and the rule in its section:
 
 | Category | Meaning | Publication obligation |
 | :--- | :--- | :--- |
-| **POSITIVE** | The primary endpoint meets the pre-registered threshold, and its 95% CI supports the direction | Publish the measured value, CI, coverage, exclusions, and the bounded claim. No claim beyond the frozen coverage. |
-| **NEGATIVE** | The primary endpoint does not meet the threshold, or the CI supports the opposite direction | Publish with the same prominence as a positive result. The negative statement in the campaign section is the required result statement; it may not be buried, softened to "inconclusive", or omitted. |
-| **INCONCLUSIVE** | The CI spans the threshold, or the pre-declared minimum sample was not reached | Publish the estimate and CI; explicitly state that no capability claim is supported. This is not a negative result and not a positive one. |
-| **INVALID** | A pre-declared validity condition failed (missingness limit, non-verdict limit, leakage breach, protocol deviation, provider outage) | Publish the invalidity reason and the flow table; no endpoint estimate may be presented as the campaign result. |
-| **STOPPED** | A permitted stop under PR-02 §0.3 occurred | Publish the stop reason; no capability claim. |
+| **POSITIVE** | The 95% CI lies entirely on the favorable side of the threshold, including the boundary | Publish the measured value, CI, coverage, exclusions, and the bounded claim. No claim beyond the frozen coverage. |
+| **NEGATIVE** | The 95% CI lies entirely on the unfavorable side of the threshold, excluding the boundary | Publish with the same prominence as a positive result. The negative statement in the campaign section is the required result statement; it may not be buried, softened to "inconclusive", or omitted. |
+| **INCONCLUSIVE** | The CI is neither entirely favorable nor entirely unfavorable under the boundary rules in §0.1: it contains the threshold in its interior or on its unfavorable edge | Publish the estimate and CI; explicitly state that no capability claim is supported. This is not a negative result and not a positive one. |
+| **INVALID** | A pre-declared validity condition failed (missingness limit, non-verdict limit, minimum sample not reached, leakage breach, protocol deviation, provider outage) | Publish the invalidity reason and the flow table; no endpoint estimate may be presented as the campaign result. |
+| **STOPPED** | A permitted stop under PR-02 §0.3 occurred before a complete primary-endpoint dataset existed | Publish the stop reason; no capability claim. |
 
 A negative result is a **complete** result. The research program's change
 discipline (ledger §8) requires it to be reported, and this rule makes the
 negative branch the default outcome statement when the threshold is not
 met, rather than an afterthought.
+
+### 0.1 Ordered evaluation — exactly one category applies
+
+The five categories are decided by the following ordered algorithm. An
+earlier step decides the category and the later steps are not evaluated,
+so the categories are mutually exclusive and exhaustive.
+
+1. **INVALID first.** If any validity condition in PR-02 or the campaign
+   section holds — including a missingness/non-verdict limit breach, the
+   pre-declared minimum sample not being reached, a leakage breach, a
+   system-identity change, or a provider outage — the campaign is
+   **INVALID**, regardless of the point estimate or CI.
+2. **STOPPED second.** If a permitted stop under PR-02 §0.3 occurred and
+   no complete primary-endpoint dataset exists, the campaign is
+   **STOPPED**. A stop condition that is itself an invalidity condition is
+   decided at step 1 as INVALID.
+3. **Campaign-specific precedence.** For #1166, an unstable eligible
+   artifact class decides **NEGATIVE** before the interval partition in
+   step 4 (see §C4). No other campaign has a class-level override.
+4. **Interval partition.** With `τ` fixed before data collection, `L` the
+   exact 95% lower bound, and `U` the exact 95% upper bound:
+   - **Higher is better:** POSITIVE iff `L ≥ τ`; NEGATIVE iff `U < τ`;
+     otherwise INCONCLUSIVE (`L < τ ≤ U`).
+   - **Lower is better:** POSITIVE iff `U ≤ τ`; NEGATIVE iff `L > τ`;
+     otherwise INCONCLUSIVE (`L ≤ τ < U`).
+
+   The three outcomes are mutually exclusive and cover every possible
+   interval with `L ≤ U`. The boundary is inclusive for POSITIVE and
+   exclusive for NEGATIVE. Concretely, higher-is-better: `L = τ` is
+   POSITIVE, and `U = τ` with `L < τ` is INCONCLUSIVE. Lower-is-better:
+   `U = τ` is POSITIVE, and `L = τ` with `U > τ` is INCONCLUSIVE.
+5. **Point estimates never decide.** The point estimate is reported, but
+   it cannot move the category. There is no separate "threshold-fragile"
+   category: an observation that the point estimate meets `τ` while the CI
+   is wide is INCONCLUSIVE under the interval rules above, and a point
+   estimate on the unfavorable side with a CI that clears the boundary is
+   NEGATIVE.
+
+The same algorithm is applied independently to each campaign; the
+campaign sections below add only their threshold name and their explicit
+negative statement.
 
 ## 1. Rules common to every campaign
 
@@ -70,17 +112,14 @@ met, rather than an afterthought.
 independent reviewer; deadline: before data collection). It is the maximum
 acceptable false-accept proportion on expected-reject cases.
 
-**Decision rule.**
+**Decision rule (lower is better; §0.1 order).**
 
-- POSITIVE if the exact 95% upper confidence bound for `FA/(FA+TR)` is at
-  or below `τ_FA`.
-- NEGATIVE if the point estimate exceeds `τ_FA`, or the lower confidence
-  bound exceeds `τ_FA`, or the point estimate is at or below `τ_FA` but
-  the upper bound exceeds it (threshold-fragile negative; report both).
-- INCONCLUSIVE if the interval spans `τ_FA` without the point estimate
-  exceeding it and the pre-declared minimum sample was reached; extend
-  with a new pre-registered sample if resources allow.
-- INVALID under PR-02 §C1 missingness or a PR-04 breach.
+- INVALID first: PR-02 §C1 missingness/non-verdict limit, pre-declared
+  minimum sample not reached, or a PR-04 breach.
+- POSITIVE iff the exact 95% upper bound `U ≤ τ_FA`.
+- NEGATIVE iff the exact 95% lower bound `L > τ_FA`.
+- INCONCLUSIVE iff `L ≤ τ_FA < U`.
+- The point estimate is reported; it cannot decide the category.
 
 **Required negative statement (template).**
 
@@ -113,17 +152,14 @@ that label. If the confirmatory campaign reuses the ten published cases,
 the paper must call the analysis a replication, and `τ_R` must have been
 fixed before the replication run.
 
-**Decision rule.**
+**Decision rule (higher is better; §0.1 order).**
 
-- POSITIVE if the exact 95% lower confidence bound for the primary
-  proportion is at or above `τ_R`.
-- NEGATIVE if the point estimate is below `τ_R`, or the upper bound is
-  below `τ_R`, or the point estimate meets `τ_R` but the lower bound does
-  not (threshold-fragile negative; report both).
-- INCONCLUSIVE if the interval spans `τ_R` and the point estimate meets
-  it; report the width and make no capability claim.
-- INVALID under PR-02 §C2 (any NOT_RUN, missing WHY, provider change,
-  or leakage breach).
+- INVALID first: PR-02 §C2 (any NOT_RUN, missing WHY, provider change,
+  or leakage breach) or the pre-declared minimum sample not reached.
+- POSITIVE iff the exact 95% lower bound `L ≥ τ_R`.
+- NEGATIVE iff the exact 95% upper bound `U < τ_R`.
+- INCONCLUSIVE iff `L < τ_R ≤ U`.
+- The point estimate is reported; it cannot decide the category.
 
 **Required negative statement (template).**
 
@@ -149,16 +185,15 @@ fixed before the replication run.
 reviewer; deadline: before data collection). It is the minimum strict
 declared-output equivalence proportion over the frozen corpus.
 
-**Decision rule.**
+**Decision rule (higher is better; §0.1 order).**
 
-- POSITIVE if the exact 95% lower confidence bound for strict
-  equivalence is at or above `τ_EQ`.
-- NEGATIVE if the point estimate is below `τ_EQ`, or the upper bound is
-  below `τ_EQ`, or the point estimate meets `τ_EQ` but the lower bound
-  does not (threshold-fragile negative; report both).
-- INCONCLUSIVE if the interval spans `τ_EQ`; no replacement claim.
-- INVALID under PR-02 §C3 (corpus seal breach, mid-campaign system
-  change, or the pre-declared missingness limit).
+- INVALID first: PR-02 §C3 (corpus seal breach, mid-campaign system
+  change, pre-declared missingness limit) or any case with zero declared
+  outputs entering the denominator (PR-01 §C3).
+- POSITIVE iff the exact 95% lower bound `L ≥ τ_EQ`.
+- NEGATIVE iff the exact 95% upper bound `U < τ_EQ`.
+- INCONCLUSIVE iff `L < τ_EQ ≤ U`; no replacement claim.
+- The point estimate is reported; it cannot decide the category.
 
 **Normalized equivalence.** A positive normalized-equivalence result with
 a negative strict result is reported as **NEGATIVE for strict equivalence**
@@ -185,30 +220,41 @@ rule and showing the differing-field set.
 
 ## C4 — #1166 cross-architecture reproduction
 
-**Threshold.** The minimum artifact count per class `n_min` and the
-stability threshold `τ_ARCH` are **UNDECIDED** (owner: campaign lead +
+**Thresholds.** Two values are **UNDECIDED** (owner: campaign lead +
 infrastructure owner + independent reviewer; deadline: before data
-collection). `τ_ARCH` is expected to equal 1.0 (all artifacts identical)
-for a class to be called stable; the value must be fixed explicitly before
-the run, not assumed.
+collection), and they govern different things:
 
-**Decision rule.**
+- `τ_ARCH` is the **campaign-level** threshold for the primary endpoint
+  (the overall architecture-stable artifact proportion over all declared
+  artifacts). It is a free parameter fixed before data collection.
+- `n_min` is the minimum number of artifacts a class must contain to be
+  eligible for a class-level statement.
 
-- POSITIVE for an artifact class if at least `n_min` artifacts were
-  produced in both arms, all are SHA-256 identical (`τ_ARCH = 1.0`), and
-  the exact 95% lower bound for the class proportion is reported. The
-  campaign-level POSITIVE requires the primary proportion over all
-  declared artifacts to meet its fixed threshold.
-- NEGATIVE if any artifact class with at least `n_min` artifacts contains
-  a differing artifact, or the primary proportion is below threshold. The
-  differing set is enumerated by path and hash pair.
-- INVALID if the environment lock or container digest differs between
-  arms (tooling confound), if the missingness limit is exceeded, or if
-  only the confounded macOS-arm64 versus Linux-x86_64 contrast is
-  available for the primary claim.
-- No INCONCLUSIVE category replaces the tooling-confound INVALID: an
-  environment mismatch is a measurement failure, not a weak stability
-  result.
+Class-level stability is **not** parameterized: a class is
+**architecture-stable only if every artifact in it is SHA-256 identical**.
+There is no threshold that can call a class with a known differing
+artifact stable. `τ_ARCH` never relaxes class membership.
+
+**Decision rule (higher is better; §0.1 order).**
+
+1. INVALID first: the environment lock or container digest differs
+   between arms (tooling confound), the missingness limit is exceeded, a
+   pre-declared minimum sample is not reached, or only the confounded
+   macOS-arm64 versus Linux-x86_64 contrast is available for the primary
+   claim. An environment mismatch is a measurement failure, not a weak
+   stability result, and no INCONCLUSIVE category replaces it.
+2. NEGATIVE precedence: if any eligible artifact class (`≥ n_min`
+   artifacts produced in both arms) contains at least one differing
+   artifact, the campaign is NEGATIVE **even if** the overall proportion
+   satisfies the POSITIVE interval rule. The differing set is enumerated
+   by path and hash pair. This is the class-level override in §0.1 step 3.
+3. Otherwise apply the §0.1 interval partition to the campaign-level
+   primary proportion: POSITIVE iff `L ≥ τ_ARCH`; NEGATIVE iff
+   `U < τ_ARCH`; INCONCLUSIVE iff `L < τ_ARCH ≤ U`.
+4. Classes with fewer than `n_min` artifacts are ineligible for a
+   class-level statement; they remain in the campaign-level primary
+   proportion and are reported with their counts. They cannot create a
+   class-level NEGATIVE, and they cannot be called stable.
 
 **Required negative statement (template).**
 

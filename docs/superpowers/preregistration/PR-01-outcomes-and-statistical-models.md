@@ -3,9 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-01 (Task 4.0 required artifact 1 of 6) |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -65,10 +66,10 @@ per campaign after freeze.
 8. **No interim analysis.** The case set and its size are fixed before the
    first confirmatory run; there is no interim efficacy analysis and no
    early stopping for a favorable result. The only permitted stops are
-   listed in PR-02 §5.
+   listed in PR-02 §0.3.
 9. **Analysis code is sealed.** The script that computes every primary
    endpoint must be committed and hashed in the pre-run manifest
-   (`PR-03` §6) before the first confirmatory run. An analysis script
+   (`PR-03` §0) before the first confirmatory run. An analysis script
    written after outcomes were seen makes the affected endpoint
    exploratory, and the publication must say so.
 10. **No silent imputation.** Every excluded or missing case is counted and
@@ -205,13 +206,17 @@ randomized run order.
 
 **Equivalence predicate (primary).** A declared output is equivalent only
 when its file content SHA-256 is identical across arms. A case is
-equivalent only when **every** declared output is byte-identical. Text
-normalization, header stripping, and format canonicalization are **not**
-part of the primary endpoint.
+equivalent only when **every** declared output is byte-identical **and
+the case declares at least one output**. A case with zero declared outputs
+is vacuously "all outputs identical" and is therefore INVALID for this
+endpoint: it must be excluded before the run (PR-02 §C3), and if one
+nevertheless enters the analysis it counts as non-equivalent, never as
+equivalent. Text normalization, header stripping, and format
+canonicalization are **not** part of the primary endpoint.
 
 **Primary endpoint.** Strict declared-output equivalence proportion over
-the frozen corpus, `equivalent cases / analyzed cases`. Direction: higher
-is better.
+the frozen corpus, `equivalent cases / analyzed cases`, where analyzed
+cases have at least one declared output. Direction: higher is better.
 
 **Secondary endpoints.**
 

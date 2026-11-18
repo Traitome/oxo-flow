@@ -96,9 +96,14 @@ Rules:
 4. Every amendment re-computes the manifest. The previous manifest is
    retained in git history and the amendment entry names the old and new
    hashes.
-5. Signatures are added through an amendment entry. Adding a signature
-   does not change the frozen analysis content and must not invalidate
-   the manifest; the entry names the manifest hash that was signed.
+5. Signatures are added through an amendment entry. A signature edits
+   PR-05 itself, so it changes that artifact's hash: the manifest **must**
+   be recomputed and committed with the amendment entry, and the previous
+   manifest remains visible in git history and in the entry. The entry
+   names the **pre-signature** manifest hash that the reviewer actually
+   signed; the recomputed manifest records the signed artifact. This is
+   the only permitted post-freeze edit that does not change analysis
+   content, and it still follows the recompute rule in item 4.
 
 ### 2.4 Timestamps and prose dates
 
@@ -114,8 +119,8 @@ not. It must be updated only by amendment.
 
 | Item | Status |
 | :--- | :--- |
-| PR-01 through PR-06 written | Yes, version 1.0.0, frozen |
-| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256` |
+| PR-01 through PR-06 written | Yes, version 1.0.1 (amendment 1), frozen |
+| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. The original v1.0.0 hashes are retained in `AMENDMENTS.md` §2.1. |
 | Independent reviewer sign-off (#1163) | PENDING |
 | Independent reviewer sign-off (#1164) | PENDING |
 | Independent reviewer sign-off (#1165) | PENDING |
