@@ -754,6 +754,7 @@ pub async fn template_command(
     name: Option<String>,
     output: Option<PathBuf>,
     ai: bool,
+    force: bool,
     from_url: Vec<String>,
     from_file: Vec<PathBuf>,
     options: TemplateAiOptions,
@@ -769,16 +770,12 @@ pub async fn template_command(
             )
         })?;
 
-        // Initialize AI provider
-        let provider = oxo_flow_ai::provider::create_provider_from_env();
-        if matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
-            anyhow::bail!(
-                "AI provider not configured.\n\
-                 Set OXO_FLOW_AI_PROVIDER=deepseek and DEEPSEEK_API_KEY=sk-...\n\
-                 Or configure via ~/.oxo-flow/ai_config.json"
-            );
-        }
-
+        // Provider resolution happens inside generate_workflow from the
+        // resolved config chain (`AiRuntime::new`), not here from the
+        // environment — a workflow-less generation still honors the
+        // global/project/env precedence, and an unresolvable provider
+        // surfaces the structured degraded-mode reason (RB-14).
+        //
         // `options.team_profile` (CLI flag) wins over `[ai] team_profile` —
         // the resolved-config value is merged inside generate_workflow from
         // the config chain.
@@ -789,6 +786,7 @@ pub async fn template_command(
             &from_url,
             &from_file,
             output,
+            force,
             options.max_retries,
             team_profile,
             options.attempts,

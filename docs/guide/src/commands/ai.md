@@ -99,7 +99,10 @@ chat surfaces — one shared persona in `oxo-flow-ai`, one orchestrator
 loop. The steps:
 
 1. **Resolve the destination** — `-o` is parsed before anything is sent
-   to the provider, so a bad output path fails cheaply.
+   to the provider, so a bad output path fails cheaply. An existing
+   destination is confirmed on an interactive terminal and refused in
+   non-interactive sessions unless `--force` is passed, so a reviewed
+   workflow is never clobbered silently and a refusal costs nothing.
 2. **Gather context** — `--from-url` references are fetched through the
    SSRF-screened fetcher; `--from-file` files are read with bounded
    previews. Both enter the prompt as external reference material.
@@ -120,7 +123,8 @@ loop. The steps:
 5. **Validate against the engine** — every draft is parsed by the core
    engine (`WorkflowConfig`). On failure the errors feed back to the
    model for correction; this loop is bounded by `--ai-max-retries`.
-6. **Deliver** — the validated TOML is written, the three static gates
+6. **Deliver** — the validated TOML is written atomically (staged temp
+   file, fsync, rename over the destination), the three static gates
    (`validate` / `dry-run` / `lint`) can then confirm it, and the AI
    session (token usage, tool calls) is archived to the `ai_sessions/`
    directory of the resolved `.oxo-flow` data dir — the project-local

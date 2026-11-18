@@ -122,23 +122,105 @@ fn prepare_output_target(target: &OutputTarget) -> Result<()> {
 }
 
 /// Write the generated workflow, returning the path it landed on.
+///
+/// Reuses the engine-wide staged-write discipline
+/// ([`oxo_flow_core::atomic_file::write_file_atomic`]): the bytes land in a
+/// same-directory temp file, are fsynced, renamed over the destination, and
+/// the parent directory is fsynced. A crash or write failure leaves the
+/// previous workflow intact — never a truncated file (RB-14 / AI-10).
 fn write_output(target: &OutputTarget, toml_content: &str) -> Result<PathBuf> {
     let path = target.file_path();
-    std::fs::write(&path, toml_content)?;
+    oxo_flow_core::atomic_file::write_file_atomic(&path, toml_content)
+        .with_context(|| format!("cannot write {}", path.display()))?;
     Ok(path)
 }
 
-/// Resolve AI provider from environment or config, returning an error if not configured.
-pub fn resolve_ai_provider() -> Result<AiProvider> {
-    let provider = oxo_flow_ai::provider::create_provider_from_env();
-    if matches!(provider, AiProvider::Noop) {
-        anyhow::bail!(
-            "AI provider not configured.\n\
-             Set OXO_FLOW_AI_PROVIDER=deepseek and DEEPSEEK_API_KEY=sk-...\n\
-             Or configure via ~/.oxo-flow/ai_config.json"
-        );
+/// What to do about a destination that already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverwriteDecision {
+    /// The destination is free (or the caller passed `--force`).
+    Proceed,
+    /// An interactive terminal may confirm the overwrite.
+    Prompt,
+    /// Refuse without touching the destination.
+    Refuse(&'static str),
+}
+
+/// The overwrite policy for `template --ai` (RB-14 / AI-10).
+///
+/// A generated workflow that already exists may be a reviewed, hand-edited
+/// artifact: it is never clobbered silently. `--force` is an explicit
+/// consent for scripts; an interactive terminal gets a y/N confirmation;
+/// a non-interactive session without `--force` refuses (the same safe
+/// default as `auto_fix = "ask"` and tool-call approval).
+fn overwrite_decision(exists: bool, force: bool, interactive: bool) -> OverwriteDecision {
+    if !exists || force {
+        return OverwriteDecision::Proceed;
     }
-    Ok(provider)
+    if interactive {
+        OverwriteDecision::Prompt
+    } else {
+        OverwriteDecision::Refuse(
+            "the destination already exists and this session is not interactive — \
+             pass --force to overwrite it, or choose another path",
+        )
+    }
+}
+
+/// Enforce [`overwrite_decision`] for the resolved destination BEFORE any
+/// paid generation happens. Returns `Ok(())` only when writing is allowed.
+fn ensure_destination_writable(target: &OutputTarget, force: bool) -> Result<()> {
+    use std::io::IsTerminal as _;
+
+    let path = target.file_path();
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    match overwrite_decision(path.exists(), force, interactive) {
+        OverwriteDecision::Proceed => Ok(()),
+        OverwriteDecision::Refuse(reason) => {
+            anyhow::bail!("{} already exists — {reason}", path.display())
+        }
+        OverwriteDecision::Prompt => {
+            eprintln!(
+                "  {} {} already exists. Overwrite it? [y/N] ",
+                "⚠".yellow(),
+                path.display()
+            );
+            let mut input = String::new();
+            let confirmed = std::io::stdin().read_line(&mut input).is_ok_and(|_| {
+                let trimmed = input.trim();
+                trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
+            });
+            if confirmed {
+                Ok(())
+            } else {
+                anyhow::bail!("{} already exists and was left untouched", path.display())
+            }
+        }
+    }
+}
+
+/// Print (and log) the structured degraded-mode reason on a surface that
+/// continues without AI. Never silent: an `[ai] enabled = true` workflow
+/// whose provider cannot resolve says exactly why (RB-14 / AI-09).
+fn emit_degraded_reason(reason: &oxo_flow_ai::provider::AiDegradedReason) {
+    eprintln!("  {} {}", "⚠".yellow(), reason);
+    tracing::warn!(
+        code = reason.code,
+        message = %reason.message,
+        suggestion = %reason.suggestion,
+        "AI degraded to no provider"
+    );
+}
+
+/// Resolve the AI provider from the documented config chain, returning a
+/// structured degraded-mode reason if enabled AI cannot resolve one.
+pub fn resolve_ai_provider() -> Result<AiProvider> {
+    let project_dir = std::env::current_dir().ok();
+    let scope = crate::commands::ai_runtime::resolve_ai_scope(None, project_dir.as_deref(), None);
+    match scope.degraded_reason() {
+        Some(reason) => Err(anyhow::Error::new(reason)),
+        None => Ok(scope.provider),
+    }
 }
 
 /// Check whether AI should be used for a workflow operation.
@@ -158,20 +240,38 @@ pub fn should_use_ai(workflow_path: Option<&Path>, cli_flag: bool) -> bool {
     false
 }
 
-/// Try to resolve AI provider. Returns None if AI is not available.
+/// Try to resolve an AI provider for an optional workflow-scoped analysis.
+///
+/// Returns `None` when AI was not requested. When AI WAS requested
+/// (workflow `[ai] enabled = true` or an explicit flag) but the resolved
+/// chain yields no usable provider, the structured degraded-mode reason is
+/// printed and logged before returning `None` — the command continues
+/// without AI, but never silently (RB-14 / AI-09).
 pub fn try_resolve_ai(workflow_path: Option<&Path>, cli_flag: bool) -> Option<AiProvider> {
     if !should_use_ai(workflow_path, cli_flag) {
         return None;
     }
-    resolve_ai_provider().ok()
+    // `None` project dir: resolve_ai_scope falls back to the workflow's
+    // parent directory for `.oxo-flow/ai.toml`, matching the recovery
+    // path's `resolve_auto_fix_mode`.
+    let scope = crate::commands::ai_runtime::resolve_ai_scope(workflow_path, None, None);
+    match scope.degraded_reason() {
+        Some(reason) => {
+            emit_degraded_reason(&reason);
+            None
+        }
+        None => Some(scope.provider),
+    }
 }
 
 /// Generate a workflow from natural language using AI.
+#[allow(clippy::too_many_arguments)]
 pub async fn generate_workflow(
     intent: &str,
     from_urls: &[String],
     from_files: &[PathBuf],
     output: Option<PathBuf>,
+    force: bool,
     ai_max_retries: Option<u32>,
     team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
     ai_attempts: u32,
@@ -180,6 +280,10 @@ pub async fn generate_workflow(
     // provider: a bad `-o` must fail cheaply, not after a paid generation.
     let output_target = resolve_output_target(output.as_deref(), intent);
     prepare_output_target(&output_target)?;
+    // Overwrite policy also runs before the paid call: an existing
+    // destination is confirmed (`--force` / interactive y/N) or refused
+    // while nothing has been spent and the old file is untouched.
+    ensure_destination_writable(&output_target, force)?;
 
     // L1-L3: Initialize AI runtime with scope config + tools
     let project_dir = std::env::current_dir().ok();
@@ -901,6 +1005,85 @@ mod tests {
         let written = write_output(&target, "[workflow]").unwrap();
         assert_eq!(written, tmp.path().join("gen.oxoflow"));
         assert_eq!(std::fs::read_to_string(written).unwrap(), "[workflow]");
+    }
+
+    #[test]
+    fn overwrite_decision_requires_consent_for_existing_destinations() {
+        // A new destination is always free to write.
+        assert_eq!(
+            overwrite_decision(false, false, false),
+            OverwriteDecision::Proceed
+        );
+        // `--force` is explicit consent, interactive or not.
+        assert_eq!(
+            overwrite_decision(true, true, false),
+            OverwriteDecision::Proceed
+        );
+        // An interactive terminal may confirm.
+        assert_eq!(
+            overwrite_decision(true, false, true),
+            OverwriteDecision::Prompt
+        );
+        // A non-interactive session without --force refuses (never clobber
+        // a reviewed workflow from CI/scripts).
+        match overwrite_decision(true, false, false) {
+            OverwriteDecision::Refuse(reason) => {
+                assert!(reason.contains("--force"), "reason: {reason}");
+                assert!(reason.contains("not interactive"), "reason: {reason}");
+            }
+            other => panic!("expected Refuse, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_replaces_the_destination_atomically_without_following_symlinks() {
+        // Atomic replacement means a rename over the destination, so a
+        // symlinked destination is replaced as an entry — the link target
+        // is never written through. `std::fs::write` (the pre-fix code)
+        // follows the symlink and clobbers the unrelated target, which is
+        // exactly the lossy behavior this pins against.
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("reviewed-workflow.oxoflow");
+        std::fs::write(&real, "reviewed content").unwrap();
+        let link = tmp.path().join("gen.oxoflow");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let written = write_output(&OutputTarget::File(link.clone()), "generated content").unwrap();
+
+        assert_eq!(written, link);
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "generated content");
+        assert_eq!(
+            std::fs::read_to_string(&real).unwrap(),
+            "reviewed content",
+            "the write must replace the destination, never write through the symlink"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the destination must now be the generated regular file"
+        );
+    }
+
+    #[test]
+    fn write_output_leaves_no_staged_temp_files() {
+        // The shared staged-write helper removes its temp sibling after the
+        // rename; a leftover `*.tmp` next to the workflow is the failure
+        // signature of a hand-rolled write.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = OutputTarget::File(tmp.path().join("w.oxoflow"));
+        write_output(&target, "content").unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staged temp files left: {leftovers:?}"
+        );
     }
 
     #[test]

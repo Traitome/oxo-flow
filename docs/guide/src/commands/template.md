@@ -32,6 +32,7 @@ definitions referenced by `conda = "envs/..."` in templates 04-15.
 |--------|-------------|
 | `-o, --output <OUTPUT>` | Output file or directory (a trailing slash forces a directory, created if missing). Defaults to the current directory with the template's name minus its numeric prefix (e.g. `01_hello_world` → `hello_world.oxoflow`) |
 | `--ai` | Generate the workflow with AI from a natural language description |
+| `--force` | With `--ai`: overwrite an existing destination without confirmation. Without it, an existing destination is confirmed on an interactive terminal and refused in non-interactive sessions. The guard runs before any paid generation |
 | `--from-url <URL>` | URL(s) to use as reference material for AI generation (repeatable) |
 | `--from-file <PATH>` | File(s) to use as reference material for AI generation (repeatable) |
 | `--ai-max-retries <N>` | Maximum AI correction rounds for the generation orchestrator — knowledge lookups and correction passes share this budget (default: 10, overridable via `[ai] max_retries` in the config). This bounds **generation** rounds; the recovery-side `--ai-max-retries` on [`run`](run.md#options)/[`dry-run`](dry-run.md#options)/[`resume`](resume.md#options) (default 1, failed-call recovery attempts) is a separate knob |

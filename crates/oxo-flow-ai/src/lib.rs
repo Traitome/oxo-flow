@@ -50,6 +50,15 @@ use error::AiError;
 use provider::{
     AiProvider, ProviderKind, create_provider, create_provider_from_env, provider_pinned_disabled,
 };
+
+// RB-14 surfaces: the CLI builds its provider from the resolved config
+// chain and reports a structured degraded-mode reason when AI is enabled
+// but unusable.
+pub use provider::{
+    AI_DEGRADED_CREDENTIAL_MISSING, AI_DEGRADED_DISABLED_BY_ENV, AI_DEGRADED_NOT_CONFIGURED,
+    AI_DEGRADED_PROVIDER_INVALID, AiDegradedReason, create_provider_from_config_chain,
+    degraded_reason,
+};
 use session::AiSession;
 
 // ── Global registry ────────────────────────────────────────────────────────

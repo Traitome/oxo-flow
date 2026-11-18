@@ -3913,7 +3913,7 @@ validation but are not consumed by run execution.
 [ai]
 enabled = true              # one-line activation: all AI commands auto-detect
 auto_fix = "ask"            # recovery write mode: "ask" (default) | "always" | "never"
-provider = "deepseek"       # advisory for the CLI runtime (see the AI CLI reference)
+provider = "deepseek"       # applied to the CLI runtime (see the AI CLI reference)
 model = "deepseek-v4-flash"
 max_retries = 5
 team_profile = "compact"    # template --ai generation profile: "compact" | "full"
@@ -3923,8 +3923,11 @@ Optional AI companion configuration. With `enabled = true`, AI surfaces
 activate without CLI flags — including the error-recovery loop that `run`
 starts when a rule fails (see
 [AI error recovery](../commands/run.md#ai-error-recovery-ai-recover)). The
-full provider/model/skills reference lives in
-[the AI CLI reference](ai-cli.md#workflow-level-config-ai-section-in-oxoflow).
+workflow section outranks the environment and the global config file for
+`provider` and `model` (project `.oxo-flow/ai.toml` sits between them, and
+`OXO_FLOW_AI_PROVIDER=disabled` remains a hard pin). The full
+provider/model/skills reference and the exact precedence table live in
+[the AI CLI reference](ai-cli.md#provider-and-model-precedence).
 
 `auto_fix` controls what the recovery path may do with an AI-proposed
 workflow patch: `ask` (the documented default) prompts y/N on an interactive

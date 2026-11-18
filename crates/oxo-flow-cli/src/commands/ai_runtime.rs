@@ -10,8 +10,84 @@ use anyhow::Result;
 use colored::Colorize as _;
 use oxo_flow_ai::agent::orchestrator::Orchestrator;
 use oxo_flow_ai::config::AiConfig;
-use oxo_flow_ai::provider::AiProvider;
+use oxo_flow_ai::provider::{AiDegradedReason, AiProvider};
 use oxo_flow_ai::tools::{ToolRegistry, builtin};
+
+/// An AI scope resolved from the documented config chain: the provider
+/// built from the resolved provider/model, plus the chain itself (skills,
+/// retries, team profile, auto_fix).
+pub struct ResolvedAiScope {
+    pub provider: AiProvider,
+    pub config: AiConfig,
+}
+
+impl ResolvedAiScope {
+    /// Structured reason why an enabled scope still degraded to the no-op
+    /// provider (RB-14 / AI-09). `None` when the provider is usable.
+    pub fn degraded_reason(&self) -> Option<AiDegradedReason> {
+        if self.provider.is_usable() {
+            return None;
+        }
+        // `provider_explicit` is set by the tier that selected a provider;
+        // the env tier is merged into the chain, so this covers both. When
+        // no tier selected one, the reason helper inspects
+        // `OXO_FLOW_AI_PROVIDER` (invalid value vs nothing configured).
+        let selected = self
+            .config
+            .provider_explicit
+            .then_some(self.config.provider);
+        Some(oxo_flow_ai::provider::degraded_reason(selected))
+    }
+}
+
+/// Resolve the AI config chain for a workflow/project and build the
+/// provider FROM THE RESOLVED CONFIG (issue #1122 / RB-14).
+///
+/// Documented precedence (later overrides earlier): defaults → global
+/// config file → environment → project `.oxo-flow/ai.toml` → workflow
+/// `[ai]` → CLI overrides. `OXO_FLOW_AI_PROVIDER=disabled` remains a hard
+/// pin. When no tier explicitly selects a provider, the provider still
+/// falls through the canonical env/saved/auto-detection chain, so
+/// zero-config setups keep working.
+///
+/// Cheap by design (no tools, MCP, or skill loading) so the analysis
+/// surfaces can share the same resolution as [`AiRuntime`].
+pub fn resolve_ai_scope(
+    workflow_path: Option<&Path>,
+    project_dir: Option<&Path>,
+    cli_max_retries: Option<u32>,
+) -> ResolvedAiScope {
+    let global = AiConfig::from_global_file();
+    let env_layer = AiConfig::from_env();
+    let project_root = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));
+    let project = project_root.and_then(AiConfig::from_project_file);
+    let workflow = workflow_path.and_then(|p| {
+        std::fs::read_to_string(p).ok().and_then(|c| {
+            c.parse::<toml::Table>()
+                .ok()
+                .and_then(|t| AiConfig::from_workflow_toml(&t))
+        })
+    });
+    let cli_overrides = cli_max_retries.map(|n| AiConfig {
+        max_retries: n,
+        ..Default::default()
+    });
+
+    let config = AiConfig::resolve_chain_with_env(
+        global.as_ref(),
+        Some(&env_layer),
+        project.as_ref(),
+        workflow.as_ref(),
+        None,
+        cli_overrides.as_ref(),
+    );
+    // The provider is built AFTER the chain resolves — the RB-14 defect was
+    // building it from the environment before `[ai] provider/model` was
+    // known.
+    let provider =
+        oxo_flow_ai::provider::create_provider_from_config_chain(&config, global.as_ref());
+    ResolvedAiScope { provider, config }
+}
 
 /// Fully-configured AI runtime for a command execution.
 pub struct AiRuntime {
@@ -25,38 +101,19 @@ pub struct AiRuntime {
 
 impl AiRuntime {
     /// Initialize AI runtime with full scope config resolution.
-    ///
-    /// Resolution chain: env vars → global config → project .oxo-flow/ai.toml →
-    /// workflow `[ai]` section → CLI overrides.
     pub async fn new(
         workflow_path: Option<&Path>,
         project_dir: Option<&Path>,
         cli_max_retries: Option<u32>,
     ) -> Result<Self> {
-        let provider = super::ai_template::resolve_ai_provider()?;
-
-        // Resolve config chain
-        let global = AiConfig::from_global_file();
-        let project = project_dir.and_then(AiConfig::from_project_file);
-        let workflow = workflow_path.and_then(|p| {
-            std::fs::read_to_string(p).ok().and_then(|c| {
-                c.parse::<toml::Table>()
-                    .ok()
-                    .and_then(|t| AiConfig::from_workflow_toml(&t))
-            })
-        });
-        let cli_overrides = cli_max_retries.map(|n| AiConfig {
-            max_retries: n,
-            ..Default::default()
-        });
-
-        let config = AiConfig::resolve_chain(
-            global.as_ref(),
-            project.as_ref(),
-            workflow.as_ref(),
-            None,
-            cli_overrides.as_ref(),
-        );
+        let scope = resolve_ai_scope(workflow_path, project_dir, cli_max_retries);
+        if !scope.provider.is_usable() {
+            let reason = scope
+                .degraded_reason()
+                .unwrap_or_else(|| oxo_flow_ai::provider::degraded_reason(None));
+            return Err(anyhow::Error::new(reason));
+        }
+        let ResolvedAiScope { provider, config } = scope;
 
         // User-defined skills: discovery (read-only) + explicit activation.
         let project = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));

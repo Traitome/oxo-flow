@@ -6,8 +6,13 @@
 //! 1. Hardcoded defaults
 //! 2. Global config file (`~/.oxo-flow/ai_config.json`)
 //! 3. Environment variables (`OXO_FLOW_AI_*`, `DEEPSEEK_API_KEY`, etc.)
-//! 4. Workflow `[ai]` section in `.oxoflow` file
-//! 5. CLI flags (`--ai`, `--ai-recover`, `--ai-max-retries N`)
+//! 4. Project `.oxo-flow/ai.toml`
+//! 5. Workflow `[ai]` section in `.oxoflow` file
+//! 6. Per-rule `[rules.ai]` overrides
+//! 7. CLI flags (`--ai`, `--ai-recover`, `--ai-max-retries N`)
+//!
+//! `OXO_FLOW_AI_PROVIDER=disabled` is a hard pin that outranks every tier
+//! (see [`crate::provider::provider_pinned_disabled`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +30,16 @@ pub struct AiConfig {
     /// Which AI provider to use.
     #[serde(default)]
     pub provider: ProviderKind,
+
+    /// Whether a merged tier explicitly set [`Self::provider`].
+    ///
+    /// The field is not optional, so an absent `provider` key parses to the
+    /// default (DeepSeek) — indistinguishable from an explicit
+    /// `provider = "deepseek"`. This flag restores the distinction the
+    /// provider resolver needs: only an explicitly selected provider may
+    /// override the environment tier / zero-config auto-detection (RB-14).
+    #[serde(skip)]
+    pub provider_explicit: bool,
 
     /// Model name override (uses provider default if None).
     #[serde(default)]
@@ -70,6 +85,7 @@ impl std::fmt::Debug for AiConfig {
         f.debug_struct("AiConfig")
             .field("enabled", &self.enabled)
             .field("provider", &self.provider)
+            .field("provider_explicit", &self.provider_explicit)
             .field("model", &self.model)
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
             .field("api_url", &self.api_url)
@@ -125,6 +141,7 @@ impl Default for AiConfig {
         Self {
             enabled: false,
             provider: ProviderKind::DeepSeek,
+            provider_explicit: false,
             model: None,
             api_key: None,
             api_url: None,
@@ -143,15 +160,17 @@ impl AiConfig {
         if other.enabled {
             self.enabled = true;
         }
-        // Provider only changes if explicitly different from default. The
-        // field is not optional, so an absent key parses to the default —
-        // taking `other.provider` unconditionally let a workflow
+        // Provider only changes when the tier explicitly selected one
+        // (`provider_explicit`, set by the TOML/JSON parsers) or carries a
+        // non-default value (hand-built `AiConfig` literals). Taking
+        // `other.provider` unconditionally let a workflow
         // `[ai] enabled = true` (no provider key) reset a global
-        // `provider = "claude"` back to DeepSeek. The cost is that an
-        // explicit `provider = "deepseek"` cannot override a non-default
-        // lower tier; DeepSeek is the default anyway.
-        if other.provider != ProviderKind::default() {
+        // `provider = "claude"` back to DeepSeek; the flag closes the old
+        // remaining cost where an explicit `provider = "deepseek"` could
+        // not override a non-default lower tier.
+        if other.provider_explicit || other.provider != ProviderKind::default() {
             self.provider = other.provider;
+            self.provider_explicit = true;
         }
         if other.model.is_some() {
             self.model = other.model.clone();
@@ -192,6 +211,8 @@ impl AiConfig {
         Some(Self {
             enabled: true,
             provider,
+            // A saved config file always names its provider explicitly.
+            provider_explicit: true,
             model: (!model.is_empty()).then_some(model),
             api_key: (!api_key.is_empty()).then_some(api_key),
             api_url: (!api_url.is_empty()).then_some(api_url),
@@ -205,13 +226,12 @@ impl AiConfig {
         let enabled =
             !provider_str.is_empty() && !crate::provider::provider_name_is_disabled(&provider_str);
 
-        let provider = if enabled {
-            provider_str
-                .parse::<ProviderKind>()
-                .unwrap_or(ProviderKind::DeepSeek)
-        } else {
-            ProviderKind::DeepSeek
-        };
+        // An unparseable (typo'd) or `disabled` value selects nothing — the
+        // documented fall-through to the saved config / detection tiers.
+        let parsed = enabled
+            .then(|| provider_str.parse::<ProviderKind>().ok())
+            .flatten();
+        let provider = parsed.unwrap_or(ProviderKind::DeepSeek);
 
         let model = std::env::var("OXO_FLOW_AI_MODEL").ok();
         let api_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
@@ -223,6 +243,7 @@ impl AiConfig {
         Self {
             enabled,
             provider,
+            provider_explicit: parsed.is_some(),
             model,
             api_key,
             api_url,
@@ -242,11 +263,11 @@ impl AiConfig {
             .get("enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let provider = ai_table
+        let parsed_provider = ai_table
             .get("provider")
             .and_then(|v| v.as_str())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(ProviderKind::DeepSeek);
+            .and_then(|s| s.parse().ok());
+        let provider = parsed_provider.unwrap_or(ProviderKind::DeepSeek);
         let model = ai_table
             .get("model")
             .and_then(|v| v.as_str())
@@ -273,6 +294,7 @@ impl AiConfig {
         Some(Self {
             enabled,
             provider,
+            provider_explicit: parsed_provider.is_some(),
             model,
             api_key: None, // API key never comes from workflow files
             api_url: None,
@@ -318,6 +340,10 @@ impl AiConfig {
     /// 4. Workflow `[ai]` section
     /// 5. Per-rule `[rules.ai]` overrides
     /// 6. CLI flags
+    ///
+    /// This is the file/flag chain. Use
+    /// [`resolve_chain_with_env`](Self::resolve_chain_with_env) when the
+    /// process environment is also a tier (the full documented order).
     pub fn resolve_chain(
         global: Option<&Self>,
         project: Option<&Self>,
@@ -325,21 +351,31 @@ impl AiConfig {
         rule: Option<&Self>,
         cli_overrides: Option<&Self>,
     ) -> Self {
+        Self::resolve_chain_with_env(global, None, project, workflow, rule, cli_overrides)
+    }
+
+    /// Resolve configuration across every documented tier, including the
+    /// environment (`AiConfig::from_env`).
+    ///
+    /// Priority (later overrides earlier): defaults → global config file →
+    /// environment variables → project `.oxo-flow/ai.toml` → workflow `[ai]`
+    /// → per-rule `[rules.ai]` → CLI flags. `OXO_FLOW_AI_PROVIDER=disabled`
+    /// remains a hard pin above all of them; it is enforced when the provider
+    /// is built, not by this merge.
+    pub fn resolve_chain_with_env(
+        global: Option<&Self>,
+        env: Option<&Self>,
+        project: Option<&Self>,
+        workflow: Option<&Self>,
+        rule: Option<&Self>,
+        cli_overrides: Option<&Self>,
+    ) -> Self {
         let mut resolved = Self::default();
-        if let Some(g) = global {
-            resolved.merge(g);
-        }
-        if let Some(p) = project {
-            resolved.merge(p);
-        }
-        if let Some(w) = workflow {
-            resolved.merge(w);
-        }
-        if let Some(r) = rule {
-            resolved.merge(r);
-        }
-        if let Some(c) = cli_overrides {
-            resolved.merge(c);
+        for tier in [global, env, project, workflow, rule, cli_overrides]
+            .into_iter()
+            .flatten()
+        {
+            resolved.merge(tier);
         }
         resolved
     }
@@ -623,6 +659,116 @@ name = "test"
         let cli = AiConfig::default();
         let resolved = AiConfig::resolve_chain(None, None, Some(&workflow), None, Some(&cli));
         assert_eq!(resolved.max_retries, 4);
+    }
+
+    #[test]
+    fn provider_explicit_distinguishes_absent_from_an_explicit_default() {
+        // `provider` is non-optional, so the key's absence parses as the
+        // DeepSeek default. The explicit flag is what lets the provider
+        // resolver tell "a tier selected DeepSeek" apart from "nobody
+        // selected a provider" (RB-14).
+        let absent = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nenabled = true\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(absent.provider, ProviderKind::DeepSeek);
+        assert!(!absent.provider_explicit);
+
+        let explicit = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nprovider = \"deepseek\"\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(explicit.provider, ProviderKind::DeepSeek);
+        assert!(explicit.provider_explicit);
+
+        // An explicit `provider = "deepseek"` in a higher tier now overrides
+        // a non-default lower tier (the old sentinel idiom could not).
+        let mut resolved = AiConfig::resolve_chain(
+            Some(&AiConfig {
+                enabled: true,
+                provider: ProviderKind::Claude,
+                ..AiConfig::default()
+            }),
+            None,
+            Some(&explicit),
+            None,
+            None,
+        );
+        assert_eq!(resolved.provider, ProviderKind::DeepSeek);
+        assert!(resolved.provider_explicit);
+
+        // An absent key still never resets the lower tier.
+        resolved = AiConfig::resolve_chain(
+            Some(&AiConfig {
+                enabled: true,
+                provider: ProviderKind::Claude,
+                ..AiConfig::default()
+            }),
+            None,
+            Some(&absent),
+            None,
+            None,
+        );
+        assert_eq!(resolved.provider, ProviderKind::Claude);
+        assert!(resolved.provider_explicit);
+    }
+
+    #[test]
+    fn resolve_chain_with_env_orders_global_env_project_workflow_cli() {
+        let tier = |provider, model: &str| AiConfig {
+            enabled: true,
+            provider,
+            provider_explicit: true,
+            model: Some(model.to_string()),
+            ..AiConfig::default()
+        };
+        let global = tier(ProviderKind::Claude, "global-model");
+        let env = tier(ProviderKind::DeepSeek, "env-model");
+        let project = tier(ProviderKind::OpenAi, "project-model");
+        let workflow = tier(ProviderKind::Ollama, "workflow-model");
+        let cli = tier(ProviderKind::OpenAi, "cli-model");
+
+        // Each tier in the documented order beats the one below it.
+        let resolved = AiConfig::resolve_chain_with_env(
+            Some(&global),
+            Some(&env),
+            Some(&project),
+            Some(&workflow),
+            None,
+            Some(&cli),
+        );
+        assert_eq!(resolved.provider, ProviderKind::OpenAi);
+        assert_eq!(resolved.model.as_deref(), Some("cli-model"));
+
+        // Without the CLI and workflow tiers, the project wins over env.
+        let resolved = AiConfig::resolve_chain_with_env(
+            Some(&global),
+            Some(&env),
+            Some(&project),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(resolved.provider, ProviderKind::OpenAi);
+        assert_eq!(resolved.model.as_deref(), Some("project-model"));
+
+        // Env wins over the global file.
+        let resolved =
+            AiConfig::resolve_chain_with_env(Some(&global), Some(&env), None, None, None, None);
+        assert_eq!(resolved.provider, ProviderKind::DeepSeek);
+        assert_eq!(resolved.model.as_deref(), Some("env-model"));
+
+        // Workflow wins over project/env.
+        let resolved = AiConfig::resolve_chain_with_env(
+            Some(&global),
+            Some(&env),
+            Some(&project),
+            Some(&workflow),
+            None,
+            None,
+        );
+        assert_eq!(resolved.provider, ProviderKind::Ollama);
+        assert_eq!(resolved.model.as_deref(), Some("workflow-model"));
     }
 
     #[test]
