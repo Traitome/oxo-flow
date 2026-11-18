@@ -139,8 +139,7 @@ so the engine aborted before the pipeline ran and the seed measured a
 fail-fast abort instead of a silent failure. The planted fault now reads an
 *undeclared* second file (`gzip -cd {input[0]} data/reads/sample_R2.fastq.gz
 | wc -l`), with the declared input produced by an upstream rule — the
-exit-0-with-error-stderr class is preserved. The historical result rows
-below were measured with the earlier seed text; they are not re-measured
+exit-0-with-error-stderr class is preserved. The historical result rows above were measured with the earlier seed text; they are not re-measured
 here and no provider was called for this change.
 
 ## Limitations

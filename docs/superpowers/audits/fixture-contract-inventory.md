@@ -216,7 +216,7 @@ false invariant.
   live provider and are not reproducible in CI; this audit called no
   provider. Only the deterministic exit-code contracts were verified.
 - `eval/frontier/results/` and `benches/*/results/` are gitignored outputs,
-  not fixtures. The tracked `eval/interpretation/results/*` directories are
+  not fixtures. The gitignored historical campaign outputs under `eval/interpretation/results/` are
   historical campaign records (run with the then-shipped seed text), also not
   fixtures; the `s04` redesign makes those rows non-comparable and the README
   says so. They are not counted in the inventory verdicts.
@@ -233,7 +233,7 @@ false invariant.
 | `python3 eval/frontier/fault_injection.py --skip-repair --binary …` | static detection 7/10 as documented; infrastructure cases runtime-attributed; repair stages unmeasured by design |
 | `cargo test -p oxo-flow-cli --test interpretation_seeds` | **fails on the original seed** (`s04` exit 1 vs 0), passes after correction (12/12 seeds) |
 | `cargo test -p oxo-flow-cli --test import_fixtures` | 2 tests ok (18 fixtures) |
-| `oxo-flow validate examples/gallery/*.oxoflow` | 16/16 pass |
+| `for f in examples/gallery/*.oxoflow; do oxo-flow validate "$f"; done` | 16/16 pass |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo test -p oxo-flow-cli -- --test-threads=1` | exit 0 (19 test binaries, 0 failures; includes the new seed gate) |
 | `cargo test -p oxo-flow --test cli_integration -- --test-threads=1` | 311 passed, 0 failed after the §4.3 correction (the one-shot CI flake retry re-failed the stale assertion, confirming it was not a flake) |
