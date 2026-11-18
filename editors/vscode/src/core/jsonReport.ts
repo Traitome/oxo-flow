@@ -109,6 +109,22 @@ export function findingsFromLint(r: LintReport): Finding[] {
 }
 
 /**
+ * Refusal finding for an unsaved buffer that could not be staged for the CLI.
+ * It is deliberately NOT a stale result: nothing is read from the saved file,
+ * so the user is told to save instead of being shown disk-based findings.
+ */
+export function saveFirstFinding(reason: string): Finding {
+  return {
+    severity: "warning",
+    code: "UNSAVED",
+    message: `Unsaved changes — oxo-flow could not analyze the in-editor buffer (${reason}) and did NOT fall back to the saved file. Save the document (Cmd/Ctrl+S) to refresh diagnostics against what you see.`,
+    rule: null,
+    suggestion: "Save the document, then re-run validation.",
+    source: "validate",
+  };
+}
+
+/**
  * Validate and lint intentionally overlap (lint re-runs the format checks), so
  * running both produces duplicates. Two findings are the same when code,
  * message and rule agree — the marketplace cannot merge them, so we do. The

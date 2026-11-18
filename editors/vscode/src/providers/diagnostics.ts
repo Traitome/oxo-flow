@@ -5,6 +5,7 @@ import {
   findingsFromLint,
   findingsFromValidate,
   parseReport,
+  saveFirstFinding,
   type Finding,
 } from "../core/jsonReport";
 import { indexToml } from "../core/tomlIndex";
@@ -204,21 +205,6 @@ function collectFindings(
     }
   }
   return findings;
-}
-
-/**
- * Refusal diagnostic for an unsaved buffer that could not be staged. It is
- * deliberately NOT a stale result: nothing is read from the saved file.
- */
-function saveFirstFinding(reason: string): Finding {
-  return {
-    severity: "warning",
-    code: "UNSAVED",
-    message: `Unsaved changes — oxo-flow could not analyze the in-editor buffer (${reason}) and did NOT fall back to the saved file. Save the document (Cmd/Ctrl+S) to refresh diagnostics against what you see.`,
-    rule: null,
-    suggestion: "Save the document, then re-run validation.",
-    source: "validate",
-  };
 }
 
 /** Human-output fallback when the JSON document cannot be recovered. */

@@ -6,6 +6,7 @@ import {
   findingsFromValidate,
   parseReport,
   ReportParseError,
+  saveFirstFinding,
   type Finding,
   type LintReport,
   type ValidateReport,
@@ -94,6 +95,16 @@ test("findingsFromLint maps severities 1:1", () => {
     ["error", "warning", "info"]
   );
   assert.equal(findings[1].rule, "qc");
+});
+
+test("saveFirstFinding is an explicit refusal, not a stale disk result", () => {
+  const f = saveFirstFinding("EACCES: permission denied");
+  assert.equal(f.code, "UNSAVED");
+  assert.equal(f.severity, "warning");
+  assert.match(f.message, /did NOT fall back to the saved file/);
+  assert.match(f.message, /Save the document/);
+  assert.match(f.message, /EACCES/);
+  assert.equal(f.rule, null);
 });
 
 test("dedupeFindings keeps validate/lint overlap once", () => {
