@@ -242,18 +242,25 @@ mod tests {
             ..Default::default()
         };
 
-        for spec_str in [
-            generate_aws_batch_job_spec(&rule, &routed, &test_config()).unwrap(),
-            generate_aws_batch_array_spec(&rule, "runs/cmds", 4, &test_config()).unwrap(),
-        ] {
-            assert!(
-                !spec_str.contains(sentinel),
-                "sentinel leaked into the AWS Batch body: {spec_str}"
-            );
-            assert!(
-                spec_str.contains("OXO_FLOW_SENSITIVE_0"),
-                "the routed reference must survive into the body: {spec_str}"
-            );
-        }
+        // Single job: the routed reference replaces the literal in the body.
+        let single = generate_aws_batch_job_spec(&rule, &routed, &test_config()).unwrap();
+        assert!(
+            !single.contains(sentinel),
+            "sentinel leaked into the AWS Batch body: {single}"
+        );
+        assert!(
+            single.contains("OXO_FLOW_SENSITIVE_0"),
+            "the routed reference must survive into the body: {single}"
+        );
+
+        // Array job: the body only dispatches to per-index command files, so
+        // it never carries either the literal OR the reference — the
+        // reference lives in the (private) cmd.N.sh files and resolves from
+        // the job definition's `containerProperties.secrets`.
+        let array = generate_aws_batch_array_spec(&rule, "runs/cmds", 4, &test_config()).unwrap();
+        assert!(
+            !array.contains(sentinel),
+            "sentinel leaked into the AWS Batch array body: {array}"
+        );
     }
 }

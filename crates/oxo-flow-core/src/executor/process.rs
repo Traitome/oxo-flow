@@ -4550,24 +4550,53 @@ pub(crate) fn route_sensitive_values_through_env(
     cmd: &str,
     values: &[String],
 ) -> (String, HashMap<String, String>) {
-    // Longest first so a value that contains another claims its own
-    // occurrences before the shorter one does, then lexically for
-    // deterministic numbering.
+    let bindings = sensitive_bindings(values);
+    route_sensitive_values_with_bindings(cmd, &bindings)
+}
+
+/// The stable `VAR -> value` bindings for a run's declared sensitive values.
+///
+/// Numbering is derived from the VALUE LIST, not from what happens to appear
+/// in one command, so the same value keeps the same variable name in every
+/// rule, every array element, and every artifact (issue #1120 / RB-12). A
+/// per-command numbering would let two instances bind `OXO_FLOW_SENSITIVE_0`
+/// to different values once a backend projects the name into a shared Secret.
+///
+/// Longest first so a value that contains another claims its own occurrences
+/// before the shorter one does, then lexically for deterministic numbering.
+/// Values shorter than the [`MASK_VARIANT_MIN_LEN`] floor are excluded (they
+/// stay on the command line: they collide with ordinary command text too
+/// easily to rewrite safely).
+pub(crate) fn sensitive_bindings(values: &[String]) -> Vec<(String, String)> {
     let mut ordered: Vec<&String> = values
         .iter()
         .filter(|value| value.len() >= MASK_VARIANT_MIN_LEN)
         .collect();
     ordered.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| (sensitive_env_name(index), value.clone()))
+        .collect()
+}
 
+/// Rewrite `cmd` with a precomputed binding table ([`sensitive_bindings`]).
+///
+/// Only bindings whose value actually occurs in `cmd` are spliced in and
+/// returned; the numbering itself always comes from the shared table, so two
+/// commands that use different subsets still agree on every variable name.
+pub(crate) fn route_sensitive_values_with_bindings(
+    cmd: &str,
+    bindings: &[(String, String)],
+) -> (String, HashMap<String, String>) {
     let mut envs: HashMap<String, String> = HashMap::new();
     let mut rewritten = cmd.to_string();
-    for value in ordered {
+    for (var, value) in bindings {
         if !rewritten.contains(value.as_str()) {
             continue;
         }
-        let var = sensitive_env_name(envs.len());
         envs.insert(var.clone(), value.clone());
-        rewritten = splice_out_value(&rewritten, value, &var);
+        rewritten = splice_out_value(&rewritten, value, var);
     }
     (rewritten, envs)
 }

@@ -558,10 +558,24 @@ impl BackendDriver {
                             // log prefix.
                             let mut array_rule = chunk[0].1.rule.clone();
                             array_rule.name = chunk[0].1.template.clone();
+                            // Routed sensitive references live in the
+                            // per-index command files, not the dispatch
+                            // line; cloud array bodies still need the union
+                            // so their secret channel can provide every
+                            // name (issue #1120 / RB-12).
+                            let sensitive_refs: Vec<String> = chunk
+                                .iter()
+                                .flat_map(|(_, sr)| {
+                                    crate::executor::process::sensitive_env_refs(&sr.shell_cmd)
+                                })
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .into_iter()
+                                .collect();
                             let script = cancel_on_error!(self.backend.render_array_script(
                                 &array_rule,
                                 &job_dir.to_string_lossy(),
                                 chunk.len(),
+                                &sensitive_refs,
                             ));
                             let script_path = job_dir.join("job.sh");
                             cancel_on_error!(
@@ -2967,6 +2981,7 @@ shell = "echo asm > out/{assembler}.txt"
             _rule: &crate::rule::Rule,
             _cmd_dir: &str,
             count: usize,
+            _sensitive_refs: &[String],
         ) -> Result<String> {
             self.inner.lock().unwrap().array_sizes.push(count);
             Ok("exit 0".to_string())

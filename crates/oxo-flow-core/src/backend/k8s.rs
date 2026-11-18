@@ -34,23 +34,22 @@ pub const K8S_SENSITIVE_SECRET: &str = "oxoflow-secrets";
 /// operator-provided Kubernetes Secret rather than inlined as a literal.
 /// A container whose command carries no routed sensitive reference is left
 /// untouched, so ordinary jobs stay byte-identical.
-fn attach_sensitive_env(container: &mut Value, rule: &Rule, shell_cmd: &str) {
-    let env: Vec<Value> = sensitive_env_refs(shell_cmd)
-        .into_iter()
+///
+/// The Secret key IS the environment variable name: the plan-level routing
+/// numbers bindings once for the whole plan (`sensitive_bindings`), so the
+/// name is unambiguous across rules and across array elements — a per-rule
+/// key namespace would break indexed jobs, whose elements are named after
+/// the template rather than the instance.
+fn attach_sensitive_env(container: &mut Value, refs: &[String]) {
+    let env: Vec<Value> = refs
+        .iter()
         .map(|var| {
-            // The Secret key is namespaced per rule so two rules reusing the
-            // same routing index never collide on one key.
-            let key = format!(
-                "{}-{}",
-                sanitize_k8s_name(&rule.name),
-                var.to_lowercase().replace('_', "-")
-            );
             json!({
                 "name": var,
                 "valueFrom": {
                     "secretKeyRef": {
                         "name": K8S_SENSITIVE_SECRET,
-                        "key": key,
+                        "key": var,
                     }
                 }
             })
@@ -115,7 +114,7 @@ pub fn generate_k8s_job_manifest(
         "args": [shell_cmd],
         "resources": container_resources(rule),
     });
-    attach_sensitive_env(&mut container, rule, shell_cmd);
+    attach_sensitive_env(&mut container, &sensitive_env_refs(shell_cmd));
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -152,6 +151,9 @@ pub fn generate_k8s_array_job_manifest(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
+    // Union of `OXO_FLOW_SENSITIVE_<n>` references over every per-index
+    // command file — the dispatch line carries none of them itself.
+    sensitive_refs: &[String],
     _cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
     let job_name = format!("oxoflow-array-{}", sanitize_k8s_name(&rule.name));
@@ -172,7 +174,7 @@ pub fn generate_k8s_array_job_manifest(
         "args": [dispatch_cmd],
         "resources": container_resources(rule),
     });
-    attach_sensitive_env(&mut container, rule, &dispatch_cmd);
+    attach_sensitive_env(&mut container, sensitive_refs);
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -277,8 +279,9 @@ mod tests {
             ..Default::default()
         };
 
-        let manifest_str = generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &test_config())
-            .expect("manifest generation must succeed");
+        let manifest_str =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config())
+                .expect("manifest generation must succeed");
         let val: Value = serde_json::from_str(&manifest_str).expect("manifest must be valid json");
 
         assert_eq!(val["spec"]["completions"], 5);
@@ -294,5 +297,62 @@ mod tests {
         );
         // Array jobs must carry the same GPU limit as single jobs.
         assert_eq!(container["resources"]["limits"]["nvidia.com/gpu"], "2");
+    }
+
+    /// Sentinel regression (ledger RB-12): once the plan routes a
+    /// `sensitive = true` value into an `OXO_FLOW_SENSITIVE_<n>` reference,
+    /// the manifest carries a `secretKeyRef`, never the literal.
+    #[test]
+    fn test_k8s_manifest_projects_sensitive_values_from_a_secret() {
+        let sentinel = "SENTINEL_SECRET_VALUE_D4";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --token {sentinel} --out x"),
+            &[sentinel.to_string()],
+        );
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let rule = Rule {
+            name: "call_variants".into(),
+            ..Default::default()
+        };
+        let manifest_str =
+            generate_k8s_job_manifest(&rule, &routed, &test_config()).expect("manifest");
+        assert!(
+            !manifest_str.contains(sentinel),
+            "sentinel leaked into the k8s manifest: {manifest_str}"
+        );
+        let val: Value = serde_json::from_str(&manifest_str).unwrap();
+        let env_entry = &val["spec"]["template"]["spec"]["containers"][0]["env"][0];
+        assert_eq!(env_entry["name"], "OXO_FLOW_SENSITIVE_0");
+        let key_ref = &env_entry["valueFrom"]["secretKeyRef"];
+        assert_eq!(key_ref["name"], K8S_SENSITIVE_SECRET);
+        assert_eq!(key_ref["key"], "OXO_FLOW_SENSITIVE_0");
+    }
+
+    /// Indexed jobs dispatch to per-index command files, so the dispatch line
+    /// carries no reference — the driver passes the union in. The env block is
+    /// still attached, and ordinary (reference-free) jobs stay untouched.
+    #[test]
+    fn test_k8s_array_manifest_attaches_the_routed_secret_refs() {
+        let rule = Rule {
+            name: "scatter_qc".into(),
+            ..Default::default()
+        };
+        let refs = vec!["OXO_FLOW_SENSITIVE_0".to_string()];
+        let manifest_str =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &refs, &test_config()).unwrap();
+        let val: Value = serde_json::from_str(&manifest_str).unwrap();
+        let env_entry = &val["spec"]["template"]["spec"]["containers"][0]["env"][0];
+        assert_eq!(env_entry["name"], "OXO_FLOW_SENSITIVE_0");
+
+        let plain =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config()).unwrap();
+        assert!(
+            !plain.contains("\"env\""),
+            "a reference-free job must stay byte-identical: {plain}"
+        );
     }
 }

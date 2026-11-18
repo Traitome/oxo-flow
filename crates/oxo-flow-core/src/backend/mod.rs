@@ -198,6 +198,7 @@ pub trait ExecutorBackend: Send + Sync {
         _rule: &crate::rule::Rule,
         _cmd_dir: &str,
         _count: usize,
+        _sensitive_refs: &[String],
     ) -> Result<String> {
         Err(OxoFlowError::Config {
             message: format!("backend '{}' does not support job arrays", self.name()),
@@ -331,20 +332,30 @@ impl ScheduledPlan {
     /// backend's own secret-injection path instead of the job body. The local
     /// executor already performs this per rule
     /// ([`crate::executor::process`] routing in `process.rs`); the cluster path
-    /// needs it here because [`build_rule`] wraps the command
+    /// needs it here because `build_rule` wraps the command
     /// (`env_resolver.wrap_command`) before any routing exists, so no refs are
     /// present when the cloud generators receive `shell_cmd`.
     ///
     /// Returns the routed `VAR -> value` bindings, sorted key order, for
     /// callers that must hand the values to an actual injection channel.
-    pub fn route_sensitive_values(&mut self, values: &[String]) -> std::collections::BTreeMap<String, String> {
+    pub fn route_sensitive_values(
+        &mut self,
+        values: &[String],
+    ) -> std::collections::BTreeMap<String, String> {
         let mut env = std::collections::BTreeMap::new();
         if values.is_empty() {
             return env;
         }
+        // One binding table for the WHOLE plan: every instance of every rule
+        // must agree on which `OXO_FLOW_SENSITIVE_<n>` name carries which
+        // value — cloud backends project those names into a secret channel
+        // shared by every element of an array job.
+        let bindings = crate::executor::process::sensitive_bindings(values);
         for sr in self.rules.values_mut() {
-            let (cmd, refs) =
-                crate::executor::process::route_sensitive_values_through_env(&sr.shell_cmd, values);
+            let (cmd, refs) = crate::executor::process::route_sensitive_values_with_bindings(
+                &sr.shell_cmd,
+                &bindings,
+            );
             sr.shell_cmd = cmd;
             env.extend(refs);
         }
