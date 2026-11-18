@@ -140,6 +140,20 @@ oxo-flow template "exome analysis" --ai \
 oxo-flow template "RNA-seq" --ai -o my-pipeline.oxoflow
 ```
 
+An existing destination is never clobbered silently — a generated workflow
+may be a reviewed, hand-edited artifact:
+
+- interactive terminal: y/N confirmation before anything is generated;
+- non-interactive session (CI, scripts): refused unless `--force` is passed;
+- `--force` is explicit consent and skips the prompt.
+
+The guard runs before any paid generation, so a refusal costs nothing and the
+old file stays byte-for-byte intact. An accepted write goes through the
+engine-wide staged-write helper (temp file in the same directory, fsync,
+atomic rename, parent-directory fsync): a crash or write failure leaves the
+previous workflow complete, never truncated, and a symlinked destination is
+replaced as an entry rather than written through.
+
 ### Control AI Behavior
 
 ```bash
@@ -190,14 +204,19 @@ the audience cannot be inferred from the workflow itself; experts opt in.
 
 ### Degraded mode (no model)
 
-`ai explain` exits 0 with the deterministic skeleton whenever the model
-layer is unavailable — provider errors, quota limits, dead endpoints, or
-explicit disable:
+`ai explain` resolves the same provider/model chain as the other AI task
+surfaces (including the workflow `[ai]` section) and exits 0 with the
+deterministic skeleton whenever the model layer is unavailable — provider
+errors, quota limits, dead endpoints, or explicit disable:
 
 - `OXO_FLOW_AI_PROVIDER=disabled` overrides any saved provider and is pinned
   after the saved config loads — a `~/.oxo-flow/ai_config.json` cannot
-  re-enable AI. It produces the skeleton with a "disabled" note on stderr;
-  AI calls fail with `AI_NOT_CONFIGURED` without contacting a provider.
+  re-enable AI. It produces the skeleton with a `AI_DISABLED_BY_ENV`
+  structured note on stderr; AI calls fail with `AI_NOT_CONFIGURED` without
+  contacting a provider.
+- Any other unresolved provider prints the structured degraded reason
+  (`AI_CREDENTIAL_MISSING`, `AI_PROVIDER_INVALID`, `AI_NOT_CONFIGURED`) in
+  the note, so the skeleton always says why model prose is missing.
 - A failed provider call degrades the same way, with the error summarized
   in the note; the skeleton and its knowledge-base grounding (bioSkills,
   tool table, pipeline graph) are still emitted in full, and `--json`
@@ -329,9 +348,63 @@ authorized it: one bounded verification rerun with the updated workflow, then
 the outcome lands in the checkpoint's `repair_record` (see the recovery flow
 below and [`run --ai-recover`](../commands/run.md#ai-error-recovery-ai-recover)).
 
-Workflow-level provider/model selection is still not guaranteed to reconfigure
-the CLI runtime — treat that setting as advisory until the remaining audit
-gates close.
+### Provider and model precedence
+
+Every AI task surface — `template --ai`, `env create --ai`, `ai explain`, and
+the AI analyses/recovery of `validate`, `lint`, `dry-run`, `debug`, `report`,
+and `run` — resolves one config chain before building the provider
+(`AiConfig::resolve_chain_with_env`). Later tiers override earlier ones:
+
+1. Hardcoded defaults
+2. Global config file (`~/.oxo-flow/ai_config.json`)
+3. Environment (`OXO_FLOW_AI_PROVIDER`, `OXO_FLOW_AI_MODEL`,
+   `OXO_FLOW_AI_API_URL`, and the per-provider credential variables)
+4. Project `.oxo-flow/ai.toml` (the workflow's directory, or the invocation
+   directory for workflow-less commands such as `template --ai`)
+5. Workflow `[ai]` section
+6. CLI flags — no flag currently selects a provider or model; `--ai-max-retries`
+   and `--ai-team-profile` override their own settings at this tier
+
+`OXO_FLOW_AI_PROVIDER=disabled` is the one exception: it is a hard pin above
+every tier and cannot be overridden by a project or workflow provider. The
+resolved `provider` and `model` are APPLIED to the backend — a workflow that
+declares `provider = "ollama"` and `model = "qwen3"` uses exactly that backend
+and model even when the shell exports a different provider.
+
+Provider-specific values are resolved for the final provider kind, not carried
+over from a lower tier: environment credentials for that provider (or
+`OXO_FLOW_AI_API_KEY`) outrank a saved config key, and a saved config's
+**key, endpoint, and model** are reused only when they belong to the same
+provider. A workflow switching to `claude` therefore never sends a saved
+DeepSeek key, endpoint, or model to Anthropic. If no tier selects a provider,
+the canonical environment → saved-config → auto-detection chain chooses the
+backend, so zero-config shell setups keep working; a workflow/project `model`
+still applies on top.
+
+The status/inspection surfaces (`oxo-flow ai`, `oxo-flow ai test`) report the
+process environment + saved config only — they take no workflow, so no
+project/workflow tier exists for them.
+
+### Degraded mode and structured reasons
+
+When AI is enabled (`[ai] enabled = true` or an explicit `--ai` flag) but the
+resolved chain yields no usable provider, commands that can continue without
+AI (`validate`, `lint`, `dry-run`, `debug`, `report`, `run`'s recovery path)
+print and log a structured reason instead of silently skipping AI:
+
+```
+⚠ AI degraded [AI_CREDENTIAL_MISSING]: provider 'claude' is selected but no
+usable credential was found — Set ANTHROPIC_AUTH_TOKEN (or OXO_FLOW_AI_API_KEY),
+or run 'oxo-flow ai setup' to save one
+```
+
+The stable codes are `AI_DISABLED_BY_ENV` (the `OXO_FLOW_AI_PROVIDER=disabled`
+pin), `AI_PROVIDER_INVALID` (an unparseable provider name),
+`AI_CREDENTIAL_MISSING` (a provider selected with no usable credential), and
+`AI_NOT_CONFIGURED` (nothing selected anywhere). Commands that cannot run
+without AI (`template --ai`, `env create --ai`) fail with the same structured
+reason on their error path. Provider-type failures mid-request are a separate
+degradation (documented under [provider failure handling](#provider-failure-handling)).
 
 ### Generation team profiles
 

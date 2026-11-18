@@ -217,6 +217,8 @@ impl AiProviderRegistry {
         let cfg = oxo_flow_ai::config::AiConfig {
             enabled: true,
             provider: kind_parsed,
+            // A reconfigure call names its provider explicitly.
+            provider_explicit: true,
             model,
             api_key,
             api_url,

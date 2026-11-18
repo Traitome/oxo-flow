@@ -325,25 +325,25 @@ pub async fn ai_explain_command(
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
     let mut plan = build_explain_plan(&config, step)?;
 
-    let provider = oxo_flow_ai::provider::create_provider_from_env();
-    if matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
-        // Degraded mode (issue #142 M10): the model is optional — the
-        // deterministic grounding layers are still useful on their own.
-        // `OXO_FLOW_AI_PROVIDER=disabled` explicitly opts into exactly
-        // this offline path; an unconfigured provider gets the same
-        // skeleton plus configuration guidance.
-        let note = if std::env::var("OXO_FLOW_AI_PROVIDER")
-            .is_ok_and(|v| v.eq_ignore_ascii_case("disabled"))
-        {
-            "AI provider disabled via OXO_FLOW_AI_PROVIDER=disabled — emitting the \
-             deterministic explanation skeleton without model prose."
-        } else {
-            "AI provider not configured — emitting the deterministic explanation \
-             skeleton without model prose. Configure one with 'oxo-flow ai setup' \
-             (or OXO_FLOW_AI_PROVIDER + *_API_KEY) to add prose."
-        };
-        return emit_degraded_explanation(&plan, workflow, level, json, note).await;
-    }
+    // Resolve through the shared config chain (RB-14 review): a workflow
+    // `[ai] provider/model` (or a project file) applies to `ai explain` the
+    // same way it applies to every other AI surface.
+    let scope = crate::commands::ai_runtime::resolve_ai_scope(Some(workflow), None, None);
+    let provider = match scope.degraded_reason() {
+        Some(reason) => {
+            // Degraded mode (issue #142 M10): the model is optional — the
+            // deterministic grounding layers are still useful on their own.
+            // `OXO_FLOW_AI_PROVIDER=disabled` explicitly opts into exactly
+            // this offline path; any other unresolved provider carries the
+            // structured reason (RB-14 / AI-09).
+            let note = format!(
+                "{reason} — emitting the deterministic explanation skeleton \
+                 without model prose."
+            );
+            return emit_degraded_explanation(&plan, workflow, level, json, &note).await;
+        }
+        None => scope.provider,
+    };
 
     // In --json mode stdout carries ONLY the JSON document (machine
     // output convention); the header and progress go to stderr.

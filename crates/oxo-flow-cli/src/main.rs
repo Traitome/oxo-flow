@@ -497,6 +497,10 @@ pub enum Commands {
         /// Enable AI-powered workflow generation from natural language.
         #[arg(long)]
         ai: bool,
+        /// Overwrite an existing destination without confirmation
+        /// (`template --ai`; an interactive session is prompted instead).
+        #[arg(long)]
+        force: bool,
         /// URL(s) to use as reference material for AI generation.
         #[arg(long = "from-url", value_name = "URL")]
         from_url: Vec<String>,
@@ -1835,6 +1839,7 @@ async fn main() -> Result<()> {
             template,
             output,
             ai,
+            force,
             from_url,
             from_file,
             ai_max_retries,
@@ -1854,6 +1859,7 @@ async fn main() -> Result<()> {
                 template,
                 output,
                 ai,
+                force,
                 from_url,
                 from_file,
                 crate::commands::project::TemplateAiOptions {
