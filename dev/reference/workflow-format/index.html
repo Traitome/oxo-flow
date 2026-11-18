@@ -9289,7 +9289,14 @@ antibody is wanted:</p>
 grandchild receives values its parent only inherits. The base rule may live in
 an <code>[[include]]</code>d file; when that include declares a <code>namespace</code>, <code>extends</code>
 references to rules inside the same module are qualified automatically
-(<code>base</code> → <code>&lt;namespace&gt;::base</code>).</p>
+(<code>base</code> → <code>&lt;namespace&gt;::base</code>). Resolution happens at load time — after any
+available <code>[[include]]</code> sources are merged and before validation, DAG
+construction, and the per-rule fingerprints recorded in the checkpoint are
+derived. The CLI (<code>run</code>/<code>dry-run</code>/<code>validate</code>/<code>graph</code>) resolves includes from
+disk; the web API resolves staged <code>include_files</code> on run creation
+(<code>POST /api/runs</code>), while the single-document parse/validate endpoints accept
+one TOML text — a base rule that lives in a file they cannot see is a load
+error, never a silently missing rule.</p>
 <h3 id="priority-and-targeting">Priority and Targeting<a class="headerlink" href="#priority-and-targeting" title="Permanent link">#</a></h3>
 <table>
 <thead>

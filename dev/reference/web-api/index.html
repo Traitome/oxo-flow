@@ -6389,6 +6389,22 @@ must be readable by the acting user. This flat shape is the typed
 <code>requestBody</code>, and the handler parses exactly that type, so the spec, the
 server, and the TypeScript client stay in lockstep. Returns
 <code>{ run_id, status: "queued", estimated_resources, execution_plan }</code>.</p>
+<p><code>execution_plan</code> and <code>estimated_resources</code> are derived from the <strong>resolved</strong>
+workflow, not from <code>toml_content</code> alone: when <code>include_files</code> are supplied, the
+sources are written beside <code>workflow.oxoflow</code> and loaded through the same
+<code>from_file</code> path the executor uses before the plan is built, so rules
+contributed by an <code>[[include]]</code> — and a rule-level <code>extends</code> whose base lives in
+one — appear in the reported plan and resource estimate. Without staged
+sources the single-file parse is used, exactly as before. A BioType violation
+contributed by a staged include keeps the stable
+<code>400 TYPE_CONTRACT_VIOLATION</code> code.</p>
+<p>The effective workflow (includes merged, <code>extends</code> resolved) is also persisted
+in the run's working directory as <code>.oxo-flow/resolved-workflow.oxoflow</code>.
+Retry, checkpoint resume (quota budgeting), <code>/dag-status</code>, <code>/status</code>,
+<code>/instances</code>, and <code>/protected-drift</code> load that snapshot — falling back to the
+host document for single-document runs — so a staged-include run reports,
+budgets, and re-executes the same plan the CLI executed. The host TOML stays in
+<code>pipeline_snapshot</code> for display.</p>
 <p>Run creation pays the dedicated #213 spawn budget: <code>OXO_FLOW_RUNS_RATE_LIMIT</code>
 run-creation attempts per minute <strong>per acting identity</strong> (default 5; <code>0</code>
 disables the limiter). The budget is keyed by the authenticated <code>users.id</code>
@@ -6566,7 +6582,7 @@ Read-only drift audit of the run's <code>[engine] protected_data_trees</code>. T
 <li><code>new_trees</code> — trees declared under <code>[engine] protected_data_trees</code> that exist but have no baseline yet. The next real <code>oxo-flow run</code> adopts them; this preview never does.</li>
 <li><code>warnings</code> — per-tree problems that did not block the audit (unreadable tree, ignored empty path values).</li>
 </ul>
-<p>The preview is <strong>read-only</strong>: unlike <code>oxo-flow run</code>, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty <code>drifted_files</code> with a non-zero <code>new_trees</code>. The audit reads the tree as it exists <strong>now</strong>: files can still change between this call and the next run, which is exactly the window <code>allow_protected_drift</code> on Create Run covers. Returns <code>404</code> for unknown or foreign runs; <code>503</code> when runs are not available on this backend.</p>
+<p>The preview is <strong>read-only</strong>: unlike <code>oxo-flow run</code>, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty <code>drifted_files</code> with a non-zero <code>new_trees</code>. The audit reads the tree as it exists <strong>now</strong>: files can still change between this call and the next run, which is exactly the window <code>allow_protected_drift</code> on Create Run covers. The declared trees come from the workflow the run executed (the persisted resolved snapshot / the run workdir sources, with the host document as fallback for single-document runs). It <strong>fails closed</strong>: if no workflow source can be loaded, the endpoint answers <code>500 {"code": "WORKFLOW_UNREADABLE", …}</code> instead of reporting a clean empty result — "could not read the declaration" is never presented as "no drift". Returns <code>404</code> for unknown or foreign runs; <code>503</code> when runs are not available on this backend.</p>
 <h3 id="provenance-verify">Provenance Verify<a class="headerlink" href="#provenance-verify" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>GET /api/runs/{id}/provenance-verify
 </span></code></pre></div>
