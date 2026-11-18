@@ -190,15 +190,27 @@ Tests (`crates/oxo-flow-web/tests/run_snapshot_isolation.rs`,
 - `concurrent_creates_from_one_saved_pipeline_admit_exactly_one` — two
   simultaneous `POST /api/runs` against one saved pipeline yield exactly one
   200 and one `409 RUN_NOT_TERMINAL`; only the admitted request leaves a run
-  dir, and a cancelled run releases the slot. Fail-first verified by
-  temporarily switching the claim back to the workdir guard (both requests
-  admitted).
+  dir, and a cancelled run releases the slot. Each of the two guards is
+  individually sufficient on SQLite (switching the claim to the workdir guard
+  still passes, because `idx_runs_live_pipeline` rejects the loser; making only
+  the index non-unique still passes, because one statement serializes on
+  SQLite); only removing both fails. The partial unique index is the mechanism
+  PostgreSQL depends on under READ COMMITTED.
 - `pipeline_guard_rejects_a_second_live_run_of_the_same_pipeline`,
   `pipeline_guard_is_atomic_under_concurrent_inserts`,
   `pipeline_guard_requires_a_pipeline_id` — storage-level guard contract.
-- `pipeline_guard_is_atomic_with_a_pooled_file_database` — the SQLite claim
+- `pipeline_guard_serializes_across_pooled_connections` — the SQLite claim
   with multiple pooled connections (true concurrency, not the one-connection
-  in-memory fixture): exactly one admitted, one live row.
+  in-memory fixture): exactly one admitted, one live row, no `SQLITE_BUSY`
+  leak. This checks the cross-connection path only; the index mechanism is
+  covered by the two tests below.
+- `pipeline_unique_index_blocks_the_other_guard_column` — isolates the guard
+  COLUMN from the partial unique INDEX: a workdir-guarded claim for a
+  saved-pipeline run is rejected by `idx_runs_live_pipeline`, a
+  pipeline-guarded claim is rejected on a `pipeline_id` collision by
+  `NOT EXISTS` and on a `workdir` collision by `idx_runs_live_workdir`.
+  Fail-first verified by making `idx_runs_live_pipeline` non-unique (this test
+  and the next both fail).
 - `live_admission_indexes_reject_bare_duplicate_live_rows` — the partial
   unique indexes themselves reject a raw second live row per pipeline and per
   workdir while a terminal row releases the slot. Fail-first verified by
