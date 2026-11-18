@@ -1,4 +1,4 @@
-use crate::environment::EnvironmentResolver;
+use crate::environment::{EnvironmentResolver, external_bind_mounts_for};
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
 use crate::scheduler::ResourcePool;
@@ -1724,6 +1724,7 @@ impl LocalExecutor {
     fn resolve_command(
         &self,
         command: &str,
+        mount_source: &str,
         rule: &Rule,
         scratch_dir: Option<&Path>,
     ) -> Result<String> {
@@ -1769,11 +1770,30 @@ impl LocalExecutor {
         let resolved_env = rule
             .environment
             .resolve_relative_paths(self.config.workflow_root.as_deref());
-        let wrapped = match self.env_resolver.wrap_command(
+        // Issue #1177: `command` may already be the ROUTED text (sensitive
+        // values replaced by `${OXO_FLOW_SENSITIVE_<n>}` references), so the
+        // container backend's automatic host-path discovery must read the
+        // PRE-routing `mount_source` — scanning the routed text silently
+        // dropped the bind mount of a path-valued secret and the rule then
+        // failed with a missing file inside the container. A mount whose
+        // path IS a sensitive value is rendered through its variable, so the
+        // literal never re-enters the wrapper string / child argv. Other
+        // backends ignore the list.
+        let external_mounts = if resolved_env.kind() == "docker" {
+            Some(external_bind_mounts_for(
+                mount_source,
+                &self.config.workdir,
+                &sensitive_bindings(&self.config.sensitive_values),
+            ))
+        } else {
+            None
+        };
+        let wrapped = match self.env_resolver.wrap_command_with_external_mounts(
             command,
             &resolved_env,
             Some(&resources),
             &self.config.workdir,
+            external_mounts.as_deref(),
         ) {
             Ok(wrapped) => Ok(match scratch_dir {
                 Some(scratch) => fixup_container_wrapper(
@@ -1844,6 +1864,7 @@ impl LocalExecutor {
     fn rewrap_if_pixi_degraded(
         &self,
         base_cmd: &str,
+        mount_source: &str,
         rule: &Rule,
         scratch_dir: Option<&Path>,
     ) -> Result<Option<String>> {
@@ -1862,7 +1883,12 @@ impl LocalExecutor {
             "environment is degraded (stale pixi.lock fallback) — executing with \
              'pixi run --as-is' so the restored committed lock is not re-validated"
         );
-        Ok(Some(self.resolve_command(base_cmd, rule, scratch_dir)?))
+        Ok(Some(self.resolve_command(
+            base_cmd,
+            mount_source,
+            rule,
+            scratch_dir,
+        )?))
     }
 
     /// Wait until the resource pool can accommodate the rule, then reserve
@@ -2474,6 +2500,10 @@ impl LocalExecutor {
         // semantics.
         let base_cmd =
             crate::config::prepend_shell_prelude(&base_cmd, self.config.shell_prelude.as_deref());
+        // Issue #1177: keep the command BEFORE sensitive routing — container
+        // backends discover their automatic host bind mounts from this text,
+        // which still carries the real host paths.
+        let unrouted_cmd = base_cmd.clone();
         // Sensitive values leave the command line here (audit A1): what the
         // shell runs references environment variables instead, and the
         // recorded command shows those references — the same masked surface
@@ -2601,7 +2631,7 @@ impl LocalExecutor {
         );
 
         let mut resolved_commands =
-            vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())?];
+            vec![self.resolve_command(&base_cmd, &unrouted_cmd, &rule, scratch_dir.as_deref())?];
         record.command = resolved_commands
             .first()
             .cloned()
@@ -2899,7 +2929,7 @@ impl LocalExecutor {
         // lock and fail on the vanished upstream build — re-resolve with
         // `pixi run --as-is` and keep the audit record honest.
         if let Some(refreshed) =
-            self.rewrap_if_pixi_degraded(&base_cmd, &rule, scratch_dir.as_deref())?
+            self.rewrap_if_pixi_degraded(&base_cmd, &unrouted_cmd, &rule, scratch_dir.as_deref())?
         {
             resolved_commands = vec![refreshed];
             record.command = resolved_commands
@@ -3613,7 +3643,7 @@ impl LocalExecutor {
                 // Preview only — nothing executes here, so a wrapping failure
                 // shows the raw command rather than failing the dry run.
                 let wrapped = command.as_deref().map(|cmd| {
-                    self.resolve_command(cmd, rule, None).unwrap_or_else(|e| {
+                    self.resolve_command(cmd, cmd, rule, None).unwrap_or_else(|e| {
                         tracing::warn!(
                             rule = %rule.name,
                             error = %e,
@@ -7371,7 +7401,7 @@ mod tests {
         // 72G (an upstream HPC label) on a 2G box — the container cgroup
         // must reflect the machine, not the declaration.
         let cmd = ex
-            .resolve_command("echo hi", &docker_rule("72G"), None)
+            .resolve_command("echo hi", "echo hi", &docker_rule("72G"), None)
             .unwrap();
         assert!(cmd.contains("--memory 2048M"), "cmd: {cmd}");
     }
@@ -7380,9 +7410,63 @@ mod tests {
     fn resolve_command_keeps_declared_memory_when_within_system_total() {
         let ex = executor_with(4, 2048);
         let cmd = ex
-            .resolve_command("echo hi", &docker_rule("1G"), None)
+            .resolve_command("echo hi", "echo hi", &docker_rule("1G"), None)
             .unwrap();
         assert!(cmd.contains("--memory 1G"), "cmd: {cmd}");
+    }
+
+    /// Issue #1177 (RB-12 residual): sensitive routing replaces a
+    /// path-valued `sensitive = true` config value with
+    /// `${OXO_FLOW_SENSITIVE_<n>}` BEFORE the docker wrap, so the executor
+    /// must hand the wrapper the PRE-routing command as the mount source.
+    /// Rescanning the routed text (the pre-fix behavior) drops the bind
+    /// mount and the rule fails with a missing file inside the container.
+    #[test]
+    fn resolve_command_mounts_sensitive_path_from_pre_routing_command() {
+        let reference_dir = tempfile::Builder::new()
+            .prefix("oxo-1177-ref")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let reference = reference_dir.path().join("hg38.fa");
+        std::fs::write(&reference, b"ACGT").unwrap();
+        let reference = reference.display().to_string();
+        let workdir = tempfile::Builder::new()
+            .prefix("oxo-1177-wd")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: workdir.path().to_path_buf(),
+            sensitive_values: vec![reference.clone()],
+            ..Default::default()
+        });
+        let rule = docker_rule("1G");
+
+        let unrouted = format!("bwa mem {reference} reads.fq > out.sam");
+        let (routed, envs) = ex.route_sensitive_values(&unrouted, &rule);
+        assert!(
+            envs.contains_key("OXO_FLOW_SENSITIVE_0"),
+            "the path value must be routed out of the command: {envs:?}"
+        );
+
+        // Pre-fix behavior: the routed text no longer carries the path, so
+        // scanning it discovers no external mount.
+        let from_routed = ex.resolve_command(&routed, &routed, &rule, None).unwrap();
+        assert!(
+            !from_routed.contains(":ro"),
+            "the routed text alone loses the mount (this is the regression): {from_routed}"
+        );
+
+        // The pre-routing text keeps the mount, expanded through the routed
+        // variable so the literal never re-enters the wrapper string.
+        let wrapped = ex.resolve_command(&routed, &unrouted, &rule, None).unwrap();
+        assert!(
+            wrapped.contains(r#"-v "${OXO_FLOW_SENSITIVE_0}":"${OXO_FLOW_SENSITIVE_0}":ro"#),
+            "the sensitive path must keep its bind mount: {wrapped}"
+        );
+        assert!(
+            !wrapped.contains(&reference),
+            "the sensitive literal must stay off the wrapper string: {wrapped}"
+        );
     }
 
     #[test]
@@ -7404,7 +7488,7 @@ mod tests {
             ..Default::default()
         };
         let wrapped = ex
-            .resolve_command("bwa mem ref.fa", &rule, None)
+            .resolve_command("bwa mem ref.fa", "bwa mem ref.fa", &rule, None)
             .expect("inline package specs are wrappable now");
         assert!(
             wrapped.contains("conda run --no-capture-output -n bwa-"),
@@ -7422,7 +7506,7 @@ mod tests {
             ..Default::default()
         };
         let err = ex
-            .resolve_command("bwa mem ref.fa", &rule, None)
+            .resolve_command("bwa mem ref.fa", "bwa mem ref.fa", &rule, None)
             .expect_err("a declared environment that cannot be wrapped must fail the rule");
         assert!(
             matches!(err, OxoFlowError::Environment { .. }),
@@ -7436,7 +7520,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            ex.resolve_command("echo hi", &plain, None).unwrap(),
+            ex.resolve_command("echo hi", "echo hi", &plain, None)
+                .unwrap(),
             "echo hi"
         );
     }
@@ -8345,7 +8430,7 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         let ex = executor_with(4, 2048);
         let rule = docker_rule("1G");
         let user_cmd = "echo hello > out.txt";
-        let wrapped = ex.resolve_command(user_cmd, &rule, None).unwrap();
+        let wrapped = ex.resolve_command(user_cmd, user_cmd, &rule, None).unwrap();
         let wrapper_hits = user_command_warnings(&wrapped);
         assert!(
             wrapper_hits
@@ -8391,7 +8476,9 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
             },
             ..Default::default()
         };
-        let wrapped = ex.resolve_command("echo hello", &rule, None).unwrap();
+        let wrapped = ex
+            .resolve_command("echo hello", "echo hello", &rule, None)
+            .unwrap();
         assert_eq!(wrapped, "numactl --cpunodebind=2 --membind=2 -- echo hello");
     }
 
@@ -8766,7 +8853,9 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         // command is wrapped ~200 lines BEFORE ensure_environment_ready, so
         // the pre-setup wrap cannot see the degraded marker that recovery
         // sets at setup time — it carries the plain `pixi run`.
-        let wrapped = ex.resolve_command("python main.py", &rule, None).unwrap();
+        let wrapped = ex
+            .resolve_command("python main.py", "python main.py", &rule, None)
+            .unwrap();
         assert_eq!(
             wrapped,
             "pixi run --manifest-path wf/pixi/pixi.toml bash -c 'python main.py'"
@@ -8793,7 +8882,7 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         // variant — without it the rule fails with the same 404, because
         // the pre-setup wrap re-validates the restored committed lock.
         let refreshed = ex
-            .rewrap_if_pixi_degraded("python main.py", &rule, None)
+            .rewrap_if_pixi_degraded("python main.py", "python main.py", &rule, None)
             .unwrap();
         let refreshed = refreshed.expect("a degraded environment must trigger a re-wrap");
         assert_eq!(
@@ -8804,7 +8893,7 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         // A rule whose environment is not degraded keeps its command.
         let plain_rule = recovery_rule();
         assert!(
-            ex.rewrap_if_pixi_degraded("echo hi", &plain_rule, None)
+            ex.rewrap_if_pixi_degraded("echo hi", "echo hi", &plain_rule, None)
                 .unwrap()
                 .is_none()
         );

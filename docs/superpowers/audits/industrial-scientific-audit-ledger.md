@@ -411,7 +411,22 @@ Required exit evidence:
   job bodies of Kubernetes / AWS Batch / GCP Batch — both the `run --profile` driver and
   `cluster submit` route each value to an `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is
   built (issue #1120), with one shared binding table per run. HPC script bodies
-  (SLURM/PBS/SGE/LSF) still materialize the literal — open.]
+  (SLURM/PBS/SGE/LSF) still materialize the literal — open. Residual found by PR
+  #1176's review and fixed in `dea4ee73` (issue #1177): a path-valued sensitive
+  value keeps its docker auto-bind mount — mounts are discovered from the
+  PRE-routing command and a sensitive path is expanded host-side from its routed
+  variable (`-v "${OXO_FLOW_SENSITIVE_n}":…`), so the wrapper string and the
+  rule shell's argv carry only the reference. The docker client itself
+  necessarily receives the expanded path as the mount source (a bind mount
+  cannot be expressed without the runtime seeing the path); a value embedded in
+  a LONGER path is skipped with a masked warning instead of being
+  re-materialized literally. Tests:
+  `environment::tests::{docker_wrap_mounts_sensitive_path_through_routed_variable,
+  docker_wrap_explicit_mounts_keep_non_sensitive_paths_literal,
+  docker_wrap_skips_mount_for_path_embedding_a_sensitive_value,
+  singularity_wrap_unchanged_by_external_mount_threading}`,
+  `executor::process::tests::resolve_command_mounts_sensitive_path_from_pre_routing_command`
+  (the latter fails on the pre-fix rescan-the-routed-text path).]
 - Each backend obtains the value through a restricted secret-injection path. [Kubernetes carries a
   `secretKeyRef` to the documented `oxoflow-secrets` Secret; docker/singularity forward the routed
   name through the child environment. AWS Batch and GCP Batch have no engine-visible injection

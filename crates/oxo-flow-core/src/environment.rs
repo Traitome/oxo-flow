@@ -763,6 +763,27 @@ fn is_bindable_host_path(path: &std::path::Path, workdir: &str) -> bool {
     path.exists()
 }
 
+/// One host path the container wrapper must bind-mount.
+///
+/// `sensitive_var` is `Some` when the path IS a `sensitive = true` config
+/// value: that value was routed out of the command into
+/// `OXO_FLOW_SENSITIVE_<n>` (issue #1120 / RB-12), so the mount must be
+/// rendered through that reference instead of the literal — otherwise the
+/// value would re-enter the wrapper string and the child argv (issue #1177).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExternalBindMount {
+    /// Absolute host path as it appears in the PRE-routing command.
+    pub path: String,
+    /// The routed variable carrying exactly this path, if it is sensitive.
+    pub sensitive_var: Option<String>,
+}
+
+/// [`external_bind_mounts_with_bindings`] for a command whose sensitive
+/// values (if any) were never routed out — every path is still literal.
+fn external_bind_mounts(command: &str, workdir: &str) -> Vec<ExternalBindMount> {
+    external_bind_mounts_with_bindings(command, workdir, &[])
+}
+
 /// Absolute host paths a rendered command references that the workdir mount
 /// does not already make visible inside the container.
 ///
@@ -770,16 +791,98 @@ fn is_bindable_host_path(path: &std::path::Path, workdir: &str) -> bool {
 /// reference genome or index outside it failed with "No such file" inside
 /// the container while the same command ran fine on the host. Paths come
 /// back deduplicated and sorted, so the rendered wrapper is deterministic.
-fn external_bind_mounts(command: &str, workdir: &str) -> Vec<String> {
+///
+/// `command` must be the PRE-routing text when sensitive routing ran
+/// (the executor replaces each `sensitive = true` value with an
+/// `OXO_FLOW_SENSITIVE_<n>` reference before wrapping): the routed text no
+/// longer carries the path, and scanning it silently dropped the mount
+/// (issue #1177). `sensitive_bindings` is the run's stable variable/value
+/// table; an exactly matching path is tagged with its variable so the
+/// wrapper can expand the mount host-side without the literal entering the
+/// wrapper string.
+pub(crate) fn external_bind_mounts_with_bindings(
+    command: &str,
+    workdir: &str,
+    sensitive_bindings: &[(String, String)],
+) -> Vec<ExternalBindMount> {
     command
         .split(|c: char| SHELL_WORD_BREAKS.contains(&c))
         .filter(|token| {
             token.starts_with('/') && is_bindable_host_path(std::path::Path::new(token), workdir)
         })
-        .map(str::to_string)
+        .filter_map(|token| {
+            if let Some((var, _)) = sensitive_bindings
+                .iter()
+                .find(|(_, value)| value.as_str() == token)
+            {
+                return Some(ExternalBindMount {
+                    path: token.to_string(),
+                    sensitive_var: Some(var.clone()),
+                });
+            }
+            if sensitive_bindings
+                .iter()
+                .any(|(_, value)| token.contains(value.as_str()))
+            {
+                // A secret embedded in a LONGER host path: mounting the
+                // literal would put the value back on the wrapper argv, and
+                // no routed variable expands to the whole path. Skipping the
+                // mount (the rule then fails with a missing file inside the
+                // container) is safer than re-exposing the value; the masked
+                // path in the warning points at the culprit.
+                let masked = sensitive_bindings
+                    .iter()
+                    .fold(token.to_string(), |text, (_, value)| {
+                        text.replace(value.as_str(), "***")
+                    });
+                tracing::warn!(
+                    path = %masked,
+                    "a declared sensitive value is embedded in an absolute host path — \
+                     skipping its container bind mount rather than putting the value back \
+                     on the command line; declare the whole path as the sensitive value"
+                );
+                return None;
+            }
+            Some(ExternalBindMount {
+                path: token.to_string(),
+                sensitive_var: None,
+            })
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// [`external_bind_mounts_with_bindings`] for callers holding a `Path`:
+/// normalizes the workdir exactly like the container wrappers do, so mount
+/// discovery and the wrapper's workdir mount agree on the same path (issue
+/// #1177).
+pub(crate) fn external_bind_mounts_for(
+    command: &str,
+    workdir: &std::path::Path,
+    sensitive_bindings: &[(String, String)],
+) -> Vec<ExternalBindMount> {
+    external_bind_mounts_with_bindings(command, &absolute_host_path(workdir), sensitive_bindings)
+}
+
+/// Render one automatic bind mount as a `docker run` argument.
+///
+/// A sensitive path is expanded from its routed variable by the host shell
+/// (`-v "${VAR}":"${VAR}":ro`): docker still receives a real host path, but
+/// the literal never appears in the wrapper string or the rule shell's argv
+/// (issue #1177 / RB-12). Non-sensitive paths keep the historical
+/// single-quoted literal form.
+fn render_external_bind_mount(mount: &ExternalBindMount) -> String {
+    match &mount.sensitive_var {
+        // Double quotes (not single): the reference must expand host-side,
+        // and expansion inside double quotes is not word-split — a path with
+        // spaces stays one mount argument.
+        Some(var) => format!(" -v \"${{{var}}}\":\"${{{var}}}\":ro"),
+        None => {
+            let quoted = escape_for_sh_single_quote(&mount.path);
+            format!(" -v '{quoted}':'{quoted}':ro")
+        }
+    }
 }
 
 /// Whether a container image reference is registry-unqualified.
@@ -1143,6 +1246,26 @@ impl DockerBackend {
         workdir: &std::path::Path,
         gpus: Option<&str>,
     ) -> Result<String> {
+        self.wrap_command_with_gpus_and_mounts(command, spec, resources, workdir, gpus, None)
+    }
+
+    /// [`Self::wrap_command_with_gpus`] taking the automatic bind mounts the
+    /// caller computed from its PRE-routing command (issue #1177).
+    ///
+    /// `None` scans `command` — correct when no sensitive-value routing ran,
+    /// because the routed and unrouted texts are then identical. The explicit
+    /// list exists because `sensitive = true` values are replaced by
+    /// `OXO_FLOW_SENSITIVE_<n>` references before wrapping: rescanning the
+    /// routed text silently dropped the mount of a path-valued secret.
+    fn wrap_command_with_gpus_and_mounts(
+        &self,
+        command: &str,
+        spec: &str,
+        resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
+        gpus: Option<&str>,
+        external_mounts: Option<&[ExternalBindMount]>,
+    ) -> Result<String> {
         // Docker requires absolute paths for -v/-w: a relative workdir
         // ("." when running from the workflow dir) is rejected by the
         // daemon ("the working directory '.' is invalid").
@@ -1159,12 +1282,17 @@ impl DockerBackend {
         // split the `-v`/`-w` value into two shell words and mount the
         // wrong source (docker: "invalid mode: doe/run").
         let quoted_workdir = escape_for_sh_single_quote(&workdir);
-        let mounts = external_bind_mounts(command, &workdir)
+        let scanned_mounts;
+        let mounts = match external_mounts {
+            Some(mounts) => mounts,
+            None => {
+                scanned_mounts = external_bind_mounts(command, &workdir);
+                &scanned_mounts
+            }
+        };
+        let mounts = mounts
             .iter()
-            .map(|path| {
-                let quoted = escape_for_sh_single_quote(path);
-                format!(" -v '{quoted}':'{quoted}':ro")
-            })
+            .map(render_external_bind_mount)
             .collect::<String>();
         let escaped_cmd = escape_for_sh_single_quote(command);
         let spec = escape_for_sh_single_quote(&mirrored_spec(spec));
@@ -2043,6 +2171,26 @@ impl EnvironmentResolver {
         resources: Option<&crate::rule::Resources>,
         workdir: &std::path::Path,
     ) -> Result<String> {
+        self.wrap_command_with_external_mounts(command, env_spec, resources, workdir, None)
+    }
+
+    /// [`Self::wrap_command`] with the container backend's automatic bind
+    /// mounts supplied explicitly (issue #1177).
+    ///
+    /// The caller computes them from the command BEFORE sensitive-value
+    /// routing replaces a `sensitive = true` value with an
+    /// `OXO_FLOW_SENSITIVE_<n>` reference — the routed text no longer carries
+    /// a path-valued secret, so rescanning it inside the docker wrapper
+    /// dropped the mount and the rule failed with a missing file inside the
+    /// container. Non-container backends ignore the list.
+    pub(crate) fn wrap_command_with_external_mounts(
+        &self,
+        command: &str,
+        env_spec: &EnvironmentSpec,
+        resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
+        external_mounts: Option<&[ExternalBindMount]>,
+    ) -> Result<String> {
         ensure_no_backend_conflict(env_spec)?;
         if let Some(ref mamba) = env_spec.mamba {
             return self.mamba.wrap_command_with_opts(
@@ -2069,12 +2217,13 @@ impl EnvironmentResolver {
             return self.pixi.wrap_command(command, pixi, resources, workdir);
         }
         if let Some(ref docker) = env_spec.docker {
-            return self.docker.wrap_command_with_gpus(
+            return self.docker.wrap_command_with_gpus_and_mounts(
                 command,
                 docker,
                 resources,
                 workdir,
                 env_spec.gpus.as_deref(),
+                external_mounts,
             );
         }
         if let Some(ref singularity) = env_spec.singularity {
@@ -5140,5 +5289,163 @@ mod tests {
             !wrapped.contains("ENV_OXO_FLOW_SENSITIVE_0="),
             "no inline assignment may precede the runtime: {wrapped}"
         );
+    }
+
+    /// Issue #1177 (RB-12 residual): a `sensitive = true` value that IS an
+    /// absolute host path must keep its automatic bind mount, while the
+    /// literal stays out of the wrapper string — the mount is expanded from
+    /// the routed variable by the host shell.
+    #[test]
+    fn docker_wrap_mounts_sensitive_path_through_routed_variable() {
+        let dir = mountable_scratch_dir();
+        let reference = dir.path().join("hg38.fa");
+        std::fs::write(&reference, b"ACGT").unwrap();
+        let reference = reference.display().to_string();
+        let workdir = mountable_scratch_dir();
+
+        let unrouted = format!("bwa mem {reference} reads.fq > out.sam");
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &unrouted,
+            std::slice::from_ref(&reference),
+        );
+        assert!(routed.contains("${OXO_FLOW_SENSITIVE_0}"));
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(reference.as_str())
+        );
+
+        // The routed text alone no longer carries the path — scanning it is
+        // exactly the regression this test pins: no mount is discovered.
+        assert!(
+            external_bind_mounts(&routed, &absolute_host_path(workdir.path())).is_empty(),
+            "the routed text must be treated as path-free (that was the bug)"
+        );
+
+        // The pre-routing text is the mount source; the path is tagged with
+        // the variable that carries it.
+        let mounts = external_bind_mounts_for(
+            &unrouted,
+            workdir.path(),
+            &crate::executor::process::sensitive_bindings(std::slice::from_ref(&reference)),
+        );
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(mounts[0].path, reference);
+        assert_eq!(
+            mounts[0].sensitive_var.as_deref(),
+            Some("OXO_FLOW_SENSITIVE_0")
+        );
+
+        let spec = EnvironmentSpec {
+            docker: Some("ubuntu:24.04".to_string()),
+            ..Default::default()
+        };
+        let wrapped = EnvironmentResolver::new()
+            .wrap_command_with_external_mounts(&routed, &spec, None, workdir.path(), Some(&mounts))
+            .unwrap();
+        assert!(
+            wrapped.contains(r#"-v "${OXO_FLOW_SENSITIVE_0}":"${OXO_FLOW_SENSITIVE_0}":ro"#),
+            "the sensitive path lost its bind mount: {wrapped}"
+        );
+        // The in-container reference still needs the value forwarded.
+        assert!(
+            wrapped.contains("-e OXO_FLOW_SENSITIVE_0"),
+            "docker must forward the routed variable into the container: {wrapped}"
+        );
+        assert!(
+            !wrapped.contains(&reference),
+            "the sensitive literal must not re-enter the wrapper string: {wrapped}"
+        );
+    }
+
+    /// Issue #1177: explicit mount discovery changes nothing for
+    /// non-sensitive paths — they keep the historical single-quoted literal
+    /// `-v` argument, and a command with no routed values behaves exactly
+    /// like the old rescan-the-command path.
+    #[test]
+    fn docker_wrap_explicit_mounts_keep_non_sensitive_paths_literal() {
+        let secret_dir = mountable_scratch_dir();
+        let secret = secret_dir.path().join("token-ref.fa");
+        std::fs::write(&secret, b"ACGT").unwrap();
+        let secret = secret.display().to_string();
+        let public_dir = mountable_scratch_dir();
+        let public = public_dir.path().join("hg38.fa");
+        std::fs::write(&public, b"ACGT").unwrap();
+        let public = public.display().to_string();
+        let workdir = mountable_scratch_dir();
+
+        let unrouted = format!("tool --secret {secret} --ref {public}");
+        let (routed, _env) = crate::executor::process::route_sensitive_values_through_env(
+            &unrouted,
+            std::slice::from_ref(&secret),
+        );
+        let mounts = external_bind_mounts_for(
+            &unrouted,
+            workdir.path(),
+            &crate::executor::process::sensitive_bindings(std::slice::from_ref(&secret)),
+        );
+        let spec = EnvironmentSpec {
+            docker: Some("ubuntu:24.04".to_string()),
+            ..Default::default()
+        };
+        let wrapped = EnvironmentResolver::new()
+            .wrap_command_with_external_mounts(&routed, &spec, None, workdir.path(), Some(&mounts))
+            .unwrap();
+
+        assert!(
+            wrapped.contains(&format!("-v '{public}':'{public}':ro")),
+            "a non-sensitive path keeps its literal mount: {wrapped}"
+        );
+        assert!(
+            wrapped.contains(r#"-v "${OXO_FLOW_SENSITIVE_0}":"${OXO_FLOW_SENSITIVE_0}":ro"#),
+            "the sensitive path is mounted through its variable: {wrapped}"
+        );
+        assert!(!wrapped.contains(&secret), "{wrapped}");
+    }
+
+    /// Issue #1177, safety edge: a sensitive value embedded in a LONGER host
+    /// path has no variable that expands to the whole path — mounting the
+    /// literal would put the value back on the wrapper argv, so the mount is
+    /// skipped instead (the rule fails with a missing file, not a leak).
+    #[test]
+    fn docker_wrap_skips_mount_for_path_embedding_a_sensitive_value() {
+        let dir = mountable_scratch_dir();
+        let token = "SUPER_SECRET_COMPONENT";
+        let reference = dir.path().join(token).join("hg38.fa");
+        std::fs::create_dir_all(reference.parent().unwrap()).unwrap();
+        std::fs::write(&reference, b"ACGT").unwrap();
+        let reference = reference.display().to_string();
+        let workdir = mountable_scratch_dir();
+
+        let command = format!("bwa mem {reference} reads.fq");
+        let mounts = external_bind_mounts_for(
+            &command,
+            workdir.path(),
+            &crate::executor::process::sensitive_bindings(&[token.to_string()]),
+        );
+        assert!(
+            mounts.is_empty(),
+            "a path embedding the secret must not be mounted literally: {mounts:?}"
+        );
+    }
+
+    /// Issue #1177: singularity discovers no automatic external mounts, so
+    /// the routing behavior is unchanged — the value rides
+    /// APPTAINERENV_/SINGULARITYENV_ and the argv carries only the reference.
+    #[test]
+    fn singularity_wrap_unchanged_by_external_mount_threading() {
+        let sentinel = "SENTINEL_SECRET_VALUE_C3";
+        let (routed, _env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --token {sentinel}"),
+            &[sentinel.to_string()],
+        );
+        let spec = EnvironmentSpec {
+            singularity: Some("image.sif".to_string()),
+            ..Default::default()
+        };
+        let wrapped = EnvironmentResolver::new()
+            .wrap_command(&routed, &spec, None, std::path::Path::new("."))
+            .unwrap();
+        assert!(!wrapped.contains(sentinel), "{wrapped}");
+        assert!(wrapped.contains("${OXO_FLOW_SENSITIVE_0}"), "{wrapped}");
     }
 }
