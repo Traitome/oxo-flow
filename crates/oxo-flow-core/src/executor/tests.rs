@@ -3130,7 +3130,7 @@ async fn spawn_rule_shell_children_die_on_drop() {
     // its in-flight Command future must not orphan the OS process (the
     // abort sweep only knows about the registered main-loop pids).
     let child =
-        super::process::spawn_rule_shell("sleep 30", &std::env::temp_dir(), &HashMap::new())
+        super::process::spawn_rule_shell("sleep 30", &std::env::temp_dir(), &HashMap::new(), false)
             .unwrap();
     let pid = child.id().expect("spawned child has a pid");
     drop(child);
@@ -3177,7 +3177,8 @@ async fn spawn_rule_shell_falls_back_to_sh_when_bash_missing() {
 
     let envs = HashMap::from([("PATH".to_string(), tmp.to_string_lossy().into_owned())]);
     let child =
-        super::process::spawn_rule_shell("echo fallback_ok", &std::env::temp_dir(), &envs).unwrap();
+        super::process::spawn_rule_shell("echo fallback_ok", &std::env::temp_dir(), &envs, false)
+            .unwrap();
     let output = child.wait_with_output().await.unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

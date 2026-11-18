@@ -817,9 +817,17 @@ impl super::ExecutorBackend for ClusterExecutor {
         rule: &crate::rule::Rule,
         cmd_dir: &str,
         count: usize,
+        sensitive_refs: &[String],
     ) -> Result<String> {
         Ok(finish_script(
-            &generate_array_submit_script(&self.backend, rule, cmd_dir, count, &self.cluster)?,
+            &generate_array_submit_script(
+                &self.backend,
+                rule,
+                cmd_dir,
+                count,
+                sensitive_refs,
+                &self.cluster,
+            )?,
             &self.backend,
             &self.workdir,
         ))
@@ -2012,7 +2020,7 @@ mod tests {
             ..crate::rule::Rule::default()
         };
         let script = exec
-            .render_array_script(&rule, "/run/jobs/align/chunk-1", 2)
+            .render_array_script(&rule, "/run/jobs/align/chunk-1", 2, &[])
             .unwrap();
         assert_eq!(
             script.matches("set -e").count(),

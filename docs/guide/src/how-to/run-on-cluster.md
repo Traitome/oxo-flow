@@ -408,6 +408,45 @@ On clusters, the scheduler enforces resources based on the generated directives.
     interrupted rule is `required = false` — an interrupt is never
     reported as a completed run.
 
+!!! note "What environment a cloud job sees"
+    Cloud jobs (Kubernetes, AWS Batch, GCP Batch) never inherit the
+    submitting host's environment. The generated manifest/spec carries the
+    rendered rule command (and, when sensitive values are routed, a
+    `secretKeyRef` env block referencing the operator's Secret), so the job
+    process sees the container
+    image's own `ENV` (or the VM image's environment for a GCP Batch
+    script runnable) plus what the engine puts in the command: the rule's
+    declared `envvars` (rendered as `export K='V'`) and the
+    `OXO_FLOW_SENSITIVE_<n>` references for `sensitive = true` values.
+    Ambient variables from the submit shell — API tokens, cloud
+    credentials, proxy settings — are never forwarded, and a regression
+    test per backend pins that boundary (issue #1171). To get a host-side
+    value onto the compute side, declare it in `envvars` or deliver it
+    through the backend's secret channel; `OXO_FLOW_ENV_PASSTHROUGH` does
+    not apply to cloud jobs because there is no ambient environment to
+    re-admit. HPC job scripts (SLURM/PBS/SGE/LSF) are different: they do
+    run a shell on nodes that the scheduler seeded from the submit
+    environment, so they apply the `env -i` allowlist described in
+    [the run reference](../commands/run.md#hpc-cluster-submissions) and in
+    [workflow format](../reference/workflow-format.md#environment-specification).
+
+!!! warning "`sensitive = true` values need an operator-side secret on cloud backends"
+    Cloud runs (`run --profile <NAME>` with `[cluster] backend = "kubernetes"`,
+    `"aws-batch"`, or `"gcp-batch"`, and `cluster submit -b` with the same
+    backends) route every `sensitive = true` config value out of the job body
+    before the manifest is generated: the body carries only an
+    `OXO_FLOW_SENSITIVE_<n>` reference. Names are assigned longest-value-first
+    (then lexically; values under 4 characters stay on the command line), and
+    the same names are used across all rules and array elements. Supply the
+    value through the backend's own secret channel — a Kubernetes Secret
+    named `oxoflow-secrets` (one key per variable name), the AWS Batch job
+    definition's `containerProperties.secrets`, or GCP Batch
+    `taskSpec.environment.secretVariables` — or the reference expands empty
+    and the rule fails. Details:
+    [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables).
+    HPC scheduler scripts (SLURM/PBS/SGE/LSF) still materialize the value in
+    the generated script; that half of the hardening is not yet done.
+
 !!! tip "Check resource availability"
     Use `sinfo` (SLURM), `pbsnodes` (PBS), or `qhost` (SGE) to verify available resources before submitting.
 

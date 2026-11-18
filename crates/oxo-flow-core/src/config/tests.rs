@@ -487,6 +487,70 @@ fn resolve_includes_with_namespace_and_depends_on() {
     assert_eq!(trim_rule.depends_on, vec!["qc::qc_step"]);
 }
 
+/// Issue #1152 (WF-01): a namespaced include must rewrite `extends` to the
+/// module-qualified base name, exactly like `depends_on`. Before the fix the
+/// load path merged `m::child_step` with `extends = "mid_step"`, and the
+/// post-merge `resolve_rule_templates` could not find `mid_step` (it had been
+/// renamed `m::mid_step`) — the whole workflow failed to load. Multi-level
+/// (base -> mid -> child) also proves resolution runs after the merge on the
+/// full `from_file` load path.
+#[test]
+fn resolve_includes_with_namespace_rewrites_extends() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let included_content = r#"
+        [workflow]
+        name = "module"
+
+        [[rules]]
+        name = "base_step"
+        threads = 4
+        shell = "echo base"
+
+        [[rules]]
+        name = "mid_step"
+        extends = "base_step"
+        shell = "echo mid"
+
+        [[rules]]
+        name = "child_step"
+        extends = "mid_step"
+        shell = "echo child"
+    "#;
+    std::fs::write(dir.path().join("mod.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[include]]
+        path = "mod.oxoflow"
+        namespace = "m"
+
+        [[rules]]
+        name = "align"
+        shell = "bwa"
+    "#;
+    let main_path = dir.path().join("main.oxoflow");
+    std::fs::write(&main_path, main_content).unwrap();
+
+    // Full load path: deserialize -> resolve_includes (namespace rewrite)
+    // -> resolve_rule_templates.
+    let config =
+        WorkflowConfig::from_file(&main_path).expect("namespaced module with extends loads");
+
+    assert_eq!(config.rules.len(), 4);
+    let child = config
+        .rules
+        .iter()
+        .find(|r| r.name == "m::child_step")
+        .expect("m::child_step must be present");
+    assert_eq!(child.extends.as_deref(), Some("m::mid_step"));
+    // Inherited through m::mid_step — resolution used the resolved base, not
+    // the pre-namespace snapshot.
+    assert_eq!(child.threads, Some(4));
+}
+
 #[test]
 fn resolve_includes_without_namespace() {
     let dir = tempfile::tempdir().unwrap();

@@ -57,8 +57,87 @@ fn staged_upload_path(dest: &FsPath) -> PathBuf {
         .file_name()
         .map(|n| n.to_os_string())
         .unwrap_or_else(|| "upload".into());
-    name.push(format!(".{seq}.{}.tmp", std::process::id()));
+    // The `.oxoupload-` marker segment makes the shape collision-proof:
+    // a plain `<base>.<seq>.<pid>.tmp` would swallow genuine versioned
+    // user files like `align.1.1.tmp` (independent-review finding on the
+    // first cut — a sweep that can delete a real input is strictly worse
+    // than the phantom listing it prevents).
+    name.push(format!(".oxoupload-{seq}-{}.tmp", std::process::id()));
     dest.with_file_name(name)
+}
+
+/// Whether `name` is a staged-upload temp (`<name>.oxoupload-<seq>-<pid>.tmp`),
+/// the sibling shape [`staged_upload_path`] hands the upload handler. A
+/// process killed between `File::create` and the final `rename`/`remove_file`
+/// leaves one behind; it is engine scratch, never a user upload, so the file
+/// listing and run staging must both skip it — otherwise the user is shown a
+/// phantom input and it is mirrored into every run directory (issue #1161).
+///
+/// The marker segment (`oxoupload-<digits>-<digits>` before `.tmp`) names the
+/// engine: a genuine user upload would have to carry that literal marker with
+/// two all-numeric fields to be hidden, which is not a realistic filename —
+/// unlike the bare numeric stamp the first cut used, which collided with
+/// versioned names like `assembly.2024.11.tmp`.
+pub(crate) fn is_staged_upload_tmp(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    // Last dot component is the engine marker `oxoupload-<seq>-<pid>`;
+    // everything before it is the user's base name.
+    let Some((base, marker)) = stem.rsplit_once('.') else {
+        return false;
+    };
+    let Some(rest) = marker.strip_prefix("oxoupload-") else {
+        return false;
+    };
+    let Some((seq, pid)) = rest.split_once('-') else {
+        return false;
+    };
+    !base.is_empty()
+        && !seq.is_empty()
+        && seq.bytes().all(|b| b.is_ascii_digit())
+        && !pid.is_empty()
+        && pid.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Best-effort removal of staged-upload temps under `dir` (recursive —
+/// uploads accept a `path` subdir, so orphan temps can sit at any depth)
+/// left by a process that no longer exists. Temps stamped with the current
+/// PID are skipped — they may belong to an upload still streaming in this
+/// process. Returns the number removed. Errors are swallowed: this is
+/// tidying, not a correctness gate.
+pub(crate) fn prune_staged_upload_temps(dir: &FsPath) -> usize {
+    // Live temps end `oxoupload-<seq>-<own pid>.tmp`; the hyphen delimiter
+    // keeps a pid-suffix match exact (pid 424 never matches pid 42424).
+    let own_suffix = format!("-{}.tmp", std::process::id());
+    fn walk(dir: &FsPath, own_suffix: &str) -> usize {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        let mut removed = 0usize;
+        for item in rd.flatten() {
+            let path = item.path();
+            let Ok(file_type) = item.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                removed += walk(&path, own_suffix);
+                continue;
+            }
+            let file_name = item.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if !is_staged_upload_tmp(name) || name.ends_with(own_suffix) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+    walk(dir, &own_suffix)
 }
 
 /// Filenames that must never be downloadable (secrets often end up in
@@ -934,6 +1013,10 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
         )
         .into_response();
     };
+    // Clear staged temps orphaned by a previous process before walking the
+    // tree, so a crashed upload neither appears in this listing nor (via
+    // `stage_user_inputs`) reaches a run directory (issue #1161).
+    prune_staged_upload_temps(&root);
     let mut out: Vec<serde_json::Value> = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
@@ -947,8 +1030,15 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
                 stack.push(path);
                 continue;
             }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // A staged temp is engine scratch, not a user upload.
+            if is_staged_upload_tmp(name) {
+                continue;
+            }
             out.push(serde_json::json!({
-                "name": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                "name": name,
                 "path": path.strip_prefix(&root).unwrap_or(&path).to_string_lossy(),
                 "size_bytes": meta.len(),
             }));
@@ -964,6 +1054,98 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #1161: the staged-upload temp shape (engine marker segment
+    /// `.oxoupload-<seq>-<pid>.tmp`) is recognised; real uploads — including
+    /// versioned names that a bare numeric stamp used to swallow
+    /// (`align.1.1.tmp`) — are not.
+    #[test]
+    fn staged_upload_tmp_shape_is_narrow() {
+        assert!(is_staged_upload_tmp("sample.bam.oxoupload-3-4242.tmp"));
+        assert!(is_staged_upload_tmp("meta.tsv.oxoupload-0-1.tmp"));
+        assert!(
+            !is_staged_upload_tmp("notes.tmp"),
+            "real upload, not scratch"
+        );
+        assert!(!is_staged_upload_tmp("sample.bam.tmp"), "no marker stamp");
+        assert!(
+            !is_staged_upload_tmp("sample.bam.3.4242.tmp"),
+            "bare numeric stamp is NOT the engine marker — a real versioned \
+             file like align.1.1.tmp must stay visible"
+        );
+        assert!(
+            !is_staged_upload_tmp("sample.bam.oxoupload-x-4242.tmp"),
+            "seq not numeric"
+        );
+        assert!(
+            !is_staged_upload_tmp("sample.bam.oxoupload-3.tmp"),
+            "pid missing"
+        );
+        assert!(
+            !is_staged_upload_tmp("sample.bam.oxoupload-.tmp"),
+            "empty seq/pid"
+        );
+        assert!(
+            !is_staged_upload_tmp("oxoupload-3-4242.tmp"),
+            "no base name before the marker"
+        );
+        assert!(!is_staged_upload_tmp("sample.bam"));
+    }
+
+    /// Issue #1161: temps stamped with a dead process are swept; the current
+    /// process's own in-flight temps are left alone.
+    #[test]
+    fn prune_staged_upload_temps_spares_live_process_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let orphan = dir.path().join("sample.bam.oxoupload-1-999999.tmp");
+        std::fs::write(&orphan, "partial").unwrap();
+        let live = dir
+            .path()
+            .join(format!("sample.bam.oxoupload-2-{}.tmp", std::process::id()));
+        std::fs::write(&live, "streaming").unwrap();
+        let real = dir.path().join("sample.bam");
+        std::fs::write(&real, "data").unwrap();
+
+        let removed = prune_staged_upload_temps(dir.path());
+
+        assert_eq!(removed, 1, "only the orphaned temp is removed");
+        assert!(!orphan.exists());
+        assert!(live.exists(), "this process's own temp must survive");
+        assert!(real.exists(), "a real upload is never touched");
+    }
+
+    /// Independent-review finding: the sweep must recurse — uploads accept a
+    /// `path` subdir, so orphan temps can sit below the inputs root.
+    #[test]
+    fn prune_staged_upload_temps_walks_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("reads");
+        std::fs::create_dir_all(&sub).unwrap();
+        let nested_orphan = sub.join("a.fq.oxoupload-7-999999.tmp");
+        std::fs::write(&nested_orphan, "partial").unwrap();
+        let nested_real = sub.join("a.fq");
+        std::fs::write(&nested_real, "data").unwrap();
+
+        let removed = prune_staged_upload_temps(dir.path());
+
+        assert_eq!(removed, 1, "the nested orphan is swept");
+        assert!(!nested_orphan.exists());
+        assert!(nested_real.exists(), "real nested upload survives");
+    }
+
+    /// The generated temp name must itself satisfy the predicate and must
+    /// round-trip through rename-to-dest unchanged in spirit (same dir).
+    #[test]
+    fn staged_upload_path_produces_recognizable_temps() {
+        let dest = std::path::Path::new("/ws/inputs/reads.fq");
+        let tmp = staged_upload_path(dest);
+        let name = tmp.file_name().unwrap().to_str().unwrap();
+        assert!(
+            is_staged_upload_tmp(name),
+            "generated temp {name} must match the predicate"
+        );
+        assert!(name.starts_with("reads.fq.oxoupload-"), "sibling of dest");
+    }
 
     /// A directory whose name is not visible ASCII (CJK, em-dash, ...) must
     /// produce a fallback header, not a panicked handler (audit #643).

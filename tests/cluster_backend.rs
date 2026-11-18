@@ -756,7 +756,7 @@ async fn kubernetes_executor_renders_manifest_and_parses_status() {
         "4"
     );
 
-    let array_manifest = exec.render_array_script(&rule, "runs/cmd", 3).unwrap();
+    let array_manifest = exec.render_array_script(&rule, "runs/cmd", 3, &[]).unwrap();
     let arr_val: serde_json::Value = serde_json::from_str(&array_manifest).unwrap();
     assert_eq!(arr_val["spec"]["completions"], 3);
     assert_eq!(arr_val["spec"]["completionMode"], "Indexed");
@@ -806,7 +806,7 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
         "8"
     );
 
-    let array_spec = exec.render_array_script(&rule, "runs/cmd", 4).unwrap();
+    let array_spec = exec.render_array_script(&rule, "runs/cmd", 4, &[]).unwrap();
     let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
     assert_eq!(arr_val["arrayProperties"]["size"], 4);
 }
@@ -853,7 +853,7 @@ async fn gcp_batch_executor_renders_spec_and_parses_status() {
         2000
     );
 
-    let array_spec = exec.render_array_script(&rule, "runs/cmd", 6).unwrap();
+    let array_spec = exec.render_array_script(&rule, "runs/cmd", 6, &[]).unwrap();
     let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
     assert_eq!(arr_val["taskGroups"][0]["taskCount"], 6);
 }

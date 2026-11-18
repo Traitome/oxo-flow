@@ -887,6 +887,26 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 &cluster_workdir,
             )?;
 
+            // Sensitive config values (issue #1120, audit RB-12): the cloud
+            // backends render a job body from each rule's expanded command,
+            // so `cluster submit` must route the same
+            // `OXO_FLOW_SENSITIVE_<n>` references the live run path does —
+            // otherwise the literal lands in the generated manifest. One
+            // binding table for the whole command keeps the names consistent
+            // across every rule. HPC scripts are intentionally left on the
+            // pre-#1120 behavior (that half of RB-12 is still open).
+            let cloud_routing = matches!(
+                cluster_backend,
+                ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch
+            );
+            let sensitive_bindings = if cloud_routing {
+                oxo_flow_core::executor::process::sensitive_bindings(
+                    &crate::commands::run::findings::sensitive_values_of(&config),
+                )
+            } else {
+                Vec::new()
+            };
+
             for rule_name in &order {
                 let rule = config
                     .get_rule(rule_name)
@@ -925,6 +945,19 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                             format!("rule '{rule_name}' command construction failed")
                         });
                     }
+                };
+
+                // Replace sensitive literals with their shared references
+                // BEFORE the environment wrapper is built, so the wrapper
+                // itself (and the manifest it feeds) never sees the value.
+                let shell_cmd = if sensitive_bindings.is_empty() {
+                    shell_cmd
+                } else {
+                    oxo_flow_core::executor::process::route_sensitive_values_with_bindings(
+                        &shell_cmd,
+                        &sensitive_bindings,
+                    )
+                    .0
                 };
 
                 // Render through the ExecutorBackend trait (issue #78): the

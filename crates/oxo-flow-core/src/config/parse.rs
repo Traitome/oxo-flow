@@ -682,6 +682,18 @@ impl WorkflowConfig {
                             *dep = format!("{}::{}", ns, dep);
                         }
                     }
+                    // Rule inheritance (#1152 WF-01): `extends` is a rule-name
+                    // reference like `depends_on`, so an intra-module base must
+                    // be rewritten with the module too. Left unrewritten, the
+                    // post-merge `resolve_rule_templates` cannot find `base`
+                    // because it is now `ns::base` — the load fails with
+                    // "extends 'base' which does not exist" even though the
+                    // include declares both rules.
+                    if let Some(base) = rule.extends.as_mut()
+                        && original_rule_names.contains(base)
+                    {
+                        *base = format!("{}::{}", ns, base);
+                    }
                 }
                 if !self.rules.iter().any(|r| r.name == rule.name) {
                     if let Some(idx) = contract_idx {

@@ -7,13 +7,57 @@
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
+use crate::executor::process::sensitive_env_refs;
 use crate::rule::Rule;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
 pub fn sanitize_k8s_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
+}
+
+/// Kubernetes Secret the manifest pulls `sensitive = true` config values
+/// from (issue #1120 / ledger RB-12). The operator creates it once per
+/// workflow, keyed by the same `OXO_FLOW_SENSITIVE_<n>` variable names the
+/// local executor routes values under, so a manifest never carries a secret
+/// literal in `args`.
+///
+/// ```sh
+/// kubectl create secret generic oxoflow-secrets \
+///   --from-literal=OXO_FLOW_SENSITIVE_0=<value>
+/// ```
+pub const K8S_SENSITIVE_SECRET: &str = "oxoflow-secrets";
+
+/// Attach the secret-backed `env` array to a container block: every sensitive
+/// value referenced by the rendered command is projected out of the
+/// operator-provided Kubernetes Secret rather than inlined as a literal.
+/// A container whose command carries no routed sensitive reference is left
+/// untouched, so ordinary jobs stay byte-identical.
+///
+/// The Secret key IS the environment variable name: the plan-level routing
+/// numbers bindings once for the whole plan (`sensitive_bindings`), so the
+/// name is unambiguous across rules and across array elements — a per-rule
+/// key namespace would break indexed jobs, whose elements are named after
+/// the template rather than the instance.
+fn attach_sensitive_env(container: &mut Value, refs: &[String]) {
+    let env: Vec<Value> = refs
+        .iter()
+        .map(|var| {
+            json!({
+                "name": var,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": K8S_SENSITIVE_SECRET,
+                        "key": var,
+                    }
+                }
+            })
+        })
+        .collect();
+    if !env.is_empty() {
+        container["env"] = json!(env);
+    }
 }
 
 /// Build the container resource block shared by single and array jobs:
@@ -63,6 +107,15 @@ pub fn generate_k8s_job_manifest(
         .as_deref()
         .unwrap_or("ubuntu:latest");
 
+    let mut container = json!({
+        "name": sanitize_k8s_name(&rule.name),
+        "image": container_image,
+        "command": ["/bin/bash", "-c"],
+        "args": [shell_cmd],
+        "resources": container_resources(rule),
+    });
+    attach_sensitive_env(&mut container, &sensitive_env_refs(shell_cmd));
+
     let manifest = json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -84,15 +137,7 @@ pub fn generate_k8s_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
-                    "containers": [
-                        {
-                            "name": sanitize_k8s_name(&rule.name),
-                            "image": container_image,
-                            "command": ["/bin/bash", "-c"],
-                            "args": [shell_cmd],
-                            "resources": container_resources(rule),
-                        }
-                    ]
+                    "containers": [container]
                 }
             }
         }
@@ -106,6 +151,9 @@ pub fn generate_k8s_array_job_manifest(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
+    // Union of `OXO_FLOW_SENSITIVE_<n>` references over every per-index
+    // command file — the dispatch line carries none of them itself.
+    sensitive_refs: &[String],
     _cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
     let job_name = format!("oxoflow-array-{}", sanitize_k8s_name(&rule.name));
@@ -118,6 +166,15 @@ pub fn generate_k8s_array_job_manifest(
 
     let dispatch_cmd =
         format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
+
+    let mut container = json!({
+        "name": sanitize_k8s_name(&rule.name),
+        "image": container_image,
+        "command": ["/bin/bash", "-c"],
+        "args": [dispatch_cmd],
+        "resources": container_resources(rule),
+    });
+    attach_sensitive_env(&mut container, sensitive_refs);
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -143,15 +200,7 @@ pub fn generate_k8s_array_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
-                    "containers": [
-                        {
-                            "name": sanitize_k8s_name(&rule.name),
-                            "image": container_image,
-                            "command": ["/bin/bash", "-c"],
-                            "args": [dispatch_cmd],
-                            "resources": container_resources(rule),
-                        }
-                    ]
+                    "containers": [container]
                 }
             }
         }
@@ -230,8 +279,9 @@ mod tests {
             ..Default::default()
         };
 
-        let manifest_str = generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &test_config())
-            .expect("manifest generation must succeed");
+        let manifest_str =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config())
+                .expect("manifest generation must succeed");
         let val: Value = serde_json::from_str(&manifest_str).expect("manifest must be valid json");
 
         assert_eq!(val["spec"]["completions"], 5);
@@ -247,5 +297,74 @@ mod tests {
         );
         // Array jobs must carry the same GPU limit as single jobs.
         assert_eq!(container["resources"]["limits"]["nvidia.com/gpu"], "2");
+    }
+
+    /// Sentinel regression (ledger RB-12): once the plan routes a
+    /// `sensitive = true` value into an `OXO_FLOW_SENSITIVE_<n>` reference,
+    /// the manifest carries a `secretKeyRef`, never the literal.
+    #[test]
+    fn test_k8s_manifest_projects_sensitive_values_from_a_secret() {
+        let sentinel = "SENTINEL_SECRET_VALUE_D4";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --token {sentinel} --out x"),
+            &[sentinel.to_string()],
+        );
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let rule = Rule {
+            name: "call_variants".into(),
+            ..Default::default()
+        };
+        let manifest_str =
+            generate_k8s_job_manifest(&rule, &routed, &test_config()).expect("manifest");
+        assert!(
+            !manifest_str.contains(sentinel),
+            "sentinel leaked into the k8s manifest: {manifest_str}"
+        );
+        let val: Value = serde_json::from_str(&manifest_str).unwrap();
+        let env_entry = &val["spec"]["template"]["spec"]["containers"][0]["env"][0];
+        assert_eq!(env_entry["name"], "OXO_FLOW_SENSITIVE_0");
+        let key_ref = &env_entry["valueFrom"]["secretKeyRef"];
+        assert_eq!(key_ref["name"], K8S_SENSITIVE_SECRET);
+        assert_eq!(key_ref["key"], "OXO_FLOW_SENSITIVE_0");
+    }
+
+    /// Issue #1171: a submit-host ambient credential must never reach a
+    /// Kubernetes job body. The manifest is built from the rule and the
+    /// rendered command only; the pod's environment is the image `ENV` plus
+    /// what this generator writes, and it writes no ambient state. The probe
+    /// runs in a child process that carries sentinel credentials (the crate
+    /// forbids `std::env::set_var`), so a future change that forwards the
+    /// submit host's environment or inlines its values fails here.
+    #[test]
+    fn kubernetes_job_body_carries_no_submit_host_environment() {
+        crate::backend::assert_cloud_body_ignores_submit_host_env("kubernetes");
+    }
+
+    /// Indexed jobs dispatch to per-index command files, so the dispatch line
+    /// carries no reference — the driver passes the union in. The env block is
+    /// still attached, and ordinary (reference-free) jobs stay untouched.
+    #[test]
+    fn test_k8s_array_manifest_attaches_the_routed_secret_refs() {
+        let rule = Rule {
+            name: "scatter_qc".into(),
+            ..Default::default()
+        };
+        let refs = vec!["OXO_FLOW_SENSITIVE_0".to_string()];
+        let manifest_str =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &refs, &test_config()).unwrap();
+        let val: Value = serde_json::from_str(&manifest_str).unwrap();
+        let env_entry = &val["spec"]["template"]["spec"]["containers"][0]["env"][0];
+        assert_eq!(env_entry["name"], "OXO_FLOW_SENSITIVE_0");
+
+        let plain =
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config()).unwrap();
+        assert!(
+            !plain.contains("\"env\""),
+            "a reference-free job must stay byte-identical: {plain}"
+        );
     }
 }
