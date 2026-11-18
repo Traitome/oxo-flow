@@ -31,6 +31,7 @@ mod overrides;
 mod preflight;
 mod reentry;
 mod refs;
+mod repair;
 pub mod resume;
 mod run_log;
 mod scheduler_loop;
@@ -50,6 +51,7 @@ pub(crate) use overrides::*;
 pub(crate) use preflight::*;
 pub(crate) use reentry::*;
 pub(crate) use refs::*;
+pub(crate) use repair::*;
 pub use resume::resume_command;
 pub(crate) use run_log::*;
 pub(crate) use scheduler_loop::*;
@@ -152,6 +154,13 @@ pub struct RunRequest {
     pub json: bool,
     pub cli_args: Vec<String>,
     pub ai_recover: bool,
+    /// Issue #1164: internal loop-guard flag. `--no-ai-recover` disables AI
+    /// error recovery for this invocation entirely (both `--ai-recover` and
+    /// the workflow's `[ai] enabled` auto-detect) — the verification rerun
+    /// the repair loop spawns passes it so a fixed run can never start
+    /// another repair cycle. Not useful interactively; kept documented so
+    /// the spawn contract stays inspectable.
+    pub no_ai_recover: bool,
     pub ai_max_retries: Option<u32>,
     pub samples_filter: Vec<String>,
     pub rerun: bool,
@@ -208,6 +217,7 @@ async fn run_command_inner(
         json,
         cli_args,
         ai_recover,
+        no_ai_recover,
         ai_max_retries,
         samples_filter,
         rerun,
@@ -1411,6 +1421,7 @@ async fn run_command_inner(
         keep_going,
         rerun,
         ai_recover,
+        no_ai_recover,
         ai_max_retries,
         no_report_snapshot,
         provenance,

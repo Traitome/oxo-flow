@@ -1450,6 +1450,7 @@ impl SectionRegistry {
         registry.register(Box::new(UniversalGenerator));
         registry.register(Box::new(ExecutionStatusGenerator));
         registry.register(Box::new(FailureDiagnosisGenerator));
+        registry.register(Box::new(AiRepairGenerator));
         registry.register(Box::new(ClinicalComplianceGenerator));
         registry.register(Box::new(WorkflowInfoGenerator));
         registry.register(Box::new(CommandManifestGenerator));
@@ -2840,6 +2841,65 @@ impl ReportSectionGenerator for SampleMatrixGenerator {
     }
 }
 
+/// AI repair loop outcome (issue #1164): when the engine applied an AI fix
+/// and whether the bounded verification rerun completed the workflow. Only
+/// applicable when the checkpoint carries a `repair_record`.
+struct AiRepairGenerator;
+impl ReportSectionGenerator for AiRepairGenerator {
+    fn name(&self) -> &str {
+        "ai-repair"
+    }
+    fn description(&self) -> &str {
+        "AI repair loop: applied fix, verification rerun attempt and outcome"
+    }
+    fn applicable(&self, ctx: &ReportContext) -> bool {
+        ctx.checkpoint
+            .and_then(|c| c.repair_record.as_ref())
+            .is_some()
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        // Section filters can force this generator to run without the
+        // `applicable()` gate, so the precondition is checked here too.
+        let Some(record) = ctx.checkpoint.and_then(|c| c.repair_record.as_ref()) else {
+            return Vec::new();
+        };
+        let applied = if record.applied { "yes" } else { "no" };
+        let rerun = if record.rerun_attempted {
+            if record.rerun_succeeded {
+                "succeeded"
+            } else {
+                "failed"
+            }
+        } else {
+            "not attempted"
+        };
+        vec![ReportSection {
+            title: "AI Repair".into(),
+            id: "ai-repair".into(),
+            content: ReportContent::Text {
+                text: "Outcome of the AI error-repair loop (issue #1164): the applied \
+                       fix and whether the bounded verification rerun completed the \
+                       workflow."
+                    .into(),
+            },
+            subsections: vec![ReportSection {
+                title: "Details".into(),
+                id: "ai-repair-details".into(),
+                content: ReportContent::KeyValue {
+                    pairs: vec![
+                        ("Fix Applied".into(), applied.into()),
+                        ("Session".into(), record.session_id.clone()),
+                        ("Verification Rerun".into(), rerun.into()),
+                        ("Detail".into(), record.detail.clone()),
+                        ("Timestamp".into(), record.timestamp.clone()),
+                    ],
+                },
+                subsections: vec![],
+            }],
+        }]
+    }
+}
+
 /// Failure diagnosis — the first screen of a failed run's report: per failed
 /// rule, the exit code, affected downstream rules, a stderr excerpt when
 /// available, and a suggested next step (issue #83 P0-4).
@@ -3889,6 +3949,36 @@ input = ["out.bam"]
         assert!(html.contains("call"));
         assert!(html.contains("memory"));
         assert!(html.contains("137"));
+    }
+
+    #[test]
+    fn ai_repair_section_renders_when_repair_record_present() {
+        // Issue #1164: the report surfaces the repair loop's outcome — and
+        // only when the checkpoint actually carries a repair_record.
+        let config = workflow_config("");
+        let mut cp = fixture_checkpoint();
+
+        // No repair_record: the section must be absent.
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "ai-repair"));
+
+        cp.repair_record = Some(crate::executor::checkpoint::RepairRecord {
+            applied: true,
+            session_id: "sess-1164".into(),
+            rerun_attempted: true,
+            rerun_succeeded: true,
+            detail: "verification rerun exited 0".into(),
+            timestamp: "2026-11-18T00:00:00Z".into(),
+        });
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let repair = sections.iter().find(|s| s.id == "ai-repair").unwrap();
+        let mut html = String::new();
+        render_section_html(&mut html, repair, 2);
+        assert!(html.contains("sess-1164"));
+        assert!(html.contains("succeeded"));
+        assert!(html.contains("verification rerun exited 0"));
     }
 
     #[test]

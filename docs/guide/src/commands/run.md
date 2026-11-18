@@ -62,7 +62,8 @@ keys matching nothing declared keep the literal spelling.
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
-| `--ai-recover` | — | — | Enable AI error recovery on rule failure |
+| `--ai-recover` | — | — | Enable AI error recovery on rule failure (see [AI error recovery](#ai-error-recovery-ai-recover)) |
+| `--no-ai-recover` | — | — | Disable AI error recovery for this invocation, including the workflow's `[ai] enabled` auto-detect. The verified-repair loop passes this flag to its verification rerun so a fixed run can never start another repair cycle (see [AI error recovery](#ai-error-recovery-ai-recover)) |
 | `--ai-max-retries` | — | `1` | Maximum AI recovery attempts when a `--ai-recover` call fails (only a failed call is retried). This bounds **recovery** attempts; the generation-side `--ai-max-retries` on [`template`](template.md) (default 10, bounding orchestrator rounds) is a separate knob |
 | `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
@@ -105,6 +106,14 @@ appends the summary, it does not switch the run to machine-only mode.
 as the report's Benchmarks table; it is empty on aborted paths and on
 cluster runs (use the report's sacct-based Resource Accounting section
 there).
+
+When the verified-repair loop applied an AI fix and ran its verification
+rerun (see [AI error recovery](#ai-error-recovery-ai-recover)), the document
+also carries a `repair` object (`applied`, `session_id`, `rerun_attempted`,
+`rerun_succeeded`). On a verified repair (`rerun_succeeded: true`) the status
+is the normal `"completed"` — the rerun finished the workflow with zero
+failures — with the counters describing the final state (failed `0`, blocked
+`0`); `repair` is what distinguishes a verified-repair run from a clean pass.
 
 ### Quick reference
 
@@ -1689,6 +1698,56 @@ the same plan; invalidating the checkpoint rule revokes its samples until it
 re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 [Workflow Format](../reference/workflow-format.md#checkpoint-re-entry) for
 the config surface.
+
+## AI error recovery (`--ai-recover`)
+
+`--ai-recover` turns a rule failure into a bounded diagnose → apply →
+verify loop. AI can also activate implicitly: a workflow with
+`[ai] enabled = true` runs recovery on failure without the flag. The write
+authorization comes from `[ai] auto_fix` (see
+[workflow-format](../reference/workflow-format.md#ai--ai-companion-settings));
+in every mode the model's own safety verdict and full workflow validation
+gate the write, and an unauthorized or refused fix never touches the file.
+
+When a required rule aborts the run and recovery is active:
+
+1. The failure is diagnosed (`--ai-max-retries` bounds failed diagnosis
+   calls) and a fix is proposed.
+2. The resolved `auto_fix` mode decides whether the fix is written: `always`
+   applies safe fixes automatically; `ask` prompts y/N on an interactive
+   terminal and is denied headless; `never` only reports. The generated TOML
+   must still validate as a complete workflow before it lands.
+3. When the fix is applied, the engine prints `REPAIR_APPLIED session_id=<id>`
+   — one line, on stderr and in the run log. These `REPAIR_*` prefixes are a
+   stable machine-readable contract (automation and eval harnesses parse
+   them verbatim; they are never colored or reworded).
+4. The engine then attempts **one** verification rerun with the updated
+   workflow: a subprocess `oxo-flow run <workflow> --resume-failed
+   --no-ai-recover` against the same checkpoint — succeeded rules stay
+   skipped, failed rules re-run, logs interleave with the parent's. The
+   rerun's outcome is narrated as `REPAIR_RERUN_SUCCEEDED <detail>`,
+   `REPAIR_RERUN_FAILED <detail>` (exit code included), or
+   `REPAIR_RERUN_SKIPPED <reason>` (e.g. the loop guard, or the binary
+   could not be resolved).
+5. The outcome is recorded in the checkpoint's `repair_record`:
+   `{applied, session_id, rerun_attempted, rerun_succeeded, detail,
+   timestamp}`. Legacy checkpoints without the field load unchanged, and
+   the report's `ai-repair` section surfaces the record (see
+   [`report`](report.md)).
+
+Outcome semantics: a rerun that completes the workflow exits **0** — the
+run finishes successfully (`✓ repair verified — rerun succeeded`, and the
+`--json` summary carries `"status": "completed"` with a `repair` object);
+a failed rerun keeps the ordinary failure path (non-zero exit,
+`REPAIR_RERUN_FAILED`).
+
+The loop is bounded by construction: at most one verification rerun per run
+invocation, enforced by the `--no-ai-recover` flag the rerun child receives
+and an internal `OXO_FLOW_REPAIR_RERUN` guard variable. A rerun therefore
+never diagnoses, never rewrites the workflow, and never starts another
+rerun — it only verifies the fix that was already authorized. `--no-ai-recover`
+also disables recovery for a normal invocation (including the `[ai] enabled`
+auto-detect).
 
 ## Exit codes
 

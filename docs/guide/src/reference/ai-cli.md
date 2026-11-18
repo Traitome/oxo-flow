@@ -324,6 +324,11 @@ fix is written atomically with a `<workflow>.bak` guard beside it:
   safety assessment is only displayed, never written)
 - `never` — only report, never modify
 
+An applied fix triggers the verified-repair loop regardless of the mode that
+authorized it: one bounded verification rerun with the updated workflow, then
+the outcome lands in the checkpoint's `repair_record` (see the recovery flow
+below and [`run --ai-recover`](../commands/run.md#ai-error-recovery-ai-recover)).
+
 Workflow-level provider/model selection is still not guaranteed to reconfigure
 the CLI runtime — treat that setting as advisory until the remaining audit
 gates close.
@@ -614,6 +619,18 @@ oxo-flow run workflow.oxoflow --ai-recover
    (`archive_before_modify`) and a sibling `<workflow>.bak`. A repair is not
    described as fixed until the complete workflow validates, the applied diff
    is reviewed, and a rerun verifies its outputs
+7. **Verified repair (issue #1164)**: when the fix is written, the engine
+   prints `REPAIR_APPLIED session_id=<id>` and attempts ONE bounded
+   verification rerun with the updated workflow
+   (`run <workflow> --resume-failed --no-ai-recover` — succeeded rules stay
+   skipped, failed rules re-run). The rerun outcome is narrated with the
+   stable `REPAIR_RERUN_SUCCEEDED` / `REPAIR_RERUN_FAILED` /
+   `REPAIR_RERUN_SKIPPED` prefixes and recorded in the checkpoint's
+   `repair_record` (`{applied, session_id, rerun_attempted, rerun_succeeded,
+   detail, timestamp}`); a rerun that completes the workflow exits 0, a
+   failed one keeps the ordinary failure path. The rerun carries
+   `--no-ai-recover`, so it can never start another repair cycle — the
+   `REPAIR_*` prefixes are a machine-readable contract, never reworded
 
 See the CLI/AI blockers in
 `docs/superpowers/audits/industrial-scientific-audit-ledger.md`.

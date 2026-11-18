@@ -34,6 +34,10 @@ pub(crate) struct SchedulerLoopContext<'a> {
     pub keep_going: bool,
     pub rerun: bool,
     pub ai_recover: bool,
+    /// Issue #1164 loop guard: the verification rerun the repair loop
+    /// spawns passes `--no-ai-recover`, disabling recovery (and therefore
+    /// any nested repair) for the child run.
+    pub no_ai_recover: bool,
     pub ai_max_retries: Option<u32>,
     pub no_report_snapshot: bool,
     pub provenance: bool,
@@ -192,6 +196,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         keep_going,
         rerun,
         ai_recover,
+        no_ai_recover,
         ai_max_retries,
         no_report_snapshot,
         provenance,
@@ -1279,6 +1284,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                     json_summary,
                     is_tty,
                     ai_recover,
+                    no_ai_recover,
                     ai_max_retries,
                 },
             )
