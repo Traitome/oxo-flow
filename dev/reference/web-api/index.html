@@ -4268,6 +4268,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Quota">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#declared-resource-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declared-resource enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5829,6 +5846,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Quota">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#declared-resource-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declared-resource enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6572,8 +6606,8 @@ Chart data built from real sources: <code>files</code> maps the run's file tree 
 </span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>{"skip_succeeded": true}
 </span></code></pre></div>
 The retry spawns a real run, so it pays the same runs-per-minute
-limiter and the quota pre-flight as run creation — a retry that exceeds
-the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code>.
+limiter and the same atomic quota admission as run creation — a retry that
+exceeds the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code>.
 The endpoint accepts <strong>no repair payload</strong>: the diagnostics <code>fix_action</code>
 shown by the monitor is advisory (placeholder values, nothing applies it),
 so the web UI labels its action "Retry unchanged" rather than claiming a
@@ -7247,14 +7281,37 @@ Keys resolve to the same ownership context (a key's requests see exactly
 what its owner sees), are stored as SHA-256 hashes, and revocation is
 immediate.</p>
 <h2 id="quota">Quota<a class="headerlink" href="#quota" title="Permanent link">#</a></h2>
-<p>Runs pre-flight the quota tracker with the workflow's declared threads and
-memory; over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the violation
-list.</p>
+<p>Runs are admitted against a <strong>durable, atomic</strong> per-user quota. The limits
+check and the run's resource reservation commit together in the storage
+backend (SQLite/PostgreSQL), so two concurrent <code>POST /api/runs</code> can never
+both pass a limit of one; counters survive server restart, and every server
+instance pointed at the same database enforces the same numbers (RB-09 /
+issue #1133). Over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the
+violation list, and a rejected request never inserts a run row.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a>GET  /api/quota           # current limits and usage
 </span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2" href="#__codelineno-70-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 </span></code></pre></div>
-<p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side).
-Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>).</p>
+<p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side). The limits are persisted through the storage backend (one singleton row), so they survive restart and apply to every instance; on a server running without storage the update stays process-local.
+Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>) and is read from the durable counters. <code>runs_today</code> is a rolling 24-hour window that restarts lazily on the next admission (a restart does not reset it). Every terminal path (completed/failed/cancelled) releases the run's reservation idempotently; reservations whose run row is terminal or missing are reclaimed at server startup.</p>
+<h3 id="declared-resource-enforcement">Declared-resource enforcement<a class="headerlink" href="#declared-resource-enforcement" title="Permanent link">#</a></h3>
+<p>Declared resources are enforced, not only counted:</p>
+<ul>
+<li><strong>Memory, Linux local runs</strong>: when a workflow declares memory
+  (<code>[rules.resources] memory</code>, or the deprecated per-rule <code>memory</code>), the
+  executor installs <code>RLIMIT_DATA</code> on the spawned CLI and every rule
+  subprocess at the run's declared total (with a 512 MB floor so the engine
+  itself can start). A process that allocates past the ceiling fails the
+  allocation, so the rule dies and the run fails — observable rejection,
+  not an advisory overage. Runs that declare no memory have no claim to
+  enforce.</li>
+<li><strong>Other platforms</strong>: Darwin rejects <code>RLIMIT_DATA</code>/<code>RLIMIT_AS</code> changes with
+  <code>EINVAL</code>; there the ceiling remains advisory (the quota counters still
+  apply). See the follow-up tracking issue for portable and remote
+  enforcement.</li>
+<li><strong>Remote (cluster) runs</strong>: the local process-tree rlimit does not travel
+  to the cluster host; quota admission still counts them, but the ceiling
+  itself is not yet enforced remotely.</li>
+</ul>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>GET    /api/clusters                  # configured SSH connections
 </span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)

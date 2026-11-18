@@ -3494,6 +3494,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Domain-Driven Module Structure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#durable-runtime-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable runtime state
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4292,6 +4309,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Domain-Driven Module Structure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#durable-runtime-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable runtime state
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4714,6 +4748,17 @@ build a Windows bundle).</p>
 </tr>
 </tbody>
 </table>
+<h3 id="durable-runtime-state">Durable runtime state<a class="headerlink" href="#durable-runtime-state" title="Permanent link">#</a></h3>
+<p>Quota state — per-user counters, per-run resource reservations, and the
+limits row — lives in the storage backend (<code>quota_usage</code>,
+<code>quota_reservations</code>, <code>quota_config</code>), not in process memory. Admission is
+one atomic compare-and-swap plus reservation insert, so concurrent requests
+serialize on the database, restarts preserve usage, and multiple server
+instances sharing a database enforce the same counters and limits (RB-09 /
+issue #1133). Locally executed runs on Linux additionally enforce the
+workflow's declared memory with <code>RLIMIT_DATA</code> on the spawned CLI process
+tree; other platforms and remote (cluster) runs remain advisory — see
+<a href="../web-api/#declared-resource-enforcement">Quota → Declared-resource enforcement</a>.</p>
 <hr />
 <h2 id="api-namespace">API Namespace<a class="headerlink" href="#api-namespace" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>/api
