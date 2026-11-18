@@ -168,14 +168,19 @@ fn overwrite_decision(exists: bool, force: bool, interactive: bool) -> Overwrite
 }
 
 /// Enforce [`overwrite_decision`] for the resolved destination BEFORE any
-/// paid generation happens. Returns `Ok(())` only when writing is allowed.
-fn ensure_destination_writable(target: &OutputTarget, force: bool) -> Result<()> {
+/// paid generation happens.
+///
+/// Returns whether the destination existed at guard time; the pre-write
+/// re-check ([`ensure_destination_did_not_appear`]) uses it to detect a file
+/// that appeared while the model was running (TOCTOU).
+fn ensure_destination_writable(target: &OutputTarget, force: bool) -> Result<bool> {
     use std::io::IsTerminal as _;
 
     let path = target.file_path();
+    let existed = path.exists();
     let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-    match overwrite_decision(path.exists(), force, interactive) {
-        OverwriteDecision::Proceed => Ok(()),
+    match overwrite_decision(existed, force, interactive) {
+        OverwriteDecision::Proceed => Ok(existed),
         OverwriteDecision::Refuse(reason) => {
             anyhow::bail!("{} already exists — {reason}", path.display())
         }
@@ -191,12 +196,33 @@ fn ensure_destination_writable(target: &OutputTarget, force: bool) -> Result<()>
                 trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
             });
             if confirmed {
-                Ok(())
+                Ok(existed)
             } else {
                 anyhow::bail!("{} already exists and was left untouched", path.display())
             }
         }
     }
+}
+
+/// Close the TOCTOU window between the pre-generation overwrite guard and
+/// the atomic replace: if the destination was ABSENT when generation started
+/// and exists now, something else created it while the model was running. Do
+/// not clobber it — refuse (the atomic rename would otherwise silently
+/// replace a file the user never consented to lose). `--force` was explicit
+/// consent for the path, so it keeps its meaning.
+fn ensure_destination_did_not_appear(
+    target: &OutputTarget,
+    force: bool,
+    existed_before_generation: bool,
+) -> Result<()> {
+    if !force && !existed_before_generation && target.file_path().exists() {
+        anyhow::bail!(
+            "{} appeared while the workflow was being generated — refusing to \
+             overwrite it; pass --force to replace it",
+            target.file_path().display()
+        );
+    }
+    Ok(())
 }
 
 /// Print (and log) the structured degraded-mode reason on a surface that
@@ -283,7 +309,7 @@ pub async fn generate_workflow(
     // Overwrite policy also runs before the paid call: an existing
     // destination is confirmed (`--force` / interactive y/N) or refused
     // while nothing has been spent and the old file is untouched.
-    ensure_destination_writable(&output_target, force)?;
+    let destination_existed = ensure_destination_writable(&output_target, force)?;
 
     // L1-L3: Initialize AI runtime with scope config + tools
     let project_dir = std::env::current_dir().ok();
@@ -672,29 +698,36 @@ pub async fn generate_workflow(
     // Write output. A failure here must not swallow the artifact — the
     // generation already happened and was paid for, so the full TOML is
     // echoed to stdout before the command reports the write failure.
-    let output_path = match write_output(&output_target, &toml_content) {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!(
-                "{} Could not write {}: {e}",
-                "  ⚠".yellow().bold(),
-                output_target.display()
-            );
-            println!();
-            println!(
-                "{}",
-                "── Generated workflow (write failed; full TOML below) ──"
-                    .yellow()
-                    .bold()
-            );
-            println!("{toml_content}");
-            println!("{}", "── end ──".yellow().bold());
-            anyhow::bail!(
-                "Workflow could not be written to {} — the full TOML was printed above",
-                output_target.display()
-            );
-        }
-    };
+    //
+    // Re-check the overwrite decision immediately before the atomic
+    // replace: a file that appeared during generation was never consented
+    // to and must not be clobbered (TOCTOU).
+    let output_path =
+        match ensure_destination_did_not_appear(&output_target, force, destination_existed)
+            .and_then(|()| write_output(&output_target, &toml_content))
+        {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!(
+                    "{} Could not write {}: {e}",
+                    "  ⚠".yellow().bold(),
+                    output_target.display()
+                );
+                println!();
+                println!(
+                    "{}",
+                    "── Generated workflow (write failed; full TOML below) ──"
+                        .yellow()
+                        .bold()
+                );
+                println!("{toml_content}");
+                println!("{}", "── end ──".yellow().bold());
+                anyhow::bail!(
+                    "Workflow could not be written to {} — the full TOML was printed above",
+                    output_target.display()
+                );
+            }
+        };
     println!(
         "{} Workflow written to {} ({} bytes)",
         "  ✓".green(),
@@ -1033,6 +1066,50 @@ mod tests {
             }
             other => panic!("expected Refuse, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn destination_that_appeared_during_generation_is_refused() {
+        // TOCTOU (RB-14 review): the pre-generation guard saw the path
+        // absent; another process created it while the model ran. The
+        // pre-write re-check must refuse and leave that file untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let destination = tmp.path().join("raced.oxoflow");
+        let target = OutputTarget::File(destination.clone());
+        assert!(!destination.exists());
+        std::fs::write(&destination, "someone else's workflow").unwrap();
+
+        let err = ensure_destination_did_not_appear(&target, false, false)
+            .expect_err("the raced destination must be refused");
+        assert!(
+            err.to_string()
+                .contains("appeared while the workflow was being generated"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "someone else's workflow"
+        );
+    }
+
+    #[test]
+    fn force_consents_to_a_destination_that_appeared_during_generation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let destination = tmp.path().join("raced.oxoflow");
+        std::fs::write(&destination, "old").unwrap();
+        let target = OutputTarget::File(destination);
+        assert!(ensure_destination_did_not_appear(&target, true, false).is_ok());
+    }
+
+    #[test]
+    fn destination_present_before_generation_is_not_treated_as_a_race() {
+        // The user already confirmed/forced an existing destination; the
+        // re-check only guards files that appeared mid-generation.
+        let tmp = tempfile::tempdir().unwrap();
+        let destination = tmp.path().join("confirmed.oxoflow");
+        std::fs::write(&destination, "old").unwrap();
+        let target = OutputTarget::File(destination);
+        assert!(ensure_destination_did_not_appear(&target, false, true).is_ok());
     }
 
     #[cfg(unix)]

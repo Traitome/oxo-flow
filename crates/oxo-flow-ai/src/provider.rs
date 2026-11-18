@@ -2081,6 +2081,9 @@ fn create_provider_from_config_in(
     if provider_name_is_disabled(&provider_env) {
         return AiProvider::Noop;
     }
+    // An explicit workflow/project selection wins over a typo'd env value,
+    // but the typo must not be silent (RB-14 review).
+    warn_if_provider_env_invalid(&provider_env);
     if config.provider_explicit {
         // Credential precedence mirrors the config tiers: an environment
         // credential for the final kind outranks the saved one (global file
@@ -2133,6 +2136,26 @@ pub fn provider_pinned_disabled() -> bool {
     std::env::var("OXO_FLOW_AI_PROVIDER").is_ok_and(|value| provider_name_is_disabled(&value))
 }
 
+/// Whether `OXO_FLOW_AI_PROVIDER` is non-empty, is not the off switch, and
+/// names no provider kind (a typo like `cluade`). The single predicate both
+/// resolution paths use, so a typo is never silently treated as unset.
+fn provider_env_is_invalid(value: &str) -> bool {
+    !value.is_empty() && !provider_name_is_disabled(value) && value.parse::<ProviderKind>().is_err()
+}
+
+/// Warn when the env provider value is a typo while an explicit
+/// workflow/project selection wins. Shared with the env/saved/detection
+/// fallback so a higher-tier selection cannot make the misconfiguration
+/// silent (RB-14 review). The value is still ignored.
+fn warn_if_provider_env_invalid(provider_env: &str) {
+    if provider_env_is_invalid(provider_env) {
+        tracing::warn!(
+            "OXO_FLOW_AI_PROVIDER='{}' is not a known provider (expected claude, openai, deepseek, or ollama) — ignoring it",
+            provider_env
+        );
+    }
+}
+
 /// Pure provider-resolution core: the env provider string, an optional
 /// persisted config, and an environment-variable snapshot.
 ///
@@ -2180,7 +2203,7 @@ fn resolve_provider(
     // detection/auto tiers as if the variable were unset (live-observed
     // confusion: an invalid name produced no signal at all). "disabled"
     // and parseable names never reach this point (early-returned above).
-    if !provider_env.is_empty() {
+    if provider_env_is_invalid(provider_env) {
         tracing::warn!(
             "OXO_FLOW_AI_PROVIDER='{}' is not a known provider (expected claude, openai, deepseek, or ollama) — ignoring it and falling back to detection/config",
             provider_env
@@ -4858,6 +4881,84 @@ mod tests {
             create_provider_from_config_in(&config, None, &env),
             AiProvider::Noop
         ));
+    }
+
+    #[test]
+    fn provider_switch_never_reuses_the_saved_providers_origin_model_or_key() {
+        // RB-14 review (HIGH): the resolved chain carries a saved DeepSeek
+        // config and the env tier switches to Claude. Neither the saved
+        // endpoint, model, nor key may reach the Claude backend — the env
+        // credential/endpoint/model are authoritative.
+        let saved = crate::config::AiConfig {
+            enabled: true,
+            provider: ProviderKind::DeepSeek,
+            provider_explicit: true,
+            api_url: Some("http://127.0.0.1:9/deepseek".into()),
+            model: Some("saved-deepseek-model".into()),
+            api_key: Some("sk-saved-deepseek".into()),
+            ..crate::config::AiConfig::default()
+        };
+        let env_layer = crate::config::AiConfig {
+            enabled: true,
+            provider: ProviderKind::Claude,
+            provider_explicit: true,
+            ..crate::config::AiConfig::default()
+        };
+        let config = crate::config::AiConfig::resolve_chain_with_env(
+            Some(&saved),
+            Some(&env_layer),
+            None,
+            None,
+            None,
+            None,
+        );
+        let env = EnvSnapshot {
+            oxo_flow_provider: Some("claude".into()),
+            anthropic_auth_token: Some("sk-env-claude".into()),
+            anthropic_base_url: Some("https://claude-origin.example.com".into()),
+            anthropic_model: Some("claude-env-model".into()),
+            deepseek_api_key: Some("sk-env-deepseek".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = create_provider_from_config_in(&config, Some(&saved), &env);
+        match provider {
+            AiProvider::Claude(p) => {
+                assert_eq!(p.api_key, "sk-env-claude", "the env credential must win");
+                assert_eq!(p.model, "claude-env-model", "the saved model must not leak");
+                assert!(
+                    p.api_url.starts_with("https://claude-origin.example.com"),
+                    "the saved endpoint must not leak: {}",
+                    p.api_url
+                );
+                assert!(!p.api_url.contains("127.0.0.1:9"));
+            }
+            other => panic!("expected claude, got {}", other.name()),
+        }
+    }
+
+    #[test]
+    fn invalid_provider_env_does_not_override_an_explicit_chain_selection() {
+        // A typo'd OXO_FLOW_AI_PROVIDER is ignored (with a warning from the
+        // shared predicate) rather than silencing the explicit selection.
+        let config = chain_config(ProviderKind::Ollama, "qwen3");
+        let env = EnvSnapshot {
+            oxo_flow_provider: Some("cluade".into()),
+            ollama_host: Some("http://localhost:11434".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = create_provider_from_config_in(&config, None, &env);
+        assert_eq!(provider.name(), "ollama");
+        assert_eq!(provider.model().as_deref(), Some("qwen3"));
+    }
+
+    #[test]
+    fn provider_env_is_invalid_recognizes_typos_only() {
+        assert!(provider_env_is_invalid("cluade"));
+        assert!(provider_env_is_invalid("open-ai2"));
+        assert!(!provider_env_is_invalid(""));
+        assert!(!provider_env_is_invalid("disabled"));
+        assert!(!provider_env_is_invalid("claude"));
+        assert!(!provider_env_is_invalid("open-ai"));
     }
 
     #[test]

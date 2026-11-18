@@ -169,6 +169,24 @@ impl AiConfig {
         // remaining cost where an explicit `provider = "deepseek"` could
         // not override a non-default lower tier.
         if other.provider_explicit || other.provider != ProviderKind::default() {
+            // Switching the provider invalidates the provider-specific
+            // fields inherited from lower tiers: a saved config's endpoint,
+            // model, and key belong to ITS provider and must never be sent
+            // to a different provider a higher tier selected (a mismatched
+            // saved origin would receive another provider's credential —
+            // RB-14 review). The switching tier's own values are applied
+            // below, so an explicit model/url/key at this tier survives.
+            if other.provider != self.provider {
+                if other.api_url.is_none() {
+                    self.api_url = None;
+                }
+                if other.model.is_none() {
+                    self.model = None;
+                }
+                if other.api_key.is_none() {
+                    self.api_key = None;
+                }
+            }
             self.provider = other.provider;
             self.provider_explicit = true;
         }
@@ -711,6 +729,80 @@ name = "test"
         );
         assert_eq!(resolved.provider, ProviderKind::Claude);
         assert!(resolved.provider_explicit);
+    }
+
+    #[test]
+    fn merge_provider_switch_drops_inherited_provider_specific_fields() {
+        // RB-14 review (HIGH): a saved global config names DeepSeek plus
+        // ITS endpoint, model, and key. When a higher tier switches the
+        // provider to Claude (env here), none of those DeepSeek-specific
+        // values may survive — otherwise the Claude credential is sent to
+        // the saved DeepSeek origin and DeepSeek's model is requested from
+        // Anthropic.
+        let global = AiConfig {
+            enabled: true,
+            provider: ProviderKind::DeepSeek,
+            provider_explicit: true,
+            api_url: Some("http://127.0.0.1:9/deepseek".into()),
+            model: Some("saved-deepseek-model".into()),
+            api_key: Some("sk-saved-deepseek".into()),
+            ..AiConfig::default()
+        };
+        let env = AiConfig {
+            enabled: true,
+            provider: ProviderKind::Claude,
+            provider_explicit: true,
+            ..AiConfig::default()
+        };
+        let resolved =
+            AiConfig::resolve_chain_with_env(Some(&global), Some(&env), None, None, None, None);
+        assert_eq!(resolved.provider, ProviderKind::Claude);
+        assert_eq!(resolved.api_url, None, "saved endpoint must not leak");
+        assert_eq!(resolved.model, None, "saved model must not leak");
+        assert_eq!(resolved.api_key, None, "saved key must not leak");
+
+        // A provider-specific value supplied by the SWITCHING tier survives.
+        let env_with_overrides = AiConfig {
+            enabled: true,
+            provider: ProviderKind::Claude,
+            provider_explicit: true,
+            model: Some("claude-env-model".into()),
+            api_url: Some("https://anthropic.example.com".into()),
+            api_key: Some("sk-env-claude".into()),
+            ..AiConfig::default()
+        };
+        let resolved = AiConfig::resolve_chain_with_env(
+            Some(&global),
+            Some(&env_with_overrides),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(resolved.model.as_deref(), Some("claude-env-model"));
+        assert_eq!(
+            resolved.api_url.as_deref(),
+            Some("https://anthropic.example.com")
+        );
+        assert_eq!(resolved.api_key.as_deref(), Some("sk-env-claude"));
+
+        // Same-provider merges keep the saved values (no false clearing).
+        let same = AiConfig {
+            enabled: true,
+            provider: ProviderKind::DeepSeek,
+            provider_explicit: true,
+            model: Some("workflow-model".into()),
+            ..AiConfig::default()
+        };
+        let resolved =
+            AiConfig::resolve_chain_with_env(Some(&global), Some(&same), None, None, None, None);
+        assert_eq!(resolved.provider, ProviderKind::DeepSeek);
+        assert_eq!(resolved.model.as_deref(), Some("workflow-model"));
+        assert_eq!(
+            resolved.api_url.as_deref(),
+            Some("http://127.0.0.1:9/deepseek")
+        );
+        assert_eq!(resolved.api_key.as_deref(), Some("sk-saved-deepseek"));
     }
 
     #[test]
