@@ -805,6 +805,11 @@ Content-Type: application/json
 The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
 the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED`.
+The endpoint accepts **no repair payload**: the diagnostics `fix_action`
+shown by the monitor is advisory (placeholder values, nothing applies it),
+so the web UI labels its action "Retry unchanged" rather than claiming a
+fix was applied. See
+[Diagnostics Engine → Failure-panel actions in the web monitor](diagnostics-engine.md#failure-panel-actions-in-the-web-monitor).
 Like every `ApiResult` error, the 429 carries no `Retry-After` header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error `message` instead (`retry in {wait_secs}s`).

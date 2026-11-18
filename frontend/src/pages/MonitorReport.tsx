@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource, describeApiError } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance, ProvenanceVerifyResponse, ProtectedDriftResponse, FilePreviewResponse } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot, ChevronDown, ShieldCheck, Eye, X } from 'lucide-react';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, FileText, Folder, File, CircleX, TriangleAlert, CircleDot, ChevronDown, ShieldCheck, Eye, X } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -778,9 +778,14 @@ export default function MonitorReport() {
                         <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
                           {/* issue #82 P1-4: these were dead buttons — retry is
                               now a real run, manual edit opens the snapshot in
-                              the editor. */}
+                              the editor. The retry is labelled "unchanged"
+                              (issue #1146): the alert's suggestion is advisory
+                              prose and no endpoint applies it, so an "Fix &
+                              Retry" label claimed a mutation that never
+                              happened. */}
                           <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
-                            onClick={() => void handleRetry()}><Wrench size={13} /> {t('monitor.alerts.fixRetry')}</button>
+                            title={t('monitor.retryUnchangedHint')}
+                            onClick={() => void handleRetry()}><RotateCcw size={13} /> {t('monitor.alerts.retryUnchanged')}</button>
                           <button className="btn-sm" onClick={async () => {
                             if (!selId) return;
                             try {
@@ -1053,27 +1058,44 @@ export default function MonitorReport() {
                   {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
                 </ul>
               )}
-              {fn.auto_fixable && fn.fix_action && (
-                <div style={{ marginTop: '6px', padding: '6px 8px', background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              {/* The engine's fix_action is ADVISORY (issue #1146): the
+                  diagnostics layer never reads the live config, so
+                  `config_change` carries placeholder values ("current" →
+                  "increase") and no server endpoint applies it — the retry
+                  endpoint accepts only `from_rule`/`skip_succeeded`. Render
+                  the suggestion as something the user applies, never as a
+                  one-click mutation that did not happen. */}
+              {fn.fix_action && (
+                <div data-testid="fix-suggestion" style={{ marginTop: '6px', padding: '6px 8px', background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--color-text)' }}>
-                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>{t('monitor.oneClickFix')}</span>
+                    <span style={{ color: 'var(--color-warning)', fontWeight: 600, marginRight: 6 }}>{t('monitor.suggestedFix')}</span>
                     {fn.fix_action.description}
                   </div>
-                  <button
-                    className="btn-sm"
-                    style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                    onClick={() => {
-                      // Route through handleRetry so the RetryPlan is honored
-                      // (new_run_id navigation) and failures surface in the
-                      // shared actionError banner — a fire-and-forget call
-                      // would leave the user staring at a silent no-op.
-                      if (selId) void handleRetry();
-                    }}
-                  >
-                    {t('monitor.applyRetry')}
-                  </button>
+                  {fn.fix_action.config_change && (
+                    <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                      {`${fn.fix_action.config_change.path}: ${fn.fix_action.config_change.old_value} → ${fn.fix_action.config_change.new_value}`}
+                    </div>
+                  )}
+                  {fn.fix_action.command && (
+                    <pre className="log-view" style={{ maxHeight: 120, marginTop: 4 }}>{fn.fix_action.command}</pre>
+                  )}
                 </div>
               )}
+              <button
+                className="btn-sm"
+                data-testid="retry-unchanged"
+                style={{ marginTop: '6px', marginRight: '6px' }}
+                title={t('monitor.retryUnchangedHint')}
+                onClick={() => {
+                  // Route through handleRetry so the RetryPlan is honored
+                  // (new_run_id navigation) and failures surface in the
+                  // shared actionError banner — a fire-and-forget call
+                  // would leave the user staring at a silent no-op.
+                  if (selId) void handleRetry();
+                }}
+              >
+                <RotateCcw size={13} /> {t('monitor.retryUnchanged')}
+              </button>
               {/* AI explanation grounded in the deterministic diagnosis
                   (issue #82 P1-10: the explain endpoint existed but the
                   UI never called it). */}
