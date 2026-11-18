@@ -4172,6 +4172,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#browser-binding-issue-1197" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser binding (issue #1197)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#redirect-allowlist" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5722,6 +5733,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#browser-binding-issue-1197" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser binding (issue #1197)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#redirect-allowlist" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6466,7 +6488,7 @@ Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, dur
 <h3 id="dag-status">DAG Status<a class="headerlink" href="#dag-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}/dag-status
 </span></code></pre></div>
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. Each node also carries the same <code>started_at</code>/<code>duration_ms</code> timing contract as <a href="#run-status">Run Status</a> (<code>started_at</code> is an RFC 3339 UTC timestamp, not a duration substitute). A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped or cancelled. Each node also carries the same <code>started_at</code>/<code>duration_ms</code> timing contract as <a href="#run-status">Run Status</a> (<code>started_at</code> is an RFC 3339 UTC timestamp, not a duration substitute). Each node's <code>environment</code> is the backend kind the rule runs in (<code>conda</code>, <code>mamba</code>, <code>pixi</code>, <code>docker</code>, <code>singularity</code>, <code>venv</code>, <code>modules</code>, or <code>system</code>), resolved from the run's own pipeline snapshot the way the run resolves it — <code>[defaults] environment</code> folded onto rules via the same <code>WorkflowConfig::apply_defaults</code> call <code>run</code>/<code>dry-run</code> make, then the rule's inline environment. An <code>env_group</code> reference is not expanded here because the run path does not consult it today; reporting the group's backend would claim a wrapping the run never performs. It is <code>null</code> only for a node that no longer maps to a snapshot rule (an orphaned instance of a workflow edited since the run), never a fabricated <code>system</code> (issue #1149, audit UX-07). A rule killed because the <em>run</em> was cancelled reports <code>status: "cancelled"</code> — never <code>failed</code> — while a rule with its own recorded exit code stays <code>failed</code> even if the run was later cancelled. <code>metrics</code> partitions the node set exactly: <code>completed_nodes</code> counts successful rules only, and <code>skipped_nodes</code> (when-gated off or abort-cancelled siblings of a failed run) plus <code>cancelled_nodes</code> (run-level cancellations) keep <code>completed + failed + cancelled + running + pending + skipped == total_nodes</code> true at every instant. The ETA average is computed over successful nodes' durations — failures, skips, and cancellations never inflate it.</p>
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>
@@ -7074,6 +7096,44 @@ consumes it in one atomic delete, before any token exchange:</p>
 </ul>
 <p>A mismatched binding still consumes the state: it can never be retried, and
 two concurrent callbacks can never both validate the same value.</p>
+<h3 id="browser-binding-issue-1197">Browser binding (issue #1197)<a class="headerlink" href="#browser-binding-issue-1197" title="Permanent link">#</a></h3>
+<p>The state is also bound to the browser that started the flow, closing the
+login-CSRF variant where an attacker starts an authorize flow, obtains a
+valid state, and tricks another browser into completing the callback:</p>
+<ul>
+<li><code>POST /api/auth/oauth/authorize</code> generates a random per-flow binding value
+  and returns it as the <code>oxoflow_oauth_binding</code> cookie — <code>HttpOnly</code>,
+  <code>SameSite=Lax</code>, <code>Path</code> scoped to the OAuth routes (the parent of the
+  request path, e.g. <code>/api/auth/oauth</code>), and <code>Max-Age=600</code> (the state TTL).
+  <code>Secure</code> is added only when the browser-facing callback origin is https;
+  a plain-http localhost deployment never carries it, because browsers drop
+  <code>Secure</code> cookies on http. The raw value is never returned in the response
+  body; only its SHA-256 digest is stored next to the state row
+  (<code>oauth_states.binding_hash</code>, with idempotent SQLite and PostgreSQL
+  migrations).</li>
+<li><code>POST /api/auth/oauth/callback</code> requires the cookie to hash to the stored
+  binding. Missing, mismatched, or empty bindings — and historical rows
+  written before the migration (empty digest) — answer the same
+  <code>400 {code:"OAUTH_STATE_MISMATCH"}</code> as a provider/redirect mismatch. A
+  browser-binding mismatch does not say which component failed; the binding
+  is checked before the provider/redirect bindings for that reason. (The
+  provider and redirect checks themselves name the expected value, by
+  design — that is what makes a misconfiguration diagnosable.)</li>
+<li>A binding mismatch still consumes the state (single use). Handler-generated
+  callback responses clear the cookie on success and failure; a request
+  rejected by body extraction (malformed JSON → <code>400 INVALID_BODY</code>) answers
+  before the handler, so that short-lived cookie simply expires.</li>
+</ul>
+<p>The shipped SPA has no OAuth sign-in UI. A browser client that implements
+the two steps must use same-origin requests so the browser stores and
+returns the cookie automatically; non-browser API clients must capture the
+<code>Set-Cookie</code> value from the authorize response and send it back on the
+callback request.</p>
+<p>Scope: this proves that a callback can only complete a flow started by the
+browser presenting the same binding value — cross-browser completion and
+cookie-less replay are rejected by the tests below. It is not a claim that
+login CSRF is impossible in every threat model (e.g. an attacker able to
+write cookies into the victim's browser is outside this control).</p>
 <h3 id="redirect-allowlist">Redirect allowlist<a class="headerlink" href="#redirect-allowlist" title="Permanent link">#</a></h3>
 <p>The redirect target's <strong>origin</strong> must appear in a server-side allowlist
 derived from the origin configuration the server already trusts — there is

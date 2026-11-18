@@ -7530,6 +7530,15 @@ safely. The value itself must come from the backend's secret channel:</p>
 <p>Local <code>docker</code>/<code>singularity</code> runs forward the same variables by name
 (<code>docker run -e NAME</code>, and <code>APPTAINERENV_NAME</code>/<code>SINGULARITYENV_NAME</code> in the
 child environment), so the value never enters the container argv either.
+A sensitive value that is itself an absolute host path keeps its automatic
+read-only bind mount (issue #1177): the mount is expanded from the routed
+variable by the host shell
+(<code>-v "$OXO_FLOW_SENSITIVE_&lt;n&gt;":"$OXO_FLOW_SENSITIVE_&lt;n&gt;":ro</code>), so the
+wrapper string and the rule shell's argv carry only the reference. The
+docker client itself necessarily receives the expanded path as the mount
+source — a bind mount cannot be expressed without the runtime seeing the
+path — and a value embedded inside a longer path is skipped (with a
+warning) instead of re-materializing the value literally.
 Without the operator-side secret the reference expands empty and the rule
 fails — loudly, instead of leaking the value into the artifact. HPC
 job-script bodies (SLURM/PBS/SGE/LSF) are <strong>not</strong> covered yet; that half of
@@ -11982,7 +11991,7 @@ validation but are not consumed by run execution.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-120-1"><a id="__codelineno-120-1" name="__codelineno-120-1" href="#__codelineno-120-1"></a><span class="k">[ai]</span>
 </span><span id="__span-120-2"><a id="__codelineno-120-2" name="__codelineno-120-2" href="#__codelineno-120-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">              </span><span class="c1"># one-line activation: all AI commands auto-detect</span>
 </span><span id="__span-120-3"><a id="__codelineno-120-3" name="__codelineno-120-3" href="#__codelineno-120-3"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">            </span><span class="c1"># recovery write mode: "ask" (default) | "always" | "never"</span>
-</span><span id="__span-120-4"><a id="__codelineno-120-4" name="__codelineno-120-4" href="#__codelineno-120-4"></a><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek"</span><span class="w">       </span><span class="c1"># advisory for the CLI runtime (see the AI CLI reference)</span>
+</span><span id="__span-120-4"><a id="__codelineno-120-4" name="__codelineno-120-4" href="#__codelineno-120-4"></a><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek"</span><span class="w">       </span><span class="c1"># applied to the CLI runtime (see the AI CLI reference)</span>
 </span><span id="__span-120-5"><a id="__codelineno-120-5" name="__codelineno-120-5" href="#__codelineno-120-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
 </span><span id="__span-120-6"><a id="__codelineno-120-6" name="__codelineno-120-6" href="#__codelineno-120-6"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
 </span><span id="__span-120-7"><a id="__codelineno-120-7" name="__codelineno-120-7" href="#__codelineno-120-7"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># template --ai generation profile: "compact" | "full"</span>
@@ -11991,8 +12000,11 @@ validation but are not consumed by run execution.</p>
 activate without CLI flags — including the error-recovery loop that <code>run</code>
 starts when a rule fails (see
 <a href="../../commands/run/#ai-error-recovery-ai-recover">AI error recovery</a>). The
-full provider/model/skills reference lives in
-<a href="../ai-cli/#workflow-level-config-ai-section-in-oxoflow">the AI CLI reference</a>.</p>
+workflow section outranks the environment and the global config file for
+<code>provider</code> and <code>model</code> (project <code>.oxo-flow/ai.toml</code> sits between them, and
+<code>OXO_FLOW_AI_PROVIDER=disabled</code> remains a hard pin). The full
+provider/model/skills reference and the exact precedence table live in
+<a href="../ai-cli/#provider-and-model-precedence">the AI CLI reference</a>.</p>
 <p><code>auto_fix</code> controls what the recovery path may do with an AI-proposed
 workflow patch: <code>ask</code> (the documented default) prompts y/N on an interactive
 terminal and is denied headless, <code>always</code> applies safe fixes automatically,

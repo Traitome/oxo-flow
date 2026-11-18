@@ -1456,6 +1456,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#metro-view-and-grouped-granularities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metro view and grouped granularities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metro view and grouped granularities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keyboard-editing-metro-view-rule-granularity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keyboard editing (Metro view, Rule granularity)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#auto-layout" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4205,6 +4233,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#metro-view-and-grouped-granularities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metro view and grouped granularities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metro view and grouped granularities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keyboard-editing-metro-view-rule-granularity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keyboard editing (Metro view, Rule granularity)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#auto-layout" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4348,7 +4404,7 @@ is preserved as a new revision first.</p>
 </tr>
 <tr>
 <td><strong>Pipeline DAG</strong> (center)</td>
-<td>The node canvas: drag, connect, delete, double-click to edit</td>
+<td>The node canvas: drag, connect, delete, double-click to edit (Metro Rule granularity adds a keyboard path — see <a href="#metro-view-and-grouped-granularities">Metro view</a>)</td>
 </tr>
 <tr>
 <td><strong>Workflow TOML</strong> (right)</td>
@@ -4403,9 +4459,25 @@ including unsaved hand edits — until <strong>Apply to editor</strong> is click
   execution controls.</li>
 </ul>
 <p>Fields the inspector doesn't cover stay editable in the TOML pane.</p>
+<p>The standard DAG view is the mouse-first editing canvas: double-click a node
+to open the inspector, drag between handles to connect, and select elements
+then press <code>Delete</code>/<code>Backspace</code> to remove them. A complete keyboard edit
+surface exists in the <strong>Metro view at Rule granularity</strong> — focus order,
+activation, connect, delete, and Escape behavior are documented under
+<a href="#metro-view-and-grouped-granularities">Metro view and grouped granularities</a>
+(audit UX-06, issue #1148).</p>
 <h2 id="connecting-rules">Connecting rules<a class="headerlink" href="#connecting-rules" title="Permanent link">#</a></h2>
 <p>Drag from a node's right handle to another node's left handle. This adds an
-explicit <code>depends_on</code> edge.</p>
+explicit <code>depends_on</code> edge. In the <strong>Metro view at Rule granularity</strong> the
+keyboard equivalent is:</p>
+<ol>
+<li>Focus the source station and press <code>c</code> — the editor announces "Connecting
+   from <rule>" and outlines the source station.</li>
+<li><code>Tab</code>/<code>Shift+Tab</code> to the target station and press <code>Enter</code> to write the
+   connection. The live region reports the settled outcome after the edit
+   round-trip ("Connected …" or "… was not applied").</li>
+<li>Alternatively press <code>Escape</code> to cancel without writing anything.</li>
+</ol>
 <p>Two connections are always rejected, before anything is written:</p>
 <ul>
 <li>connecting a node to itself, and</li>
@@ -4445,8 +4517,49 @@ be resolved against each other leave the ordering ambiguous — use
 <p>Select one or more nodes and press <code>Delete</code> (or <code>Backspace</code>) to remove rules;
 with an edge selected instead, the same keys disconnect it (file-inferred
 edges are managed through the <code>input</code>/<code>output</code> paths, not by disconnect).
+In the Metro view at <strong>Rule</strong> granularity, focus a single station and press
+<code>Delete</code>/<code>Backspace</code> to remove exactly that rule (grouped Process/Module
+stations ignore those keys — see <a href="#metro-view-and-grouped-granularities">Metro view</a>).
 Removing a rule whose outputs other rules consume will surface validation
 errors on those rules — fix their inputs, and the workflow is valid again.</p>
+<h2 id="metro-view-and-grouped-granularities">Metro view and grouped granularities<a class="headerlink" href="#metro-view-and-grouped-granularities" title="Permanent link">#</a></h2>
+<p><strong>Metro View</strong> (bottom-right of the canvas) draws the DAG as a transit map,
+with a <code>Rule</code> / <code>Process</code> / <code>Module</code> granularity switch:</p>
+<ul>
+<li><strong>Rule</strong> — one station per rule. This is the Metro editing surface: the
+  keyboard actions below plus the mouse path (double-click to edit, drag
+  handles to connect).</li>
+<li><strong>Process</strong> — stations aggregate rules by environment backend (for example
+  one <code>system</code> station containing every system rule).</li>
+<li><strong>Module</strong> — stations aggregate rules by inferred bioinformatics modality
+  (genomics, transcriptomics, epigenomics, metagenomics, infrastructure).</li>
+</ul>
+<h3 id="keyboard-editing-metro-view-rule-granularity">Keyboard editing (Metro view, Rule granularity)<a class="headerlink" href="#keyboard-editing-metro-view-rule-granularity" title="Permanent link">#</a></h3>
+<p>In the Metro view at <strong>Rule</strong> granularity, stations are the canvas's focus
+stops, in rule-declaration order (<code>Tab</code> moves to the next station,
+<code>Shift+Tab</code> to the previous one; edges are not focus stops there):</p>
+<ul>
+<li><code>Enter</code> or <code>Space</code> — open the inspector for the focused rule.</li>
+<li><code>Escape</code> — cancel a pending connection, or close the inspector and return
+  focus to the station it came from.</li>
+<li><code>c</code> — start a connection from the focused station (see
+  <a href="#connecting-rules">Connecting rules</a>).</li>
+<li><code>Delete</code> / <code>Backspace</code> — remove the focused rule. The live region reports
+  the settled outcome ("Removed rule …" or "… was not removed") after the
+  edit round-trip.</li>
+</ul>
+<p>These shortcuts (including the connect flow) are Metro Rule-granularity
+features; the standard DAG view keeps its mouse-first editing path.</p>
+<p><strong>Process and Module are read-only</strong> (audit UX-06, issue #1148). Their
+station ids are aggregation keys, not rule names, so a group operation cannot
+be proven to preserve execution semantics — and a rule literally named like a
+group key (for example <code>system</code>) would be silently edited instead of the
+group. Grouped stations are therefore not buttons, carry a <code>read-only</code> badge,
+keep their transit edges but expose only non-connectable handles, ignore
+<code>Delete</code>/<code>Backspace</code>, and announce why when activated from the keyboard.
+The toolbar shows the same note. Switch back to <strong>Rule</strong> granularity to edit
+or connect. Grouping only changes the visualization — it never rewrites the
+workflow document.</p>
 <h2 id="auto-layout">Auto layout<a class="headerlink" href="#auto-layout" title="Permanent link">#</a></h2>
 <p>Use <strong>Auto layout</strong> to re-run the layered Sugiyama layout; then drag nodes
 wherever you like — positions are saved per pipeline (presentation only, never

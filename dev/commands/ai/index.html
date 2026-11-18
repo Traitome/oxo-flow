@@ -4291,7 +4291,10 @@ chat surfaces — one shared persona in <code>oxo-flow-ai</code>, one orchestrat
 loop. The steps:</p>
 <ol>
 <li><strong>Resolve the destination</strong> — <code>-o</code> is parsed before anything is sent
-   to the provider, so a bad output path fails cheaply.</li>
+   to the provider, so a bad output path fails cheaply. An existing
+   destination is confirmed on an interactive terminal and refused in
+   non-interactive sessions unless <code>--force</code> is passed, so a reviewed
+   workflow is never clobbered silently and a refusal costs nothing.</li>
 <li><strong>Gather context</strong> — <code>--from-url</code> references are fetched through the
    SSRF-screened fetcher; <code>--from-file</code> files are read with bounded
    previews. Both enter the prompt as external reference material.</li>
@@ -4312,7 +4315,8 @@ loop. The steps:</p>
 <li><strong>Validate against the engine</strong> — every draft is parsed by the core
    engine (<code>WorkflowConfig</code>). On failure the errors feed back to the
    model for correction; this loop is bounded by <code>--ai-max-retries</code>.</li>
-<li><strong>Deliver</strong> — the validated TOML is written, the three static gates
+<li><strong>Deliver</strong> — the validated TOML is written atomically (staged temp
+   file, fsync, rename over the destination), the three static gates
    (<code>validate</code> / <code>dry-run</code> / <code>lint</code>) can then confirm it, and the AI
    session (token usage, tool calls) is archived to the <code>ai_sessions/</code>
    directory of the resolved <code>.oxo-flow</code> data dir — the project-local

@@ -3072,6 +3072,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-pipeline-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI pipeline generation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#formatting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4083,6 +4094,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-pipeline-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI pipeline generation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#formatting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4266,6 +4288,35 @@ Problems-panel diagnostics:</p>
 <li>trigger on save by default (<code>oxo-flow.diagnosticMode: save</code>); switch to
   <code>type</code> for debounced live diagnostics or <code>off</code> to disable</li>
 </ul>
+<p><strong>Unsaved buffers are diagnosed as they are shown.</strong> The CLI reads workflows
+from a path, so a dirty buffer is staged as a temporary hidden <code>.oxoflow</code>
+file beside the document before <code>validate</code>/<code>lint</code> run on it — relative
+<code>[[include]]</code> and sample-pattern resolution are unchanged, and the snapshot is
+always deleted. Diagnostics therefore describe the editor content, never the
+stale saved file; the Validate/Lint commands use the same snapshot path when
+the buffer is dirty. If the snapshot cannot be created (read-only directory,
+disk error), the extension refuses with an <code>UNSAVED</code> warning telling you to
+save — it does <strong>not</strong> quietly report the saved file's findings.</p>
+<h2 id="ai-pipeline-generation">AI pipeline generation<a class="headerlink" href="#ai-pipeline-generation" title="Permanent link">#</a></h2>
+<p><code>oxo-flow: Generate Pipeline with AI…</code> picks a backend from
+<code>oxo-flow.ai.backend</code> (<code>auto</code> prefers a configured CLI provider, otherwise an
+editor language model). The CLI backend runs
+<code>oxo-flow template "&lt;description&gt;" --ai -o &lt;file&gt;</code> as a task, where the
+engine's own generation loop owns validation.</p>
+<p>The editor-model backend is <strong>validate-before-apply</strong>: the model's draft is
+staged as a temporary sibling <code>.oxoflow</code> snapshot and grounded through
+<code>oxo-flow validate</code> (the same CLI path diagnostics use). On failure the
+CLI's structured findings — code, message, rule and hint, parsed from the
+<code>--json</code> report — go back to the model for exactly one repair round, and the
+repaired draft is validated again. Only a passing pipeline is written to the
+chosen destination — an invalid generation (including a failed repair) is
+surfaced as an error, the findings and the rejected draft appear in the
+<em>oxo-flow</em> output channel, and the destination file is left untouched.</p>
+<p>Infrastructure failures are reported as such, not as validation failures: if
+<code>oxo-flow</code> cannot be launched (check <code>oxo-flow.executablePath</code>), the check
+times out, or the draft cannot be staged (read-only directory), generation
+names that cause, writes nothing, and does not spend the single repair round
+on a condition the model cannot fix.</p>
 <h2 id="formatting">Formatting<a class="headerlink" href="#formatting" title="Permanent link">#</a></h2>
 <p><code>oxo-flow: Format Document</code> (and the standard <em>Format Document</em> action) runs
 the engine's canonical TOML formatter (<code>oxo-flow format</code>) on the current
@@ -4358,7 +4409,7 @@ title bar.</p>
 </tr>
 <tr>
 <td>Generate Pipeline with AI…</td>
-<td><code>oxo-flow template "&lt;description&gt;" --ai -o &lt;file&gt;</code></td>
+<td>CLI backend: <code>oxo-flow template "&lt;description&gt;" --ai -o &lt;file&gt;</code> as a task; editor-model backend: <code>oxo-flow validate</code> gate before writing (see <a href="#ai-pipeline-generation">AI pipeline generation</a>)</td>
 </tr>
 <tr>
 <td>Show AI Provider Status</td>
@@ -4450,7 +4501,7 @@ the description.</p>
 <tr>
 <td><code>oxo-flow.ai.backend</code></td>
 <td><code>auto</code></td>
-<td>Backend for <strong>Generate Pipeline with AI</strong>: <code>auto</code> uses the CLI provider when configured, else the editor language model; <code>cli</code> / <code>ide</code> force one path (the <code>ide</code> path always grounds drafts through <code>oxo-flow validate</code> with one repair round)</td>
+<td>Backend for <strong>Generate Pipeline with AI</strong>: <code>auto</code> uses the CLI provider when configured, else the editor language model; <code>cli</code> / <code>ide</code> force one path (the <code>ide</code> path validates every draft, re-validates the one repair round, and only then writes the file)</td>
 </tr>
 <tr>
 <td><code>oxo-flow.trace</code></td>
