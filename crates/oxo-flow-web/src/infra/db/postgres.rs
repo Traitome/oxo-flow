@@ -302,6 +302,7 @@ impl StorageBackend for PostgresBackend {
                 state TEXT PRIMARY KEY,
                 provider TEXT NOT NULL DEFAULT '',
                 redirect_uri TEXT NOT NULL DEFAULT '',
+                binding_hash TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
 
@@ -390,9 +391,10 @@ impl StorageBackend for PostgresBackend {
 
         // OAuth state binding (issue #1141, parity with the SQLite
         // migration): pending states carry the provider and redirect URI
-        // they were issued for. Historical rows default to '' and can never
+        // they were issued for, plus the initiating browser's binding
+        // digest (issue #1197). Historical rows default to '' and can never
         // pass verification; they age out under the existing purge.
-        for column in ["provider", "redirect_uri"] {
+        for column in ["provider", "redirect_uri", "binding_hash"] {
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS {column} TEXT NOT NULL DEFAULT ''"
             )))
@@ -1550,15 +1552,17 @@ impl StorageBackend for PostgresBackend {
         state: &str,
         provider: &str,
         redirect_uri: &str,
+        binding_hash: &str,
         created_at: &str,
     ) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO oauth_states (state, provider, redirect_uri, created_at) \
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO oauth_states (state, provider, redirect_uri, binding_hash, created_at) \
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(state)
         .bind(provider)
         .bind(redirect_uri)
+        .bind(binding_hash)
         .bind(created_at)
         .execute(&self.pool)
         .await
@@ -1575,7 +1579,7 @@ impl StorageBackend for PostgresBackend {
         // fails the callback closed instead of accepting a reusable state.
         let row: Option<models::OAuthStateRow> = sqlx::query_as(
             "DELETE FROM oauth_states WHERE state = $1 \
-             RETURNING state, provider, redirect_uri, created_at",
+             RETURNING state, provider, redirect_uri, binding_hash, created_at",
         )
         .bind(state)
         .fetch_optional(&self.pool)

@@ -81,6 +81,7 @@ async fn storage_backend_contract_round_trips_on_postgres() {
             &format!("state-{suffix}"),
             "orcid",
             "https://flows.example/cb",
+            &format!("binding-{suffix}"),
             &timestamp,
         )
         .await
