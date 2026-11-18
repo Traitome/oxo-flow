@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import { api } from '../api/client';
 import { useI18n } from '../context/I18n';
+import { AUTH_CHANGED_EVENT, AUTH_TOKEN_KEY, writeIdentityHint } from '../utils/identityStorage';
 
 export default function Login() {
   const location = useLocation();
@@ -33,10 +34,14 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.login(username.trim(), password);
-      localStorage.setItem('oxo_token', res.token);
+      localStorage.setItem(AUTH_TOKEN_KEY, res.token);
+      // #1144: cache the server-stated identity BEFORE announcing the
+      // change, so listeners that re-key identity-scoped storage read the
+      // new owner, never the previous session's bucket.
+      writeIdentityHint(res.username);
       // #907 T1: Layout stays mounted across this client-side navigate(), so
       // its mount-time authMe would leave the identity chip stale. Notify it.
-      window.dispatchEvent(new Event('oxo:auth-changed'));
+      window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
       navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('login.failed'));

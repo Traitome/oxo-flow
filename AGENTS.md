@@ -314,3 +314,4 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 - `components/WorkflowCanvas.tsx` — Interactive DAG using React Flow + d3-dag
 - `api/client.ts` — Typed API client with structured error handling
 - `api/types.ts` — TypeScript types matching the Rust API responses
+- `utils/identityStorage.ts` — identity-scoped client state (issue #1144 / UX-02): draft, chat, and canvas buckets are keyed by the username the server reports (`oxo_identity` caches it, `GET /api/auth/me` must confirm it before the first paint and an unconfirmed identity fails closed with no drafts — never a cached-identity fallback), logout wipes every identity-scoped key and suppresses further writes, and the pre-#1144 browser-wide `oxo_session` blob is discarded. Do not add new account-scoped `localStorage` keys outside this module

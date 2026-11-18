@@ -21,6 +21,7 @@ import '@xyflow/react/dist/style.css';
 import { LayoutGrid, TrainTrack } from 'lucide-react';
 import type { DagJson } from '../api/types';
 import { useI18n } from '../context/I18n';
+import { canvasPositionKey } from '../utils/identityStorage';
 import { MetroCanvas } from './MetroCanvas';
 
 // ── Node card: a terminal snippet, because the subject's vernacular is code ──
@@ -125,11 +126,15 @@ function computeLayout(
 }
 
 // ── Position persistence (presentation-only; layout is not workflow data) ──
+//
+// #1144: the node ids ARE rule names from the user's draft, so positions are
+// identity-scoped like the draft itself — the logout wipe removes every
+// `oxo-canvas-pos::…` key along with the session buckets.
 
 const positionsStore = {
   load(scopeKey: string): Record<string, { x: number; y: number }> {
     try {
-      const raw = localStorage.getItem(`oxo-canvas-pos-${scopeKey}`);
+      const raw = localStorage.getItem(canvasPositionKey(scopeKey));
       return raw ? (JSON.parse(raw) as Record<string, { x: number; y: number }>) : {};
     } catch {
       return {};
@@ -137,7 +142,7 @@ const positionsStore = {
   },
   save(scopeKey: string, positions: Record<string, { x: number; y: number }>) {
     try {
-      localStorage.setItem(`oxo-canvas-pos-${scopeKey}`, JSON.stringify(positions));
+      localStorage.setItem(canvasPositionKey(scopeKey), JSON.stringify(positions));
     } catch {
       // Storage unavailable — layout persistence is cosmetic, not data.
     }

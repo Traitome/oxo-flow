@@ -159,6 +159,48 @@ Dark mode (follows the OS or the header 🌙 toggle), Chinese interface
 chrome (header 中文 toggle), and bilingual glossary tooltips on core
 terms (pipeline, rule, wildcard, checkpoint, dry-run, depends_on).
 
+## Browser storage and account switching
+
+The editor keeps unsaved work in the browser so a reload or a crash does
+not lose it. That state is **scoped to the account that created it**:
+
+- **What is scoped**: the draft workflow TOML, the AI chat transcripts, and
+  the canvas node positions. Each is stored under the username the server
+  reports for the current session (`POST /api/auth/login` and
+  `GET /api/auth/me`), in a bucket like `oxo_session::user:<username>`; a
+  browser with nobody signed in uses a separate `guest` bucket.
+- **Signing out clears all of it** — every account's bucket, not just the
+  current one, plus the cached identity and the session token. A second
+  account that signs in on the same browser starts from its own (empty)
+  bucket and never sees the previous account's draft, chat, or canvas.
+- **A rejected or expired session keeps your draft**: the token and the
+  cached identity are dropped, but the bucket is only removed by an
+  explicit sign-out, so signing back in as the same user restores the
+  unsaved draft.
+- **The cached identity is confirmed before anything renders**: when the
+  browser holds a session token (or claims an identity), the app asks
+  `GET /api/auth/me` before the first paint and restores **only** the bucket
+  the server names. A stale or forged cached identity is corrected without
+  ever rendering the wrong account's draft.
+- **If the server cannot confirm the account, the app fails closed**: when
+  the identity check fails (unreachable) or does not answer within a few
+  seconds, no draft is shown at all — the cached identity is never used as a
+  fallback. Instead you get a **Session not confirmed** notice with
+  **Retry** and **Sign in again**. A late confirmation is adopted as soon as
+  it arrives, so a slow server resolves to your own draft without a reload.
+  Signing in again drops the token and the cached identity but keeps every
+  saved draft, which returns with the same account.
+- **Other tabs follow**: signing out (or in) in one tab re-initializes the
+  same browser's other open tabs, and the sign-out wipe is authoritative —
+  a background tab cannot re-save the signed-out account's state.
+- **What is not scoped**: per-device preferences — theme, language, sidebar
+  collapse, guided/canvas editor mode, and the onboarding banner. They
+  describe the device, not the account.
+
+Drafts saved by versions before this scoping existed were browser-wide and
+cannot be attributed to an account, so they are discarded on first load.
+Exports and saved pipelines are unaffected (they live on the server).
+
 ## See also
 
 - [DAG Edit API](../reference/dag-edit-api.md) — the command API behind the canvas

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { GUEST_SCOPE, sessionKeyForScope } from '../src/utils/identityStorage';
 
 test.describe('oxo-flow v0.9 Core User Flows', () => {
 
@@ -241,15 +242,17 @@ name = "tricky_rule"
 output = ["out.txt"]
 shell = "echo '[[rules]] [engine]' > out.txt"
 `;
-    await page.addInitScript((seededToml: string) => {
+    // #1144: drafts live in an identity-scoped bucket; the anonymous
+    // `guest` scope is the one this spec (no login) reads.
+    await page.addInitScript(({ seededToml, sessionKey }: { seededToml: string; sessionKey: string }) => {
       localStorage.setItem('oxo_editor_mode', 'canvas');
-      localStorage.setItem('oxo_session', JSON.stringify({
+      localStorage.setItem(sessionKey, JSON.stringify({
         _stamp: 999,
         pipelineToml: seededToml,
         dagData: null,
         activeRunId: null,
       }));
-    }, initialToml);
+    }, { seededToml: initialToml, sessionKey: sessionKeyForScope(GUEST_SCOPE) });
 
     // Open editor with ?modal=data
     await page.goto('/editor?modal=data');
@@ -287,10 +290,10 @@ shell = "echo '[[rules]] [engine]' > out.txt"
 
     // Wait for session flush to localStorage (500ms debounce) and validate resulting TOML via backend parser
     await page.waitForTimeout(600);
-    const savedToml = await page.evaluate(() => {
-      const raw = localStorage.getItem('oxo_session');
+    const savedToml = await page.evaluate((sessionKey: string) => {
+      const raw = localStorage.getItem(sessionKey);
       return raw ? (JSON.parse(raw).pipelineToml as string) : '';
-    });
+    }, sessionKeyForScope(GUEST_SCOPE));
     expect(savedToml).toContain('samples = ["S\\"quote", "S\\\\slash"]');
     expect(savedToml).toContain('custom_companion = "keep-me"');
     expect(savedToml).toContain('# operator comment preserved');
