@@ -735,26 +735,22 @@ impl LocalExecutor {
     }
 
     /// Move a rule command's sensitive values from the command line into the
-    /// child environment (audit A1). Container backends are skipped: their
-    /// wrapper does not forward the host environment, so a substituted
-    /// reference would reach the tool empty — the leak there needs the
-    /// engine-level `docker -e` / singularity `--env` plumbing instead.
-    fn route_sensitive_values(&self, cmd: &str, rule: &Rule) -> (String, HashMap<String, String>) {
+    /// child environment (audit A1). Container backends route the same way
+    /// (issue #1120, audit RB-12): the docker/singularity wrappers in
+    /// `environment.rs` scan the wrapped command for the `OXO_FLOW_SENSITIVE_`
+    /// references this pass splices in and forward those names into the
+    /// container (`docker run -e VAR` / an `APPTAINERENV_`|`SINGULARITYENV_`
+    /// prefix), so the reference resolves inside the container exactly as it
+    /// does on the bare-local path. The wrap happens later (in
+    /// `resolve_command`), so every container-routed command text here still
+    /// carries the substituted value — the container prelude must run BEFORE
+    /// the wrap so the value is off the command line by the time the wrapper
+    /// string is built.
+    fn route_sensitive_values(&self, cmd: &str, _rule: &Rule) -> (String, HashMap<String, String>) {
         if self.config.sensitive_values.is_empty() {
             return (cmd.to_string(), HashMap::new());
         }
-        match rule.environment.kind() {
-            "docker" | "singularity" => {
-                tracing::warn!(
-                    rule = %rule.name,
-                    environment = rule.environment.kind(),
-                    "sensitive config values stay on the command line for container backends \
-                     (the wrapper does not forward the host environment)"
-                );
-                (cmd.to_string(), HashMap::new())
-            }
-            _ => route_sensitive_values_through_env(cmd, &self.config.sensitive_values),
-        }
+        route_sensitive_values_through_env(cmd, &self.config.sensitive_values)
     }
 
     /// Snapshot of the in-flight child pid per rule (issue #131). The
@@ -4506,6 +4502,33 @@ pub const SENSITIVE_ENV_BASE: &str = "OXO_FLOW_SENSITIVE";
 /// The environment variable name for the `index`-th routed secret.
 fn sensitive_env_name(index: usize) -> String {
     format!("{SENSITIVE_ENV_BASE}_{index}")
+}
+
+/// The sensitive-routing variable names a rendered command references
+/// (issue #1120, audit RB-12).
+///
+/// After [`route_sensitive_values_through_env`] rewrites a command, every
+/// routed secret is referenced as `${OXO_FLOW_SENSITIVE_n}`. Container and
+/// cloud artifacts cannot carry the value, so each backend's artifact
+/// builder (docker `-e`, singularity/apptainer `*ENV_` prefix, k8s
+/// `secretKeyRef`, GCP `secretVariables`) must first discover which names
+/// to forward. This is the ONE scanner they all share — a per-backend copy
+/// would drift from the numbering [`route_sensitive_values_through_env`]
+/// assigns. Returned in sorted order so generated manifests are
+/// order-independent (BTreeSet, not HashSet).
+pub(crate) fn sensitive_env_refs(cmd: &str) -> Vec<String> {
+    let needle = format!("{SENSITIVE_ENV_BASE}_");
+    let mut names = std::collections::BTreeSet::new();
+    let mut rest = cmd;
+    while let Some(pos) = rest.find(&needle) {
+        let after = &rest[pos + needle.len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        rest = &after[digits.len()..];
+        if !digits.is_empty() {
+            names.insert(format!("{SENSITIVE_ENV_BASE}_{digits}"));
+        }
+    }
+    names.into_iter().collect()
 }
 
 /// Route declared sensitive values out of a rendered command and into the

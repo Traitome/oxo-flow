@@ -13,13 +13,51 @@
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
+use crate::executor::process::sensitive_env_refs;
 use crate::rule::Rule;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric
 /// and hyphens, max 63 chars).
 pub fn sanitize_gcp_batch_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
+}
+
+/// Prefix of the Google Secret Manager secret each routed `sensitive = true`
+/// config value is expected under (issue #1120 / ledger RB-12). The GCP Batch
+/// task carries only `secretVariables` references, so no secret literal ever
+/// lands in the job body.
+///
+/// The operator creates one secret per (rule, variable) pair, e.g.
+/// `oxoflow-call-variants-oxo-flow-sensitive-0`, and grants the Batch service
+/// account `roles/secretmanager.secretAccessor` on it. The environment
+/// variable injected into the task is the same `OXO_FLOW_SENSITIVE_<n>` name
+/// the local executor routes values under.
+pub const GCP_SENSITIVE_SECRET_PREFIX: &str = "oxoflow";
+
+/// Build the Secret Manager secret name for one routed env variable of one
+/// rule (deterministic, so the operator-side contract is stable).
+fn gcp_sensitive_secret_name(rule: &Rule, var: &str) -> String {
+    format!(
+        "{}-{}",
+        GCP_SENSITIVE_SECRET_PREFIX,
+        sanitize_gcp_batch_name(&format!("{}-{}", rule.name, var))
+    )
+}
+
+/// Project the routed sensitive references of a rendered command into a
+/// `secretVariables` map for the task's `environment`. Returns `None` when the
+/// command carries no routed reference, so ordinary jobs stay byte-identical.
+fn sensitive_secret_variables(rule: &Rule, shell_cmd: &str) -> Option<Value> {
+    let refs = sensitive_env_refs(shell_cmd);
+    if refs.is_empty() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    for var in refs {
+        map.insert(var.clone(), json!(gcp_sensitive_secret_name(rule, &var)));
+    }
+    Some(json!({ "secretVariables": Value::Object(map) }))
 }
 
 /// Generate a Google Cloud Batch job JSON configuration.
@@ -48,17 +86,22 @@ pub fn generate_gcp_batch_job_spec(
         });
     }
 
+    let mut task_spec = json!({
+        "runnables": [runnable],
+        "computeResource": {
+            "cpuMilli": threads * 1000,
+            "memoryMib": mem_mb
+        },
+        "maxRetryCount": 0
+    });
+    if let Some(environment) = sensitive_secret_variables(rule, shell_cmd) {
+        task_spec["environment"] = environment;
+    }
+
     let payload = json!({
         "taskGroups": [
             {
-                "taskSpec": {
-                    "runnables": [runnable],
-                    "computeResource": {
-                        "cpuMilli": threads * 1000,
-                        "memoryMib": mem_mb
-                    },
-                    "maxRetryCount": 0
-                }
+                "taskSpec": task_spec
             }
         ],
         "logsPolicy": {

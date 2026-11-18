@@ -7,13 +7,58 @@
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
+use crate::executor::process::sensitive_env_refs;
 use crate::rule::Rule;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
 pub fn sanitize_k8s_name(name: &str) -> String {
     sanitize_cloud_name(name, 63, true, "")
+}
+
+/// Kubernetes Secret the manifest pulls `sensitive = true` config values
+/// from (issue #1120 / ledger RB-12). The operator creates it once per
+/// workflow, keyed by the same `OXO_FLOW_SENSITIVE_<n>` variable names the
+/// local executor routes values under, so a manifest never carries a secret
+/// literal in `args`.
+///
+/// ```sh
+/// kubectl create secret generic oxoflow-secrets \
+///   --from-literal=OXO_FLOW_SENSITIVE_0=<value>
+/// ```
+pub const K8S_SENSITIVE_SECRET: &str = "oxoflow-secrets";
+
+/// Attach the secret-backed `env` array to a container block: every sensitive
+/// value referenced by the rendered command is projected out of the
+/// operator-provided Kubernetes Secret rather than inlined as a literal.
+/// A container whose command carries no routed sensitive reference is left
+/// untouched, so ordinary jobs stay byte-identical.
+fn attach_sensitive_env(container: &mut Value, rule: &Rule, shell_cmd: &str) {
+    let env: Vec<Value> = sensitive_env_refs(shell_cmd)
+        .into_iter()
+        .map(|var| {
+            // The Secret key is namespaced per rule so two rules reusing the
+            // same routing index never collide on one key.
+            let key = format!(
+                "{}-{}",
+                sanitize_k8s_name(&rule.name),
+                var.to_lowercase().replace('_', "-")
+            );
+            json!({
+                "name": var,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": K8S_SENSITIVE_SECRET,
+                        "key": key,
+                    }
+                }
+            })
+        })
+        .collect();
+    if !env.is_empty() {
+        container["env"] = json!(env);
+    }
 }
 
 /// Build the container resource block shared by single and array jobs:
@@ -63,6 +108,15 @@ pub fn generate_k8s_job_manifest(
         .as_deref()
         .unwrap_or("ubuntu:latest");
 
+    let mut container = json!({
+        "name": sanitize_k8s_name(&rule.name),
+        "image": container_image,
+        "command": ["/bin/bash", "-c"],
+        "args": [shell_cmd],
+        "resources": container_resources(rule),
+    });
+    attach_sensitive_env(&mut container, rule, shell_cmd);
+
     let manifest = json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -84,15 +138,7 @@ pub fn generate_k8s_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
-                    "containers": [
-                        {
-                            "name": sanitize_k8s_name(&rule.name),
-                            "image": container_image,
-                            "command": ["/bin/bash", "-c"],
-                            "args": [shell_cmd],
-                            "resources": container_resources(rule),
-                        }
-                    ]
+                    "containers": [container]
                 }
             }
         }
@@ -119,6 +165,15 @@ pub fn generate_k8s_array_job_manifest(
     let dispatch_cmd =
         format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
 
+    let mut container = json!({
+        "name": sanitize_k8s_name(&rule.name),
+        "image": container_image,
+        "command": ["/bin/bash", "-c"],
+        "args": [dispatch_cmd],
+        "resources": container_resources(rule),
+    });
+    attach_sensitive_env(&mut container, rule, &dispatch_cmd);
+
     let manifest = json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -143,15 +198,7 @@ pub fn generate_k8s_array_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
-                    "containers": [
-                        {
-                            "name": sanitize_k8s_name(&rule.name),
-                            "image": container_image,
-                            "command": ["/bin/bash", "-c"],
-                            "args": [dispatch_cmd],
-                            "resources": container_resources(rule),
-                        }
-                    ]
+                    "containers": [container]
                 }
             }
         }

@@ -322,6 +322,35 @@ impl ScheduledPlan {
         Ok(plan)
     }
 
+    /// Route `sensitive = true` config values out of every job shell and into
+    /// the environment (issue #1120 / ledger RB-12).
+    ///
+    /// Cloud job bodies are rendered from [`ScheduledRule::shell_cmd`], so the
+    /// literal must be replaced by an `OXO_FLOW_SENSITIVE_<n>` reference BEFORE
+    /// any manifest/spec is built — the value then travels through the
+    /// backend's own secret-injection path instead of the job body. The local
+    /// executor already performs this per rule
+    /// ([`crate::executor::process`] routing in `process.rs`); the cluster path
+    /// needs it here because [`build_rule`] wraps the command
+    /// (`env_resolver.wrap_command`) before any routing exists, so no refs are
+    /// present when the cloud generators receive `shell_cmd`.
+    ///
+    /// Returns the routed `VAR -> value` bindings, sorted key order, for
+    /// callers that must hand the values to an actual injection channel.
+    pub fn route_sensitive_values(&mut self, values: &[String]) -> std::collections::BTreeMap<String, String> {
+        let mut env = std::collections::BTreeMap::new();
+        if values.is_empty() {
+            return env;
+        }
+        for sr in self.rules.values_mut() {
+            let (cmd, refs) =
+                crate::executor::process::route_sensitive_values_through_env(&sr.shell_cmd, values);
+            sr.shell_cmd = cmd;
+            env.extend(refs);
+        }
+        env
+    }
+
     /// Append newly created instances after a checkpoint re-entry (P3).
     pub fn merge_new_instances(
         &mut self,

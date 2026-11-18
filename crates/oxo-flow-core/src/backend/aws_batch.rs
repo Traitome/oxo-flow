@@ -8,6 +8,25 @@
 //! `walltime` and `extra_args` are deliberately not mapped: an AWS Batch
 //! SubmitJob payload carries neither — retry behavior lives in the job
 //! definition and timeouts in `timeout.retryStrategy`, both operator-managed.
+//!
+//! # Sensitive config values (issue #1120 / ledger RB-12)
+//!
+//! A `sensitive = true` config value must never be inlined in the job body.
+//! The cluster plan routes each such value out of `shell_cmd` into an
+//! `OXO_FLOW_SENSITIVE_<n>` reference before this generator runs
+//! (`ScheduledPlan::route_sensitive_values`, called from `run_cluster.rs`), so
+//! `containerOverrides.command` carries only the *name*.
+//!
+//! The value itself cannot be attached here: the SubmitJob `ContainerOverrides`
+//! structure has **no `secrets` field** (only `environment` — plaintext), and
+//! this generator receives neither the value nor a path to it. The faithful
+//! AWS mechanism is the **job definition's** `containerProperties.secrets`
+//! (`[{ "name": "OXO_FLOW_SENSITIVE_0", "valueFrom": "<arn>" }]`, or
+//! `environment`), which is operator-managed and never part of a SubmitJob
+//! call. The operator must therefore map each routed `OXO_FLOW_SENSITIVE_<n>`
+//! name on the job definition (or via `environment` in
+//! `containerOverrides`, added by whoever holds the value); the container then
+//! resolves the reference from its own environment.
 
 use super::{sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
@@ -200,5 +219,41 @@ mod tests {
             .find(|r| r["type"] == "GPU")
             .expect("array spec must include GPU requirement");
         assert_eq!(gpu["value"], "1");
+    }
+
+    /// Sentinel regression (ledger RB-12): once the cluster plan routes the
+    /// sensitive literal out of `shell_cmd`, no AWS Batch job body carries it —
+    /// only the `OXO_FLOW_SENSITIVE_<n>` reference the job-definition secret
+    /// (or `environment` override) resolves at container start.
+    #[test]
+    fn test_sensitive_value_never_in_aws_batch_body() {
+        let sentinel = "SENTINEL_SECRET_VALUE_C3";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --api-key {sentinel} --run"),
+            &[sentinel.to_string()],
+        );
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let rule = Rule {
+            name: "call_variants".into(),
+            ..Default::default()
+        };
+
+        for spec_str in [
+            generate_aws_batch_job_spec(&rule, &routed, &test_config()).unwrap(),
+            generate_aws_batch_array_spec(&rule, "runs/cmds", 4, &test_config()).unwrap(),
+        ] {
+            assert!(
+                !spec_str.contains(sentinel),
+                "sentinel leaked into the AWS Batch body: {spec_str}"
+            );
+            assert!(
+                spec_str.contains("OXO_FLOW_SENSITIVE_0"),
+                "the routed reference must survive into the body: {spec_str}"
+            );
+        }
     }
 }
