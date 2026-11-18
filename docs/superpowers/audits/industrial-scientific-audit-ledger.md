@@ -499,7 +499,10 @@ Required exit evidence:
   covered by a prompt-injection-shaped scripted-model test
   (`read_then_fetch_cannot_reach_the_network_without_approval`: auto-approved scoped read of a
   secret file followed by `fetch_url` to an unapproved origin — the fetch never executes, the
-  refusal carries the origin only, and no secret appears in the transcript or refusal).]
+  refusal carries the origin only, and neither the refusal nor CLI output echoes the secret.
+  (The scripted backend's `observed_calls` stores the model's own tool-call arguments, so the
+  model-side transcript does contain the value the model chose to send; that is a record of the
+  attempted call, not an output path opened by the gate.)]
 
 ### RB-14: Workflow-scoped AI policy is parsed but not enforced
 

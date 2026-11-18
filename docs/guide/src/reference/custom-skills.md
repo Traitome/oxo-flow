@@ -159,8 +159,8 @@ MCP tools execute under the same approval policy as all agent tools:
   for an effectful tool).
 - **Every MCP tool invocation is refused unless a human approves that
   specific call** — the AI prompts on the terminal (`Allow execution?
-  [y/N]`); non-interactive sessions (CI, `--json`, redirected stdin)
-  always refuse.
+  [y/N]`); non-interactive sessions (CI, redirected stdin, the web
+  server surfaces) always refuse.
 
 Outbound network egress from a built-in tool is gated the same way
 (#1123, audit AI-05). A model-initiated `fetch_url` is read-only in the
@@ -170,7 +170,7 @@ auto-approval:
 
 - In an interactive session the AI prompts for that specific call
   (`Allow execution? [y/N]`), showing the destination URL.
-- In a non-interactive session (CI, `--json`, redirected stdin, the web
+- In a non-interactive session (CI, redirected stdin, the web
   chat/translate loop) the call is refused, and the model receives an
   error naming the destination origin — never the URL's path or query,
   and never any file content.
