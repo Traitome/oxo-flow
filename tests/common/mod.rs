@@ -44,8 +44,27 @@ pub fn workspace_bin(name: &str) -> PathBuf {
 /// An `oxo-flow` command builder (assert_cmd): the canonical way every
 /// integration test spawns the CLI. Tests needing raw `std::process::Command`
 /// (stdio piping, abort signalling) construct it from `workspace_bin`.
+///
+/// The AI config path is redirected per-process: without it, every test
+/// inherits the developer's real `$HOME/.oxo-flow/ai_config.json` (the
+/// saved tier outranks the ambient env tier), so e.g. an "unreachable
+/// provider must degrade" test would make a REAL model call through the
+/// saved key and fail on clean-room assertions. The path is authoritative
+/// when set and is never created here — a missing file is simply no saved
+/// config. Tests that exercise config writes set their own
+/// `AI_CONFIG_OVERRIDE_ENV` afterwards, replacing this one (same isolation
+/// the web harness applies below).
 pub fn oxo_flow_cmd() -> assert_cmd::Command {
-    assert_cmd::Command::new(workspace_bin("oxo-flow"))
+    static REDIRECT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| {
+        std::env::temp_dir().join(format!(
+            "oxoflow-test-ai-config-{}.json",
+            std::process::id()
+        ))
+    });
+    let mut cmd = assert_cmd::Command::new(workspace_bin("oxo-flow"));
+    cmd.env(oxo_flow_ai::provider::AI_CONFIG_OVERRIDE_ENV, redirect);
+    cmd
 }
 
 pub fn free_port() -> u16 {
