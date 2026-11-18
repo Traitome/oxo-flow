@@ -13,6 +13,7 @@ import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
 import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
 import { detectGuidedUnsupported } from '../utils/guidedSafety';
+import { diffLines, summarizeDiff } from '../utils/tomlDiff';
 
 // Lazy: guided mode (the default) never mounts these, so @xyflow/react,
 // d3-dag and CodeMirror stay out of the initial editor load (issue #79).
@@ -42,6 +43,20 @@ threads = 8
 interface InspectorState {
   ruleName: string;
   rule: Record<string, unknown> | null;
+}
+
+// UX-05 (issue #1147): AI-generated workflow output is staged here as a
+// PROPOSAL. Nothing from the AI is written into editor state until the user
+// accepts the shown diff — a chat round used to overwrite unsaved work.
+interface AiProposal {
+  id: string;
+  toml: string;
+  /** Stable 1-based staging ordinal within the current queue batch; the
+   *  panel label keeps it when earlier proposals are applied/discarded. */
+  seq: number;
+  validation?: unknown;
+  pipelineId?: string;
+  receivedAt: number;
 }
 
 // UX-03 (issue #1145): the validation verdict is fail-closed. `unavailable`
@@ -237,6 +252,16 @@ export default function PipelineEditor() {
   const editSeq = useRef(0);
   const [running, setRunning] = useState(false);
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
+  // UX-05 (issue #1147): pending AI proposals, oldest first. The displayed
+  // proposal is `activeProposalId` when set, else the FIRST pending one — so
+  // a second proposal arriving while one is pending is appended, never
+  // silently swapped in. Accept/discard are the only ways state leaves here.
+  const [proposals, setProposals] = useState<AiProposal[]>([]);
+  const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
+  const activeProposal = proposals.find((p) => p.id === activeProposalId) ?? proposals[0] ?? null;
+  // Highest staging ordinal still pending: the label of a queued proposal
+  // does not shift when an earlier one is applied/discarded.
+  const proposalBatchTotal = proposals.reduce((max, p) => Math.max(max, p.seq), 0);
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
   const [inspector, setInspector] = useState<InspectorState | null>(null);
   const [showRunDialog, setShowRunDialog] = useState(false);
@@ -604,7 +629,12 @@ export default function PipelineEditor() {
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
               <button className="btn-sm" onClick={async () => {
                 try {
+                  // Review follow-up (issue #1147): same guarded writer as
+                  // runEdit — a snapshot load that resolves after a newer
+                  // edit (e.g. an accepted AI proposal) must not clobber it.
+                  const seq = ++editSeq.current;
                   const snap = await api.getRevision(savedPipelineId, r.id);
+                  if (seq !== editSeq.current) return;
                   setToml(snap.toml_content);
                   session.setRunResult({ message: t('editor.history.snapshotLoaded').replace('{{id}}', r.id.slice(0, 8)), type: 'success' });
                 } catch (err: unknown) {
@@ -614,8 +644,14 @@ export default function PipelineEditor() {
               <button className="btn-sm" onClick={async () => {
                 if (!window.confirm(t('editor.history.rollbackConfirm').replace('{{time}}', new Date(r.created_at).toLocaleString(locale)))) return;
                 try {
+                  // Review follow-up (issue #1147): guarded writer — the
+                  // rollback's re-read must not overwrite a newer edit that
+                  // landed while the requests were in flight.
+                  const seq = ++editSeq.current;
                   await api.rollbackPipeline(savedPipelineId, r.id);
-                  setToml((await api.getPipeline(savedPipelineId)).toml_content);
+                  const next = await api.getPipeline(savedPipelineId);
+                  if (seq !== editSeq.current) return;
+                  setToml(next.toml_content);
                   api.listRevisions(savedPipelineId).then(setRevisions);
                   session.setRunResult({ message: t('editor.history.rolledBack'), type: 'success' });
                 } catch (err: unknown) {
@@ -700,8 +736,13 @@ export default function PipelineEditor() {
   };
 
   const handleFormat = async () => {
+    // Review follow-up (issue #1147): the guarded-writer ticket. A format
+    // response can land after a newer edit — notably an accepted AI proposal
+    // — and must not overwrite it with the stale formatted text.
+    const seq = ++editSeq.current;
     try {
       const res = await api.format(toml);
+      if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.formatted);
       session.setRunResult({ message: t('editor.formatted'), type: 'success' });
     } catch (err: unknown) {
@@ -729,6 +770,84 @@ export default function PipelineEditor() {
       session.setRunResult({ message: msg, type: 'error' });
     }
   };
+
+  // ── UX-05 (issue #1147): the AI proposal gate. `onPipelineReady` stages
+  //    the generated TOML here; the editor content (including unsaved edits)
+  //    is untouched until the user accepts the diff. ──
+  const stagePipelineProposal = (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => {
+    const proposed = data.toml_content;
+    if (!proposed) return;
+    // Chat's own Accept/Edit buttons re-deliver the payload the stream
+    // already staged; point at the existing proposal instead of duplicating.
+    const existing = proposals.find((p) => p.toml === proposed);
+    if (existing) {
+      setActiveProposalId((current) => current ?? existing.id);
+      return;
+    }
+    const hadPending = proposals.length > 0;
+    setProposals((prev) => [
+      ...prev,
+      {
+        id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        toml: proposed,
+        // Ordinal within the current queue batch; an emptied queue restarts
+        // at 1 so a fresh proposal is still "Proposal 1".
+        seq: prev.reduce((max, p) => Math.max(max, p.seq), 0) + 1,
+        validation: data.validation,
+        pipelineId: data.pipeline_id,
+        receivedAt: Date.now(),
+      },
+    ]);
+    // Leave the displayed proposal alone; a new arrival only queues.
+    session.setRunResult({
+      message: hadPending ? t('editor.aiProposal.stagedMore') : t('editor.aiProposal.staged'),
+      type: 'info',
+    });
+  };
+
+  const acceptActiveProposal = () => {
+    if (!activeProposal) return;
+    // Review follow-up: Apply consumes ONLY the accepted proposal — queued
+    // proposals stay reviewable (an earlier version cleared the whole queue,
+    // silently dropping the others). The next one becomes active.
+    const remaining = proposals.filter((p) => p.id !== activeProposal.id);
+    // A canvas edit may still be in flight; accepting supersedes it so a late
+    // response cannot overwrite the content the user just approved.
+    ++editSeq.current;
+    setToml(activeProposal.toml);
+    setProposals(remaining);
+    setActiveProposalId(remaining[0]?.id ?? null);
+    session.setRunResult({
+      message: remaining.length > 0
+        ? t('editor.aiProposal.acceptedMore').replace('{{count}}', String(remaining.length))
+        : t('editor.aiProposal.accepted'),
+      type: 'success',
+    });
+  };
+
+  const discardActiveProposal = () => {
+    if (!activeProposal) return;
+    const remaining = proposals.filter((p) => p.id !== activeProposal.id);
+    setProposals(remaining);
+    setActiveProposalId(remaining[0]?.id ?? null);
+    session.setRunResult({ message: t('editor.aiProposal.discarded'), type: 'info' });
+  };
+
+  const reviewNextProposal = () => {
+    if (proposals.length < 2 || !activeProposal) return;
+    const index = proposals.findIndex((p) => p.id === activeProposal.id);
+    setActiveProposalId(proposals[(index + 1) % proposals.length].id);
+  };
+
+  // Diff against the CURRENT editor content: it is recomputed if the user
+  // keeps editing while a proposal is pending, so Accept always states
+  // exactly what changes.
+  const activeProposalToml = activeProposal?.toml ?? null;
+  const proposalDiff = useMemo(
+    () => (activeProposalToml === null ? [] : diffLines(toml, activeProposalToml)),
+    [toml, activeProposalToml],
+  );
+  const proposalSummary = useMemo(() => summarizeDiff(proposalDiff), [proposalDiff]);
 
   const applyEngineSettings = () => {
     const rawFields = [engineForm.minFreeDisk, engineForm.reclaimFreeDisk, engineForm.tmpDir, engineForm.protectedTrees];
@@ -790,6 +909,78 @@ export default function PipelineEditor() {
           </button>
         </div>
       </div>
+
+      {/* UX-05 (issue #1147): a pending AI proposal is reviewed here, above
+          both view modes. The proposal's TOML is applied only via Apply —
+          other editor edits keep their own paths. */}
+      {activeProposal && (
+        <section
+          className="ai-proposal"
+          data-testid="ai-proposal"
+          aria-label={t('editor.aiProposal.title')}
+        >
+          <div className="ai-proposal-header">
+            <Sparkles size={14} />
+            <span className="ai-proposal-title">{t('editor.aiProposal.title')}</span>
+            {(proposals.length > 1 || proposalBatchTotal > 1) && (
+              <span className="ai-proposal-count" data-testid="ai-proposal-count">
+                {t('editor.aiProposal.count')
+                  .replace('{{index}}', String(activeProposal.seq))
+                  .replace('{{total}}', String(proposalBatchTotal))}
+              </span>
+            )}
+            <div className="row" style={{ marginLeft: 'auto', gap: '6px' }}>
+              {proposals.length > 1 && (
+                <button
+                  type="button"
+                  className="btn-sm"
+                  data-testid="ai-proposal-next"
+                  onClick={reviewNextProposal}
+                >
+                  {t('editor.aiProposal.next')}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-sm"
+                data-testid="ai-proposal-discard"
+                onClick={discardActiveProposal}
+              >
+                {t('editor.aiProposal.discard')}
+              </button>
+              <button
+                type="button"
+                className="btn-run"
+                data-testid="ai-proposal-accept"
+                onClick={acceptActiveProposal}
+              >
+                <CheckCircle size={14} /> {t('editor.aiProposal.accept')}
+              </button>
+            </div>
+          </div>
+          <div className="ai-proposal-summary">
+            {proposalSummary.added === 0 && proposalSummary.removed === 0
+              ? t('editor.aiProposal.identical')
+              : t('editor.aiProposal.summary')
+                  .replace('{{added}}', String(proposalSummary.added))
+                  .replace('{{removed}}', String(proposalSummary.removed))}
+          </div>
+          <div className="ai-proposal-diff" data-testid="ai-proposal-diff">
+            {proposalDiff.map((line, i) => (
+              <div
+                key={i}
+                className={`ai-proposal-line ai-proposal-line--${line.kind}`}
+                data-kind={line.kind}
+              >
+                <span className="ai-proposal-sign">
+                  {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
+                </span>
+                {line.text || ' '}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {viewMode === 'guided' && (
         <div style={{ marginTop: '1rem' }}>
@@ -874,12 +1065,7 @@ export default function PipelineEditor() {
                 {renderHistory()}
               </div>
             ) : (
-              <ChatUI
-                context="editor"
-                onPipelineReady={(data) => {
-                  if (data.toml_content) setToml(data.toml_content);
-                }}
-              />
+              <ChatUI context="editor" onPipelineReady={stagePipelineProposal} />
             )}
           </div>
         </div>

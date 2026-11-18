@@ -68,6 +68,29 @@ is preserved as a new revision first.
 | **Pipeline DAG** (center) | The node canvas: drag, connect, delete, double-click to edit |
 | **Workflow TOML** (right) | The canonical `.oxoflow` text — always in sync with the canvas |
 
+## AI assistant: proposals require acceptance
+
+The **Assistant** tab drafts workflows with the configured AI provider. Its
+output is never written into the editor directly: each generated pipeline is
+staged as a **proposal** with a line diff against the current editor content
+(insertions green, deletions red). The editor keeps its exact content —
+including unsaved hand edits — until **Apply to editor** is clicked;
+**Discard** leaves it byte-identical (audit UX-05, issue #1147).
+
+- A proposal that arrives while another is pending is queued, not swapped in:
+  the panel keeps showing the pending proposal and reports `Proposal 1 of N`;
+  **Review next proposal** switches between them explicitly.
+- **Apply to editor** consumes only the accepted proposal. Any other queued
+  proposals survive with their stable ordinals (`Proposal 2 of 2`) and remain
+  reviewable; **Discard** likewise removes only the proposal on screen.
+- Navigating away from the editor never applies a pending proposal; proposals
+  are per-editor-session state and are discarded when the editor unmounts.
+- The diff is recomputed against the live editor content, so if you keep
+  editing while a proposal is pending, **Apply** states exactly what changes.
+- An accepted proposal replaces the editor content as one edit; the usual
+  debounced validation and (for a saved pipeline) **Save** flow applies
+  afterwards — acceptance does not save or run anything.
+
 ## Adding a rule from the tool palette
 
 1. Open the **Tools** tab and search (e.g. `fastp`).
