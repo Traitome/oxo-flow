@@ -53,7 +53,14 @@ test.describe('Metro frame-time (UX-09 #1151)', () => {
     await expect(page.locator('.val-badge')).toContainText('Valid', { timeout: 15_000 });
     await expect(page.locator('.rf-rule-node')).toHaveCount(6, { timeout: 15_000 });
 
-    await page.locator('.rf-metro-btn', { hasText: 'Metro View' }).click();
+    // Keyboard activation, mirroring the shipped Metro helper: UX-06
+    // (#1148 / PR #1211) fixed the stacked view-toggle buttons and owns the
+    // click-through regression. Enter on the focused native button exercises
+    // the same state transition while this spec stays focused on layout
+    // cost.
+    const metroToggle = page.locator('.rf-metro-btn', { hasText: 'Metro View' });
+    await metroToggle.focus();
+    await page.keyboard.press('Enter');
     await expect(page.locator('.rf-metro-canvas-container')).toBeVisible();
 
     const samples = await page.evaluate(async () => {
