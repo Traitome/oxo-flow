@@ -813,6 +813,21 @@ pub(crate) async fn run_on_cluster(
     )
     .map_err(|e| anyhow::anyhow!("failed to build the execution plan: {e}"))?;
 
+    // Cloud job bodies are rendered from each rule's `shell_cmd`, so a
+    // `sensitive = true` config value must be replaced by an
+    // `OXO_FLOW_SENSITIVE_<n>` reference BEFORE any manifest/spec is built —
+    // otherwise the literal lands in the containerOverrides.command / script
+    // text (issue #1120 / ledger RB-12). The HPC script backends (slurm/pbs/
+    // sge/lsf) keep their existing behaviour; only the cloud bodies carry the
+    // value off-container. Each cloud backend then projects the reference out
+    // of its own secret channel (k8s secretKeyRef, GCP secretVariables).
+    if matches!(
+        backend,
+        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch
+    ) {
+        plan.route_sensitive_values(args.sensitive_values);
+    }
+
     let run_dir = create_run_dir(args.workdir)?;
 
     // A rule that alone exceeds the workflow's own declared budget would be

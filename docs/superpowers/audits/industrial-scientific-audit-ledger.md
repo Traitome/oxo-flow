@@ -389,7 +389,8 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) — local container argv and cloud job bodies route values through
+references; HPC script bodies and live artifact-inspection proof remain.
 
 Cluster command files contain the fully expanded shell command. Kubernetes, AWS Batch, and GCP
 Batch manifests embed that command, and Docker/Singularity execution keeps sensitive values in
@@ -408,9 +409,18 @@ Evidence:
 Required exit evidence:
 
 - A sentinel declared `sensitive = true` never appears in generated local, HPC, Kubernetes, AWS, or
-  GCP artifacts or child argv.
-- Each backend obtains the value through a restricted secret-injection path.
-- Artifact inspection, restart, and cancellation tests prove no secret is recoverable.
+  GCP artifacts or child argv. [DONE for local containers (docker/singularity) and for the cloud
+  job bodies of Kubernetes / AWS Batch / GCP Batch — both the `run --profile` driver and
+  `cluster submit` route each value to an `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is
+  built (issue #1120), with one shared binding table per run. HPC script bodies
+  (SLURM/PBS/SGE/LSF) still materialize the literal — open.]
+- Each backend obtains the value through a restricted secret-injection path. [Kubernetes carries a
+  `secretKeyRef` to the documented `oxoflow-secrets` Secret; docker/singularity forward the routed
+  name through the child environment. AWS Batch and GCP Batch have no engine-visible injection
+  field (AWS: job-definition `containerProperties.secrets`; GCP: submission-time
+  `secretVariables` needs the operator's project), so the operator-side mapping is documented and
+  the reference fails closed rather than leaking. Not yet proven by a live campaign.]
+- Artifact inspection, restart, and cancellation tests prove no secret is recoverable. [OPEN.]
 
 ### RB-13: AI tool and MCP trust boundaries fail open
 
@@ -478,14 +488,40 @@ URLs, MCP tokens, and proxy credentials without declaring them.
 
 Evidence:
 
-- `crates/oxo-flow-core/src/executor/process.rs:3836` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/executor/process.rs:3960` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/executor/process.rs:1323` (environment setup spawn via `env_tooling_shell_command` — the accepted-risk channel described below)
 - `crates/oxo-flow-core/src/cluster.rs` `generate_{slurm,pbs,sge,lsf}_script` (HPC job scripts; isolated behind the shared allowlist in the same fix)
 
 Required exit evidence:
 
 - A rule with no declared environment cannot observe sentinel ambient secrets.
 - Explicit declarations expose only the named variables.
-- Local and HPC execution paths share the same tested allowlist policy. Container (docker/singularity) and cloud (k8s/aws-batch/gcp-batch) dispatch paths do NOT yet route through the shared allowlist and are clean only by omission — bringing them under the same policy is still required.
+- Local and HPC execution paths share the same tested allowlist policy. Local docker/singularity dispatch runs inside the same cleared rule shell; its runtime plumbing is re-admitted through the narrow list below. Cloud dispatch (k8s/aws-batch/gcp-batch) has no ambient environment to clear: the engine writes only the rendered command into the manifest/spec, so a job's environment is the container image's `ENV` (or the GCP VM image environment) plus what the engine writes into the command — the rule's declared `envvars` (as `export K='V'`) and the `OXO_FLOW_SENSITIVE_<n>` secret references. The submit host's environment is never forwarded and no generated body carries an ambient `env`/`environment` channel; `kubernetes_job_body_carries_no_submit_host_environment`, `aws_batch_job_body_carries_no_submit_host_environment`, and `gcp_batch_job_body_carries_no_submit_host_environment` pin the boundary by re-executing the test binary with sentinel credentials in its ambient environment (#1171).
+- Local docker/singularity rules re-admit an exact, exported list of container-daemon variables — `CONTAINER_DAEMON_ENV_VARS` in `crates/oxo-flow-core/src/executor/process.rs` (issue #1173, RB-15 residual): `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `DOCKER_BUILDKIT`, `APPTAINER_CACHEDIR`/`SINGULARITY_CACHEDIR`, `APPTAINER_BIND`/`SINGULARITY_BIND`, `APPTAINER_TMPDIR`/`SINGULARITY_TMPDIR`, and `APPTAINER_LOCALCACHEDIR`/`SINGULARITY_LOCALCACHEDIR`. This is a deliberately narrow admission of runtime plumbing the engine itself invokes (a remote daemon is unusable otherwise), never a `DOCKER_*`/`APPTAINER_*` prefix. Declared `envvars` are applied last and override every ambient copy (including these); `OXO_FLOW_ENV_PASSTHROUGH` re-admits the same ambient value and cannot change it. The bare-local path's allowlist is unchanged. Cloud dispatch is not covered by this list because it forwards no submit-host environment at all (see the exit-evidence bullet above).
+
+**Accepted risk — environment SETUP channel (issue #1174, decision (b)).**
+Environment setup spawns (`conda/mamba env create -f <workflow spec>`,
+`pixi install`, `python3 -m venv` + `pip install -r <workflow
+requirements>`, plus their teardown/retry/verify forms) deliberately keep
+the full ambient environment; rule shells, `pre_exec`, and rule/workflow
+hooks do not. This is an accepted residual, not a resolved finding:
+RB-15 stays open. Rationale: the setup inputs are workflow-authored
+executable content — `pip install` builds pinned sdists (whose build
+backend runs `setup.py`) and conda runs package post-link scripts — and
+that code runs as the operator with ordinary filesystem access, so it can
+read `~/.aws/credentials`, `~/.docker/config.json`, or
+`$HOME/.oxo-flow/ai_config.json` whether or not the environment was
+cleared; an environment clear is cosmetic, not a boundary. Clearing would
+instead break legitimate provisioning that depends on proxy/mirror/CA
+variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `PIP_INDEX_URL`,
+`PIP_TRUSTED_HOST`, `SSL_CERT_FILE`, `CONDA_*`, corporate mirrors) the
+engine cannot enumerate per tool. The actual boundary is the
+workflow-trust decision: do not run workflows you do not trust. Pinned by
+`env_setup_spawn_inherits_ambient_environment` and
+`rule_shell_does_not_inherit_the_setup_sentinel`
+(`crates/oxo-flow-core/src/executor/process.rs`); documented in
+`docs/guide/src/reference/environment-system.md` and
+`docs/guide/src/reference/workflow-format.md`.
 
 ---
 
@@ -495,9 +531,9 @@ Required exit evidence:
 
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
-| WF-01 | P1 | Load-path parsing bypassed `extends`, so inherited rules were absent. | Implemented but unproven | Multi-level inheritance tests exist; exact commit-bound evidence still needs to be attached. |
+| WF-01 | P1 | Load-path parsing bypassed `extends`, so inherited rules were absent. | Fixed (#1178) | Behavior landed in af4929c53e67e7bc5ab7ab65c8b96edc0b47bea6 (#997): both load paths (`WorkflowConfig::parse`, used by the web handlers, and `WorkflowConfig::from_file`, used by `validate`/`run`/`dry-run`/`graph`) call `resolve_rule_templates` before validation/DAG derivation, and multi-level chains resolve from the resolved base rather than the pre-resolution snapshot. This PR additionally rewrites `extends` with the module namespace inside namespaced `[[include]]`s (previously such a module failed to load with "extends 'base' which does not exist"). Evidence tests: `cli_load_path_resolves_multilevel_rule_extends`, `cli_load_path_merges_included_base_rules_before_extends_resolution`, `cli_load_path_resolves_extends_inside_namespaced_include` (`tests/extends_load_path.rs`); `web_parse_handler_resolves_multilevel_rule_extends`, `web_validate_handler_reports_inherited_fields_for_multilevel_chain` (`crates/oxo-flow-web/tests/extends_load_path.rs`); `config::tests::resolve_includes_with_namespace_rewrites_extends`. |
 | WF-02 | P1 | Empty scatter domains and zero/invalid `transform.split.n` could produce a misleading successful plan. | Implemented but unproven | Fail-closed behavior and regression tests exist; exact commit-bound evidence still needs to be attached. |
-| WF-03 | P1 | Transform-generated rules lost environment, hooks, retries, staging, tags, benchmarks, and related semantics. | Implemented but unproven | Preserved semantics and tests exist; broad corpus evidence remains open. |
+| WF-03 | P1 | Transform-generated rules lost environment, hooks, retries, staging, tags, benchmarks, and related semantics. | Fixed (#1182) | The defect was live at af4929c53^: map/combine rules were rebuilt from `Rule::default` with only six copied fields (probe: generated `t_chr1` had `tags=[]` vs authored `["variant"]`). Construction fixed in af4929c53e67e7bc5ab7ab65c8b96edc0b47bea6 (#997) — generated rules clone the authored rule and override only `name`/`input`/`output`/`shell`/`cleanup_chunks`, clearing `transform`/`scatter`/`output_pattern`. Exhaustive field-by-field evidence over all 56 `Rule` fields (compile-guarded by a rest-free destructure; the source rule carries a non-default value in every field that can coexist with `transform` — `scatter`, `output_pattern`, and `input_groups` cannot, and are asserted to keep their defaults): `config::transform_semantics_tests::transform_generated_rules_preserve_every_rule_field`, `config::transform_semantics_tests::transform_without_combine_preserves_every_rule_field`, `config::transform_semantics_tests::transform_aggregate_combine_preserves_every_rule_field`. Docs: `workflow-format.md` `transform` → "Generated-Rule Semantics". |
 | WF-04 | P1 | BioType validation can still false-accept undeclared producers, missing required builds, and declared attributes. | Checker fixed (#1118); admission advisory | TYPE-008/009 now report untyped-producer and build-incomplete edges (advisory at the admission gate, not blocking); resolved web include/override admission remains RB-04. |
 | WF-05 | P2 | Conda-family environment handling had duplicated and divergent paths. | Implemented but unproven | Consolidation landed; cross-backend lifecycle evidence remains incomplete. |
 | WF-06 | P1 | `job.sh` can still contain expanded secrets. | Planned / blocked | Secret-store or minimal-environment routing is required before team/HPC use. |

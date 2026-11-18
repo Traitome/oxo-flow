@@ -117,12 +117,20 @@ pub fn generate_array_submit_script(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
+    // Union of routed sensitive references over the chunk's command files —
+    // the dispatch line in a cloud array body carries none of them itself
+    // (issue #1120 / RB-12).
+    sensitive_refs: &[String],
     config: &ClusterJobConfig,
 ) -> Result<String> {
     match backend {
         ClusterBackend::Kubernetes => {
             return crate::backend::k8s::generate_k8s_array_job_manifest(
-                rule, cmd_dir, count, config,
+                rule,
+                cmd_dir,
+                count,
+                sensitive_refs,
+                config,
             );
         }
         ClusterBackend::AwsBatch => {
@@ -801,6 +809,7 @@ mod tests {
             &rule,
             "/run/jobs/align",
             3,
+            &[],
             &config,
         )
         .unwrap();
@@ -828,6 +837,7 @@ mod tests {
             &rule,
             "/run/jobs/align",
             3,
+            &[],
             &config,
         )
         .unwrap();
@@ -840,8 +850,9 @@ mod tests {
             (ClusterBackend::Sge, "#$ -t 1-3", "SGE_TASK_ID"),
             (ClusterBackend::Lsf, "#BSUB -J", "LSB_JOBINDEX"),
         ] {
-            let s2 = generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &config)
-                .unwrap();
+            let s2 =
+                generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &[], &config)
+                    .unwrap();
             assert!(s2.contains(range), "{backend:?}: {s2}");
             assert!(s2.contains(var), "{backend:?}: {s2}");
         }
@@ -954,6 +965,7 @@ mod tests {
                 &make_rule("align", 4, Some("8G")),
                 "/run/jobs/align",
                 3,
+                &[],
                 &make_config(),
             )
             .unwrap();

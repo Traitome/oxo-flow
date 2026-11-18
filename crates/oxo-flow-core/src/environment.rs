@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::error::{OxoFlowError, Result};
+use crate::executor::process::sensitive_env_refs;
 use crate::rule::EnvironmentSpec;
 
 /// Trait for environment backends.
@@ -1178,8 +1179,23 @@ impl DockerBackend {
             _ => String::new(),
         };
 
+        // Sensitive-value routing (issue #1120, audit RB-12). A
+        // `sensitive = true` config value is spliced out of the command on
+        // the host side and replaced by a `${OXO_FLOW_SENSITIVE_n}`
+        // reference (see `route_sensitive_values_through_env`), with the
+        // real value placed in the child environment. Inside the container
+        // the reference expands to empty unless we forward the value, so a
+        // bare `-e VAR` is emitted for each referenced name: the docker
+        // client reads the value from its own environment (populated by
+        // `spawn_rule_shell`'s `.envs(rule_envs)`) and passes it through —
+        // the value never appears on the command line.
+        let sensitive_args = sensitive_env_refs(command)
+            .iter()
+            .map(|name| format!(" -e {name}"))
+            .collect::<String>();
+
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg}{cpu_arg} -v '{quoted_workdir}':'{quoted_workdir}'{mounts} -w '{quoted_workdir}' '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg}{cpu_arg}{sensitive_args} -v '{quoted_workdir}':'{quoted_workdir}'{mounts} -w '{quoted_workdir}' '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 }
@@ -4928,5 +4944,79 @@ mod tests {
         assert_eq!(name, "env");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Sensitive-value routing through the container runtime (#1120) ──
+
+    /// Sentinel regression (ledger RB-12): a `sensitive = true` config value
+    /// must never reach the container argv — it is exported into the child
+    /// environment and referenced by name (`docker run -e VAR`).
+    #[test]
+    fn docker_wrap_hands_sensitive_values_through_environment_not_argv() {
+        let sentinel = "SENTINEL_SECRET_VALUE_A1";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("curl -H 'Authorization: {sentinel}' https://example.invalid"),
+            &[sentinel.to_string()],
+        );
+        assert!(
+            routed.contains("${OXO_FLOW_SENSITIVE_0}"),
+            "routed command must carry the env reference: {routed}"
+        );
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let workdir = mountable_scratch_dir();
+        let wrapped = DockerBackend
+            .wrap_command(&routed, "ubuntu:24.04", None, workdir.path())
+            .unwrap();
+        assert!(
+            !wrapped.contains(sentinel),
+            "sentinel leaked into the docker argv: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("-e OXO_FLOW_SENSITIVE_0"),
+            "docker wrapper must forward the sensitive var by name: {wrapped}"
+        );
+    }
+
+    /// Sentinel regression (ledger RB-12) for singularity/apptainer: the value
+    /// rides `APPTAINERENV_`/`SINGULARITYENV_` in the child environment, never
+    /// the argv.
+    #[test]
+    fn singularity_wrap_hands_sensitive_values_through_environment_not_argv() {
+        let sentinel = "SENTINEL_SECRET_VALUE_B2";
+        let (routed, env) = crate::executor::process::route_sensitive_values_through_env(
+            &format!("tool --token {sentinel}"),
+            &[sentinel.to_string()],
+        );
+        assert!(routed.contains("${OXO_FLOW_SENSITIVE_0}"));
+        assert_eq!(
+            env.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some(sentinel)
+        );
+
+        let backend = SingularityBackend::new();
+        let wrapped = backend
+            .wrap_command(&routed, "image.sif", None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            !wrapped.contains(sentinel),
+            "sentinel leaked into the singularity argv: {wrapped}"
+        );
+        // The wrapper must NOT start with a shell assignment: `numactl … --
+        // <cmd>` execs the first word directly, and an assignment sent to
+        // execve fails with ENOENT (issue #1120 review, D2). The prefixed
+        // variables are exported through the child environment instead
+        // (pinned by the executor-side test in `executor::process`).
+        assert!(
+            wrapped.starts_with(backend.binary.as_str()),
+            "wrapper must begin with the runtime binary: {wrapped}"
+        );
+        assert!(
+            !wrapped.contains("ENV_OXO_FLOW_SENSITIVE_0="),
+            "no inline assignment may precede the runtime: {wrapped}"
+        );
     }
 }

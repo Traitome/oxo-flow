@@ -401,6 +401,40 @@ samples   = { required = true, type = "path", must_exist = true }
 Values are accessible as `{config.<name>}` in shell commands, input/output
 paths, and `when` conditions:
 
+> **`sensitive = true` and execution artifacts (issue #1120).** A sensitive
+> value is not only masked in captured output — on the cloud cluster backends
+> (`run --profile <NAME>` with `[cluster] backend = "kubernetes"`,
+> `"aws-batch"`, or `"gcp-batch"`, and the same backends via
+> `cluster submit -b …`) it is also routed out of the rendered job body
+> before any manifest is built. Each value becomes a numbered
+> `OXO_FLOW_SENSITIVE_<n>` environment reference, identical across every rule
+> and every array element. Names are assigned once per run: values are
+> ordered longest-first (then lexically), and values shorter than 4
+> characters stay on the command line because they cannot be replaced
+> safely. The value itself must come from the backend's secret channel:
+>
+> - **Kubernetes** — the manifest attaches `env[].valueFrom.secretKeyRef`
+>   pointing at the Secret `oxoflow-secrets` (key = the variable name).
+>   Create it in the job's namespace before submitting:
+>   `kubectl create secret generic oxoflow-secrets --from-literal=OXO_FLOW_SENSITIVE_0=<value>`.
+> - **AWS Batch** — the SubmitJob payload has no secrets field; map each
+>   `OXO_FLOW_SENSITIVE_<n>` name on the job definition's
+>   `containerProperties.secrets` (or `environment`).
+> - **GCP Batch** — set `taskSpec.environment.secretVariables` at submission,
+>   pointing each name at
+>   `projects/<PROJECT>/secrets/<SECRET>/versions/<VERSION>` and granting the
+>   Batch service account `roles/secretmanager.secretAccessor`. The engine
+>   does not know the project, so it does not invent a path; a hand-kept
+>   submission wrapper is the place to add it.
+>
+> Local `docker`/`singularity` runs forward the same variables by name
+> (`docker run -e NAME`, and `APPTAINERENV_NAME`/`SINGULARITYENV_NAME` in the
+> child environment), so the value never enters the container argv either.
+> Without the operator-side secret the reference expands empty and the rule
+> fails — loudly, instead of leaking the value into the artifact. HPC
+> job-script bodies (SLURM/PBS/SGE/LSF) are **not** covered yet; that half of
+> RB-12 remains open.
+
 ```toml
 [[rules]]
 name = "blast"
@@ -817,11 +851,76 @@ environment = { conda = "envs/tools.yaml" }
 # env_group = "qc_env"
 ```
 
+**Setup runs with the operator's environment (accepted risk, issue #1174).**
+The commands that create or verify an environment (`conda env create -f`,
+`pixi install`, `python3 -m venv` plus `pip install -r`, and their
+teardown/retry forms) inherit the full ambient environment of the
+`oxo-flow` process. Rule shells do not: they run under a cleared
+environment plus a fixed allowlist (see
+[Rule execution environment](../commands/run.md#rule-execution-environment-issue-1108)),
+so a rule with no declared `envvars` cannot read ambient credentials.
+Setup is different by design: its inputs are workflow-authored executable
+content that can already run arbitrary code as the operator (sdist build
+backends, conda post-link scripts), so hiding the environment would be
+cosmetic; it is kept because conda, pip, and pixi need proxy, mirror,
+index, and CA-certificate configuration to provision anything. The
+practical boundary is not to run workflows you do not trust. See
+[the environment system reference](environment-system.md).
+
 **Container shell:** `docker`/`singularity` rules run under `bash` inside
 the container when the image provides it (falling back to `sh` otherwise).
 nf-core-derived images ship bash, and their scripts rely on bash features
 (`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.
+
+**Container daemon configuration (issue #1173):** rule shells run under a
+cleared environment (see
+[`[engine]` — Runtime Disk-Pressure Guard](#engine-runtime-disk-pressure-guard)),
+and the local `docker run` / `apptainer exec` wrapper executes inside that
+shell. So that a remote docker daemon, an operator-configured image cache,
+or site bind mounts keep working, a rule whose environment kind is
+`docker` or `singularity` automatically re-admits these ambient variables
+(when set):
+
+- Docker CLI: `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
+  `DOCKER_TLS_VERIFY`, `DOCKER_BUILDKIT`
+- Apptainer/Singularity: `APPTAINER_CACHEDIR`, `SINGULARITY_CACHEDIR`,
+  `APPTAINER_BIND`, `SINGULARITY_BIND`, `APPTAINER_TMPDIR`,
+  `SINGULARITY_TMPDIR`, `APPTAINER_LOCALCACHEDIR`,
+  `SINGULARITY_LOCALCACHEDIR`
+
+The list is exact-name, never a `DOCKER_*`/`APPTAINER_*` prefix — an
+unknown future credential-bearing variable is not admitted by accident —
+and it applies only to container rules: the bare (non-container) path's
+allowlist is unchanged. The rule's declared
+[`envvars`](#environment-variables-envvars) still win over the ambient
+copy. Anything else a container tool needs (a proxy setting, a private
+registry token, a site variable) requires a rule-level `envvars` entry or
+the operator-level `OXO_FLOW_ENV_PASSTHROUGH` list. No `podman` backend is
+wired, so `PODMAN_*` is not admitted.
+
+**Cloud job environment (issue #1171):** cloud rules (Kubernetes, AWS
+Batch, GCP Batch) do not run as shell commands of the submitting process.
+The engine writes only the rendered rule command into the manifest/spec
+(the Kubernetes Job `args`, the AWS Batch `containerOverrides.command`, or
+the GCP Batch runnable), so the job's environment is:
+
+- the container image's own `ENV` (or the VM image's environment for a
+  GCP Batch script runnable), plus
+- the rule's declared `envvars`, which travel inside the command as
+  `export K='V'` lines, plus
+- the `OXO_FLOW_SENSITIVE_<n>` references for `sensitive = true` config
+  values (resolved from the backend's own secret channel).
+
+The submit host's ambient environment is never forwarded: a generated
+body carries no `env`/`environment` channel for ambient state (only the
+sensitive-value references above create one), and the submit-side CLI
+(`kubectl`, `aws`, `gcloud`) runs in the operator's own process
+environment, which is likewise never written into the job. Regression
+tests pin the boundary per backend
+(`kubernetes_job_body_carries_no_submit_host_environment`,
+`aws_batch_job_body_carries_no_submit_host_environment`,
+`gcp_batch_job_body_carries_no_submit_host_environment`).
 
 **Stale pixi.lock fallback:** a rule declared with
 `environment = { pixi = "envs/pixi.toml" }` installs from the committed
@@ -1509,6 +1608,12 @@ extends = "align_default"  # Inherits threads, memory, tags
 [rules.resources]
 threads = 16  # Override inherited value
 ```
+
+`extends` chains may be multi-level: base rules are resolved first, so a
+grandchild receives values its parent only inherits. The base rule may live in
+an `[[include]]`d file; when that include declares a `namespace`, `extends`
+references to rules inside the same module are qualified automatically
+(`base` → `<namespace>::base`).
 
 ### Priority and Targeting
 
@@ -3115,6 +3220,43 @@ Transform rules expand into:
 - Map rules: `{rule_name}_{split_value}` (e.g., `variant_calling_chr1`)
 - Combine rule: `{rule_name}_combine` (e.g., `variant_calling_combine`)
 
+### Generated-Rule Semantics
+
+The engine does not synthesize map/combine rules from a default rule: each
+generated rule is a **clone of the authored rule**, with only the fields the
+operator owns replaced (issue #1154, ledger WF-03). Every other field an
+author set survives onto every generated rule unchanged — including
+`environment` and `env_group`, the hooks `pre_exec` / `on_success` /
+`on_failure`, `retries` / `retry_delay`, staging (`staging_mode`, `pipe`),
+`tags`, `benchmark`, `log`, `report`, `group`, `priority`, `target`,
+`optional`, `required`, `depends_on`, `extends`, `temporary`, `scratch`,
+`singleton`, `temp_output`, `protected_output`, `input_function`, `envvars`,
+`checkpoint` / `checkpoint_manifest`, `params`, the resource shorthand and
+`resources`, `resource_hint`, `rule_metadata`, `cache_key`, `interpreter`,
+`format_hint`, `checksum`, `script`, and `types`.
+
+Only these fields are replaced on generated rules:
+
+| Field | Map rule | Combine rule |
+|---|---|---|
+| `name` | `{rule}_{value}` | `{rule}_combine` |
+| `input` | authored `input` with the split variable substituted (other placeholders stay literal) | every chunk output |
+| `output` | the authored output with the split variable substituted when it references one; otherwise the per-chunk path `.oxo-flow/chunks/{by}/{value}.<ext>` | the authored output |
+| `shell` | `transform.map` with the split variable substituted | `transform.combine.shell` (or the generated aggregate command) |
+| `cleanup_chunks` | `false` | `transform.cleanup` |
+| `transform` | cleared | cleared |
+| `scatter`, `output_pattern` | cleared — neither can reach the transform branch (`scatter` wins the branch, `output_pattern` is a validated exclusion) | cleared |
+
+`expand_inputs` is carried over and materialized independently on each
+generated rule; the expanded literals are appended after the transformed
+inputs.
+
+The exhaustive contract is pinned by `config::transform_semantics_tests`
+(`crates/oxo-flow-core/src/config/transform_semantics_tests.rs`): the test
+factory fills every `Rule` field, and the assertion helper destructures the
+struct without a rest pattern, so adding a field to `Rule` fails that suite
+at compile time until the new field is covered.
+
 ---
 
 ## Multi-line Strings
@@ -3586,9 +3728,11 @@ Notes:
   through the schedulers' export-by-default behavior (`--export=ALL`,
   `-V`, `-env`). See
   [the run command reference](../commands/run.md#hpc-cluster-submissions).
-  Container and cloud backends (docker, singularity, Kubernetes, AWS
-  Batch, GCP Batch) do **not** yet route through the shared policy — they
-  are clean only because they forward no ambient environment.
+  Local `docker`/`singularity` dispatch runs *inside* that same cleared
+  rule shell (covered by the same allowlist, widened only by the narrow
+  daemon-variable list above). Cloud dispatch (Kubernetes, AWS Batch, GCP
+  Batch) never forwards the submit host's environment at all — see
+  [Environment specification](#environment-specification).
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from

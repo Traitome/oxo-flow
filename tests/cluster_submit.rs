@@ -361,3 +361,50 @@ fn cluster_submit_surfaces_walltime_and_extra_args() {
         "repeated --extra-arg must all land:\n{body}"
     );
 }
+
+const SENSITIVE_WORKFLOW: &str = r#"
+[workflow]
+name = "sensitive"
+
+[config]
+api_token = { default = "SENTINEL-SECRET-TOKEN-42", sensitive = true }
+
+[[rules]]
+name = "call"
+output = ["out.txt"]
+shell = "echo {config.api_token} > out.txt"
+"#;
+
+/// Sentinel regression (issue #1120 / ledger RB-12): `cluster submit` renders
+/// the same cloud job bodies the live run path does, so it must route
+/// `sensitive = true` values out of them too. On the pre-fix tree the literal
+/// appears in every generated manifest (independent review D1).
+#[test]
+fn cluster_submit_cloud_manifests_never_carry_sensitive_literals() {
+    for backend in ["kubernetes", "aws-batch", "gcp-batch"] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("wf.oxoflow"), SENSITIVE_WORKFLOW).unwrap();
+        let out_dir = submit_with_backend(dir.path(), backend, &[]);
+
+        let mut inspected = 0;
+        for entry in std::fs::read_dir(&out_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if !path.is_file() {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).unwrap();
+            inspected += 1;
+            assert!(
+                !body.contains("SENTINEL-SECRET-TOKEN-42"),
+                "{backend}: sensitive literal leaked into {}:\n{body}",
+                path.display()
+            );
+            assert!(
+                body.contains("OXO_FLOW_SENSITIVE_0"),
+                "{backend}: routed reference missing from {}:\n{body}",
+                path.display()
+            );
+        }
+        assert!(inspected > 0, "{backend}: no artifact was generated");
+    }
+}

@@ -1590,6 +1590,30 @@ Engine tooling commands (conda/pixi/venv environment setup, teardown, and
 `env_verify`) spawn through a different code path and keep the ambient
 environment, so tool discovery and proxy settings still work.
 
+#### Local container rules (docker/singularity)
+
+A container rule runs `docker run` / `apptainer exec` from inside that
+cleared shell, so daemon and cache configuration the operator relies on
+would otherwise be invisible to it. Rules whose environment kind is
+`docker` or `singularity` therefore automatically re-admit these ambient
+variables when they are set (issue #1173):
+
+- Docker CLI: `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
+  `DOCKER_TLS_VERIFY`, `DOCKER_BUILDKIT`
+- Apptainer/Singularity: `APPTAINER_CACHEDIR`, `SINGULARITY_CACHEDIR`,
+  `APPTAINER_BIND`, `SINGULARITY_BIND`, `APPTAINER_TMPDIR`,
+  `SINGULARITY_TMPDIR`, `APPTAINER_LOCALCACHEDIR`,
+  `SINGULARITY_LOCALCACHEDIR`
+
+The list is exact-name (never a `DOCKER_*`/`APPTAINER_*` prefix, so an
+unknown credential-bearing variable is not admitted by accident) and
+applies only to container rules — the bare (non-container) path's
+allowlist is unchanged. Declared `envvars` still win over the ambient
+copy. Any other variable a container command needs — a proxy setting, a
+private registry token, a site variable — must be declared in the rule's
+`envvars` or listed in `OXO_FLOW_ENV_PASSTHROUGH`. No `podman` backend is
+wired, so `PODMAN_*` is not admitted.
+
 #### HPC cluster submissions
 
 The same allowlist is applied to the job scripts `oxo-flow cluster submit`
@@ -1614,12 +1638,18 @@ implementation. Two caveats to note:
   (the same path the local executor uses), so it executes *inside* the
   isolated `sh -c` and sees the same allowlisted environment as the rule
   body.
-- Container (docker, singularity) and cloud (Kubernetes, AWS Batch, GCP
-  Batch) backends do **not** yet route through this shared allowlist. They
-  are clean only because they do not forward the ambient environment at
-  all — a future change that adds env forwarding to any of them must
+- Remote dispatch paths (Kubernetes, AWS Batch, GCP Batch) do not forward
+  the submit host's environment into a job at all: a cloud job's environment
+  is the container image's own `ENV`, the declared `envvars`, and the
+  `OXO_FLOW_SENSITIVE_<n>` secret references — never the operator's ambient
+  environment (pinned per backend by the cloud-dispatch boundary tests,
+  issue #1171). A future change that adds env forwarding to any of them must
   re-admit the declared variables through this same policy rather than
-  passing the ambient environment through.
+  passing the ambient environment through. Locally executed
+  `docker`/`singularity` rules do run under the allowlist (their CLI wrapper
+  executes inside the rule shell) — see
+  [Local container rules](#local-container-rules-dockersingularity) for
+  the narrow daemon-variable admission.
 
 ### Protected data trees (`protected_data_trees`)
 
