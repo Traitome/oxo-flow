@@ -451,6 +451,18 @@ must be readable by the acting user. This flat shape is the typed
 server, and the TypeScript client stay in lockstep. Returns
 `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
+Run creation pays the dedicated #213 spawn budget: `OXO_FLOW_RUNS_RATE_LIMIT`
+run-creation attempts per minute **per acting identity** (default 5; `0`
+disables the limiter). The budget is keyed by the authenticated `users.id`
+(the `default` pseudo-user in personal mode), independent of the per-IP
+request limiter above. Over budget, the attempt is rejected before any
+workflow parsing or process spawn with
+`429 {"code": "RUN_RATE_LIMITED", "message": "… retry in Ns", "detail": "Allowance: N runs per minute …"}`;
+like every `ApiResult` error it carries no `Retry-After` header — the
+countdown lives in `message`. The sliding window refills once the oldest
+counted attempt is older than 60 seconds. Retries and checkpoint resumes pay
+the same budget (see [Smart Retry](#smart-retry)).
+
 Before spawning the executor the run stages the acting user's uploaded
 files (`POST /api/files` → `workspace/users/<user>/inputs/`) into the run's
 working directory, so `metadata_file` and relative input paths resolve the

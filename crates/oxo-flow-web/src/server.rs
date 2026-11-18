@@ -312,6 +312,29 @@ fn asset_ref_regex() -> &'static regex::Regex {
 /// * `team` — bind to 0.0.0.0, auth required
 /// * `hpc` — bind to 0.0.0.0, scheduler awareness
 pub fn build_router(mode: &str) -> Router {
+    build_router_with_limiter(mode, crate::domains::execution::run_limit::global())
+}
+
+/// Test-only constructor: the production router assembly with a
+/// test-scoped run-limiter instance (fixed budget + advanceable clock).
+///
+/// [`build_router`] delegates to the same assembly, so router-level tests
+/// drive the real composition — extension install, handler lookup, identity
+/// keying — without a process-global override (WEB-18 / issue #1142).
+/// Debug builds only; release builds expose just the production wiring.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn build_router_with_run_limiter(
+    mode: &str,
+    run_limiter: std::sync::Arc<crate::domains::execution::run_limit::RunRateLimiter>,
+) -> Router {
+    build_router_with_limiter(mode, run_limiter)
+}
+
+fn build_router_with_limiter(
+    mode: &str,
+    run_limiter: std::sync::Arc<crate::domains::execution::run_limit::RunRateLimiter>,
+) -> Router {
     tracing::info!("Building router for mode: {mode}");
     set_running_mode(mode);
 
@@ -810,6 +833,12 @@ pub fn build_router(mode: &str) -> Router {
             crate::rate_limit::rate_limit_middleware,
         ))
         .layer(axum::Extension(rate_limiter))
+        // Run-creation budget (#213): the handlers on every spawn path
+        // (create/retry/resume-checkpoint) look the instance up from request
+        // extensions. A missing extension is a wiring bug they fail closed
+        // on, so the install line is load-bearing — WEB-18 / #1142 pins it at
+        // the router level with an injected test instance.
+        .layer(axum::Extension(run_limiter))
         .layer(cors)
         // Request tracing: INFO span + completion log per request, except
         // /api/health — the dashboard polls it every few seconds, so its
