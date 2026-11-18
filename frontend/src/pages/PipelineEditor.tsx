@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react'
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose, Sparkles, Shield, FileSpreadsheet, AlignLeft, X, Upload } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, describeApiError } from '../api/client';
-import type { DagJson, KnowledgeTool, SamplesheetParseResponse, UploadedFileEntry, VerifyDataResponse } from '../api/types';
+import type { DagJson, KnowledgeTool, SamplesheetParseResponse, UploadedFileEntry, ValidateResponse, VerifyDataResponse } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ToolPalette from '../components/ToolPalette';
@@ -41,6 +41,17 @@ threads = 8
 interface InspectorState {
   ruleName: string;
   rule: Record<string, unknown> | null;
+}
+
+// UX-03 (issue #1145): the validation verdict is fail-closed. `unavailable`
+// records that the validation REQUEST failed (network/5xx) — the document was
+// never judged, which is not the same as passing. It always ships with
+// `valid: false` so a stale success can never keep the Run affordances
+// enabled; only a genuinely successful validation clears it.
+interface ValidationState {
+  valid: boolean;
+  errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>;
+  unavailable?: boolean;
 }
 
 type LeftTab = 'assistant' | 'palette' | 'history';
@@ -217,7 +228,7 @@ export default function PipelineEditor() {
   const locale = getLocale(lang);
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
-  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }> } | null>(null);
+  const [validation, setValidation] = useState<ValidationState | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   // Monotonic edit sequence: debounced validation and canvas edits resolve
   // out of order — only the latest request may apply its result (issue #79
@@ -341,6 +352,18 @@ export default function PipelineEditor() {
     if (dagJson && session.state.dagData !== dagJson) session.setDagData(dagJson);
   }, [dagJson, session]);
 
+  // UX-03 (issue #1145): a validation request that FAILS is not a validation.
+  // The verdict is unknown, so the prior result is invalidated instead of kept
+  // (the audit baseline retained it, leaving a green "Valid" badge and an
+  // enabled Run button on content that was never validated).
+  const markValidationUnavailable = useCallback((reason: string) => {
+    setValidation({
+      valid: false,
+      unavailable: true,
+      errors: [{ code: 'VALIDATION_UNAVAILABLE', message: reason, rule: null, suggestion: null }],
+    });
+  }, []);
+
   const updateDag = useCallback(async (content: string) => {
     const seq = ++editSeq.current;
     try {
@@ -349,10 +372,11 @@ export default function PipelineEditor() {
       setDagJson(dag);
       setValidation(val);
     } catch (err: unknown) {
+      if (seq !== editSeq.current) return; // a newer edit owns the outcome
       const msg = err instanceof Error ? err.message : t('common.unknownError');
-      setValidation({ valid: false, errors: [{ code: 'ERROR', message: msg, rule: null, suggestion: null }] });
+      markValidationUnavailable(msg);
     }
-  }, [t]);
+  }, [t, markValidationUnavailable]);
 
   // Debounced buildDag+validate runs in both view modes: guided mode gates
   // its Run/Dry-Run buttons on `validation`, which nothing else populates
@@ -363,6 +387,14 @@ export default function PipelineEditor() {
   }, [toml, updateDag]);
 
   const handleRun = async (dryRun = false, options: RunOptions = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
+    // UX-03 (issue #1145): the buttons gate on `validation?.valid`, but the
+    // Run dialog can already be open when a validation request fails. Refuse
+    // to launch from a missing/unavailable/stale verdict (fail closed).
+    if (!validation?.valid) {
+      setShowRunDialog(false);
+      session.setRunResult({ message: t('editor.runBlockedUnvalidated'), type: 'error' });
+      return;
+    }
     setRunning(true);
     try {
       // Issue #79 P1-12: runs launched from an opened saved pipeline must
@@ -595,12 +627,25 @@ export default function PipelineEditor() {
     // or cycles. Invalid content is refused with the error list instead.
     // Validate the exact content being saved: the debounced result can be
     // stale by up to 300ms (and was never populated at all in guided mode).
-    let current = validation;
+    let current: ValidateResponse;
     try {
       current = await api.validate(toml);
       setValidation(current);
-    } catch { /* keep the last known validation */ }
-    if (current && !current.valid) {
+    } catch (err: unknown) {
+      // UX-03 (issue #1145): the validation request itself failed, so the
+      // content was never judged. Fail closed: invalidate the prior result,
+      // refuse to report a save of unvalidated content, and leave the Run
+      // affordances disabled until a validation actually succeeds.
+      const msg = describeApiError(err, t('editor.validationUnavailable'));
+      markValidationUnavailable(msg);
+      setShowErrors(true);
+      session.setRunResult({
+        message: t('editor.notSavedValidation').replace('{{error}}', msg),
+        type: 'error',
+      });
+      return;
+    }
+    if (!current.valid) {
       setShowErrors(true);
       session.setRunResult({
         message: t('editor.notSaved').replace('{{n}}', String(current.errors.length)),
@@ -874,13 +919,21 @@ export default function PipelineEditor() {
               </button>
               {validation && (
                 <button
-                  className={`val-badge ${validation.valid ? 'valid' : 'invalid'}`}
+                  className={`val-badge ${validation.unavailable ? 'unavailable' : validation.valid ? 'valid' : 'invalid'}`}
                   style={{ background: 'transparent', border: 'none', cursor: validation.valid ? 'default' : 'pointer' }}
                   onClick={() => setShowErrors((v) => !v)}
-                  title={validation.valid ? t('editor.validation.tooltip.valid') : t('editor.validation.tooltip.invalid')}
+                  title={validation.unavailable
+                    ? t('editor.validation.tooltip.unavailable')
+                    : validation.valid
+                      ? t('editor.validation.tooltip.valid')
+                      : t('editor.validation.tooltip.invalid')}
                 >
                   {validation.valid ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
-                  {validation.valid ? ` ${t('editor.validation.valid')}` : ` ${t('editor.validation.errors').replace('{{count}}', String(validation.errors.length))}`}
+                  {validation.unavailable
+                    ? ` ${t('editor.validation.unavailable')}`
+                    : validation.valid
+                      ? ` ${t('editor.validation.valid')}`
+                      : ` ${t('editor.validation.errors').replace('{{count}}', String(validation.errors.length))}`}
                 </button>
               )}
               <button onClick={handleSave} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>

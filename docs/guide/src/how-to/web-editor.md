@@ -119,6 +119,16 @@ pipeline and opens the monitor. Both honor the engine's checkpoint semantics:
 re-runs reuse completed rules unless inputs, config, or rule definitions
 changed.
 
+The verdict is fail-closed (audit UX-03, issue #1145). When the validation
+request itself fails — a network error or a server 5xx — the editor does not
+keep the previous "Valid" result: the badge switches to **Not validated**,
+**Save** refuses to report a save whose content was never validated, and
+**Dry-Run**/**Run** stay disabled until a validation request actually
+succeeds. A validation that returns findings behaves as before: the badge
+shows the error count, the error list opens, and the save is refused with
+that count. Recovery is automatic — the next successful validation (a new
+edit or another **Save**) restores the run affordances.
+
 ## Look & feel
 
 Dark mode (follows the OS or the header 🌙 toggle), Chinese interface

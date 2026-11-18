@@ -319,6 +319,7 @@ select.search-input{padding-right:1.75rem}
 .val-badge{display:inline-flex;align-items:center;gap:4px;font-size:.75rem}
 .val-badge.valid{color:var(--color-success)}
 .val-badge.invalid{color:var(--color-error)}
+.val-badge.unavailable{color:var(--color-warning)}
 .result-bar{border-radius:var(--radius-sm);padding:.6rem .75rem;margin-top:.75rem;font-size:.85rem;display:flex;align-items:center;gap:.5rem}
 .result-bar.success{background:var(--color-success-bg);color:var(--color-success);border:1px solid var(--color-success)}
 .result-bar.error{background:var(--color-error-bg);color:var(--color-error);border:1px solid var(--color-error)}
