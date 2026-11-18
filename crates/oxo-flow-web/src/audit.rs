@@ -193,15 +193,16 @@ pub async fn audit_middleware(
     let status = response.status().as_u16();
     let action = format!("{method} {path}");
 
-    // Successful sign-ins are recorded by the login handler itself, which
-    // knows the authenticated identity — the middleware only sees the
-    // pre-auth request, so every login row it writes would be misattributed
-    // to the `default` pseudo-user (web-api.md §Audit Logs contract). That
-    // handler row is REQUIRED (WEB-15 / #1199): its failure already replaced
-    // the response with the structured 500, and a 5xx is preserved below.
-    // Failed attempts still fall through here (actor unknown → `default`,
-    // result: "failure" — the actionable brute-force signal).
-    if login_success_is_handler_recorded(&path, status) {
+    // Successful sign-ins are recorded by the handler that owns the identity
+    // — the password login and the OAuth callback — which knows the
+    // authenticated identity. The middleware only sees the pre-auth request,
+    // so every success row it writes would be misattributed to the `default`
+    // pseudo-user (web-api.md §Audit Logs contract). Those handler rows are
+    // REQUIRED (WEB-15 / #1199): their failure already replaced the response
+    // with the structured 500, and a 5xx is preserved below. Failed attempts
+    // still fall through here (actor unknown → `default`, result: "failure"
+    // — the actionable brute-force signal).
+    if auth_success_is_handler_recorded(&path, status) {
         return response;
     }
 
@@ -401,11 +402,13 @@ fn audit_actor_id(user: Option<&crate::domains::auth::current_user::CurrentUser>
         .unwrap_or_else(|| crate::domains::auth::current_user::CurrentUser::default_user().id)
 }
 
-/// Successful sign-ins are recorded by the login handler (which owns the
-/// authenticated identity) as a REQUIRED row; the middleware records failed
-/// attempts only.
-fn login_success_is_handler_recorded(path: &str, status: u16) -> bool {
-    path == "/api/auth/login" && (200..300).contains(&status)
+/// Successful sign-ins are recorded by the handler that owns the
+/// authenticated identity (`POST /api/auth/login`, and the OAuth callback —
+/// which mints the session pre-auth, so the middleware would attribute the
+/// row to the `default` pseudo-user) as a REQUIRED row; the middleware
+/// records failed attempts only.
+fn auth_success_is_handler_recorded(path: &str, status: u16) -> bool {
+    matches!(path, "/api/auth/login" | "/api/auth/oauth/callback") && (200..300).contains(&status)
 }
 
 #[cfg(test)]
@@ -437,16 +440,25 @@ mod tests {
         assert_eq!(audit_actor_id(None), "default");
     }
 
-    /// Login-success audit rows belong to the login handler (canonical
+    /// Sign-in success rows (password login AND the OAuth callback — both
+    /// mint the session pre-auth) belong to the owning handler (canonical
     /// actor id); the middleware must not double-record them, but failed
     /// attempts stay in the middleware trail for brute-force analysis.
     #[test]
     fn login_success_rows_are_handler_owned() {
-        assert!(login_success_is_handler_recorded("/api/auth/login", 200));
-        assert!(login_success_is_handler_recorded("/api/auth/login", 204));
-        assert!(!login_success_is_handler_recorded("/api/auth/login", 401));
-        assert!(!login_success_is_handler_recorded("/api/auth/login", 429));
-        assert!(!login_success_is_handler_recorded("/api/runs", 200));
+        assert!(auth_success_is_handler_recorded("/api/auth/login", 200));
+        assert!(auth_success_is_handler_recorded("/api/auth/login", 204));
+        assert!(auth_success_is_handler_recorded(
+            "/api/auth/oauth/callback",
+            200
+        ));
+        assert!(!auth_success_is_handler_recorded(
+            "/api/auth/oauth/callback",
+            400
+        ));
+        assert!(!auth_success_is_handler_recorded("/api/auth/login", 401));
+        assert!(!auth_success_is_handler_recorded("/api/auth/login", 429));
+        assert!(!auth_success_is_handler_recorded("/api/runs", 200));
     }
 
     /// WEB-15 / issue #1140: the durability class is a property of the

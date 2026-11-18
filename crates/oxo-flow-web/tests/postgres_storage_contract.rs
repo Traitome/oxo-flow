@@ -390,6 +390,16 @@ async fn storage_backend_contract_round_trips_on_postgres() {
         "persisted limits round-trip"
     );
     let now_ms = 1_800_000_000_000i64;
+    // A fresh user's FIRST admission is gated by the same limits as every
+    // later one — the plain-INSERT path must not bypass the DO UPDATE WHERE.
+    let (allowed, _) = backend
+        .quota_admit("pg-run-over-limit", &quota_user, 99, 256, &limits, now_ms)
+        .await
+        .expect("over-limit first admission");
+    assert!(
+        !allowed,
+        "an over-limit FIRST admission must be rejected on PostgreSQL too"
+    );
     let (allowed, usage) = backend
         .quota_admit("pg-run-1", &quota_user, 2, 256, &limits, now_ms)
         .await

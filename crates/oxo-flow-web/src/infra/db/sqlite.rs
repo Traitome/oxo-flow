@@ -1012,11 +1012,22 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_pipeline(&self, id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM pipelines WHERE id = ?")
+        // The revision snapshots (up to 50 per pipeline) have no FK on
+        // pipeline_id, so the pipeline delete alone would orphan them —
+        // read paths 404 while the rows accumulate forever. One transaction
+        // removes both, or neither.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM pipeline_revisions WHERE pipeline_id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM pipelines WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -2306,10 +2317,14 @@ impl StorageBackend for SqliteBackend {
         let cutoff = now_ms - crate::infra::quota::QUOTA_WINDOW_MS;
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         // The reservation insert is the idempotency gate: a run id that is
-        // already reserved is a replay, not a second admission.
+        // already reserved is a replay, not a second admission. Scoped to
+        // the one constraint (`ON CONFLICT(run_id)`), exactly like the
+        // PostgreSQL statement — a bare `INSERT OR IGNORE` would map ANY
+        // constraint violation to "replay allowed".
         let reserved = sqlx::query(
-            "INSERT OR IGNORE INTO quota_reservations \
-             (run_id, user_id, threads, memory_mb, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO quota_reservations \
+             (run_id, user_id, threads, memory_mb, created_at) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(run_id) DO NOTHING",
         )
         .bind(run_id)
         .bind(user_id)
@@ -2324,13 +2339,22 @@ impl StorageBackend for SqliteBackend {
             tx.commit().await.map_err(|e| e.to_string())?;
             return Ok((true, usage));
         }
-        // ONE statement checks every limit against the row it updates: the
-        // condition and the increment cannot be split by a concurrent
-        // admission (RB-09).
+        // ONE statement checks every limit on BOTH paths: the DO UPDATE
+        // WHERE guards the increment against the user's existing row, and
+        // the INSERT…SELECT WHERE guards the first-ever row (a plain
+        // VALUES insert would admit an over-limit first run — the exact
+        // drift quota::evaluate rejects). The condition and the increment
+        // cannot be split by a concurrent admission (RB-09). The SELECT's
+        // WHERE is also what disambiguates the upsert from the SELECT in
+        // SQLite's grammar.
         let admitted = sqlx::query(
             "INSERT INTO quota_usage \
              (user_id, active_runs, used_threads, used_memory_mb, runs_today, window_started_at) \
-             VALUES (?, 1, ?, ?, 1, ?) \
+             SELECT ?, 1, ?, ?, 1, ? \
+             WHERE 1 <= ? \
+               AND ? <= ? \
+               AND ? <= ? \
+               AND 1 <= ? \
              ON CONFLICT(user_id) DO UPDATE SET \
                  active_runs = quota_usage.active_runs + 1, \
                  used_threads = quota_usage.used_threads + excluded.used_threads, \
@@ -2350,6 +2374,13 @@ impl StorageBackend for SqliteBackend {
         .bind(i64::from(threads))
         .bind(memory_mb as i64)
         .bind(now_ms)
+        // Fresh-row guards: the inserted row's usage is (0,0,0) plus this run.
+        .bind(i64::from(limits.max_concurrent_runs))
+        .bind(i64::from(threads))
+        .bind(i64::from(limits.max_total_threads))
+        .bind(memory_mb as i64)
+        .bind(limits.max_total_memory_mb as i64)
+        .bind(i64::from(limits.max_runs_per_day))
         .bind(cutoff)
         .bind(cutoff)
         .bind(i64::from(limits.max_concurrent_runs))

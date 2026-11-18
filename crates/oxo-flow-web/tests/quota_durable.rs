@@ -137,6 +137,88 @@ async fn quota_state_is_atomic_durable_and_shared_across_instances() {
     assert_eq!(usage.active_runs, 0, "no leaked active run after reconcile");
 }
 
+/// A user's FIRST admission is gated by the same limits as every later one.
+/// The durable upsert's `DO UPDATE … WHERE` only filters the update path —
+/// the fresh-row INSERT used to run unconditionally, admitting an
+/// over-limit first run that `quota::evaluate` and the no-backend fallback
+/// both reject (limit semantics mirrored here from `evaluate`).
+#[tokio::test]
+async fn first_admission_over_limit_is_rejected_like_every_other() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("quota.db").display());
+    let backend = SqliteBackend::new(&url).await.expect("backend");
+    backend.init().await.expect("schema");
+
+    let limits = QuotaConfig {
+        max_concurrent_runs: 4,
+        max_total_threads: 2,
+        max_total_memory_mb: 512,
+        max_runs_per_day: 5,
+    };
+    backend
+        .save_quota_config(&limits)
+        .await
+        .expect("save limits");
+    let now = 1_800_000_000_000i64;
+
+    // Fresh user, threads over the total limit: must be rejected, not
+    // admitted into a first row that never existed to guard the update.
+    let (allowed, _) = backend
+        .quota_admit("run-over-threads", "fresh-user", 99, 64, &limits, now)
+        .await
+        .expect("admission call");
+    assert!(
+        !allowed,
+        "an over-limit FIRST admission must be rejected like any other"
+    );
+
+    // Same for memory and the zero-limit edge (no concurrent capacity).
+    let (allowed, _) = backend
+        .quota_admit("run-over-memory", "fresh-user", 1, 4096, &limits, now)
+        .await
+        .expect("admission call");
+    assert!(!allowed, "an over-memory first admission must be rejected");
+
+    let zero_concurrency = QuotaConfig {
+        max_concurrent_runs: 0,
+        max_total_threads: 16,
+        max_total_memory_mb: 8192,
+        max_runs_per_day: 50,
+    };
+    let (allowed, _) = backend
+        .quota_admit(
+            "run-zero-capacity",
+            "fresh-user-2",
+            1,
+            64,
+            &zero_concurrency,
+            now,
+        )
+        .await
+        .expect("admission call");
+    assert!(
+        !allowed,
+        "max_concurrent_runs = 0 admits nothing, not even a first run"
+    );
+
+    // Nothing was recorded for the rejected attempts.
+    let usage = backend
+        .quota_usage("fresh-user", now)
+        .await
+        .expect("usage after rejections");
+    assert_eq!(usage.active_runs, 0, "rejections record no usage");
+
+    // A within-limit first admission for the same user still succeeds (the
+    // gated INSERT path admits a row whose usage is within every limit).
+    let (allowed, usage) = backend
+        .quota_admit("run-ok", "fresh-user", 2, 64, &limits, now)
+        .await
+        .expect("admission call");
+    assert!(allowed, "a within-limit first admission still succeeds");
+    assert_eq!(usage.active_runs, 1);
+    assert_eq!(usage.used_threads, 2, "usage counts the admitted run");
+}
+
 /// Request-level: two concurrent creates under `max_concurrent_runs = 1`
 /// cannot both be admitted. The spawned stub blocks until the test releases
 /// it, so the winner's reservation is still held while the loser is refused.
