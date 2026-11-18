@@ -433,9 +433,11 @@ mod tests {
     #[test]
     fn stage_user_inputs_skips_staged_upload_temps() {
         // Issue #1161: a process killed between creating its staging temp and
-        // renaming it over the destination leaves `<name>.<seq>.<pid>.tmp`
-        // beside the upload. Mirroring it would give every run a phantom
-        // input whose name no user ever chose.
+        // renaming it over the destination leaves
+        // `<name>.oxoupload-<seq>-<pid>.tmp` beside the upload. Mirroring it
+        // would give every run a phantom input whose name no user ever chose.
+        // The bare numeric shape (`meta.tsv.7.999999.tmp`) is a REAL file —
+        // the collision case the marker redesign exists to protect.
         let _cwd = CWD_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let prev = std::env::current_dir().unwrap();
@@ -443,11 +445,17 @@ mod tests {
 
         std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
         std::fs::write("workspace/users/alice/inputs/meta.tsv", "a\n").unwrap();
-        // The orphan shape the upload handler produces, plus a genuine upload
-        // that merely happens to end in `.tmp` — the latter must survive.
+        // The orphan shape the upload handler produces, a versioned real file
+        // the old numeric shape would have swallowed, and a genuine upload
+        // that merely happens to end in `.tmp` — the latter two must survive.
         std::fs::write(
-            "workspace/users/alice/inputs/meta.tsv.7.999999.tmp",
+            "workspace/users/alice/inputs/meta.tsv.oxoupload-7-999999.tmp",
             "partial",
+        )
+        .unwrap();
+        std::fs::write(
+            "workspace/users/alice/inputs/notes.tmp.1.999999.tmp",
+            "keep",
         )
         .unwrap();
         std::fs::write("workspace/users/alice/inputs/notes.tmp", "keep").unwrap();
@@ -458,14 +466,19 @@ mod tests {
 
         std::env::set_current_dir(prev).unwrap();
 
-        assert_eq!(copied, 2, "only the real uploads are staged");
+        assert_eq!(copied, 3, "only the real uploads are staged");
         assert!(run_dir.join("meta.tsv").is_file());
         assert!(
             run_dir.join("notes.tmp").is_file(),
             "a real upload ending in .tmp is not engine scratch"
         );
         assert!(
-            !run_dir.join("meta.tsv.7.999999.tmp").exists(),
+            run_dir.join("notes.tmp.1.999999.tmp").is_file(),
+            "a versioned real file matching the old numeric shape is not \
+             engine scratch"
+        );
+        assert!(
+            !run_dir.join("meta.tsv.oxoupload-7-999999.tmp").exists(),
             "the orphaned staging temp must not be mirrored"
         );
     }
