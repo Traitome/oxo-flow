@@ -94,6 +94,19 @@ dotted name such as `r-4.4` is not truncated. `mamba:` is accepted and uses
 the same shared builder; `pixi:`/`venv:`/`modules:` are rejected rather than
 silently running the item on the host `PATH`.
 
+The item shell (`sh -c <template>`) runs under the same cleared-environment
+allowlist as an `oxo-flow run` rule shell (issue #1233, RB-15): it starts
+from an empty environment plus `PATH`, `HOME`, `LANG`, every `LC_*`
+variable, the `OXO_FLOW_ENV_PASSTHROUGH` names, and the
+`OXO_FLOW_TMPDIR`-derived `TMPDIR`/`TMP`/`TEMP` triple — never the
+operator's ambient environment. A `docker:`/`singularity:` item is an
+exception in one direction only: because the wrapper runs `docker run` /
+`singularity exec` from that very shell, the container-daemon variables
+(`DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_CONFIG`,
+`APPTAINER_*`, `SINGULARITY_*`) are re-admitted for it, exactly as the rule
+executor admits them for a container rule (issue #1173). See
+[Rule execution environment](run.md#rule-execution-environment-issue-1108).
+
 ### Generate workflow
 
 ```bash

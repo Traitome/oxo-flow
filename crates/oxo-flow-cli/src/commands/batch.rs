@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 use crate::commands::{
-    collect_batch_items, expand_batch_template, print_banner, run_batch_command, wrap_batch_command,
+    batch_env_is_container, collect_batch_items, expand_batch_template, print_banner,
+    run_batch_command, wrap_batch_command,
 };
 
 /// Result for a single batch item.
@@ -172,6 +173,11 @@ pub async fn batch_command(
             cmd.clone()
         };
 
+        // A `docker:`/`singularity:` item renders a `docker run`/`singularity
+        // exec` wrapper, so the daemon variables must be re-admitted into the
+        // cleared shell exactly as the rule path does (issue #1173/#1233).
+        let container_daemon = env_clone.as_deref().is_some_and(batch_env_is_container);
+
         let task = tokio::spawn(async move {
             // Clone for spawn_blocking (needs 'static lifetime)
             let final_cmd_for_blocking = final_cmd.clone();
@@ -179,7 +185,11 @@ pub async fn batch_command(
 
             // Execute command in blocking context
             let result = tokio::task::spawn_blocking(move || {
-                run_batch_command(&final_cmd_for_blocking, &workdir_for_blocking)
+                run_batch_command(
+                    &final_cmd_for_blocking,
+                    &workdir_for_blocking,
+                    container_daemon,
+                )
             })
             .await;
 

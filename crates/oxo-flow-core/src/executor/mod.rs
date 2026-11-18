@@ -80,6 +80,7 @@ pub(crate) fn expand_to_fixed_point(
 pub use checkpoint::{BenchmarkRecord, CheckpointState, output_tail_bytes_from_env};
 pub use process::{
     CONTAINER_DAEMON_ENV_VARS, ExecutionEvent, ExecutorConfig, JobRecord, JobStatus, LocalExecutor,
+    RuleEnvCommand, apply_rule_env_allowlist, insert_tmpdir_vars,
 };
 pub use security::{
     sanitize_shell_command, validate_shell_safety, validate_shell_safety_in_workdir,

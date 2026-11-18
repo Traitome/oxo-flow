@@ -3888,11 +3888,11 @@ fn env_tooling_shell_command(script: &str, workdir: &Path) -> Command {
 /// shell cannot read the engine's own credentials, proxy settings, or
 /// arbitrary host state. That guarantee is rule-shell-only: environment
 /// SETUP spawns deliberately keep the full ambient environment as an
-/// accepted risk (issue #1174 — see [`env_tooling_shell_command`]).
+/// accepted risk (issue #1174 — see `env_tooling_shell_command`).
 /// `PATH`/`HOME`/`LANG` are the minimum a POSIX shell and the tooling it
 /// invokes need to function; `LC_*` is handled separately by dynamic
 /// prefix so a new locale variable needs no edit here.
-pub(crate) const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
+pub const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
 
 /// Ambient variables re-admitted into a rule shell **only when that rule
 /// runs through a local container runtime** — docker or
@@ -3968,13 +3968,57 @@ pub(crate) fn env_passthrough_names() -> Vec<String> {
     parse_env_passthrough(std::env::var(ENV_PASSTHROUGH_ENV).ok().as_deref())
 }
 
+/// The minimal `Command` surface the environment-allowlist policy drives,
+/// implemented for both `std::process::Command` and
+/// `tokio::process::Command` so the policy is defined exactly once
+/// (invariant "Reuse, never retype") and callable from every shell spawn
+/// site: the executor's rule/hook shells (tokio) and the CLI's
+/// reference-build and batch shells (one of each, issue #1233).
+///
+/// Method names (`clear_env` / `put_env` / `put_envs`) deliberately differ
+/// from the inherent `env_clear` / `env` / `envs` so each impl delegates to
+/// the inherent method without recursing into the trait.
+pub trait RuleEnvCommand {
+    /// Drop every inherited variable (the inherent `env_clear`).
+    fn clear_env(&mut self);
+    /// Set one variable (the inherent `env`).
+    fn put_env(&mut self, key: &std::ffi::OsStr, value: &std::ffi::OsStr);
+    /// Set every declared variable (the inherent `envs`); declared values
+    /// are applied last and win over every ambient source.
+    fn put_envs(&mut self, envs: &HashMap<String, String>);
+}
+
+impl RuleEnvCommand for std::process::Command {
+    fn clear_env(&mut self) {
+        self.env_clear();
+    }
+    fn put_env(&mut self, key: &std::ffi::OsStr, value: &std::ffi::OsStr) {
+        self.env(key, value);
+    }
+    fn put_envs(&mut self, envs: &HashMap<String, String>) {
+        self.envs(envs);
+    }
+}
+
+impl RuleEnvCommand for tokio::process::Command {
+    fn clear_env(&mut self) {
+        self.env_clear();
+    }
+    fn put_env(&mut self, key: &std::ffi::OsStr, value: &std::ffi::OsStr) {
+        self.env(key, value);
+    }
+    fn put_envs(&mut self, envs: &HashMap<String, String>) {
+        self.envs(envs);
+    }
+}
+
 /// Rebuild a rule/hook shell's environment from scratch (issue #1108,
 /// RB-15): `env_clear()` drops everything the engine process carries —
 /// API tokens, cloud credentials, proxy settings, the operator's shell —
 /// and only these reach the child:
 ///
 /// 1. the ambient allowlist ([`RULE_ENV_ALLOWLIST`] plus every `LC_*`),
-/// 2. any [`ENV_PASSTHROUGH_ENV`] names the operator opted in,
+/// 2. any `ENV_PASSTHROUGH_ENV` names the operator opted in,
 /// 3. [`CONTAINER_DAEMON_ENV_VARS`] when `container_daemon` is set — the
 ///    rule's environment kind is docker/singularity, so the engine is
 ///    about to invoke that CLI from this very shell (issue #1173), and
@@ -3982,7 +4026,7 @@ pub(crate) fn env_passthrough_names() -> Vec<String> {
 ///    (and the sensitive-value + `TMPDIR`/`TMP`/`TEMP` injection layered
 ///    onto it by the caller) always wins over every ambient source.
 ///
-/// Shared by every rule-shell spawn site: [`spawn_rule_shell`] is the one
+/// Shared by every rule-shell spawn site: `spawn_rule_shell` is the one
 /// choke point covering the rule command, `pre_exec`, rule-level hooks,
 /// and workflow-level hooks, so this policy is defined exactly once
 /// (invariant "Reuse, never retype"). Env setup/teardown/verify commands
@@ -3991,8 +4035,8 @@ pub(crate) fn env_passthrough_names() -> Vec<String> {
 ///
 /// `container_daemon` must be `true` only for rules whose environment
 /// kind is docker or singularity; the bare path's allowlist never widens.
-pub(super) fn apply_rule_env_allowlist(
-    cmd: &mut Command,
+pub fn apply_rule_env_allowlist<C: RuleEnvCommand>(
+    cmd: &mut C,
     envs: &HashMap<String, String>,
     container_daemon: bool,
 ) {
@@ -4005,8 +4049,8 @@ pub(super) fn apply_rule_env_allowlist(
 /// process-wide, and this crate is `#![forbid(unsafe_code)]`, so tests may
 /// not mutate the ambient environment to drive the escape hatch. Production
 /// always reaches this through [`apply_rule_env_allowlist`].
-pub(super) fn apply_rule_env_allowlist_with(
-    cmd: &mut Command,
+pub(crate) fn apply_rule_env_allowlist_with<C: RuleEnvCommand>(
+    cmd: &mut C,
     envs: &HashMap<String, String>,
     passthrough: &[String],
     container_daemon: bool,
@@ -4029,32 +4073,32 @@ pub(super) fn apply_rule_env_allowlist_with(
 /// `std::env::vars_os()` — tests that observe the child environment can see
 /// the developer's own locale variables, but no production behavior depends
 /// on the injection for that branch.
-fn apply_rule_env_allowlist_from(
-    cmd: &mut Command,
+fn apply_rule_env_allowlist_from<C: RuleEnvCommand>(
+    cmd: &mut C,
     envs: &HashMap<String, String>,
     passthrough: &[String],
     container_daemon: bool,
     ambient: &dyn Fn(&str) -> Option<std::ffi::OsString>,
 ) {
-    cmd.env_clear();
+    cmd.clear_env();
     // Ambient allowlist: the bare minimum a POSIX shell needs. `var_os`
     // (not `var`) so a non-UTF-8 value is passed through verbatim.
     for key in RULE_ENV_ALLOWLIST {
         if let Some(value) = ambient(key) {
-            cmd.env(key, value);
+            cmd.put_env(std::ffi::OsStr::new(key), &value);
         }
     }
     // Locale family (`LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, …): matched by
     // prefix so a new `LC_*` variable needs no edit here.
     for (key, value) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("LC_") {
-            cmd.env(&key, value);
+            cmd.put_env(&key, &value);
         }
     }
     // Operator escape hatch: re-admit named ambient variables.
     for name in passthrough {
         if let Some(value) = ambient(name) {
-            cmd.env(name, value);
+            cmd.put_env(std::ffi::OsStr::new(name), &value);
         }
     }
     // Container-daemon plumbing (issue #1173): only a rule the engine runs
@@ -4063,12 +4107,12 @@ fn apply_rule_env_allowlist_from(
     if container_daemon {
         for name in CONTAINER_DAEMON_ENV_VARS {
             if let Some(value) = ambient(name) {
-                cmd.env(name, value);
+                cmd.put_env(std::ffi::OsStr::new(name), &value);
             }
         }
     }
     // Declared environment last — it overrides every ambient source above.
-    cmd.envs(envs);
+    cmd.put_envs(envs);
 }
 
 /// Spawn a rule command under `bash -c`, falling back to `sh -c` on
@@ -4957,7 +5001,7 @@ async fn discard_scratch(scratch: Option<&Path>) {
 /// `TMPDIR`/`TMP`/`TEMP` like Snakemake's tmpdir resource, so both POSIX
 /// (TMPDIR) and legacy (TEMP/TMP) readers land on the same scratch volume.
 /// `None` leaves `envs` untouched.
-fn insert_tmpdir_vars(envs: &mut HashMap<String, String>, tmp_dir: Option<&std::path::Path>) {
+pub fn insert_tmpdir_vars(envs: &mut HashMap<String, String>, tmp_dir: Option<&std::path::Path>) {
     if let Some(tmp) = tmp_dir {
         for var in ["TMPDIR", "TMP", "TEMP"] {
             envs.insert(var.to_string(), tmp.display().to_string());

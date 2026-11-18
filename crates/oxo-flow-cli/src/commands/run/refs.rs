@@ -196,6 +196,7 @@ pub(crate) async fn auto_build_references(
     env_cache_dir: &Path,
     json_summary: &mut RunJsonSummary,
     skip_ref_build: bool,
+    tmp_dir: Option<&Path>,
 ) -> anyhow::Result<()> {
     if skip_ref_build || config.references.is_empty() {
         return Ok(());
@@ -501,24 +502,48 @@ pub(crate) async fn auto_build_references(
             // (spawn_rule_shell): `set -o pipefail` in a shell prelude
             // is invalid under dash, which /bin/sh is on Debian-family
             // systems (review finding on issue #92).
+            //
+            // RB-15 (#1233): the comment above claims this "mirrors the
+            // rule executor", but it used to spawn with the parent
+            // environment untouched. Route it through the SAME
+            // `apply_rule_env_allowlist` helper the rule shell uses so a
+            // reference build cannot read ambient secrets
+            // (`ANTHROPIC_AUTH_TOKEN`, …) the engine deliberately hides
+            // from rules. The declared environment (if any) is already
+            // baked into `build_cmd` by `resolver.wrap_command` above, so
+            // it is not undone here.
+            let mut ref_envs = HashMap::new();
+            oxo_flow_core::executor::insert_tmpdir_vars(&mut ref_envs, tmp_dir);
+            let container_daemon = ref_def
+                .environment
+                .as_ref()
+                .is_some_and(|e| e.is_container_runtime());
             async fn run_ref_shell(
                 shell: &str,
                 cmd: &str,
                 dir: &Path,
+                envs: &HashMap<String, String>,
+                container_daemon: bool,
             ) -> std::io::Result<std::process::ExitStatus> {
-                tokio::process::Command::new(shell)
-                    .arg("-c")
-                    .arg(cmd)
-                    .current_dir(dir)
-                    .status()
-                    .await
+                let mut command = tokio::process::Command::new(shell);
+                command.arg("-c").arg(cmd).current_dir(dir);
+                oxo_flow_core::executor::apply_rule_env_allowlist(
+                    &mut command,
+                    envs,
+                    container_daemon,
+                );
+                command.status().await
             }
-            let status = match run_ref_shell("bash", &build_cmd, ref_workdir).await {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    run_ref_shell("sh", &build_cmd, ref_workdir).await
-                }
-                other => other,
-            };
+            let status =
+                match run_ref_shell("bash", &build_cmd, ref_workdir, &ref_envs, container_daemon)
+                    .await
+                {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        run_ref_shell("sh", &build_cmd, ref_workdir, &ref_envs, container_daemon)
+                            .await
+                    }
+                    other => other,
+                };
             match status {
                 Ok(s) if s.success() => {
                     // Store the POST-build fingerprint: the decision
