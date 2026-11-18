@@ -4,7 +4,8 @@ import AxeBuilder from '@axe-core/playwright';
 // WCAG scan (ledger UX-09, issue #1151).
 //
 // Scope: the six primary routes in the default (Guided) editor mode, scanned
-// in BOTH color themes, PLUS the mobile shell at 390x844 (drawer closed and
+// in BOTH color themes, PLUS the canvas editor mode (rule cards + TOML pane)
+// in both themes, PLUS the mobile shell at 390x844 (drawer closed and
 // open) — the drawer's ARIA association only exists at phone widths. The app
 // follows `prefers-color-scheme` when the user has not pinned a theme, so
 // `page.emulateMedia` selects the theme under test without touching
@@ -25,13 +26,15 @@ import AxeBuilder from '@axe-core/playwright';
 // developer running locally with provider credentials sees the configured
 // variants instead; both states are AA in both themes.
 //
-// Deliberately outside this scan: the Canvas + TOML editor surface
-// (`oxo_editor_mode=canvas`). It carries known, separate findings — the
-// React Flow rule cards expose a role="button" whose visible text (rule,
-// environment, shell) is wider than its aria-label, and CodeMirror's dark
-// syntax palette is below AA — tracked as remaining UX-09 work rather than
-// silently excluded here. The Guided editor scanned below is what a new
-// user gets by default.
+// The Canvas + TOML editor surface (`oxo_editor_mode=canvas`) is scanned below
+// too. Two product fixes landed with it (issue #1223): the React Flow rule
+// cards previously exposed a role="button" whose visible text (rule,
+// environment, shell) was wider than its bare "Edit rule <name>" aria-label —
+// label-content-name-mismatch — now composed with aria-labelledby over the
+// rendered name/meta/shell nodes; and CodeMirror's built-in light-only syntax
+// palette was below AA on the dark editor background — replaced with a
+// theme-aware AA palette. The Guided editor scanned above is what a new user
+// gets by default; the canvas scans exercise the other editor mode.
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
@@ -104,6 +107,27 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await expectNoAxeViolations(page, `${route.path} (${colorScheme})`);
       });
     }
+  });
+}
+
+// Canvas mode (issue #1223): the same /editor route in the other editor
+// mode. This mode adds two surfaces the Guided scans never mount — the React
+// Flow rule cards (role=button) and the CodeMirror TOML pane — both scanned
+// in BOTH themes. editMode pins the same localStorage key editor-canvas.spec.ts
+// uses.
+for (const colorScheme of ['light', 'dark'] as const) {
+  test.describe(`WCAG 2.1 A/AA — canvas editor, ${colorScheme} theme`, () => {
+    test.use({ colorScheme });
+
+    test('/editor (canvas) has no axe violations', async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
+      await page.goto('/editor');
+      // Both surfaces must have rendered; the rule cards mount once the
+      // server returned a verdict for the default workflow.
+      await expect(page.locator('.rf-rule-node').first()).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator('.cm-content')).toBeVisible({ timeout: 15_000 });
+      await expectNoAxeViolations(page, `/editor canvas (${colorScheme})`);
+    });
   });
 }
 

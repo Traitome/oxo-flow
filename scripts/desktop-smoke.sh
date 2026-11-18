@@ -15,6 +15,12 @@
 #
 # Exit codes: 0 = pass, 1 = lifecycle regression, 77 = environment cannot
 # run a GUI (missing display tooling) — a skip, never a silent pass.
+#
+# Windows is not supported by this script (issue #1223): it relies on flock,
+# SIGTERM, and — on headless Linux — a private Xvfb display, none of which
+# exist on Windows, and CI has no Windows runner. The documented Windows
+# support status and a manual PowerShell equivalent live in
+# docs/guide/src/how-to/desktop-app.md → Windows.
 
 set -euo pipefail
 

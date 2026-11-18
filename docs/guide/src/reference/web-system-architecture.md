@@ -210,15 +210,21 @@ ones gated) after asserting the served bundle is the freshly built artifact
 | :--- | :--- | :--- |
 | Browser E2E: author → validate → run → monitor | `core-flows.spec.ts` | Editor renders TOML + DAG, the validation badge reflects a real `POST /api/pipelines/validate`, Save creates a pipeline, and the Stage 4/5 case creates a real run, then verifies provenance/checksums and the output preview in the monitor/report. |
 | Mobile viewport | `mobile-viewport.spec.ts` | At 390×844, routed content does not overflow: `.main-content.scrollWidth <= clientWidth + 1` on the dashboard, pipelines, editor, runs, monitor and settings routes (the document-level check alone is vacuous because `body`/`.main-content` clip `overflow-x`). A negative-control test injects a 2000px child and proves the detector reports it. The navigation drawer reaches the editor and an enabled Run button opens the run dialog with its close control inside the viewport; the React Flow canvas does not widen the routed content. |
-| WCAG / accessibility | `accessibility.spec.ts` | axe-core scans the six primary routes in both color themes plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI. CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes and the out-of-scope canvas surface are documented in the spec header. |
+| WCAG / accessibility | `accessibility.spec.ts` | axe-core scans the six primary routes in both color themes, the canvas editor mode (`/editor` with `oxo_editor_mode=canvas`: the React Flow rule cards and the CodeMirror TOML pane) in both themes, plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI (including the canvas rule-card `label-content-name-mismatch` and the dark TOML syntax contrast, issue #1223). CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes are documented in the spec header. |
 | Metro frame-time budget | `metro-performance.spec.ts` | A 6-rule workflow is switched Rule → Process → Module (a Sugiyama re-layout per switch) and the interaction-to-next-paint latency is measured with `performance.now` plus two `requestAnimationFrame`s after the click. Station counts prove the switch regrouped (Rule = 6, Process = 1); worst sample < 750 ms, median < 300 ms. |
 | Keyboard graph navigation | `metro-canvas.spec.ts` | Metro station keyboard access is owned by issue #1148 / ledger UX-06; that spec ships with the keyboard-access change. It is not duplicated here. |
 | Desktop (wry/tao) lifecycle | `scripts/desktop-smoke.sh` (CI `desktop` job, `make desktop-smoke`) | Build + launch against an isolated `HOME`, the embedded server creates its lock + SQLite database, a second instance is refused with the documented message, and SIGTERM exits 0. See `docs/guide/src/how-to/desktop-app.md` → Verification. |
 
 Deliberately not covered by this suite: visual pixel rendering, real-device
 mobile gestures, screen-reader output beyond what axe-core's rule set
-evaluates, and Windows desktop packaging (the release pipeline does not
-build a Windows bundle).
+evaluates, and the Windows desktop lifecycle (the release pipeline builds no
+Windows bundle and the smoke test is POSIX-only). The screen-reader gap is
+not incidental: axe-core checks the accessibility tree a screen reader
+*consumes*, but it does not run one, so the Metro keyboard path and the
+mobile drawer's announced output remain **manual and unmeasured** — no
+NVDA/JAWS/VoiceOver/TalkBack pass has been performed. Windows desktop is
+source-compatible but unbuilt and untested by CI; see
+`docs/guide/src/how-to/desktop-app.md` → Windows.
 
 ## Domain-Driven Module Structure
 
