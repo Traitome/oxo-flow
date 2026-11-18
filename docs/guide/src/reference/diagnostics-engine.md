@@ -141,6 +141,38 @@ resource_bottlenecks: [{
   (e.g. LSF) or a missing accounting row. Legacy checkpoints degrade to
   an empty list.
 
+## Failure-panel actions in the web monitor
+
+A failed node may carry `auto_fixable: true` and a `fix_action`
+(`description`, optional `config_change`, optional `command`). **The
+`fix_action` is advisory** — the diagnostics engine never reads the live
+configuration, so `config_change.path` / `old_value` / `new_value` describe
+the *intent* of the change with placeholder values (typically
+`"current"` → `"increase"`), and today no producer sets `command`. No
+server endpoint applies it: `POST /api/runs/{id}/retry` accepts only
+`skip_succeeded` and `from_rule`.
+
+Consequently the monitor's diagnostics tab renders the suggestion as
+**"Suggested fix (apply manually)"** (path and any command shown for
+copying) and labels its action **"Retry unchanged"**: clicking it re-runs
+the same workflow without mutating anything, so a rerun of an unmodified
+pipeline fails the same way. Apply the change yourself first — edit the
+workflow/config and create a new run, or use the CLI's verified repair
+loop (`oxo-flow run --ai-recover`, which gates `apply_fix` on validation
+and writes the workflow atomically). The monitor never claims a repair was
+applied when none was. The AI monitor's alert cards get the same action
+label ("Retry unchanged") for the same reason — their `suggestion` is
+likewise prose, not an applicable mutation — but they render no
+"Suggested fix (apply manually)" caption.
+
+Regression coverage: `frontend/e2e/monitor-apply-retry.spec.ts`
+(`advisory fix is displayed and Retry unchanged sends only the retry
+request`, `no repair payload: no suggestion block, Retry unchanged still
+sends no repair request`, `alert card action is relabelled Retry unchanged
+without the manual-fix caption`) asserts the displayed payload is shown as
+advisory, the alert card carries only the action relabel (no manual-fix
+caption), and the retry POST is the only mutation sent.
+
 ## Extending the Pattern Library
 
 Add new patterns in `crates/oxo-flow-core/src/diagnostics.rs` (inside

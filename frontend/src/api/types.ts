@@ -167,7 +167,10 @@ export interface DagStatus {
   metrics: { total_nodes: number; completed_nodes: number; failed_nodes: number; running_nodes: number; pending_nodes: number; skipped_nodes: number; cancelled_nodes: number; eta_ms: number | null };
 }
 export interface Diagnostics {
-  failed_nodes: Array<{ rule: string; error_pattern: string | null; likely_cause: string; suggestions: string[]; relevant_log_lines: string[]; auto_fixable?: boolean; fix_action?: { description: string; command?: string } }>;
+  /** `fix_action` is ADVISORY (issue #1146): `config_change.old_value` /
+   *  `new_value` are placeholders describing intent ("current" → "increase")
+   *  and no endpoint applies it — the monitor renders it for manual action. */
+  failed_nodes: Array<{ rule: string; error_pattern: string | null; likely_cause: string; suggestions: string[]; relevant_log_lines: string[]; auto_fixable?: boolean; fix_action?: { description: string; config_change?: { path: string; old_value: string; new_value: string }; command?: string } }>;
   warnings: Array<{ rule: string; pattern: string; suggestion: string }>;
   resource_bottlenecks: Array<{ rule: string; metric: string; actual: number; limit: number }>;
 }
