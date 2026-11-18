@@ -5073,6 +5073,30 @@ launched there detached, and logs/files/report views work exactly as for
 local runs once the results are pulled back. The remote host needs the
 <code>oxo-flow</code> CLI on <code>PATH</code>, <code>tar</code>, and non-interactive SSH access (key
 auth, <code>BatchMode</code>).</p>
+<div class="admonition warning">
+<p class="admonition-title">Result pulls are validated before a run can finalize</p>
+<p>The pulled result stream is parsed by oxo-flow's own archive reader,
+not the host <code>tar</code>. A member whose path is absolute or contains <code>..</code>,
+a symlink or hard link whose target is absolute or contains any <code>..</code> (extraction targets are created empty or from regular files only, so no pre-existing symlink can be traversed)
+component (even one that would "cancel out" lexically — it can escape
+through a symlinked path segment), or a member type other than
+file/directory/link rejects the whole extraction and fails the run
+with the offending member named — nothing is written outside the
+local workdir. After extraction every member is re-checked on disk.
+The wrapper appends a run-specific completion record to the stream
+<strong>after</strong> the result tree, so a transfer that stops early cannot carry
+it: a truncated pull fails the run instead of reporting a partial
+tree as complete, and <code>execution.log</code> plus <code>.exit-code</code> are required
+as well. The failure is recorded in the run's <code>artifacts_incomplete</code>
+note and the run is <strong>never</strong> reported as <code>completed</code>. The pull
+verifies that the complete tree arrived — it does not re-derive the
+expanded output list locally; declared outputs are verified by the
+engine on the remote host before the run exits 0, and a non-zero
+remote exit always fails the run. Result trees that intentionally
+leave symlinks pointing outside the workdir (for example an externally
+rooted <code>OXO_FLOW_ENV_STORE</code> link, or any link target containing <code>..</code>)
+are rejected by this check — pulled results must be self-contained.</p>
+</div>
 <p>Cluster connection management is admin-only outside personal mode.
 Details: <a href="../../reference/web-api/#cluster-connections-remote-execution">Cluster Connections &amp; Remote
 Execution</a>

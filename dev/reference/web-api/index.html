@@ -6903,11 +6903,19 @@ private <code>0600</code> temp file for the SSH invocation, so either form works
 the remote host (tar over stdio — no rsync), launches it detached (own
 session via <code>setsid</code>, with <code>nohup</code> fallback) so the launch call returns
 while the workflow keeps running, and pulls the results back on completion
-so every downstream endpoint (logs, files, report) works unchanged. If that
-pull fails, the run is <strong>not</strong> finalized as a success — it is failed with the
-pull error and the run row records <code>artifacts_incomplete</code> (see
+so every downstream endpoint (logs, files, report) works unchanged. The
+pulled stream is extracted through the engine's validated archive reader:
+absolute/<code>..</code> member paths and link targets that are absolute or contain
+any <code>..</code> component are rejected by name, every member is verified on disk,
+and <code>execution.log</code>, <code>.exit-code</code>, plus a run-specific completion record
+tarred <strong>after</strong> the result tree must be present — a truncated stream
+cannot carry the record (issue #1157 / audit CL-04). If that pull fails,
+the run is <strong>not</strong> finalized as a success — it is failed with the pull
+error and the run row records <code>artifacts_incomplete</code> (see
 <a href="#run-detail">Run Detail</a>), because the local workdir the downstream
 endpoints read may be missing or stale (issue #1112 / audit RB-05).
+Because the pull does not re-derive the expanded output list locally,
+declared-output existence remains the remote engine's exit-0 contract.
 Cancel kills the wrapper's recorded process group, so the remote CLI and
 rule subprocesses stop rather than being orphaned. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
