@@ -188,9 +188,9 @@ still see the attempt. The successful-login path is the exception: the
 login handler returns before the middleware's event emission and owns its
 own best-effort row, so a successful login on broken storage leaves
 **neither a row nor a structured event**. Failed login attempts are
-REQUIRED rows written by the middleware. Migration of the handler-owned
-rows to the shared helpers is pending on the reserved `domains/auth/`
-file (open PR #1141).
+REQUIRED rows written by the middleware. Migration of the successful-login
+row to `audit_required` is tracked follow-up work in the WEB-15 ledger
+entry.
 
 ### Server-Sent Events
 ```
