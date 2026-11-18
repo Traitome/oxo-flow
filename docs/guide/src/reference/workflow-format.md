@@ -857,6 +857,32 @@ nf-core-derived images ship bash, and their scripts rely on bash features
 (`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.
 
+**Container daemon configuration (issue #1173):** rule shells run under a
+cleared environment (see
+[`[engine]` — Runtime Disk-Pressure Guard](#engine-runtime-disk-pressure-guard)),
+and the local `docker run` / `apptainer exec` wrapper executes inside that
+shell. So that a remote docker daemon, an operator-configured image cache,
+or site bind mounts keep working, a rule whose environment kind is
+`docker` or `singularity` automatically re-admits these ambient variables
+(when set):
+
+- Docker CLI: `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
+  `DOCKER_TLS_VERIFY`, `DOCKER_BUILDKIT`
+- Apptainer/Singularity: `APPTAINER_CACHEDIR`, `SINGULARITY_CACHEDIR`,
+  `APPTAINER_BIND`, `SINGULARITY_BIND`, `APPTAINER_TMPDIR`,
+  `SINGULARITY_TMPDIR`, `APPTAINER_LOCALCACHEDIR`,
+  `SINGULARITY_LOCALCACHEDIR`
+
+The list is exact-name, never a `DOCKER_*`/`APPTAINER_*` prefix — an
+unknown future credential-bearing variable is not admitted by accident —
+and it applies only to container rules: the bare (non-container) path's
+allowlist is unchanged. The rule's declared
+[`envvars`](#environment-variables-envvars) still win over the ambient
+copy. Anything else a container tool needs (a proxy setting, a private
+registry token, a site variable) requires a rule-level `envvars` entry or
+the operator-level `OXO_FLOW_ENV_PASSTHROUGH` list. No `podman` backend is
+wired, so `PODMAN_*` is not admitted.
+
 **Stale pixi.lock fallback:** a rule declared with
 `environment = { pixi = "envs/pixi.toml" }` installs from the committed
 `pixi.lock` beside that manifest. When the pinned package builds have
