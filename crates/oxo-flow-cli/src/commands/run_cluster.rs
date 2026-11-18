@@ -803,30 +803,22 @@ pub(crate) async fn run_on_cluster(
     // path — export it into every job shell (build_with_scratch), since
     // jobs start from the scheduler's clean environment. `merge` is None
     // on this path, so nothing re-expands the prefixed commands.
-    let mut plan = ScheduledPlan::build_with_scratch(
+    //
+    // Sensitive values (issue #1120 / ledger RB-12) are routed BEFORE the
+    // environment wrapper is built, so docker/singularity forward them by
+    // name instead of re-expanding the literal on the compute node. Every
+    // backend then gets the value through its own channel: an HPC env file
+    // the driver writes and removes, or the cloud body's secret reference.
+    let mut plan = ScheduledPlan::build_with_scratch_and_sensitive(
         args.config,
         args.dag,
         args.workdir,
         &env_resolver,
         args.wildcard_values,
         args.tmp_dir,
+        args.sensitive_values,
     )
     .map_err(|e| anyhow::anyhow!("failed to build the execution plan: {e}"))?;
-
-    // Cloud job bodies are rendered from each rule's `shell_cmd`, so a
-    // `sensitive = true` config value must be replaced by an
-    // `OXO_FLOW_SENSITIVE_<n>` reference BEFORE any manifest/spec is built —
-    // otherwise the literal lands in the containerOverrides.command / script
-    // text (issue #1120 / ledger RB-12). The HPC script backends (slurm/pbs/
-    // sge/lsf) keep their existing behaviour; only the cloud bodies carry the
-    // value off-container. Each cloud backend then projects the reference out
-    // of its own secret channel (k8s secretKeyRef, GCP secretVariables).
-    if matches!(
-        backend,
-        ClusterBackend::Kubernetes | ClusterBackend::AwsBatch | ClusterBackend::GcpBatch
-    ) {
-        plan.route_sensitive_values(args.sensitive_values);
-    }
 
     let run_dir = create_run_dir(args.workdir)?;
 
@@ -911,8 +903,13 @@ pub(crate) async fn run_on_cluster(
     );
     eprintln!("  run directory: {}", run_dir.display());
 
-    let executor =
-        ClusterExecutor::new(backend, cluster_config).with_workdir(args.workdir.to_path_buf());
+    // Operator-supplied secret references (OXO_FLOW_SECRET_REFS): only GCP
+    // Batch has a submission-time field (`secretVariables`) for them; the
+    // other backends resolve routed names through their own channel
+    // (issue #1120 / ledger RB-12).
+    let executor = ClusterExecutor::new(backend, cluster_config)
+        .with_workdir(args.workdir.to_path_buf())
+        .with_secret_refs(oxo_flow_core::backend::secret_refs_from_env());
     let driver = BackendDriver::new(Arc::new(executor), driver_config);
     // Submit-time checkpoint recording (issue #136 H6): a crashed driver
     // leaves truthful RUNNING entries for accepted jobs, so `resume` /

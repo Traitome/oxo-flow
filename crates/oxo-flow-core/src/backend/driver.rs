@@ -6,7 +6,10 @@
 //! [`JobRecord`]s — the same record type the local executor produces, so
 //! checkpoint semantics are identical.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule, TerminalRecord};
+use super::{
+    BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule, TerminalRecord,
+    source_sensitive_env_file, write_private, write_sensitive_env_file,
+};
 use crate::error::{OxoFlowError, Result};
 use crate::executor::{JobRecord, JobStatus};
 use chrono::{DateTime, Utc};
@@ -14,7 +17,7 @@ use std::collections::{
     BTreeMap, {HashMap, HashSet},
 };
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -167,6 +170,10 @@ struct InFlight {
     /// Polling/cancelling targets the base for schedulers that report
     /// arrays only by their base id (PBS/LSF/SGE — issue #136 H4).
     array_base: Option<String>,
+    /// Private env file carrying this job's routed sensitive values
+    /// (issue #1120 / RB-12). Removed as soon as the driver observes the job
+    /// terminal — or by the run-end sweep if the driver itself exits first.
+    env_file: Option<PathBuf>,
 }
 
 /// Scheduler-visible directive signature: two instances are array-eligible
@@ -342,7 +349,26 @@ impl BackendDriver {
     /// exception is [`OxoFlowError::Cancelled`] — an interrupt delivered via
     /// [`DriverConfig::cancel`] — which carries the interrupted job records
     /// itself so the caller can persist them before exiting.
+    ///
+    /// Sensitive env files this run wrote are swept on EVERY exit path —
+    /// success, terminal error, interrupt (issue #1120 / ledger RB-12), so an
+    /// inspected or restarted run directory never leaves a recoverable value.
     pub async fn run(
+        &self,
+        plan: &mut ScheduledPlan,
+        to_run: &HashSet<String>,
+        opts: DriverOptions<'_>,
+    ) -> Result<Vec<JobRecord>> {
+        let run_dir = opts.run_dir.to_path_buf();
+        // A resume (or a caller reusing a directory after a crash) may find
+        // env files from a previous process that never reached its sweep.
+        sweep_sensitive_env_files(&run_dir);
+        let result = self.run_inner(plan, to_run, opts).await;
+        sweep_sensitive_env_files(&run_dir);
+        result
+    }
+
+    async fn run_inner(
         &self,
         plan: &mut ScheduledPlan,
         to_run: &HashSet<String>,
@@ -366,6 +392,13 @@ impl BackendDriver {
         let mut done: HashMap<String, JobStatus> = HashMap::new();
         let mut inflight: HashMap<String, InFlight> = HashMap::new();
         let mut to_run_set: HashSet<String> = to_run.clone();
+        // The run's stable `VAR -> value` table for routed `sensitive = true`
+        // values. The plan carries only the `${OXO_FLOW_SENSITIVE_<n>}`
+        // references; an HPC backend needs the values to write each job's
+        // private env file (issue #1120 / RB-12). Same helper, same ordering
+        // the plan routing used, so the names cannot disagree.
+        let sensitive_bindings =
+            crate::executor::process::sensitive_bindings(opts.sensitive_values);
         // Priority aging (issue #134): each round a ready rule spends
         // beyond the cap adds +1 to its effective priority.
         let mut waited_rounds: HashMap<String, i32> = HashMap::new();
@@ -588,27 +621,6 @@ impl BackendDriver {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
                                 }
                             }));
-                            for (i, (_, c_sr)) in chunk.iter().enumerate() {
-                                let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
-                                cancel_on_error!(
-                                    write_private(&cmd_path, c_sr.shell_cmd.as_bytes()).map_err(
-                                        |e| OxoFlowError::Config {
-                                            message: format!(
-                                                "cannot write {}: {e}",
-                                                cmd_path.display()
-                                            ),
-                                        }
-                                    )
-                                );
-                            }
-                            // The array presents itself under the TEMPLATE
-                            // name: naming it after `chunk[0]`'s instance
-                            // made squeue/sacct report a job named after one
-                            // arbitrary sample. The per-index log paths
-                            // follow, so every element shares the template's
-                            // log prefix.
-                            let mut array_rule = chunk[0].1.rule.clone();
-                            array_rule.name = chunk[0].1.template.clone();
                             // Routed sensitive references live in the
                             // per-index command files, not the dispatch
                             // line; cloud array bodies still need the union
@@ -622,6 +634,52 @@ impl BackendDriver {
                                 .collect::<std::collections::BTreeSet<_>>()
                                 .into_iter()
                                 .collect();
+                            // HPC backends: one private env file per chunk,
+                            // sourced by every per-index command file. The
+                            // scheduler's copy of `job.sh` therefore carries
+                            // only references (issue #1120 / RB-12).
+                            let env_file = if self.backend.uses_secret_env_file()
+                                && !sensitive_refs.is_empty()
+                            {
+                                let path = job_dir.join(super::SENSITIVE_ENV_FILE_NAME);
+                                cancel_on_error!(write_sensitive_env_file(
+                                    &path,
+                                    &sensitive_bindings,
+                                    &sensitive_refs,
+                                    chunk[0].1.rule.environment.kind(),
+                                ));
+                                Some(path)
+                            } else {
+                                None
+                            };
+                            let env_prefix = env_file
+                                .as_deref()
+                                .map(|path| format!("{} && ", source_sensitive_env_file(path)));
+                            for (i, (_, c_sr)) in chunk.iter().enumerate() {
+                                let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
+                                let contents = match env_prefix {
+                                    Some(ref prefix) => format!("{prefix}{}", c_sr.shell_cmd),
+                                    None => c_sr.shell_cmd.clone(),
+                                };
+                                cancel_on_error!(
+                                    write_private(&cmd_path, contents.as_bytes()).map_err(|e| {
+                                        OxoFlowError::Config {
+                                            message: format!(
+                                                "cannot write {}: {e}",
+                                                cmd_path.display()
+                                            ),
+                                        }
+                                    })
+                                );
+                            }
+                            // The array presents itself under the TEMPLATE
+                            // name: naming it after `chunk[0]`'s instance
+                            // made squeue/sacct report a job named after one
+                            // arbitrary sample. The per-index log paths
+                            // follow, so every element shares the template's
+                            // log prefix.
+                            let mut array_rule = chunk[0].1.rule.clone();
+                            array_rule.name = chunk[0].1.template.clone();
                             let script = cancel_on_error!(self.backend.render_array_script(
                                 &array_rule,
                                 &job_dir.to_string_lossy(),
@@ -653,6 +711,7 @@ impl BackendDriver {
                                         rule: c_name.clone(),
                                         submitted_at,
                                         array_base: Some(base_id.clone()),
+                                        env_file: env_file.clone(),
                                     },
                                 );
                             }
@@ -769,13 +828,42 @@ impl BackendDriver {
                             submitted_this_round += chunk.len();
                         } else {
                             let (c_name, c_sr) = &chunk[0];
-                            let script = cancel_on_error!(self.backend.render_script(c_sr));
                             let job_dir = opts.run_dir.join("jobs").join(sanitize(c_name));
                             cancel_on_error!(std::fs::create_dir_all(&job_dir).map_err(|e| {
                                 OxoFlowError::Config {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
                                 }
                             }));
+                            // HPC backends: the literal never enters the
+                            // scheduler-visible script. A `0o600` env file
+                            // beside it carries the routed values and the
+                            // command sources it inside the `env -i` shell
+                            // (issue #1120 / RB-12).
+                            let env_file = {
+                                let refs =
+                                    crate::executor::process::sensitive_env_refs(&c_sr.shell_cmd);
+                                if self.backend.uses_secret_env_file() && !refs.is_empty() {
+                                    let path = job_dir.join(super::SENSITIVE_ENV_FILE_NAME);
+                                    cancel_on_error!(write_sensitive_env_file(
+                                        &path,
+                                        &sensitive_bindings,
+                                        &refs,
+                                        c_sr.rule.environment.kind(),
+                                    ));
+                                    Some(path)
+                                } else {
+                                    None
+                                }
+                            };
+                            let mut rendered = c_sr.clone();
+                            if let Some(ref path) = env_file {
+                                rendered.shell_cmd = format!(
+                                    "{} && {}",
+                                    source_sensitive_env_file(path),
+                                    rendered.shell_cmd
+                                );
+                            }
+                            let script = cancel_on_error!(self.backend.render_script(&rendered));
                             let script_path = job_dir.join("job.sh");
                             cancel_on_error!(
                                 write_private(&script_path, script.as_bytes()).map_err(|e| {
@@ -794,6 +882,7 @@ impl BackendDriver {
                                     rule: c_name.clone(),
                                     submitted_at: Utc::now(),
                                     array_base: None,
+                                    env_file,
                                 },
                             );
                             cancel_on_error!(
@@ -1055,6 +1144,20 @@ impl BackendDriver {
                 // message (review of #1188, D1).
                 for (job_id, _, _) in &settled {
                     inflight.remove(job_id);
+                }
+                // Issue #1120 / RB-12: once no in-flight job still needs a
+                // secret env file (a chunk's array elements share one), it is
+                // removed — the value must not outlive the job it belongs to.
+                for (_, f, _) in &settled {
+                    let Some(path) = f.env_file.as_ref() else {
+                        continue;
+                    };
+                    let still_needed = inflight
+                        .values()
+                        .any(|other| other.env_file.as_deref() == Some(path.as_path()));
+                    if !still_needed {
+                        let _ = std::fs::remove_file(path);
+                    }
                 }
                 for (job_id, f, status) in settled {
                     let acct = accounting.get(&job_id).copied();
@@ -1531,39 +1634,31 @@ fn write_status(job_dir: &Path, job_id: &str, command: &str, state: &str) -> Res
     write_status_full(job_dir, job_id, command, state, None, None)
 }
 
-/// Write scheduler-visible files without granting group/other access.
+/// Remove every private secret env file below `run_dir/jobs` (issue #1120 /
+/// ledger RB-12).
 ///
-/// Cluster scripts may contain fully expanded sensitive config values.
-/// They must remain executable by the submitting user's scheduler, but not
-/// readable by unrelated local users. This is defense in depth, not a
-/// substitute for routing secrets through a dedicated secret store.
-fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|e| OxoFlowError::Config {
-        message: format!("cannot open {}: {e}", path.display()),
-    })?;
-    file.write_all(contents).map_err(|e| OxoFlowError::Config {
-        message: format!("cannot write {}: {e}", path.display()),
-    })?;
-    file.sync_all().map_err(|e| OxoFlowError::Config {
-        message: format!("cannot sync {}: {e}", path.display()),
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-            OxoFlowError::Config {
-                message: format!("cannot set private permissions on {}: {e}", path.display()),
+/// Runs at the start of a driver run (a crashed predecessor may have left
+/// files behind, and a resume reuses the directory) and on every exit path.
+/// The per-job removal in the settle loop is the normal case; this is the
+/// backstop that also covers cancellation, driver errors, and interrupts.
+fn sweep_sensitive_env_files(run_dir: &Path) {
+    fn walk(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(super::SENSITIVE_ENV_FILE_NAME))
+            {
+                let _ = std::fs::remove_file(&path);
             }
-        })?;
+        }
     }
-    Ok(())
+    walk(&run_dir.join("jobs"));
 }
 
 /// Write `jobs/<instance>/status.json`.
@@ -4122,5 +4217,334 @@ shell = "echo asm > out/{assembler}.txt"
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, JobStatus::Success);
         assert!(backend.state().lock().unwrap().cancelled.is_empty());
+    }
+
+    // ─── issue #1120 / RB-12: HPC secret injection via a private env file ──
+
+    /// A single-rule HPC plan whose command embeds a `sensitive = true`
+    /// value, routed before the wrapper (the production ordering).
+    fn secret_plan(workdir: &Path, sentinel: &str, shell: &str, output: &str) -> ScheduledPlan {
+        let wf_toml =
+            String::from("[workflow]\nname = \"secrets\"\n[[rules]]\nname = \"leak_probe\"\n")
+                + &format!("shell = \"{shell}\"\noutput = [\"{output}\"]\n");
+        let wf = workdir.join("secrets.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build_with_sensitive(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::from([("config.api_token".to_string(), sentinel.to_string())]),
+            &[sentinel.to_string()],
+        )
+        .unwrap()
+    }
+
+    /// Sentinel regression (ledger RB-12): an HPC job's scheduler-visible
+    /// script carries only the `OXO_FLOW_SENSITIVE_0` reference plus the
+    /// path of a `0o600` env file the shell sources. The value reaches the
+    /// command (proved by the output), and the env file is removed when the
+    /// driver observes the job terminal.
+    #[test]
+    fn hpc_secret_never_reaches_the_script_and_is_removed_on_settle() {
+        let sentinel = "SENTINEL_SECRET_VALUE_A1H";
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = secret_plan(
+            fx.workdir.path(),
+            sentinel,
+            "mkdir -p out && printf '%s' '{config.api_token}' > out/token.txt",
+            "out/token.txt",
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[sentinel.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Success);
+
+        // The value reached the command through the env file.
+        let token = std::fs::read_to_string(fx.workdir.path().join("out/token.txt")).unwrap();
+        assert_eq!(
+            token, sentinel,
+            "the routed variable must expand to the value"
+        );
+
+        // The driver's script carries the reference and the env-file path,
+        // never the value.
+        let job_dir = fx.run_dir.path().join("jobs/leak_probe");
+        let script = std::fs::read_to_string(job_dir.join("job.sh")).unwrap();
+        assert!(
+            !script.contains(sentinel),
+            "sentinel leaked into the HPC job script: {script}"
+        );
+        assert!(
+            script.contains("${OXO_FLOW_SENSITIVE_0}"),
+            "the script must carry the routed reference: {script}"
+        );
+        assert!(
+            script.contains("secrets.env"),
+            "the script must source the private env file: {script}"
+        );
+
+        // The scheduler's own copy of the script is equally clean.
+        let sched_script = std::fs::read_to_string(fx._state.path().join("jobs/1/job.sh")).unwrap();
+        assert!(
+            !sched_script.contains(sentinel),
+            "sentinel leaked into the scheduler's script copy: {sched_script}"
+        );
+
+        // The env file is gone once the job is terminal.
+        assert!(
+            !job_dir
+                .join(crate::backend::SENSITIVE_ENV_FILE_NAME)
+                .exists(),
+            "the secret env file must not outlive the job"
+        );
+
+        // Records and status never carry the value either.
+        let status = std::fs::read_to_string(job_dir.join("status.json")).unwrap();
+        assert!(
+            !status.contains(sentinel),
+            "sentinel leaked into status.json"
+        );
+        let events = std::fs::read_to_string(fx.run_dir.path().join("events.jsonl")).unwrap();
+        assert!(
+            !events.contains(sentinel),
+            "sentinel leaked into events.jsonl"
+        );
+    }
+
+    /// Cancellation path (ledger RB-12): the env file is swept when the run
+    /// ends, and neither the script nor the scheduler's copy carries the
+    /// value.
+    #[test]
+    fn cancelled_hpc_job_leaves_no_recoverable_secret() {
+        let sentinel = "SENTINEL_CANCELLED_VALUE_K7";
+        let fx = setup();
+        let mut plan = secret_plan(
+            fx.workdir.path(),
+            sentinel,
+            "mkdir -p out && test -n '{config.api_token}' && touch out/started && sleep 30",
+            "out/started",
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(fixtures_dir())
+                .with_env("MOCK_SCHEDULER_DIR", &fx._state.path().to_string_lossy()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: Some(cancel_rx),
+                keep_going: false,
+            },
+        );
+        // Give the driver time to submit and start the job, then interrupt.
+        let signaller = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            cancel_tx
+                .send(Some(CancelSignal {
+                    signal_name: "SIGINT",
+                    signum: 2,
+                }))
+                .unwrap();
+        });
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[sentinel.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap_err();
+        signaller.join().unwrap();
+        assert!(
+            matches!(err, OxoFlowError::Cancelled { .. }),
+            "expected an interrupt, got: {err}"
+        );
+
+        let job_dir = fx.run_dir.path().join("jobs/leak_probe");
+        let script = std::fs::read_to_string(job_dir.join("job.sh")).unwrap();
+        assert!(
+            !script.contains(sentinel),
+            "sentinel leaked into job.sh: {script}"
+        );
+        assert!(
+            !job_dir
+                .join(crate::backend::SENSITIVE_ENV_FILE_NAME)
+                .exists(),
+            "the secret env file must be swept on the cancel path"
+        );
+        let sched = std::fs::read_to_string(fx._state.path().join("jobs/1/job.sh")).unwrap();
+        assert!(
+            !sched.contains(sentinel),
+            "sentinel leaked into the scheduler's script copy: {sched}"
+        );
+        let status = std::fs::read_to_string(job_dir.join("status.json")).unwrap();
+        assert!(
+            !status.contains(sentinel),
+            "sentinel leaked into status.json"
+        );
+    }
+
+    /// Restart path (ledger RB-12): a run directory left behind by a killed
+    /// driver may hold an env file; the next driver sweeps it before any
+    /// submission, so a resume never leaves a recoverable value.
+    #[test]
+    fn driver_startup_sweeps_stale_secret_env_files() {
+        let fx = setup();
+        let stale_dir = fx.run_dir.path().join("jobs/stale_rule");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        let stale = stale_dir.join(crate::backend::SENSITIVE_ENV_FILE_NAME);
+        std::fs::write(&stale, "export OXO_FLOW_SENSITIVE_0='stale-secret'\n").unwrap();
+
+        let (d, _) = driver(&fx);
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "ok.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert!(
+            !stale.exists(),
+            "a stale secret env file must be removed by the startup sweep"
+        );
+    }
+
+    /// Array path (ledger RB-12): one env file per chunk, sourced by every
+    /// per-index command file, removed once the whole array settles.
+    #[test]
+    fn hpc_array_chunk_secret_env_file_is_sourced_and_removed() {
+        let sentinel = "SENTINEL_ARRAY_VALUE_P2";
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let wf_toml = r#"
+[workflow]
+name = "secret-array"
+[[values]]
+name = "assembler"
+values = ["spades", "megahit"]
+[[rules]]
+name = "asm"
+output = ["out/{assembler}.txt"]
+shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
+"#;
+        let wf = fx.workdir.path().join("arr.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let mut plan = ScheduledPlan::build_with_sensitive(
+            &config,
+            &dag,
+            fx.workdir.path(),
+            &EnvironmentResolver::new(),
+            &HashMap::from([("config.api_token".to_string(), sentinel.to_string())]),
+            &[sentinel.to_string()],
+        )
+        .unwrap();
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[sentinel.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.status == JobStatus::Success));
+
+        // Both elements received the value through the shared env file.
+        for assembler in ["spades", "megahit"] {
+            let out =
+                std::fs::read_to_string(fx.workdir.path().join(format!("out/{assembler}.txt")))
+                    .unwrap();
+            assert_eq!(out, sentinel);
+        }
+
+        let chunk_dir = fx.run_dir.path().join("jobs/asm/chunk-1");
+        let job_sh = std::fs::read_to_string(chunk_dir.join("job.sh")).unwrap();
+        assert!(
+            !job_sh.contains(sentinel),
+            "sentinel leaked into the array script"
+        );
+        for index in [1, 2] {
+            let cmd = std::fs::read_to_string(chunk_dir.join(format!("cmd.{index}.sh"))).unwrap();
+            assert!(
+                !cmd.contains(sentinel),
+                "sentinel leaked into cmd.{index}.sh: {cmd}"
+            );
+            assert!(
+                cmd.contains("secrets.env"),
+                "the per-index command must source the private env file: {cmd}"
+            );
+            assert!(
+                cmd.contains("${OXO_FLOW_SENSITIVE_0}"),
+                "the per-index command must carry the routed reference: {cmd}"
+            );
+        }
+        assert!(
+            !chunk_dir
+                .join(crate::backend::SENSITIVE_ENV_FILE_NAME)
+                .exists(),
+            "the array's env file must be removed once every element settled"
+        );
+        let sched = std::fs::read_to_string(fx._state.path().join("jobs/1_1/job.sh")).unwrap();
+        assert!(
+            !sched.contains(sentinel),
+            "sentinel leaked into the scheduler's array script copy: {sched}"
+        );
     }
 }

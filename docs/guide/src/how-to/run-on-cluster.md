@@ -464,8 +464,11 @@ On clusters, the scheduler enforces resources based on the generated directives.
     `taskSpec.environment.secretVariables` — or the reference expands empty
     and the rule fails. Details:
     [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables).
-    HPC scheduler scripts (SLURM/PBS/SGE/LSF) still materialize the value in
-    the generated script; that half of the hardening is not yet done.
+    HPC scheduler scripts (SLURM/PBS/SGE/LSF) route the same way: the driver
+    writes a private `0o600` env file beside the run holding only the
+    references each rule uses, and the generated script sources it inside the
+    `env -i` wrapper, so the scheduler-visible script body carries
+    `$OXO_FLOW_SENSITIVE_<n>` and never the value.
 
 !!! tip "Check resource availability"
     Use `sinfo` (SLURM), `pbsnodes` (PBS), or `qhost` (SGE) to verify available resources before submitting.

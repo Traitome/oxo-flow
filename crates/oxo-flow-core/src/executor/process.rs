@@ -762,15 +762,12 @@ impl LocalExecutor {
         let (routed, mut envs) =
             route_sensitive_values_through_env(cmd, &self.config.sensitive_values);
         if rule.environment.kind() == "singularity" {
-            // Both prefixes: apptainer honors SINGULARITYENV_ (deprecated
-            // but supported) and singularity ignores APPTAINERENV_.
             let prefixed: Vec<(String, String)> = envs
                 .iter()
                 .flat_map(|(name, value)| {
-                    [
-                        (format!("APPTAINERENV_{name}"), value.clone()),
-                        (format!("SINGULARITYENV_{name}"), value.clone()),
-                    ]
+                    sensitive_env_aliases(name, "singularity")
+                        .into_iter()
+                        .map(|alias| (alias, value.clone()))
                 })
                 .collect();
             envs.extend(prefixed);
@@ -4687,7 +4684,27 @@ fn sensitive_env_name(index: usize) -> String {
 /// would drift from the numbering [`route_sensitive_values_through_env`]
 /// assigns. Returned in sorted order so generated manifests are
 /// order-independent (BTreeSet, not HashSet).
-pub(crate) fn sensitive_env_refs(cmd: &str) -> Vec<String> {
+/// Extra variable names a routed sensitive value must also be exported under
+/// for a container environment kind (issue #1120 / ledger RB-12).
+///
+/// Singularity/apptainer read the container-side environment from
+/// `SINGULARITYENV_<name>` (deprecated but honored) and
+/// `APPTAINERENV_<name>` variables in the CLI's own environment — the local
+/// spawn path and the HPC env file must spell the aliases identically, so the
+/// table lives here once. Docker forwards by name (`docker run -e <name>`)
+/// and every other backend needs nothing.
+pub fn sensitive_env_aliases(name: &str, env_kind: &str) -> Vec<String> {
+    if env_kind == "singularity" {
+        vec![
+            format!("APPTAINERENV_{name}"),
+            format!("SINGULARITYENV_{name}"),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+pub fn sensitive_env_refs(cmd: &str) -> Vec<String> {
     let needle = format!("{SENSITIVE_ENV_BASE}_");
     let mut names = std::collections::BTreeSet::new();
     let mut rest = cmd;

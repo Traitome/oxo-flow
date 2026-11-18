@@ -7,7 +7,8 @@
 
 use super::{BackendJobStatus, ScheduledRule, TerminalRecord};
 use crate::cluster::{
-    ClusterBackend, ClusterJobConfig, generate_array_submit_script, generate_submit_script,
+    ClusterBackend, ClusterJobConfig, generate_array_submit_script_with_secrets,
+    generate_submit_script_with_secrets,
 };
 use crate::error::{OxoFlowError, Result};
 use chrono::Utc;
@@ -685,6 +686,12 @@ pub struct ClusterExecutor {
     /// own `cd` guard, but the scheduler still launches the script somewhere
     /// before reading it — and that somewhere defaults to `$HOME` on PBS.
     workdir: PathBuf,
+    /// Operator-supplied secret-reference mapping for cloud bodies
+    /// (`OXO_FLOW_SECRET_REFS`, issue #1120 / ledger RB-12): routed
+    /// `OXO_FLOW_SENSITIVE_<n>` name → backend-native reference. GCP Batch
+    /// projects the used entries into `taskSpec.environment
+    /// .secretVariables`; AWS Batch has no submit-time field and ignores it.
+    secret_refs: std::collections::BTreeMap<String, String>,
 }
 
 impl ClusterExecutor {
@@ -695,7 +702,15 @@ impl ClusterExecutor {
             bin_dir: None,
             env: Vec::new(),
             workdir: PathBuf::from("."),
+            secret_refs: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Attach the operator's secret-reference mapping (`OXO_FLOW_SECRET_REFS`,
+    /// issue #1120 / ledger RB-12) to the cloud body renderers.
+    pub fn with_secret_refs(mut self, refs: std::collections::BTreeMap<String, String>) -> Self {
+        self.secret_refs = refs;
+        self
     }
 
     /// Set the directory array jobs run in.
@@ -806,7 +821,13 @@ impl super::ExecutorBackend for ClusterExecutor {
 
     fn render_script(&self, rule: &ScheduledRule) -> Result<String> {
         Ok(finish_script(
-            &generate_submit_script(&self.backend, &rule.rule, &rule.shell_cmd, &self.cluster)?,
+            &generate_submit_script_with_secrets(
+                &self.backend,
+                &rule.rule,
+                &rule.shell_cmd,
+                &self.secret_refs,
+                &self.cluster,
+            )?,
             &self.backend,
             &rule.workdir,
         ))
@@ -820,17 +841,28 @@ impl super::ExecutorBackend for ClusterExecutor {
         sensitive_refs: &[String],
     ) -> Result<String> {
         Ok(finish_script(
-            &generate_array_submit_script(
+            &generate_array_submit_script_with_secrets(
                 &self.backend,
                 rule,
                 cmd_dir,
                 count,
                 sensitive_refs,
+                &self.secret_refs,
                 &self.cluster,
             )?,
             &self.backend,
             &self.workdir,
         ))
+    }
+
+    /// The script-based schedulers copy the script into scheduler-visible
+    /// storage; their routed sensitive values travel through the private
+    /// env file the driver writes beside the script (issue #1120 / RB-12).
+    fn uses_secret_env_file(&self) -> bool {
+        matches!(
+            self.backend,
+            ClusterBackend::Slurm | ClusterBackend::Pbs | ClusterBackend::Sge | ClusterBackend::Lsf
+        )
     }
 
     async fn submit(&self, script_path: &Path) -> Result<String> {
@@ -1579,10 +1611,11 @@ mod tests {
         // The executor is a thin render layer over the directive generator,
         // plus the working-directory pin and the duplicate-line cleanup.
         let direct = finish_script(
-            &generate_submit_script(
+            &generate_submit_script_with_secrets(
                 &ClusterBackend::Slurm,
                 &plan.rules["align"].rule,
                 &plan.rules["align"].shell_cmd,
+                &std::collections::BTreeMap::new(),
                 &cluster_config(),
             )
             .expect("script generation must succeed"),
@@ -2163,6 +2196,69 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
         )
         .unwrap();
+    }
+
+    /// Sentinel regression (ledger RB-12), per HPC backend: a rendered
+    /// submit script for a routed command carries the
+    /// `OXO_FLOW_SENSITIVE_<n>` reference, never the value — the value
+    /// travels in the driver's private env file, and the script-based
+    /// backends declare that channel (`uses_secret_env_file`).
+    #[test]
+    fn hpc_scripts_render_the_reference_not_the_sentinel_for_every_scheduler() {
+        let sentinel = "SENTINEL_RENDER_VALUE_Q4";
+        let mut plan = single_rule_plan();
+        // Put the sentinel into the command, then route it through the
+        // shared builder so the shell_cmd carries the reference (the
+        // production ordering: route, then render the script).
+        plan.rules.get_mut("align").unwrap().shell_cmd =
+            format!("bwa mem ref.fa in.fq -R {sentinel} > out.bam");
+        let bindings = crate::executor::process::sensitive_bindings(&[sentinel.to_string()]);
+        let routed = crate::executor::process::route_sensitive_values_with_bindings(
+            &plan.rules["align"].shell_cmd,
+            &bindings,
+        )
+        .0;
+        assert!(
+            !routed.contains(sentinel) && routed.contains("${OXO_FLOW_SENSITIVE_0}"),
+            "precondition: routing must swap the value for a reference: {routed}"
+        );
+        plan.rules.get_mut("align").unwrap().shell_cmd = routed;
+
+        for backend in [
+            ClusterBackend::Slurm,
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let exec = ClusterExecutor::new(backend, cluster_config());
+            assert!(
+                exec.uses_secret_env_file(),
+                "{backend} must declare the private env-file channel"
+            );
+            let script = exec.render_script(&plan.rules["align"]).unwrap();
+            assert!(
+                !script.contains(sentinel),
+                "{backend} script leaked the sentinel: {script}"
+            );
+            assert!(
+                script.contains("${OXO_FLOW_SENSITIVE_0}"),
+                "{backend} script must carry the routed reference: {script}"
+            );
+        }
+
+        // Cloud backends do not use the env file: their bodies carry the
+        // reference into the backend's own secret channel.
+        for backend in [
+            ClusterBackend::Kubernetes,
+            ClusterBackend::AwsBatch,
+            ClusterBackend::GcpBatch,
+        ] {
+            let exec = ClusterExecutor::new(backend, cluster_config());
+            assert!(
+                !exec.uses_secret_env_file(),
+                "{backend} must not declare the env-file channel"
+            );
+        }
     }
 }
 

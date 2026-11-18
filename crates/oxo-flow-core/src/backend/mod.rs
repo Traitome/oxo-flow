@@ -96,6 +96,161 @@ pub fn with_tmp_dir_exports(cmd: &str, tmp_dir: &Path) -> String {
     }
 }
 
+/// File name of the private env file an HPC job shell sources for routed
+/// `sensitive = true` values (issue #1120 / ledger RB-12).
+///
+/// One name for the driver's run directory and `cluster submit`'s output
+/// directory, so an operator (or a cleanup script) recognizes the artifact
+/// on both paths.
+pub const SENSITIVE_ENV_FILE_NAME: &str = "secrets.env";
+
+/// Contents of the private env file that carries routed `sensitive = true`
+/// values to an HPC job (issue #1120 / ledger RB-12).
+///
+/// `bindings` is the run's shared `VAR -> value` table
+/// ([`crate::executor::process::sensitive_bindings`]); `refs` are the names a
+/// job's commands actually reference, so an env file never carries a value
+/// that job has no use for. `env_kind` mirrors the local routing: a
+/// `singularity`/`apptainer` job also gets the `APPTAINERENV_`/
+/// `SINGULARITYENV_` aliases its runtime reads from the CLI environment.
+///
+/// Values are single-quote escaped for POSIX `sh`; the file is sourced by the
+/// job shell — never embedded in a scheduler script or a command line.
+pub fn sensitive_env_file_contents(
+    bindings: &[(String, String)],
+    refs: &[String],
+    env_kind: &str,
+) -> String {
+    let mut lines = String::new();
+    for (var, value) in bindings {
+        if !refs.iter().any(|used| used == var) {
+            continue;
+        }
+        let quoted = crate::environment::escape_for_sh_single_quote(value);
+        lines.push_str(&format!("export {var}='{quoted}'\n"));
+        for alias in crate::executor::process::sensitive_env_aliases(var, env_kind) {
+            lines.push_str(&format!("export {alias}='{quoted}'\n"));
+        }
+    }
+    lines
+}
+
+/// Write [`sensitive_env_file_contents`] to `path` with `0o600` permissions.
+///
+/// Shared by the cluster driver (run directory) and `cluster submit`
+/// (operator output directory) so both write the same file with the same
+/// mode — a hand-rolled writer on either path would drift.
+pub fn write_sensitive_env_file(
+    path: &Path,
+    bindings: &[(String, String)],
+    refs: &[String],
+    env_kind: &str,
+) -> Result<()> {
+    let contents = sensitive_env_file_contents(bindings, refs, env_kind);
+    write_private(path, contents.as_bytes())
+}
+
+/// The operator's secret-reference mapping for cloud job bodies
+/// (`OXO_FLOW_SECRET_REFS`, issue #1120 / ledger RB-12).
+///
+/// GCP Batch resolves a routed `OXO_FLOW_SENSITIVE_<n>` through
+/// `taskSpec.environment.secretVariables`, whose value must be a Secret
+/// Manager resource path — the engine cannot invent the project, so the
+/// operator states it here. Syntax: `NAME=REFERENCE` pairs separated by `;`
+/// (`,` and newlines also split). AWS Batch's `SubmitJob` has no secrets
+/// field, so an AWS operator maps the same names on the job definition
+/// instead; the map is ignored for that backend.
+pub fn secret_refs_from_env() -> std::collections::BTreeMap<String, String> {
+    secret_refs_from(std::env::var("OXO_FLOW_SECRET_REFS").ok().as_deref())
+}
+
+/// Parse the `OXO_FLOW_SECRET_REFS` syntax (see [`secret_refs_from_env`]).
+///
+/// A malformed pair is skipped with a warning: guessing a reference for a
+/// secret would route it somewhere the operator did not name.
+pub fn secret_refs_from(raw: Option<&str>) -> std::collections::BTreeMap<String, String> {
+    let mut refs = std::collections::BTreeMap::new();
+    let Some(raw) = raw else {
+        return refs;
+    };
+    for entry in raw.split([';', ',', '\n']) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((name, reference)) = entry.split_once('=') else {
+            tracing::warn!(
+                entry,
+                "ignoring OXO_FLOW_SECRET_REFS entry without '=' — expected NAME=REFERENCE"
+            );
+            continue;
+        };
+        let (name, reference) = (name.trim(), reference.trim());
+        let valid_name = !name.is_empty()
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid_name || reference.is_empty() {
+            tracing::warn!(
+                entry,
+                "ignoring malformed OXO_FLOW_SECRET_REFS entry — expected NAME=REFERENCE"
+            );
+            continue;
+        }
+        refs.insert(name.to_string(), reference.to_string());
+    }
+    refs
+}
+
+/// The shell fragment that loads a private secret env file: POSIX `.`
+/// (source) with the path shell-quoted. Prepended to an HPC job command
+/// *inside* the `env -i` isolation, so the isolated shell exports the routed
+/// values itself and the allowlist never has to carry them.
+pub fn source_sensitive_env_file(path: &Path) -> String {
+    format!(
+        ". '{}'",
+        crate::environment::escape_for_sh_single_quote(&path.display().to_string())
+    )
+}
+
+/// Write `contents` to `path` with `0o600` permissions (owner read/write).
+///
+/// The run directory holds scheduler scripts, job ids, status records and —
+/// for HPC backends — the private secret env file. Everything the driver
+/// writes goes through this one writer so the permission can never differ
+/// per artifact (issue #136, RB-12).
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| OxoFlowError::Config {
+        message: format!("cannot open {}: {e}", path.display()),
+    })?;
+    file.write_all(contents).map_err(|e| OxoFlowError::Config {
+        message: format!("cannot write {}: {e}", path.display()),
+    })?;
+    file.sync_all().map_err(|e| OxoFlowError::Config {
+        message: format!("cannot sync {}: {e}", path.display()),
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            OxoFlowError::Config {
+                message: format!("cannot set private permissions on {}: {e}", path.display()),
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendJobStatus {
@@ -179,6 +334,20 @@ pub trait ExecutorBackend: Send + Sync {
 
     /// Render a scheduler submit script for one scheduled rule.
     fn render_script(&self, rule: &ScheduledRule) -> Result<String>;
+
+    /// True when this backend's job artifacts must receive routed
+    /// `sensitive = true` values through a private (`0o600`) env file the job
+    /// shell sources (issue #1120 / ledger RB-12).
+    ///
+    /// Script-based HPC schedulers copy the script into scheduler-visible
+    /// storage, so the literal can never be part of it; the env file lives on
+    /// the run directory's shared filesystem and is removed when the driver
+    /// observes the job terminal. Cloud backends return `false` — their bodies
+    /// carry an `OXO_FLOW_SENSITIVE_<n>` reference that resolves through the
+    /// backend's own secret channel instead.
+    fn uses_secret_env_file(&self) -> bool {
+        false
+    }
 
     /// Submit one rendered script; returns the scheduler-assigned job id.
     async fn submit(&self, script_path: &Path) -> Result<String>;
@@ -278,12 +447,43 @@ impl ScheduledPlan {
         env_resolver: &EnvironmentResolver,
         wildcard_values: &HashMap<String, String>,
     ) -> Result<Self> {
+        Self::build_with_sensitive(config, dag, workdir, env_resolver, wildcard_values, &[])
+    }
+
+    /// [`Self::build`] with `sensitive = true` config values routed out of
+    /// every rule command BEFORE the environment wrapper is built (issue
+    /// #1120 / ledger RB-12).
+    ///
+    /// Ordering is load-bearing: the local executor routes the raw command
+    /// first ([`crate::executor::process`]), so the docker/singularity
+    /// wrappers see the `OXO_FLOW_SENSITIVE_<n>` reference and forward the
+    /// value by name (`docker run -e NAME`, `SINGULARITYENV_NAME`) instead of
+    /// re-expanding the literal into the container argv. Routing the wrapped
+    /// text afterwards left the cluster path with the pre-#1176 leak: the
+    /// value was re-materialized on the compute node. One binding table per
+    /// plan keeps every rule and array element on the same variable names.
+    pub fn build_with_sensitive(
+        config: &WorkflowConfig,
+        dag: &WorkflowDag,
+        workdir: &Path,
+        env_resolver: &EnvironmentResolver,
+        wildcard_values: &HashMap<String, String>,
+        sensitive_values: &[String],
+    ) -> Result<Self> {
         let order = dag.execution_order()?;
         let groups = dag.parallel_groups()?;
+        let bindings = crate::executor::process::sensitive_bindings(sensitive_values);
         let mut rules = HashMap::new();
         for name in &order {
-            if let Some(sr) = build_rule(name, config, dag, workdir, env_resolver, wildcard_values)?
-            {
+            if let Some(sr) = build_rule(
+                name,
+                config,
+                dag,
+                workdir,
+                env_resolver,
+                wildcard_values,
+                &bindings,
+            )? {
                 rules.insert(name.clone(), sr);
             }
         }
@@ -314,7 +514,36 @@ impl ScheduledPlan {
         wildcard_values: &HashMap<String, String>,
         tmp_dir: Option<&Path>,
     ) -> Result<Self> {
-        let mut plan = Self::build(config, dag, workdir, env_resolver, wildcard_values)?;
+        Self::build_with_scratch_and_sensitive(
+            config,
+            dag,
+            workdir,
+            env_resolver,
+            wildcard_values,
+            tmp_dir,
+            &[],
+        )
+    }
+
+    /// [`Self::build_with_scratch`] plus pre-wrapper sensitive-value routing
+    /// (issue #1120 / ledger RB-12) — the production cluster-run entry point.
+    pub fn build_with_scratch_and_sensitive(
+        config: &WorkflowConfig,
+        dag: &WorkflowDag,
+        workdir: &Path,
+        env_resolver: &EnvironmentResolver,
+        wildcard_values: &HashMap<String, String>,
+        tmp_dir: Option<&Path>,
+        sensitive_values: &[String],
+    ) -> Result<Self> {
+        let mut plan = Self::build_with_sensitive(
+            config,
+            dag,
+            workdir,
+            env_resolver,
+            wildcard_values,
+            sensitive_values,
+        )?;
         if let Some(tmp) = tmp_dir {
             for rule in plan.rules.values_mut() {
                 rule.shell_cmd = with_tmp_dir_exports(&rule.shell_cmd, tmp);
@@ -323,18 +552,16 @@ impl ScheduledPlan {
         Ok(plan)
     }
 
-    /// Route `sensitive = true` config values out of every job shell and into
-    /// the environment (issue #1120 / ledger RB-12).
+    /// Route `sensitive = true` config values out of every already-wrapped
+    /// job shell (issue #1120 / ledger RB-12).
     ///
-    /// Cloud job bodies are rendered from [`ScheduledRule::shell_cmd`], so the
-    /// literal must be replaced by an `OXO_FLOW_SENSITIVE_<n>` reference BEFORE
-    /// any manifest/spec is built — the value then travels through the
-    /// backend's own secret-injection path instead of the job body. The local
-    /// executor already performs this per rule
-    /// ([`crate::executor::process`] routing in `process.rs`); the cluster path
-    /// needs it here because `build_rule` wraps the command
-    /// (`env_resolver.wrap_command`) before any routing exists, so no refs are
-    /// present when the cloud generators receive `shell_cmd`.
+    /// This is the post-wrapper safety net for plans built by
+    /// [`Self::build`]: the production cluster path pre-routes the raw
+    /// command through [`Self::build_with_sensitive`], which is the only
+    /// ordering that lets the docker/singularity wrappers forward the value
+    /// by name. Calling this on a plan that has no literal left is a no-op;
+    /// on a plan that still carries one, the reference replaces it before any
+    /// manifest/spec is rendered.
     ///
     /// Returns the routed `VAR -> value` bindings, sorted key order, for
     /// callers that must hand the values to an actual injection channel.
@@ -373,8 +600,20 @@ impl ScheduledPlan {
         new_names: &[String],
     ) -> Result<()> {
         for name in new_names {
-            if let Some(sr) = build_rule(name, config, dag, workdir, env_resolver, wildcard_values)?
-            {
+            // A merge hook belongs to a caller that also owns the sensitive
+            // value list; checkpoint re-entry on the cluster path passes no
+            // merge hook (`run_cluster` sets `merge: None`), so re-expanded
+            // instances keep the unrouted text until a caller supplies the
+            // values — never silently route with a different table.
+            if let Some(sr) = build_rule(
+                name,
+                config,
+                dag,
+                workdir,
+                env_resolver,
+                wildcard_values,
+                &[],
+            )? {
                 self.rules.insert(name.clone(), sr);
                 self.order.push(name.clone());
             }
@@ -394,6 +633,7 @@ fn build_rule(
     workdir: &Path,
     env_resolver: &EnvironmentResolver,
     wildcard_values: &HashMap<String, String>,
+    sensitive_bindings: &[(String, String)],
 ) -> Result<Option<ScheduledRule>> {
     let rule = config.get_rule(name).ok_or_else(|| OxoFlowError::Config {
         message: format!("rule '{name}' not found in workflow"),
@@ -411,8 +651,33 @@ fn build_rule(
     // executor (issue #92): prepending outside would leave the wrapped
     // command (conda run / docker run bash -c) without fail-fast semantics.
     let cmd = config.defaults.apply_shell_prelude(&cmd);
+    // Issue #1177/#1120: container backends discover their automatic host
+    // bind mounts from the PRE-routing text, and the wrapper itself must see
+    // the routed reference so docker forwards by name (`-e NAME`) instead of
+    // re-expanding the literal on the compute node — the same ordering the
+    // local executor uses.
+    let external_mounts = if rule.environment.kind() == "docker" && !sensitive_bindings.is_empty() {
+        Some(crate::environment::external_bind_mounts_for(
+            &cmd,
+            workdir,
+            sensitive_bindings,
+        ))
+    } else {
+        None
+    };
+    let cmd = if sensitive_bindings.is_empty() {
+        cmd
+    } else {
+        crate::executor::process::route_sensitive_values_with_bindings(&cmd, sensitive_bindings).0
+    };
     let wrapped = env_resolver
-        .wrap_command(&cmd, &rule.environment, Some(&rule.resources), workdir)
+        .wrap_command_with_external_mounts(
+            &cmd,
+            &rule.environment,
+            Some(&rule.resources),
+            workdir,
+            external_mounts.as_deref(),
+        )
         .map_err(|e| OxoFlowError::Config {
             message: format!("environment wrapping failed for '{name}': {e}"),
         })?;
@@ -731,6 +996,180 @@ mod tests {
         }
     }
 
+    /// Build a one-rule plan whose command embeds a `sensitive = true`
+    /// config value, routing it before the environment wrapper (issue #1120
+    /// / RB-12).
+    fn sensitive_plan(
+        workdir: &std::path::Path,
+        sentinel: &str,
+        shell: &str,
+        environment: &str,
+    ) -> ScheduledPlan {
+        let toml =
+            String::from("[workflow]\nname = \"secrets\"\n[[rules]]\nname = \"leak_probe\"\n")
+                + &format!("shell = \"{shell}\"\noutput = [\"out.txt\"]\n")
+                + environment;
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build_with_sensitive(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::from([("config.api_token".to_string(), sentinel.to_string())]),
+            &[sentinel.to_string()],
+        )
+        .unwrap()
+    }
+
+    /// Routing must happen BEFORE the environment wrapper is built: the
+    /// docker wrapper then forwards the routed name (`-e NAME`) instead of
+    /// re-expanding the literal into the container argv on the compute node.
+    /// Routing the wrapped text (the pre-#1120 cluster ordering) leaves the
+    /// literal in `shell_cmd`'s container command — this fails on that
+    /// behavior.
+    #[test]
+    fn build_with_sensitive_routes_before_the_container_wrapper() {
+        let sentinel = "SENTINEL_SECRET_VALUE_C3X";
+        let dir = tempfile::tempdir().unwrap();
+        let plan = sensitive_plan(
+            dir.path(),
+            sentinel,
+            "curl -H 'Authorization: {config.api_token}' https://example.invalid",
+            "environment = { docker = \"ubuntu:24.04\" }\n",
+        );
+        let cmd = &plan.rules["leak_probe"].shell_cmd;
+        assert!(
+            !cmd.contains(sentinel),
+            "the sentinel must not survive routing: {cmd}"
+        );
+        assert!(
+            cmd.contains("-e OXO_FLOW_SENSITIVE_0"),
+            "the docker wrapper must forward the routed var by name: {cmd}"
+        );
+        assert!(
+            cmd.contains("${OXO_FLOW_SENSITIVE_0}"),
+            "the command must reference the routed var: {cmd}"
+        );
+
+        // Contrast: the pre-routing build path still carries the literal
+        // (the documented historical behavior; callers that need routing
+        // use the `_with_sensitive` entry points).
+        let toml = std::fs::read_to_string(dir.path().join("wf.oxoflow")).unwrap();
+        let wf = dir.path().join("plain.oxoflow");
+        std::fs::write(&wf, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plain = ScheduledPlan::build(
+            &config,
+            &dag,
+            dir.path(),
+            &EnvironmentResolver::new(),
+            &HashMap::from([("config.api_token".to_string(), sentinel.to_string())]),
+        )
+        .unwrap();
+        assert!(
+            plain.rules["leak_probe"].shell_cmd.contains(sentinel),
+            "build() is the unrouted path; the regression contrast is real"
+        );
+    }
+
+    #[test]
+    fn sensitive_env_file_carries_only_used_refs_and_quotes_values() {
+        let bindings = crate::executor::process::sensitive_bindings(&[
+            "SENTINEL_USED_VALUE_A1".to_string(),
+            "SENTINEL_UNUSED_VALUE_B2".to_string(),
+        ]);
+        assert_eq!(bindings.len(), 2);
+        // Numbering is longest-first, so look the name up by its value.
+        let used = bindings
+            .iter()
+            .find(|(_, value)| value == "SENTINEL_USED_VALUE_A1")
+            .expect("binding exists")
+            .0
+            .clone();
+        let contents =
+            sensitive_env_file_contents(&bindings, std::slice::from_ref(&used), "system");
+        assert!(
+            contents.contains(&format!("export {used}='SENTINEL_USED_VALUE_A1'")),
+            "the used ref must be exported: {contents}"
+        );
+        assert!(
+            !contents.contains("SENTINEL_UNUSED_VALUE_B2"),
+            "an unused value must never enter the env file: {contents}"
+        );
+
+        // POSIX single-quote escaping: a quote in the value must not break
+        // out of the assignment.
+        let hostile = "it's-a-secret";
+        let bindings = crate::executor::process::sensitive_bindings(&[hostile.to_string()]);
+        let contents = sensitive_env_file_contents(&bindings, &[bindings[0].0.clone()], "system");
+        assert!(
+            contents.contains(r#"'it'\''s-a-secret'"#),
+            "the value must be safely single-quoted: {contents}"
+        );
+    }
+
+    /// Singularity/apptainer read the container-side value from the
+    /// `*ENV_` aliases in the CLI environment — the cluster env file must
+    /// spell exactly the aliases the local spawn path exports.
+    #[test]
+    fn sensitive_env_file_adds_singularity_aliases_only_for_singularity() {
+        let bindings =
+            crate::executor::process::sensitive_bindings(&["SENTINEL_VALUE_S9".to_string()]);
+        let refs = vec![bindings[0].0.clone()];
+        let singularity = sensitive_env_file_contents(&bindings, &refs, "singularity");
+        assert!(
+            singularity.contains("export APPTAINERENV_OXO_FLOW_SENSITIVE_0='SENTINEL_VALUE_S9'")
+        );
+        assert!(
+            singularity.contains("export SINGULARITYENV_OXO_FLOW_SENSITIVE_0='SENTINEL_VALUE_S9'")
+        );
+
+        let docker = sensitive_env_file_contents(&bindings, &refs, "docker");
+        assert!(!docker.contains("SINGULARITYENV_"));
+        assert!(!docker.contains("APPTAINERENV_"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_sensitive_env_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SENSITIVE_ENV_FILE_NAME);
+        let bindings =
+            crate::executor::process::sensitive_bindings(&["SENTINEL_MODE_VALUE_M4".to_string()]);
+        write_sensitive_env_file(&path, &bindings, &[bindings[0].0.clone()], "system").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the secret env file must stay owner-only");
+    }
+
+    #[test]
+    fn secret_refs_env_parses_name_reference_pairs_and_skips_malformed() {
+        let refs = secret_refs_from(Some(
+            "OXO_FLOW_SENSITIVE_0=projects/p/secrets/s/versions/latest;\
+             OXO_FLOW_SENSITIVE_1 = projects/p/secrets/t/versions/3\n\
+             broken-entry, =missing-name, OXO_FLOW_SENSITIVE_2=",
+        ));
+        assert_eq!(
+            refs.get("OXO_FLOW_SENSITIVE_0").map(String::as_str),
+            Some("projects/p/secrets/s/versions/latest")
+        );
+        assert_eq!(
+            refs.get("OXO_FLOW_SENSITIVE_1").map(String::as_str),
+            Some("projects/p/secrets/t/versions/3")
+        );
+        assert!(!refs.contains_key("broken-entry"));
+        assert!(!refs.contains_key("OXO_FLOW_SENSITIVE_2"));
+        assert!(secret_refs_from(None).is_empty());
+    }
+
     /// Whether an `env` entry is the engine's own routed sensitive
     /// reference (issue #1120 / #1176): the ONLY legitimate `env` channel a
     /// generated cloud body may carry. Deployment credentials never look
@@ -769,6 +1208,9 @@ mod tests {
                         continue;
                     }
                     if key == "environment" {
+                        if is_gcp_secret_variables_environment(child) {
+                            continue;
+                        }
                         return Some(format!("an 'environment' channel: {child}"));
                     }
                     if let Some(violation) = env_channel_violation(child) {
@@ -780,6 +1222,41 @@ mod tests {
             serde_json::Value::Array(items) => items.iter().find_map(env_channel_violation),
             _ => None,
         }
+    }
+
+    /// True for the one legitimate GCP Batch environment block: a
+    /// `secretVariables` map whose every entry is an `OXO_FLOW_SENSITIVE_<n>`
+    /// name pointing at a Secret Manager resource path. Anything else —
+    /// plaintext `variables`, a literal value under `secretVariables`, an
+    /// extra key — is a leak channel and must fail the boundary test.
+    fn is_gcp_secret_variables_environment(value: &serde_json::Value) -> bool {
+        let Some(map) = value.as_object() else {
+            return false;
+        };
+        if map.len() != 1 {
+            return false;
+        }
+        let Some(vars) = map
+            .get("secretVariables")
+            .and_then(serde_json::Value::as_object)
+        else {
+            return false;
+        };
+        !vars.is_empty()
+            && vars.iter().all(|(name, reference)| {
+                name.starts_with("OXO_FLOW_SENSITIVE_")
+                    && reference.as_str().is_some_and(is_gcp_secret_resource)
+            })
+    }
+
+    /// A Secret Manager resource name, not a value: `projects/<p>/secrets/<s>/
+    /// versions/<v>` (the `/locations/<l>/` variant keeps the same `/secrets/`
+    /// and `/versions/` markers).
+    fn is_gcp_secret_resource(reference: &str) -> bool {
+        reference.starts_with("projects/")
+            && reference.contains("/secrets/")
+            && reference.contains("/versions/")
+            && !reference.contains(char::is_whitespace)
     }
 
     /// Fail when a generated cloud job body carries a submit-host environment
@@ -827,6 +1304,28 @@ mod tests {
 
         let environment = serde_json::json!({"environment": {"variables": {"A": "b"}}});
         assert!(env_channel_violation(&environment).is_some());
+
+        // GCP Batch's submission-time secret references are the other
+        // legitimate channel — but only as `secretVariables` resource paths.
+        let gcp_routed = serde_json::json!({"taskSpec": {"environment": {
+            "secretVariables": {
+                "OXO_FLOW_SENSITIVE_0": "projects/p/secrets/s/versions/latest"
+            }
+        }}});
+        assert_eq!(env_channel_violation(&gcp_routed), None);
+
+        let gcp_literal = serde_json::json!({"taskSpec": {"environment": {
+            "secretVariables": {"OXO_FLOW_SENSITIVE_0": "literal-secret"}
+        }}});
+        assert!(env_channel_violation(&gcp_literal).is_some());
+
+        let gcp_mixed = serde_json::json!({"taskSpec": {"environment": {
+            "secretVariables": {
+                "OXO_FLOW_SENSITIVE_0": "projects/p/secrets/s/versions/latest"
+            },
+            "variables": {"AWS_ACCESS_KEY_ID": "x"}
+        }}});
+        assert!(env_channel_violation(&gcp_mixed).is_some());
 
         let unrelated = serde_json::json!({"args": ["echo hi"], "nested": [{"x": 1}]});
         assert_eq!(env_channel_violation(&unrelated), None);
