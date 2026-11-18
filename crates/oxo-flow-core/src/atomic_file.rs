@@ -93,3 +93,45 @@ pub fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     let tmp = staged_tmp_path(path);
     publish_staged(content, path, &tmp)
 }
+
+/// Byte-exact [`write_file_atomic`] for payloads that must not be
+/// reinterpreted as UTF-8: stages a copy of `source` beside `destination`,
+/// fsyncs it, renames it over `destination`, then fsyncs the parent so a
+/// non-UTF-8 workflow source survives byte-for-byte. Reuses the same staged
+/// discipline so a crash leaves the old or the new file, never a truncated
+/// one; on failure the staged temp file is removed and the target is kept.
+pub fn copy_file_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let tmp = staged_tmp_path(destination);
+    let result = (|| -> std::io::Result<()> {
+        std::fs::copy(source, &tmp)?;
+        sync_path(&tmp)?;
+        std::fs::rename(&tmp, destination)?;
+        sync_parent_dir(destination)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_file_atomic_is_byte_exact_for_invalid_utf8() {
+        let dir = std::env::temp_dir().join(format!("atomic-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        let payload: Vec<u8> = vec![0x41, 0xFF, 0xFE, 0x01, 0x42];
+        std::fs::write(&src, &payload).unwrap();
+
+        copy_file_atomic(&src, &dst).unwrap();
+
+        assert_eq!(std::fs::read(&dst).unwrap(), payload);
+        assert!(!staged_tmp_path(&dst).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -55,6 +55,21 @@ async fn write_run_source_atomic(path: std::path::PathBuf, content: String) -> s
     .unwrap_or_else(|join_err| Err(std::io::Error::other(join_err.to_string())))
 }
 
+/// Byte-exact sibling of [`write_run_source_atomic`]: copies `source` to
+/// `dest` through [`oxo_flow_core::atomic_file::copy_file_atomic`] so a
+/// staged workflow's bytes (which need not be valid UTF-8) survive verbatim
+/// into the run workdir. Runs on the blocking pool for the same reason.
+async fn copy_run_source_atomic(
+    source: std::path::PathBuf,
+    dest: std::path::PathBuf,
+) -> std::io::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        oxo_flow_core::atomic_file::copy_file_atomic(&source, &dest)
+    })
+    .await
+    .unwrap_or_else(|join_err| Err(std::io::Error::other(join_err.to_string())))
+}
+
 /// Deterministic fault-injection seam for the pre-spawn staging steps
 /// (RB-03 / #1131). An integration test sets
 /// `OXO_FLOW_TEST_FAIL_PRE_SPAWN=materialize` (or `inputs`) to force the
@@ -644,28 +659,16 @@ async fn materialize_run_sources(
         ));
     }
     let dest_workflow = run_dir.join("workflow.oxoflow");
-    match tokio::fs::read(workflow_path).await {
-        Ok(bytes) => {
-            let content = String::from_utf8_lossy(&bytes).into_owned();
-            if let Err(e) = write_run_source_atomic(dest_workflow.clone(), content).await {
-                tracing::error!("Failed to write workflow to {:?}: {e}", dest_workflow);
-                return Err(err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "RUN_ERROR",
-                    "Failed to materialize workflow source".to_string(),
-                ));
-            }
-            tracing::info!("Saved workflow to {:?}", dest_workflow);
-        }
-        Err(e) => {
-            tracing::error!("Failed to read staged workflow {:?}: {e}", workflow_path);
-            return Err(err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "RUN_ERROR",
-                "Failed to materialize workflow source".to_string(),
-            ));
-        }
+    if let Err(e) = copy_run_source_atomic(workflow_path.to_path_buf(), dest_workflow.clone()).await
+    {
+        tracing::error!("Failed to write workflow to {:?}: {e}", dest_workflow);
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RUN_ERROR",
+            "Failed to materialize workflow source".to_string(),
+        ));
     }
+    tracing::info!("Saved workflow to {:?}", dest_workflow);
     for (rel, content) in include_paths {
         let dest = run_dir.join(rel);
         ensure_run_source_parent(&dest, rel).await?;
@@ -682,24 +685,38 @@ async fn materialize_run_sources(
     // beside the staged sources. Run-lifecycle endpoints (retry, resume,
     // DAG/status, protected-drift) reload it instead of the host-only
     // snapshot, which is not self-contained for staged-include runs (issue
-    // #1152 review, MEDIUM). Best-effort: the staged sources above still
-    // resolve through `from_file` if this write fails.
+    // #1152 review, MEDIUM). Fatal like the rest of materialization (RB-03 /
+    // #1131): a run that cannot persist its resolved snapshot would start
+    // with only the host-only view, so the caller compensates instead of
+    // proceeding on a short source tree.
     if let Some(snapshot) = resolved_snapshot {
         let dest = run_resolved_snapshot_path(run_dir);
-        match dest.parent() {
-            Some(parent) => {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    tracing::warn!(
-                        "Failed to create resolved-snapshot directory {:?}: {e}",
-                        parent
-                    );
-                } else if let Err(e) =
-                    write_run_source_atomic(dest.clone(), snapshot.to_string()).await
-                {
-                    tracing::warn!("Failed to write resolved snapshot to {:?}: {e}", dest);
-                }
-            }
-            None => tracing::warn!("resolved snapshot path {:?} has no parent", dest),
+        let Some(parent) = dest.parent() else {
+            tracing::error!("resolved snapshot path {:?} has no parent", dest);
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                "Failed to materialize resolved workflow snapshot".to_string(),
+            ));
+        };
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            tracing::error!(
+                "Failed to create resolved-snapshot directory {:?}: {e}",
+                parent
+            );
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                "Failed to materialize resolved workflow snapshot".to_string(),
+            ));
+        }
+        if let Err(e) = write_run_source_atomic(dest.clone(), snapshot.to_string()).await {
+            tracing::error!("Failed to write resolved snapshot to {:?}: {e}", dest);
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                "Failed to materialize resolved workflow snapshot".to_string(),
+            ));
         }
     }
     if !include_paths.is_empty() {
@@ -1244,20 +1261,23 @@ pub async fn create_run(
                 Ok(row) => row.filter(|c| c.enabled),
                 Err(e) => {
                     // Same ghost-claim hazard as the CLUSTER_NOT_FOUND path
-                    // below: the run row exists but nothing will execute,
-                    // so the reservation is released before the 500.
+                    // below: the run row exists but nothing will execute.
+                    // Route through the shared compensation so the row and
+                    // its workdir do not survive as an unreachable `queued`
+                    // ghost (RB-03 / #1131) — the same guarantee every other
+                    // pre-spawn failure gives.
                     tracing::error!(
                         "DB error loading cluster {cid} for run {}: {e}",
                         resp.run_id
                     );
-                    release_spawn_budget(backend.as_ref(), &resp.run_id).await;
+                    compensate_failed_run(backend.as_ref(), &resp.run_id, &run_dir).await;
                     return Err(db_err(format!("DB error loading cluster {cid}: {e}")));
                 }
             };
             let Some(cluster_row) = cluster_row else {
-                // The run row exists but nothing will execute: release the
-                // reservation before the 404 leaves a ghost claim behind.
-                release_spawn_budget(backend.as_ref(), &resp.run_id).await;
+                // The run row exists but nothing will execute: compensate so
+                // the 404 does not leave a ghost claim behind (RB-03 / #1131).
+                compensate_failed_run(backend.as_ref(), &resp.run_id, &run_dir).await;
                 return Err(err(
                     StatusCode::NOT_FOUND,
                     "CLUSTER_NOT_FOUND",

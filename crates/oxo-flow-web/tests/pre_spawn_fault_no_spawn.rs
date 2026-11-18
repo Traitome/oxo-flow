@@ -167,6 +167,22 @@ async fn pre_spawn_staging_failure_fails_closed_without_spawning() {
     );
     assert_never_spawned(&record).await;
 
+    // Fault 3 — unknown cluster must not leave a ghost queued row.
+    unset_env("OXO_FLOW_TEST_FAIL_PRE_SPAWN");
+    let before = run_count().await;
+    let body = json!({"toml_content": WORKFLOW, "cluster_id": "no-such-cluster"});
+    let (status, resp) = post(&app, body).await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "unknown cluster must answer non-2xx, got {status}: {resp}"
+    );
+    assert_eq!(
+        run_count().await,
+        before,
+        "a ghost queued row survived the cluster error path"
+    );
+    assert_never_spawned(&record).await;
+
     // Control — with the fault cleared the clean create still spawns, so the
     // "never invoked" assertions above are meaningful.
     unset_env("OXO_FLOW_TEST_FAIL_PRE_SPAWN");
