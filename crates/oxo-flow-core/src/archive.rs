@@ -103,6 +103,14 @@ impl ExtractedArchive {
 /// archive to carry (e.g. a remote run's `execution.log`). Every required
 /// member missing from the archive fails with all missing paths named — a
 /// partial archive can never look like a successful extraction.
+///
+/// Link-target validation is SYNTACTIC (absolute paths and any `..`
+/// component are rejected). That is sufficient only when `dest` is empty or
+/// carries no symlinks of its own: a target with no `..` that traverses a
+/// PRE-EXISTING symlink can still resolve outside. Both current callers
+/// extract into a fresh tempdir or a regular-file-only staged tree; any new
+/// caller extracting into a non-empty tree must resolve targets against the
+/// real filesystem or clear the destination first.
 pub fn extract_tar_requiring<R: Read>(
     reader: R,
     dest: &Path,

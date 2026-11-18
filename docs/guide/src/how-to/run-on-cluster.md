@@ -469,7 +469,7 @@ auth, `BatchMode`).
 !!! warning "Result pulls are validated before a run can finalize"
     The pulled result stream is parsed by oxo-flow's own archive reader,
     not the host `tar`. A member whose path is absolute or contains `..`,
-    a symlink or hard link whose target is absolute or contains any `..`
+    a symlink or hard link whose target is absolute or contains any `..` (extraction targets are created empty or from regular files only, so no pre-existing symlink can be traversed)
     component (even one that would "cancel out" lexically — it can escape
     through a symlinked path segment), or a member type other than
     file/directory/link rejects the whole extraction and fails the run
