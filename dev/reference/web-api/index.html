@@ -4146,6 +4146,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="OAuth">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#state-binding-and-single-use-issue-1141" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State binding and single use (issue #1141)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redirect-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redirect allowlist
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5657,6 +5685,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="OAuth">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#state-binding-and-single-use-issue-1141" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State binding and single use (issue #1141)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redirect-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redirect allowlist
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6879,7 +6935,42 @@ pollute the audit trail or trip the provider's rate limiter.</p>
 </span></code></pre></div>
 <p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
 fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
-environment table in <code>AGENTS.md</code>).</p>
+environment table in <code>AGENTS.md</code>). Both endpoints resolve it with the same
+precedence — an explicit request value, then the environment variable, then
+the fallback — and the callback may echo it as <code>redirect_uri</code>; whichever
+value the callback presents must equal the one the state was issued for.</p>
+<h3 id="state-binding-and-single-use-issue-1141">State binding and single use (issue #1141)<a class="headerlink" href="#state-binding-and-single-use-issue-1141" title="Permanent link">#</a></h3>
+<p><code>POST /api/auth/oauth/authorize</code> issues a CSRF <code>state</code> bound server-side to
+<code>(provider, redirect URI, issued-at timestamp)</code>. The callback verifies AND
+consumes it in one atomic delete, before any token exchange:</p>
+<ul>
+<li>unknown, malformed, or already-consumed (replayed) state →
+  <code>400 {code:"OAUTH_INVALID_STATE"}</code>;</li>
+<li>a state older than the 10-minute TTL → <code>400 {code:"OAUTH_INVALID_STATE"}</code>
+  with an "expired" message;</li>
+<li>a state issued for a different provider or a different redirect URI →
+  <code>400 {code:"OAUTH_STATE_MISMATCH"}</code>.</li>
+</ul>
+<p>A mismatched binding still consumes the state: it can never be retried, and
+two concurrent callbacks can never both validate the same value.</p>
+<h3 id="redirect-allowlist">Redirect allowlist<a class="headerlink" href="#redirect-allowlist" title="Permanent link">#</a></h3>
+<p>The redirect target's <strong>origin</strong> must appear in a server-side allowlist
+derived from the origin configuration the server already trusts — there is
+no separate OAuth-redirect setting:</p>
+<ul>
+<li><code>OXO_FLOW_ALLOWED_ORIGINS</code> (comma-separated), or the built-in localhost
+  origins when it is unset — the same list the CORS layer uses;</li>
+<li>the origin of the server-configured <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> (or the
+  documented fallback), which every working deployment needs;</li>
+<li>the origin declared by <code>OXO_FLOW_PUBLIC_URL</code>, when set (reverse-proxy
+  deployments).</li>
+</ul>
+<p>Paths are not constrained — the provider's registered callback URI pins the
+path, while the origin is what stops a crafted authorize request from
+sending the authorization code to another host. An off-list target is
+rejected with <code>400 {code:"OAUTH_REDIRECT_NOT_ALLOWED"}</code> at authorize time,
+and again at callback time (defense in depth) if the configuration changed
+between issue and callback.</p>
 <p>The local user record is idempotent on the provider identity: the canonical
 users row is keyed by the namespaced id <code>oauth:{provider}:{provider_user_id}</code>
 (e.g. the ORCID iD), so re-login reuses the same row. Display names are NOT

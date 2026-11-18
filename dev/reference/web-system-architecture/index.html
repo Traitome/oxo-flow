@@ -4789,6 +4789,21 @@ only present when a handler supplies them (e.g. <code>429</code> bodies carry
 <td>Supplied <code>toml_content</code> is not the tip of the recorded DAG edit history; nothing is applied</td>
 </tr>
 <tr>
+<td><code>OAUTH_INVALID_STATE</code></td>
+<td>400</td>
+<td>OAuth CSRF state missing, unknown, malformed, replayed, or past its 10-minute TTL</td>
+</tr>
+<tr>
+<td><code>OAUTH_STATE_MISMATCH</code></td>
+<td>400</td>
+<td>OAuth CSRF state was issued for a different provider or redirect URI</td>
+</tr>
+<tr>
+<td><code>OAUTH_REDIRECT_NOT_ALLOWED</code></td>
+<td>400</td>
+<td>OAuth redirect target origin is not on the server-side allowlist</td>
+</tr>
+<tr>
 <td><code>RATE_LIMITED</code></td>
 <td>429</td>
 <td>Request rate exceeded</td>
