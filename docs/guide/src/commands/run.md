@@ -1638,13 +1638,16 @@ implementation. Two caveats to note:
   (the same path the local executor uses), so it executes *inside* the
   isolated `sh -c` and sees the same allowlisted environment as the rule
   body.
-- Remote dispatch paths (Kubernetes, AWS Batch, GCP Batch) do **not** yet
-  route through this shared allowlist. They are clean only because they do
-  not forward the ambient environment at all — a future change that adds
-  env forwarding to any of them must re-admit the declared variables
-  through this same policy rather than passing the ambient environment
-  through. Locally executed `docker`/`singularity` rules do run under the
-  allowlist (their CLI wrapper executes inside the rule shell) — see
+- Remote dispatch paths (Kubernetes, AWS Batch, GCP Batch) do not forward
+  the submit host's environment into a job at all: a cloud job's environment
+  is the container image's own `ENV`, the declared `envvars`, and the
+  `OXO_FLOW_SENSITIVE_<n>` secret references — never the operator's ambient
+  environment (pinned per backend by the cloud-dispatch boundary tests,
+  issue #1171). A future change that adds env forwarding to any of them must
+  re-admit the declared variables through this same policy rather than
+  passing the ambient environment through. Locally executed
+  `docker`/`singularity` rules do run under the allowlist (their CLI wrapper
+  executes inside the rule shell) — see
   [Local container rules](#local-container-rules-dockersingularity) for
   the narrow daemon-variable admission.
 

@@ -410,8 +410,10 @@ On clusters, the scheduler enforces resources based on the generated directives.
 
 !!! note "What environment a cloud job sees"
     Cloud jobs (Kubernetes, AWS Batch, GCP Batch) never inherit the
-    submitting host's environment. The generated manifest/spec carries
-    only the rendered rule command, so the job process sees the container
+    submitting host's environment. The generated manifest/spec carries the
+    rendered rule command (and, when sensitive values are routed, a
+    `secretKeyRef` env block referencing the operator's Secret), so the job
+    process sees the container
     image's own `ENV` (or the VM image's environment for a GCP Batch
     script runnable) plus what the engine puts in the command: the rule's
     declared `envvars` (rendered as `export K='V'`) and the

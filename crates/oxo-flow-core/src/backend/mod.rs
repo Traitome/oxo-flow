@@ -731,29 +731,105 @@ mod tests {
         }
     }
 
-    /// Fail when a generated cloud job body carries any `env`/`environment`
-    /// object key: with no `sensitive = true` references the body must have
-    /// no environment channel at all (issue #1171 — the container's
-    /// environment is the image ENV plus what the engine writes, and the
-    /// engine writes none of the submit host's state).
-    fn assert_no_env_channel(value: &serde_json::Value, backend: &str, shape: &str) {
+    /// Whether an `env` entry is the engine's own routed sensitive
+    /// reference (issue #1120 / #1176): the ONLY legitimate `env` channel a
+    /// generated cloud body may carry. Deployment credentials never look
+    /// like this.
+    fn is_routed_secret_env_entry(entry: &serde_json::Value) -> bool {
+        let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        let Some(suffix) = name.strip_prefix(crate::executor::process::SENSITIVE_ENV_BASE) else {
+            return false;
+        };
+        let suffix = suffix.strip_prefix('_').unwrap_or("");
+        !suffix.is_empty()
+            && suffix.bytes().all(|b| b.is_ascii_digit())
+            && entry.pointer("/valueFrom/secretKeyRef").is_some()
+    }
+
+    /// The first environment channel in `value` that is NOT an engine-routed
+    /// sensitive reference, if any. A cloud job's environment is the image
+    /// ENV plus what the engine writes — and the engine writes no submit-host
+    /// state (issue #1171); the one channel it does write is the
+    /// `OXO_FLOW_SENSITIVE_<n>` secret reference.
+    fn env_channel_violation(value: &serde_json::Value) -> Option<String> {
         match value {
             serde_json::Value::Object(map) => {
                 for (key, child) in map {
-                    assert!(
-                        key != "env" && key != "environment",
-                        "{backend} {shape} body must carry no environment channel, found '{key}': {value}"
-                    );
-                    assert_no_env_channel(child, backend, shape);
+                    if key == "env" {
+                        let routed = child.as_array().is_some_and(|items| {
+                            !items.is_empty() && items.iter().all(is_routed_secret_env_entry)
+                        });
+                        if !routed {
+                            return Some(format!(
+                                "'env' carries something other than OXO_FLOW_SENSITIVE_<n> secretKeyRef entries: {child}"
+                            ));
+                        }
+                        continue;
+                    }
+                    if key == "environment" {
+                        return Some(format!("an 'environment' channel: {child}"));
+                    }
+                    if let Some(violation) = env_channel_violation(child) {
+                        return Some(violation);
+                    }
                 }
+                None
             }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    assert_no_env_channel(item, backend, shape);
-                }
-            }
-            _ => {}
+            serde_json::Value::Array(items) => items.iter().find_map(env_channel_violation),
+            _ => None,
         }
+    }
+
+    /// Fail when a generated cloud job body carries a submit-host environment
+    /// channel. The engine's own routed sensitive references are the single
+    /// allowed `env` channel.
+    fn assert_no_env_channel(value: &serde_json::Value, backend: &str, shape: &str) {
+        if let Some(violation) = env_channel_violation(value) {
+            panic!(
+                "{backend} {shape} body must carry no submit-host environment channel — {violation}"
+            );
+        }
+    }
+
+    /// The detector must accept the legitimate #1176 secret-reference block
+    /// and reject every other environment channel — pinning the predicate so
+    /// a future relaxation cannot silently reopen the leak.
+    #[test]
+    fn env_channel_detector_accepts_only_routed_secret_refs() {
+        let routed = serde_json::json!({
+            "spec": {"containers": [{"env": [{
+                "name": "OXO_FLOW_SENSITIVE_0",
+                "valueFrom": {"secretKeyRef": {
+                    "name": "oxoflow-secrets",
+                    "key": "OXO_FLOW_SENSITIVE_0"
+                }}
+            }]}]}
+        });
+        assert_eq!(env_channel_violation(&routed), None);
+
+        let ambient = serde_json::json!({"env": [{"name": "USER", "value": "wsx"}]});
+        assert!(env_channel_violation(&ambient).is_some());
+
+        let mixed = serde_json::json!({"env": [
+            {"name": "OXO_FLOW_SENSITIVE_0",
+             "valueFrom": {"secretKeyRef": {"name": "s", "key": "OXO_FLOW_SENSITIVE_0"}}},
+            {"name": "AWS_ACCESS_KEY_ID", "value": "x"}
+        ]});
+        assert!(env_channel_violation(&mixed).is_some());
+
+        // The routed NAME with a plaintext value is still a leak.
+        let plaintext = serde_json::json!({"env": [{
+            "name": "OXO_FLOW_SENSITIVE_0", "value": "literal-secret"
+        }]});
+        assert!(env_channel_violation(&plaintext).is_some());
+
+        let environment = serde_json::json!({"environment": {"variables": {"A": "b"}}});
+        assert!(env_channel_violation(&environment).is_some());
+
+        let unrelated = serde_json::json!({"args": ["echo hi"], "nested": [{"x": 1}]});
+        assert_eq!(env_channel_violation(&unrelated), None);
     }
 
     /// Child half of [`assert_cloud_body_ignores_submit_host_env`]: runs in a
