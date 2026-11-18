@@ -119,12 +119,16 @@ accepted on import.
 
 ## Permissions Model
 
-A simple three-state visibility model:
+A simple three-state visibility model (`private`, `workspace`, `link`)
+plus an admin override — enforced by one server-side predicate
+(`domains::workflow::visibility::can_read_pipeline`), documented in the
+[Web API reference](../reference/web-api.md#visibility-policy-web-13-issue-1138):
 
 | Level | Access |
 |-------|--------|
-| Private | Only the owner can view/edit (the default for imported pipelines) |
-| Shared (`link` / `workspace`) | Read-only access via share/import |
+| Private | Only the owner (or an admin) can view/edit — the default for imported pipelines |
+| Workspace | Readable by every signed-in user; writable only by the owner (or an admin) |
+| Link | Not readable through the pipeline API; a minted share token grants anonymous read-only access |
 | Admin | Can view all, manage users |
 
 No nested RBAC. No group hierarchies. Simple and transparent.

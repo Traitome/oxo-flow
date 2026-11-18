@@ -313,6 +313,14 @@ pub trait StorageBackend: Send + Sync {
         pipeline_id: &str,
         revision_id: &str,
     ) -> Result<Option<models::PipelineRevisionRow>, String>;
+    /// Candidate window for `POST /api/pipelines/search` (WEB-13 / issue
+    /// #1138): the SQL scopes by owner/shared visibility BEFORE `LIMIT` so
+    /// foreign private rows cannot crowd the caller's own results out of the
+    /// page (audit #664). It is an optimization, not the policy — the handler
+    /// MUST re-filter every returned row with
+    /// `workflow::visibility::can_read_pipeline`, which is the single source
+    /// of truth. Any change to the predicate's policy must keep this query a
+    /// superset of it.
     async fn search_pipelines(
         &self,
         query: &str,
@@ -320,6 +328,9 @@ pub trait StorageBackend: Send + Sync {
         is_admin: bool,
         limit: u32,
     ) -> Result<Vec<models::PipelineRow>, String>;
+    /// Candidate window for `GET /api/pipelines` — see
+    /// [`Self::search_pipelines`] for the contract: the handler re-filters
+    /// with `workflow::visibility::can_read_pipeline`.
     async fn list_pipelines_visible(
         &self,
         user_id: &str,

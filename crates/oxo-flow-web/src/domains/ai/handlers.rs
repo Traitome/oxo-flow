@@ -12,8 +12,9 @@ use crate::domains::auth::current_user;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{
-    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_backend,
+    ApiError, ai_not_configured_error, err, error_event, get_backend,
 };
+use crate::domains::workflow::visibility::can_read_pipeline;
 use crate::infra::db::{global_backend, models};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
