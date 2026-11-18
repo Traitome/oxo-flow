@@ -1031,15 +1031,16 @@ pub async fn get_dag_status(
     let run = load_owned_run(backend.as_ref(), &user, &id).await?;
 
     // Parse the pipeline snapshot to build DAG (config-expanded, issue #707).
-    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+    // ONE parse feeds both the DAG and the per-rule environment labels
+    // (issue #1149) — a second parse could disagree with the first.
+    let mut workflow = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot).ok();
+    let dag = workflow.as_ref().and_then(|wf| {
+        oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+            &wf.rules,
+            &wf.config_placeholder_values(),
+        )
         .ok()
-        .and_then(|wf| {
-            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &wf.rules,
-                &wf.config_placeholder_values(),
-            )
-            .ok()
-        });
+    });
 
     // Node status comes from the engine's checkpoint state, merged with the
     // full rule list so unrun rules show as pending. The checkpoint read is
@@ -1058,6 +1059,32 @@ pub async fn get_dag_status(
         }
         None => node_items,
     };
+    // Per-rule environment from the run's own snapshot (issue #1149),
+    // mirroring the RUN path exactly rather than a prettier intent:
+    // `[defaults] environment` is folded onto rules by the shared
+    // `WorkflowConfig::apply_defaults` (the same call `run`/`dry-run` make)
+    // and the executor wraps each rule with `rule.environment.kind()`.
+    // `env_group` is deliberately NOT expanded here: the run path itself
+    // never consults it (preflight and the executor read `rule.environment`
+    // after defaults), so labelling an `env_group` rule with its group's
+    // backend would claim a wrapping the run never performs — the same
+    // class of misrepresentation this fix removes. Node names are base rule
+    // names (`with_all_rules` aggregates instance statuses), so this map
+    // covers every normal node; an orphan keeps `None` instead of a
+    // fabricated `system`.
+    if let Some(wf) = workflow.as_mut() {
+        wf.apply_defaults();
+    }
+    let env_by_rule: std::collections::HashMap<String, String> = workflow
+        .as_ref()
+        .map(|wf| {
+            wf.rules
+                .iter()
+                .map(|rule| (rule.name.clone(), rule.environment.kind().to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let dag_nodes: Vec<DagNode> = node_items
         .iter()
         .map(|n| {
@@ -1080,6 +1107,7 @@ pub async fn get_dag_status(
                 exit_code: n.exit_code,
                 stderr_tail: n.stderr_tail.clone(),
                 stdout_tail: n.stdout_tail.clone(),
+                environment: env_by_rule.get(&n.rule).cloned(),
             }
         })
         .collect();

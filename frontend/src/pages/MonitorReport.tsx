@@ -1146,7 +1146,12 @@ export default function MonitorReport() {
         id: n.id,
         label: n.label,
         color: n.color,
-        environment: 'system',
+        // Issue #1149 (audit UX-07): the canvas used to hard-code
+        // `environment: 'system'`, so every conda/docker/singularity rule
+        // was drawn as a system rule. The engine-reported kind comes from
+        // the run's own snapshot; an orphaned instance (no matching rule
+        // any more) is honestly "unknown", never a guessed "system".
+        environment: n.environment ?? 'unknown',
         rule: {},
       })),
       edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),

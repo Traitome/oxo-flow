@@ -161,7 +161,13 @@ export interface RunStatus {
   resources: { cpu_pct: number; memory_mb: number; disk_mb: number };
 }
 export interface DagStatus {
-  nodes: Array<{ id: string; label: string; status: string; color: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
+  /** `environment` (issue #1149) is the backend kind the run actually wraps
+   *  the rule in, resolved from the run's own snapshot the way the run path
+   *  does ([defaults] environment folded onto rules, then the rule's inline
+   *  environment). `null` only for an orphaned instance whose base rule is
+   *  no longer in the snapshot — the monitor renders "unknown", never a
+   *  guessed "system". */
+  nodes: Array<{ id: string; label: string; status: string; color: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string; environment: string | null }>;
   edges: Array<{ source: string; target: string }>;
   parallel_groups: Array<Array<string>>; critical_path: Array<string>;
   metrics: { total_nodes: number; completed_nodes: number; failed_nodes: number; running_nodes: number; pending_nodes: number; skipped_nodes: number; cancelled_nodes: number; eta_ms: number | null };
