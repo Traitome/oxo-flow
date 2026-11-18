@@ -34,7 +34,14 @@ pub(crate) struct AbortContext<'a> {
     pub json_summary: &'a mut RunJsonSummary,
     pub is_tty: bool,
     pub ai_recover: bool,
+    /// Issue #1164 loop guard: this invocation was spawned as the repair
+    /// loop's verification rerun (`--no-ai-recover`), so it must never
+    /// start another one.
+    pub no_ai_recover: bool,
     pub ai_max_retries: Option<u32>,
+    /// Parent run context forwarded into the verification rerun (issue
+    /// #1164 review-R3).
+    pub rerun_ctx: &'a crate::commands::run::repair::RerunContext,
 }
 
 /// Abort in-flight execution on failure (when not in keep_going mode):
@@ -253,9 +260,13 @@ pub(crate) async fn handle_run_failure_abort(
         }
     }
 
-    // AI error recovery
-    let should_recover =
-        ctx.ai_recover || crate::commands::ai_template::should_use_ai(Some(ctx.workflow), false);
+    // AI error recovery. `--no-ai-recover` (issue #1164 loop guard)
+    // disables recovery entirely — including the workflow's `[ai] enabled`
+    // auto-detect — so the repair loop's verification rerun can never start
+    // another repair cycle.
+    let should_recover = !ctx.no_ai_recover
+        && (ctx.ai_recover
+            || crate::commands::ai_template::should_use_ai(Some(ctx.workflow), false));
     // The engine produced a bounded deterministic repair plan, but no
     // interactive key handlers exist — the old "[R] Auto-scale & resume"
     // menu promised keys that were never wired (false affordance). Point
@@ -363,14 +374,123 @@ pub(crate) async fn handle_run_failure_abort(
                                 "  AI fix not auto-applied: generated TOML failed \
                                          validation ({e}). Review the suggestion manually."
                             ));
-                        } else if apply_ready
-                            && let Err(e) = crate::commands::ai_recover::apply_fix(
+                        } else if apply_ready {
+                            match crate::commands::ai_recover::apply_fix(
                                 ctx.workflow,
                                 toml,
                                 &diag.session_id,
-                            )
-                        {
-                            narrate_console_line(format_args!("  Failed to apply AI fix: {e}"));
+                            ) {
+                                Err(e) => {
+                                    narrate_console_line(format_args!(
+                                        "  Failed to apply AI fix: {e}"
+                                    ));
+                                }
+                                Ok(_) => {
+                                    // Verified-repair loop (issue #1164):
+                                    // record the applied fix, attempt ONE
+                                    // bounded verification rerun with the
+                                    // updated workflow (resume semantics —
+                                    // succeeded rules stay skipped, failed
+                                    // rules re-run), and record its outcome.
+                                    // The narration lines are a cross-agent
+                                    // contract (eval harness) — see
+                                    // run/repair.rs; never reword them.
+                                    narrate_repair_line(
+                                        &applied_narration(&diag.session_id),
+                                        Some(ctx.run_log),
+                                    );
+                                    record_repair_applied(
+                                        ctx.checkpoint,
+                                        ctx.checkpoint_path,
+                                        &diag.session_id,
+                                    )
+                                    .await;
+                                    let rerun = verification_rerun(
+                                        ctx.workflow,
+                                        ctx.checkpoint_path,
+                                        ctx.rerun_ctx,
+                                    )
+                                    .await;
+                                    narrate_repair_line(
+                                        &rerun_narration(&rerun),
+                                        Some(ctx.run_log),
+                                    );
+                                    record_repair_rerun(
+                                        ctx.checkpoint,
+                                        ctx.checkpoint_path,
+                                        &diag.session_id,
+                                        &rerun,
+                                    )
+                                    .await;
+                                    if rerun.attempted && rerun.succeeded {
+                                        // The rerun completed the workflow:
+                                        // the parent finishes successfully.
+                                        // The child already fired its own
+                                        // terminal hook/webhook for the
+                                        // workflow, so the parent narrates
+                                        // the verdict, emits the succeeded
+                                        // summary, and exits 0 — the
+                                        // plain-failure path below never
+                                        // runs.
+                                        progress_narrate(
+                                            format_args!(
+                                                "{} repair verified — rerun succeeded",
+                                                "✓".green()
+                                            ),
+                                            ctx.run_log,
+                                        );
+                                        // The verification rerun rewrote the
+                                        // checkpoint on disk — report the
+                                        // FINAL rule records, falling back to
+                                        // the parent's in-memory copy when the
+                                        // file cannot be read.
+                                        let final_ck = match CheckpointState::load_from_file(
+                                            ctx.checkpoint_path,
+                                        ) {
+                                            Ok(ck) => ck,
+                                            Err(_) => ctx.checkpoint.lock().await.clone(),
+                                        };
+                                        ctx.json_summary.set_repair(RunRepairSummary {
+                                            applied: true,
+                                            session_id: diag.session_id.clone(),
+                                            rerun_attempted: true,
+                                            rerun_succeeded: true,
+                                        });
+                                        // The documented `run --json` success
+                                        // status ("completed" — final state:
+                                        // zero failures); the `repair` object
+                                        // distinguishes a verified-repair run
+                                        // from a clean pass.
+                                        ctx.json_summary.emit(
+                                            "completed",
+                                            // Final-state counters: every rule
+                                            // the parent ran (or failed)
+                                            // completed during the verified
+                                            // rerun, so nothing is failed or
+                                            // blocked anymore.
+                                            &RunCounts {
+                                                succeeded: ctx
+                                                    .success_count
+                                                    .load(std::sync::atomic::Ordering::Relaxed)
+                                                    + ctx
+                                                        .fail_count
+                                                        .load(std::sync::atomic::Ordering::Relaxed)
+                                                    + ctx
+                                                        .non_required_fail_count
+                                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                                skipped: ctx
+                                                    .skipped_count
+                                                    .load(std::sync::atomic::Ordering::Relaxed),
+                                                failed: 0,
+                                                non_required_failed: 0,
+                                                blocked: 0,
+                                            },
+                                            rule_resource_rows(&final_ck),
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            }
                         }
                     }
                 }

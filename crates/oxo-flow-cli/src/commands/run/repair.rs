@@ -1,0 +1,621 @@
+//! Verified AI-repair loop (issue #1164): after `apply_fix` succeeds, the
+//! engine attempts ONE bounded verification rerun of the failed rules using
+//! the UPDATED workflow, records the outcome in the checkpoint
+//! (`repair_record`), and narrates stable machine-readable `REPAIR_*`
+//! prefixes. The prefixes are a cross-agent contract consumed verbatim by
+//! the eval harness — never reword them:
+//!
+//! - `REPAIR_APPLIED <session-id>` — the AI fix was written to the workflow
+//! - `REPAIR_RERUN_SUCCEEDED <detail>` — the verification rerun exited 0
+//! - `REPAIR_RERUN_FAILED <detail>` — the rerun exited non-zero
+//! - `REPAIR_RERUN_SKIPPED <reason>` — no rerun was attempted
+
+use super::*;
+
+/// Environment variable marking a process as a verification-rerun child
+/// (issue #1164 loop guard): a rerun never spawns another rerun, and (review
+/// B1) it skips the exclusive workdir lock its parent already holds. Set on
+/// the child process by [`verification_rerun`]; both the failure handler and
+/// the run command consult [`loop_guard_active`] before acting.
+pub(crate) const REPAIR_RERUN_ENV: &str = "OXO_FLOW_REPAIR_RERUN";
+
+/// Parent run context forwarded into the verification rerun's argv (review
+/// R3, issue #1164): the child must execute the SAME plan the parent ran,
+/// not a freshly re-derived one. Every field is conditional — a knob the
+/// child would resolve identically on its own is not forwarded, keeping the
+/// spawned argv minimal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RerunContext {
+    /// The parent's effective workdir when it differs from the child's
+    /// default (the workflow's directory): an explicit `--workdir`, a
+    /// repository run's cwd default, or a resume's recorded workdir. Without
+    /// this the child would execute rules in the wrong cwd while loading the
+    /// parent's checkpoint.
+    pub workdir: Option<PathBuf>,
+    /// Config override tokens (the merged `KEY=VALUE` / `--KEY=VALUE` /
+    /// `--KEY VALUE` positionals) forwarded verbatim, so the child re-derives
+    /// the same config — and therefore the same rule fingerprints — instead
+    /// of invalidating every config-referencing rule.
+    pub config_args: Vec<String>,
+    /// Forward `--provenance` when the parent tracked output checksums, so
+    /// the rerun's re-executed rules record them too.
+    pub provenance: bool,
+    /// Forward `--jobs <n>` when the parent ran with explicit concurrency
+    /// other than the default 1.
+    pub jobs: Option<usize>,
+    /// Forward `--keep-going` when the parent tolerated failures, so a
+    /// non-required failure in the rerun does not abort it early.
+    pub keep_going: bool,
+}
+
+/// Outcome of one verification-rerun decision (issue #1164).
+pub(crate) struct VerificationRerun {
+    /// Whether the rerun was actually attempted (guards and launch failures
+    /// leave this false).
+    pub attempted: bool,
+    /// Whether the child completed the workflow (exit 0). Meaningful only
+    /// when `attempted`.
+    pub succeeded: bool,
+    /// Human-readable detail: skip reason or exit code.
+    pub detail: String,
+}
+
+/// Whether the current process is itself a verification rerun (loop guard).
+pub(crate) fn loop_guard_active() -> bool {
+    std::env::var_os(REPAIR_RERUN_ENV).is_some()
+}
+
+/// Whether this run invocation must acquire the exclusive workdir lock.
+///
+/// Review-B1 exception (issue #1164): the verification rerun spawned by the
+/// repair loop carries the [`REPAIR_RERUN_ENV`] guard while its parent holds
+/// the workdir lock (flock on `.oxo-flow/lock`) for the whole run and is
+/// blocked awaiting the child — no other writer can exist for the
+/// checkpoint's lifetime, and a flock cannot be shared across processes, so
+/// skipping the acquisition is the only way the child can run at all. The
+/// parent never releases its own lock mid-run.
+pub(crate) fn workdir_lock_required() -> bool {
+    workdir_lock_required_checked(loop_guard_active())
+}
+
+/// [`workdir_lock_required`] with the guard injected — the explicit form
+/// lets tests exercise both branches without mutating the process
+/// environment (edition-2024 `set_var` is unsafe and races parallel tests).
+pub(crate) fn workdir_lock_required_checked(rerun_guard: bool) -> bool {
+    !rerun_guard
+}
+
+/// The exact argv of the verification rerun child: `run <workflow>
+/// --resume-failed --no-ai-recover --checkpoint <p>` plus the forwarded
+/// parent context ([`RerunContext`]). Pure so tests can pin the contract.
+///
+/// `--resume-failed` clears the failed rules so they re-execute while
+/// succeeded rules stay skipped (resume semantics). `--no-ai-recover` both
+/// disables AI recovery inside the child (no recursion through the recovery
+/// path) and, together with the [`REPAIR_RERUN_ENV`] guard, makes a second
+/// verification rerun impossible. Override tokens come LAST — run's
+/// overrides positional is `trailing_var_arg`, so everything after the first
+/// `KEY=VALUE` token is override text.
+pub(crate) fn build_rerun_args(
+    workflow: &Path,
+    checkpoint_path: &Path,
+    extra: &RerunContext,
+) -> Vec<String> {
+    let mut args = vec![
+        "run".to_string(),
+        workflow.display().to_string(),
+        "--resume-failed".to_string(),
+        "--no-ai-recover".to_string(),
+        "--checkpoint".to_string(),
+        checkpoint_path.display().to_string(),
+    ];
+    if let Some(wd) = &extra.workdir {
+        args.push("--workdir".to_string());
+        args.push(wd.display().to_string());
+    }
+    if extra.provenance {
+        args.push("--provenance".to_string());
+    }
+    if let Some(jobs) = extra.jobs {
+        args.push("--jobs".to_string());
+        args.push(jobs.to_string());
+    }
+    if extra.keep_going {
+        args.push("--keep-going".to_string());
+    }
+    args.extend(extra.config_args.iter().cloned());
+    args
+}
+
+/// Attempt the ONE bounded verification rerun (issue #1164 R1): resolve the
+/// current binary, spawn the child run against the SAME checkpoint with the
+/// parent's context forwarded ([`RerunContext`]), and wait for it with
+/// inherited stdio so the verification run's logs interleave with the
+/// parent's narration. The child carries [`REPAIR_RERUN_ENV`] so it can
+/// never start a second rerun.
+pub(crate) async fn verification_rerun(
+    workflow: &Path,
+    checkpoint_path: &Path,
+    extra: &RerunContext,
+) -> VerificationRerun {
+    verification_rerun_checked(workflow, checkpoint_path, loop_guard_active(), extra).await
+}
+
+/// [`verification_rerun`] with the loop guard injected — the explicit-guard
+/// form exists so tests can exercise the skip branch without mutating the
+/// process environment (edition-2024 `set_var` is unsafe and races parallel
+/// tests).
+pub(crate) async fn verification_rerun_checked(
+    workflow: &Path,
+    checkpoint_path: &Path,
+    guard_active: bool,
+    extra: &RerunContext,
+) -> VerificationRerun {
+    if guard_active {
+        return VerificationRerun {
+            attempted: false,
+            succeeded: false,
+            detail: "already a verification rerun (loop guard)".into(),
+        };
+    }
+    // Binary resolution: an explicit `OXO_FLOW_BIN` pin wins (the same knob
+    // the web server/desktop use to spawn runs — reuse, never retype), then
+    // the running executable itself.
+    let exe = match std::env::var_os("OXO_FLOW_BIN") {
+        Some(bin) if !bin.is_empty() => PathBuf::from(bin),
+        _ => match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                return VerificationRerun {
+                    attempted: false,
+                    succeeded: false,
+                    detail: format!("cannot resolve the current executable: {e}"),
+                };
+            }
+        },
+    };
+    // The workflow path is absolutized against the inherited cwd so the
+    // child resolves the same file even if a future caller changes directory
+    // before the spawn.
+    let workflow = if workflow.is_absolute() {
+        workflow.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(workflow))
+            .unwrap_or_else(|_| workflow.to_path_buf())
+    };
+    let status = tokio::process::Command::new(&exe)
+        .args(build_rerun_args(&workflow, checkpoint_path, extra))
+        .env(REPAIR_RERUN_ENV, "1")
+        .status()
+        .await;
+    match status {
+        Ok(status) if status.success() => VerificationRerun {
+            attempted: true,
+            succeeded: true,
+            detail: "verification rerun completed the workflow".into(),
+        },
+        Ok(status) => VerificationRerun {
+            attempted: true,
+            succeeded: false,
+            detail: format!(
+                "verification rerun exited {}",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "by signal".into())
+            ),
+        },
+        Err(e) => VerificationRerun {
+            attempted: false,
+            succeeded: false,
+            detail: format!("verification rerun could not be launched: {e}"),
+        },
+    }
+}
+
+/// The `REPAIR_APPLIED` narration line (issue #1164 contract): the AI fix
+/// landed, carrying the diagnosis session id that links the archived session
+/// and the before-fix workflow snapshot.
+pub(crate) fn applied_narration(session_id: &str) -> String {
+    format!("REPAIR_APPLIED session_id={session_id}")
+}
+
+/// The `REPAIR_RERUN_*` narration line for a rerun outcome (issue #1164
+/// contract) — exactly one of SUCCEEDED / FAILED / SKIPPED.
+pub(crate) fn rerun_narration(rerun: &VerificationRerun) -> String {
+    if !rerun.attempted {
+        format!("REPAIR_RERUN_SKIPPED {}", rerun.detail)
+    } else if rerun.succeeded {
+        format!("REPAIR_RERUN_SUCCEEDED {}", rerun.detail)
+    } else {
+        format!("REPAIR_RERUN_FAILED {}", rerun.detail)
+    }
+}
+
+/// Emit one machine-readable repair-contract line: plain text on stderr
+/// (never colored, never quiet-suppressed — the eval harness parses it) plus
+/// a plain-text copy in the archived run log.
+pub(crate) fn narrate_repair_line(line: &str, run_log: Option<&SharedRunLog>) {
+    narrate_console_line(format_args!("{line}"));
+    if let Some(log) = run_log {
+        write_run_log_line(log, line);
+    }
+}
+
+/// Persist the repair record after the fix is written (issue #1164 R2):
+/// `applied = true`, rerun outcome still pending.
+pub(crate) async fn record_repair_applied(
+    checkpoint: &Mutex<CheckpointState>,
+    checkpoint_path: &Path,
+    session_id: &str,
+) {
+    let record = oxo_flow_core::executor::checkpoint::RepairRecord {
+        applied: true,
+        session_id: session_id.to_string(),
+        rerun_attempted: false,
+        rerun_succeeded: false,
+        detail: "AI fix applied; verification rerun pending".into(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    persist_repair_record(checkpoint, checkpoint_path, record).await;
+}
+
+/// Persist the rerun outcome into the repair record (issue #1164 R2).
+/// Overwrites the pending record written by [`record_repair_applied`]; the
+/// session id is passed through so the record stays linked even if the
+/// apply-time save was lost.
+pub(crate) async fn record_repair_rerun(
+    checkpoint: &Mutex<CheckpointState>,
+    checkpoint_path: &Path,
+    session_id: &str,
+    rerun: &VerificationRerun,
+) {
+    let record = oxo_flow_core::executor::checkpoint::RepairRecord {
+        applied: true,
+        session_id: session_id.to_string(),
+        rerun_attempted: rerun.attempted,
+        rerun_succeeded: rerun.succeeded,
+        detail: rerun.detail.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    persist_repair_record(checkpoint, checkpoint_path, record).await;
+}
+
+/// Write the repair record onto the checkpoint FILE (review B2, issue
+/// #1164): the persisted state is authoritative — after the verification
+/// rerun the child has rewritten the checkpoint with the FINAL rule records
+/// (completed/failed, benchmarks, tails) while the parent's in-memory copy
+/// still describes the failed parent run. Serializing the in-memory state
+/// would clobber the child's outcome, so only the loaded file's state gets
+/// the `repair_record` set and saved; the parent's in-memory copy is updated
+/// in place for in-process readers but is never written after the child ran.
+async fn persist_repair_record(
+    checkpoint: &Mutex<CheckpointState>,
+    checkpoint_path: &Path,
+    record: oxo_flow_core::executor::checkpoint::RepairRecord,
+) {
+    // Load the authoritative file. When it cannot be read (no checkpoint on
+    // disk yet, or a torn write), the parent's in-memory copy is the best
+    // available baseline.
+    let mut authoritative = match CheckpointState::load_from_file(checkpoint_path) {
+        Ok(ck) => ck,
+        Err(_) => checkpoint.lock().await.clone(),
+    };
+    authoritative.record_repair(record.clone());
+    if let Err(e) = authoritative.save_to_file_async(checkpoint_path).await {
+        tracing::warn!(error = %e, "failed to persist repair_record into the checkpoint");
+    }
+    checkpoint.lock().await.record_repair(record);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The narration prefixes are a cross-agent contract (eval harness);
+    /// pin them verbatim.
+    #[test]
+    fn narration_prefixes_are_stable() {
+        assert_eq!(
+            applied_narration("sess-1"),
+            "REPAIR_APPLIED session_id=sess-1"
+        );
+        let ok = VerificationRerun {
+            attempted: true,
+            succeeded: true,
+            detail: "verification rerun completed the workflow".into(),
+        };
+        assert!(rerun_narration(&ok).starts_with("REPAIR_RERUN_SUCCEEDED "));
+        let failed = VerificationRerun {
+            attempted: true,
+            succeeded: false,
+            detail: "verification rerun exited 3".into(),
+        };
+        assert_eq!(
+            rerun_narration(&failed),
+            "REPAIR_RERUN_FAILED verification rerun exited 3"
+        );
+        let skipped = VerificationRerun {
+            attempted: false,
+            succeeded: false,
+            detail: "already a verification rerun (loop guard)".into(),
+        };
+        assert_eq!(
+            rerun_narration(&skipped),
+            "REPAIR_RERUN_SKIPPED already a verification rerun (loop guard)"
+        );
+    }
+
+    /// The rerun argv contract (review R3): fixed flags first, forwarded
+    /// parent context conditionally, override tokens LAST (the overrides
+    /// positional is trailing_var_arg — nothing may follow them).
+    #[test]
+    fn rerun_argv_pins_forwarded_parent_context() {
+        let ctx = RerunContext {
+            workdir: Some(PathBuf::from("/data/run")),
+            config_args: vec!["threads=8".into(), "--api-token".into(), "secret".into()],
+            provenance: true,
+            jobs: Some(8),
+            keep_going: true,
+        };
+        let args = build_rerun_args(
+            Path::new("/w/wf.oxoflow"),
+            Path::new("/w/.oxo-flow/checkpoint.json"),
+            &ctx,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "/w/wf.oxoflow",
+                "--resume-failed",
+                "--no-ai-recover",
+                "--checkpoint",
+                "/w/.oxo-flow/checkpoint.json",
+                "--workdir",
+                "/data/run",
+                "--provenance",
+                "--jobs",
+                "8",
+                "--keep-going",
+                "threads=8",
+                "--api-token",
+                "secret",
+            ]
+        );
+    }
+
+    /// A parent that used nothing non-default spawns the minimal argv: no
+    /// `--workdir`, `--provenance`, `--jobs`, `--keep-going`, or overrides.
+    #[test]
+    fn rerun_argv_is_minimal_for_a_default_parent() {
+        let args = build_rerun_args(
+            Path::new("wf.oxoflow"),
+            Path::new(".oxo-flow/checkpoint.json"),
+            &RerunContext::default(),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "wf.oxoflow",
+                "--resume-failed",
+                "--no-ai-recover",
+                "--checkpoint",
+                ".oxo-flow/checkpoint.json",
+            ]
+        );
+    }
+
+    /// The loop guard must short-circuit before any spawn: with the guard
+    /// active, the rerun is skipped and no child process is started.
+    #[tokio::test]
+    async fn loop_guard_blocks_a_second_rerun() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf = tmp.path().join("wf.oxoflow");
+        std::fs::write(&wf, "[workflow]\nname = \"t\"\n").unwrap();
+        let ck_path = tmp.path().join("checkpoint.json");
+
+        let rerun = verification_rerun_checked(&wf, &ck_path, true, &RerunContext::default()).await;
+        assert!(!rerun.attempted, "guarded rerun must not spawn a child");
+        assert!(!rerun.succeeded);
+        assert!(rerun.detail.contains("loop guard"));
+        // The skip must be narratable as the contract's SKIPPED line.
+        assert!(rerun_narration(&rerun).starts_with("REPAIR_RERUN_SKIPPED "));
+    }
+
+    /// Review B1: the guard that lets a verification rerun skip the
+    /// workdir lock is exactly [`REPAIR_RERUN_ENV`] — the child must not
+    /// deadlock against its parent's held flock.
+    #[test]
+    fn workdir_lock_is_skipped_under_the_rerun_guard() {
+        assert!(
+            !workdir_lock_required_checked(true),
+            "a verification rerun must skip the workdir lock (its parent holds it)"
+        );
+        assert!(
+            workdir_lock_required_checked(false),
+            "a normal run must still acquire the workdir lock"
+        );
+        // The runtime gate composes the two exactly as the exception
+        // requires: env guard present → skip, absent → acquire.
+        assert_eq!(workdir_lock_required(), !loop_guard_active());
+    }
+
+    /// Decision → apply → rerun plumbing without a live provider (issue
+    /// #1164 R5a): the `auto_fix = "always"` + safe verdict decision
+    /// authorizes the write, `apply_fix` rewrites the poisoned workflow with
+    /// the fixed TOML, and the rerun layer is then reached with the UPDATED
+    /// workflow. The rerun itself fails to launch here (the test process is
+    /// not the CLI binary), which the record must carry honestly as an
+    /// attempted-but-failed rerun — the failed-workflow outcome semantics.
+    #[test]
+    fn decision_apply_then_rerun_reaches_the_updated_workflow() {
+        use crate::commands::ai_recover::{apply_fix, auto_fix_decision};
+        use oxo_flow_ai::config::AutoFixMode;
+
+        let _cwd = crate::commands::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::Builder::new()
+            .prefix("oxo-repair-loop-")
+            .tempdir()
+            .unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let _restore = crate::commands::RestoreCwd(prev);
+
+        let poisoned =
+            "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"boom\"\nshell = \"exit 1\"\n";
+        let fixed =
+            "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"boom\"\nshell = \"echo fixed\"\n";
+        std::fs::write("wf.oxoflow", poisoned).unwrap();
+
+        // Decision plumbing: `always` + a safe verdict = Apply (never
+        // ShowOnly) — the only branch that reaches the writer.
+        assert_eq!(
+            auto_fix_decision(AutoFixMode::Always, true),
+            crate::commands::ai_recover::AutoFixDecision::Apply
+        );
+        apply_fix(Path::new("wf.oxoflow"), fixed, "sess-1164").unwrap();
+        assert_eq!(
+            std::fs::read_to_string("wf.oxoflow").unwrap(),
+            fixed,
+            "the fix must be written before the rerun is attempted"
+        );
+
+        // The rerun layer receives the UPDATED workflow. The guard is off,
+        // so the spawn IS attempted; the child here is the test harness
+        // binary, which rejects the `run` argv — asserted as an attempted,
+        // failed rerun (exit code in the detail), not a skip.
+        let rerun = futures_block_on(verification_rerun_checked(
+            Path::new("wf.oxoflow"),
+            &tmp.path().join("checkpoint.json"),
+            false,
+            &RerunContext::default(),
+        ));
+        assert!(rerun.attempted, "unguarded rerun must be attempted");
+        assert!(!rerun.succeeded);
+        assert!(rerun.detail.contains("exited"), "detail: {}", rerun.detail);
+        assert!(rerun_narration(&rerun).starts_with("REPAIR_RERUN_FAILED "));
+    }
+
+    /// Block on an async call from a sync test without a full runtime
+    /// dependency: the CLI tests already link tokio.
+    fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// The repair record round-trips through the shared checkpoint
+    /// persistence: apply-then-rerun overwrites the pending record and the
+    /// file on disk carries the final outcome.
+    #[tokio::test]
+    async fn repair_record_persists_apply_then_rerun() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ck_path = tmp.path().join("checkpoint.json");
+        let checkpoint = Mutex::new(CheckpointState::new());
+
+        record_repair_applied(&checkpoint, &ck_path, "sess-persist").await;
+        {
+            let ck = checkpoint.lock().await;
+            let record = ck.repair_record.as_ref().expect("applied record set");
+            assert!(record.applied);
+            assert!(!record.rerun_attempted);
+            // The apply-time save landed on disk.
+            let loaded = CheckpointState::load_from_file(&ck_path).unwrap();
+            assert!(loaded.repair_record.as_ref().expect("persisted").applied);
+        }
+
+        let rerun = VerificationRerun {
+            attempted: true,
+            succeeded: true,
+            detail: "verification rerun completed the workflow".into(),
+        };
+        record_repair_rerun(&checkpoint, &ck_path, "sess-persist", &rerun).await;
+        let ck = checkpoint.lock().await;
+        let record = ck.repair_record.as_ref().expect("rerun record set");
+        assert_eq!(record.session_id, "sess-persist");
+        assert!(record.rerun_attempted);
+        assert!(record.rerun_succeeded);
+        assert_eq!(record.detail, "verification rerun completed the workflow");
+        drop(ck);
+        let loaded = CheckpointState::load_from_file(&ck_path).unwrap();
+        let record = loaded.repair_record.expect("rerun outcome persisted");
+        assert!(record.rerun_attempted && record.rerun_succeeded);
+    }
+
+    /// Review B2 regression: the repair-record write is a FILE merge — the
+    /// parent's stale in-memory state (failed rule, poisoned command, no
+    /// child benchmarks) must never be serialized over the child's final
+    /// checkpoint; only `repair_record` changes.
+    #[tokio::test]
+    async fn repair_record_write_is_file_merge_not_in_memory_clobber() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ck_path = tmp.path().join("checkpoint.json");
+
+        // The child's final state on disk: `boom` completed with the FIXED
+        // command and a benchmark.
+        let mut child_final = CheckpointState::new();
+        child_final.completed_rules.insert("boom".to_string());
+        child_final.mark_completed(
+            "boom",
+            oxo_flow_core::executor::BenchmarkRecord {
+                rule: "boom".into(),
+                wall_time_secs: 0.25,
+                max_memory_mb: Some(64),
+                memory_limit_mb: None,
+                cpu_seconds: Some(0.1),
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        child_final.rule_runs.insert(
+            "boom".to_string(),
+            oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(0),
+                started_at: None,
+                finished_at: None,
+                command: Some("echo fixed".into()),
+                stderr_tail: None,
+                stdout_tail: None,
+                caption: None,
+                status: None,
+                skip_reason: None,
+                signal: None,
+            },
+        );
+        child_final.save_to_file_async(&ck_path).await.unwrap();
+
+        // The parent's stale in-memory copy: `boom` still Failed.
+        let mut stale = CheckpointState::new();
+        stale.failed_rules.insert("boom".to_string());
+        let checkpoint = Mutex::new(stale);
+
+        let rerun = VerificationRerun {
+            attempted: true,
+            succeeded: true,
+            detail: "verification rerun completed the workflow".into(),
+        };
+        record_repair_rerun(&checkpoint, &ck_path, "sess-b2", &rerun).await;
+
+        // The FILE keeps the child's final rule state; only repair_record
+        // was added.
+        let loaded = CheckpointState::load_from_file(&ck_path).unwrap();
+        assert!(
+            loaded.completed_rules.contains("boom") && loaded.failed_rules.is_empty(),
+            "the child's completed state must survive the parent's record write"
+        );
+        assert!(
+            loaded.benchmarks.contains_key("boom"),
+            "the child's benchmarks must survive the parent's record write"
+        );
+        let record = loaded.repair_record.expect("repair record persisted");
+        assert_eq!(record.session_id, "sess-b2");
+        assert!(record.rerun_succeeded);
+    }
+}

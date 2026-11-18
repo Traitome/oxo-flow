@@ -394,6 +394,34 @@ pub struct RuleRunRecord {
     pub signal: Option<i32>,
 }
 
+/// AI-repair loop outcome (issue #1164): what the engine did after a rule
+/// failure triggered AI recovery — whether a fix was applied to the workflow
+/// and whether the bounded verification rerun completed it.
+///
+/// Schema-additive: legacy checkpoints load with `None` (the field is
+/// `Option` with a serde default), and the whole record is skipped when
+/// absent so pre-#1164 checkpoints round-trip byte-stably.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairRecord {
+    /// Whether an AI-proposed fix was actually written to the workflow file
+    /// (authorization gates passed and `apply_fix` succeeded).
+    pub applied: bool,
+    /// AI session id of the diagnosis that produced the fix; links the
+    /// repair record to the archived session and the before-fix workflow
+    /// snapshot.
+    pub session_id: String,
+    /// Whether the verification rerun was attempted (guards, binary
+    /// resolution, and spawn failures leave this false).
+    pub rerun_attempted: bool,
+    /// Whether the verification rerun completed the workflow (exit 0).
+    /// Meaningful only when `rerun_attempted` is true.
+    pub rerun_succeeded: bool,
+    /// Human-readable detail: why the rerun was skipped, or its exit code.
+    pub detail: String,
+    /// RFC3339 timestamp of the last record update.
+    pub timestamp: String,
+}
+
 /// Persistent checkpoint state for resumable workflow execution.
 ///
 /// Tracks which rules have completed or failed so that a restarted workflow
@@ -565,6 +593,13 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub env_repro_degraded: bool,
+
+    /// AI-repair loop outcome (issue #1164): set when AI error recovery
+    /// applied a fix to the workflow, updated after the bounded verification
+    /// rerun completes (or is skipped). Absent in legacy checkpoints and
+    /// whenever no repair was applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_record: Option<RepairRecord>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -697,7 +732,16 @@ impl CheckpointState {
             output_pattern_domains: BTreeMap::new(),
             protected_tree_baselines: BTreeMap::new(),
             env_repro_degraded: false,
+            repair_record: None,
         }
+    }
+
+    /// Record the AI-repair loop outcome (issue #1164). `applied` is set
+    /// when the fix is written; `rerun_attempted`/`rerun_succeeded` are
+    /// updated after the verification rerun completes (or is skipped).
+    /// The timestamp is refreshed on every call.
+    pub fn record_repair(&mut self, record: RepairRecord) {
+        self.repair_record = Some(record);
     }
 
     /// Record a runtime-discovered output_pattern domain for a producer
@@ -4096,6 +4140,46 @@ mod tests {
         // (skip_serializing_if) — legacy consumers never see a null key.
         let json = CheckpointState::new().to_json().unwrap();
         assert!(!json.contains("workflow_git_sha"));
+    }
+
+    #[test]
+    fn repair_record_roundtrip_and_legacy_default() {
+        // Issue #1164: the repair-loop outcome survives a save/load roundtrip
+        // with every field intact.
+        let mut state = CheckpointState::new();
+        assert!(state.repair_record.is_none());
+        state.record_repair(RepairRecord {
+            applied: true,
+            session_id: "sess-1164".into(),
+            rerun_attempted: true,
+            rerun_succeeded: true,
+            detail: "verification rerun exited 0".into(),
+            timestamp: "2026-11-18T00:00:00Z".into(),
+        });
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        let record = loaded
+            .repair_record
+            .expect("repair_record survives roundtrip");
+        assert!(record.applied);
+        assert_eq!(record.session_id, "sess-1164");
+        assert!(record.rerun_attempted);
+        assert!(record.rerun_succeeded);
+        assert_eq!(record.detail, "verification rerun exited 0");
+        assert_eq!(record.timestamp, "2026-11-18T00:00:00Z");
+        // Legacy checkpoint without the field loads fine (schema-additive).
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.repair_record.is_none());
+    }
+
+    #[test]
+    fn repair_record_absent_from_json_by_default() {
+        // Runs without an AI repair never carry the key
+        // (skip_serializing_if) — checkpoint JSON stays byte-identical to
+        // pre-#1164 for them.
+        let json = CheckpointState::new().to_json().unwrap();
+        assert!(!json.contains("repair_record"));
     }
 
     #[test]

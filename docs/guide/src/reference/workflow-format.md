@@ -3873,6 +3873,54 @@ validation but are not consumed by run execution.
 | `title` | String | No | Workflow or paper title |
 | `url` | String | No | Source repository or landing page URL |
 
+## `[ai]` — AI Companion Settings
+
+```toml
+[ai]
+enabled = true              # one-line activation: all AI commands auto-detect
+auto_fix = "ask"            # recovery write mode: "ask" (default) | "always" | "never"
+provider = "deepseek"       # advisory for the CLI runtime (see the AI CLI reference)
+model = "deepseek-v4-flash"
+max_retries = 5
+team_profile = "compact"    # template --ai generation profile: "compact" | "full"
+```
+
+Optional AI companion configuration. With `enabled = true`, AI surfaces
+activate without CLI flags — including the error-recovery loop that `run`
+starts when a rule fails (see
+[AI error recovery](../commands/run.md#ai-error-recovery-ai-recover)). The
+full provider/model/skills reference lives in
+[the AI CLI reference](ai-cli.md#workflow-level-config-ai-section-in-oxoflow).
+
+`auto_fix` controls what the recovery path may do with an AI-proposed
+workflow patch: `ask` (the documented default) prompts y/N on an interactive
+terminal and is denied headless, `always` applies safe fixes automatically,
+`never` only reports. In every mode the model's own safety verdict and
+complete-workflow validation still gate the write — an unauthorized or
+refused fix never touches the file.
+
+When a fix IS applied (the verified-repair loop, issue #1164), the engine
+performs one bounded verification rerun of the failed rules with the updated
+workflow (`run <workflow> --resume-failed --no-ai-recover`; succeeded rules
+stay skipped), narrates stable `REPAIR_APPLIED` / `REPAIR_RERUN_SUCCEEDED` /
+`REPAIR_RERUN_FAILED` / `REPAIR_RERUN_SKIPPED` contract lines, and records
+the outcome in the checkpoint's `repair_record`:
+
+| Field | Type | Description |
+|---|---|---|
+| `applied` | Bool | The fix was written to the workflow file |
+| `session_id` | String | AI diagnosis session that produced the fix (links the archived session and the before-fix snapshot) |
+| `rerun_attempted` | Bool | The verification rerun was attempted (guards/launch failures leave it `false`) |
+| `rerun_succeeded` | Bool | The rerun completed the workflow (exit 0) |
+| `detail` | String | Skip reason or the rerun exit code |
+| `timestamp` | String | RFC3339 time of the last record update |
+
+A rerun that completes the workflow exits 0 (the run finishes successfully
+with the `--json` `repair` object set); a failed rerun keeps the ordinary
+failure path. The rerun carries `--no-ai-recover`, so it can never start
+another repair cycle — at most one verification rerun happens per run
+invocation.
+
 ## See Also
 
 - [Create a Workflow](../how-to/create-workflow.md) — practical authoring guide

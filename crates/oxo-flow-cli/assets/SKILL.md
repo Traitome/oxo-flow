@@ -94,7 +94,10 @@ ends with a **Done when** condition — do not proceed without it.
 - On failure: read structured diagnostics, diagnose, fix, re-run the static
   gates, then resume — `oxo-flow resume <checkpoint>` (or `run --resume-failed`)
   (checkpoint avoids recompute). Optional AI recovery:
-  `run --ai-recover --ai-max-retries 3`.
+  `run --ai-recover --ai-max-retries 3`. An applied fix is verified by one
+  automatic rerun: the engine emits `REPAIR_APPLIED` then
+  `REPAIR_RERUN_SUCCEEDED`/`REPAIR_RERUN_FAILED`/`REPAIR_RERUN_SKIPPED`
+  contract lines and records `repair_record` in the checkpoint.
 - Retry budget: max 3 correction loops, then escalate to the human.
 - Done when: all rules complete, evidenced by checkpoint state.
 

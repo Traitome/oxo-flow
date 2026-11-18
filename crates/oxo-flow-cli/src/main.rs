@@ -198,6 +198,12 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
+        /// Disable AI error recovery for this invocation, including the
+        /// workflow's `[ai] enabled` auto-detect. The verified-repair loop
+        /// (issue #1164) passes this to its verification rerun so a fixed
+        /// run can never start another repair cycle.
+        #[arg(long)]
+        no_ai_recover: bool,
         /// Maximum AI attempts for recovery when a call fails (default: 1;
         /// only a FAILED call is retried).
         #[arg(long = "ai-max-retries", value_name = "N")]
@@ -1528,6 +1534,7 @@ async fn main() -> Result<()> {
             args,
             config_overrides,
             ai_recover,
+            no_ai_recover,
             ai_max_retries,
             samples_filter,
             rerun,
@@ -1693,6 +1700,7 @@ async fn main() -> Result<()> {
                 json: cli.json,
                 cli_args: merged_args,
                 ai_recover,
+                no_ai_recover,
                 ai_max_retries,
                 samples_filter,
                 rerun,
@@ -2221,6 +2229,8 @@ async fn main() -> Result<()> {
                         json: false,
                         cli_args: vec![],
                         ai_recover: false,
+                        // `test` never triggers the AI repair loop
+                        no_ai_recover: false,
                         ai_max_retries: None,
                         samples_filter: samples_filter.clone(),
                         // test mode: normal up-to-date checks

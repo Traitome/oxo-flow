@@ -173,6 +173,9 @@ pub async fn resume_command(
         // resume reuses checkpoint state
         cli_args: Vec::new(),
         ai_recover,
+        // resume honors the user's AI recovery choice (no loop guard here —
+        // a verification rerun goes through `run`, never `resume`)
+        no_ai_recover: false,
         ai_max_retries,
         // resume restores checkpoint state as-is
         samples_filter: Vec::new(),

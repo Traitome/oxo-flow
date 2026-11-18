@@ -145,6 +145,16 @@ pub(crate) struct RunCounts {
     pub(crate) blocked: usize,
 }
 
+/// AI-repair loop outcome for the `--json` summary (issue #1164): set when
+/// the failure handler applied a fix and attempted the verification rerun.
+#[derive(Clone)]
+pub(crate) struct RunRepairSummary {
+    pub(crate) applied: bool,
+    pub(crate) session_id: String,
+    pub(crate) rerun_attempted: bool,
+    pub(crate) rerun_succeeded: bool,
+}
+
 /// The `--json` summary for one `run`/`resume` invocation, emitted at most
 /// once in the canonical `{"command":"run",...}` shape.
 ///
@@ -156,6 +166,7 @@ pub(crate) struct RunCounts {
 pub(crate) struct RunJsonSummary {
     json: bool,
     workflow: PathBuf,
+    repair: Option<RunRepairSummary>,
     emitted: bool,
 }
 
@@ -167,6 +178,7 @@ impl RunJsonSummary {
             // name available; `set_workflow` replaces it with the resolved
             // path (a repository spec resolves to a checkout path).
             workflow: workflow.unwrap_or_else(|| Path::new("")).to_path_buf(),
+            repair: None,
             emitted: false,
         }
     }
@@ -174,6 +186,12 @@ impl RunJsonSummary {
     /// Point the summary at the resolved workflow file.
     pub(crate) fn set_workflow(&mut self, workflow: &Path) {
         self.workflow = workflow.to_path_buf();
+    }
+
+    /// Attach the AI-repair loop outcome (issue #1164); emitted as the
+    /// `repair` key of the summary document when present.
+    pub(crate) fn set_repair(&mut self, repair: RunRepairSummary) {
+        self.repair = Some(repair);
     }
 
     pub(crate) fn emit(
@@ -197,6 +215,12 @@ impl RunJsonSummary {
                 "non_required_failed": counts.non_required_failed,
                 "blocked": counts.blocked,
             }),
+            "repair": self.repair.as_ref().map(|r| serde_json::json!({
+                "applied": r.applied,
+                "session_id": r.session_id,
+                "rerun_attempted": r.rerun_attempted,
+                "rerun_succeeded": r.rerun_succeeded,
+            })),
             "resources": resources,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
