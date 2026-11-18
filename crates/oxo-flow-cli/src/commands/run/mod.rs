@@ -1420,13 +1420,25 @@ async fn run_command_inner(
 
     // Parent context the repair loop forwards into its verification rerun
     // (issue #1164 review-R3): the effective workdir, the raw override
-    // tokens, and the run-shaping flags the child must re-derive.
+    // tokens, and the run-shaping flags the child must re-derive. The
+    // plan-shaping flags ride along verbatim — the child replans from the
+    // workflow file, and without them a `--samples`/`--target`-restricted
+    // parent would "verify" by executing the whole remaining DAG.
     let rerun_ctx = crate::commands::run::repair::RerunContext {
         workdir: Some((*workdir_actual).clone()),
         config_args: rerun_config_args,
         provenance,
         jobs: (jobs != 1).then_some(jobs),
         keep_going,
+        samples: samples_filter.clone(),
+        targets: target,
+        modules: module,
+        from_rule,
+        profile,
+        timeout: (timeout != "0").then_some(timeout),
+        retry: (retry > 0).then_some(retry),
+        max_threads: (max_threads > 0).then_some(max_threads),
+        max_memory: (max_memory > 0).then_some(max_memory),
     };
     run_scheduler_loop(SchedulerLoopContext {
         jobs,

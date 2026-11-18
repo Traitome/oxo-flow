@@ -2235,8 +2235,12 @@ async fn main() -> Result<()> {
                         json: false,
                         cli_args: vec![],
                         ai_recover: false,
-                        // `test` never triggers the AI repair loop
-                        no_ai_recover: false,
+                        // `test` never triggers the AI repair loop: without
+                        // this flag a workflow's `[ai] enabled` would
+                        // auto-detect in the failure handler and enter the
+                        // verified-repair rerun inside what is a validation
+                        // gate.
+                        no_ai_recover: true,
                         ai_max_retries: None,
                         samples_filter: samples_filter.clone(),
                         // test mode: normal up-to-date checks
