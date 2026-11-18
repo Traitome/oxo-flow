@@ -375,6 +375,16 @@ pub struct DagNode {
     /// their root cause on stdout; surfaced alongside stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_tail: Option<String>,
+    /// Environment the rule is declared to run in (issue #1149), resolved
+    /// from the run's own pipeline snapshot with the run's precedence —
+    /// `env_group` → rule `environment` → `[defaults] environment` — so the
+    /// monitor no longer mislabels every rule as `system`. The value is the
+    /// backend kind (`conda`, `mamba`, `pixi`, `docker`, `singularity`,
+    /// `venv`, `modules`, `system`). `None` for a node that no longer maps
+    /// to a snapshot rule (an orphaned instance of a workflow edited since
+    /// the run): the environment is genuinely unknown there, and reporting
+    /// `system` would be a fabrication.
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

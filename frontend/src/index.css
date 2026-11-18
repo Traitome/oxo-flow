@@ -417,6 +417,9 @@ select.search-input{padding-right:1.75rem}
 .rf-env-singularity { background: var(--env-singularity); }
 .rf-env-venv { background: var(--env-venv); }
 .rf-env-modules { background: var(--env-modules); }
+/* Issue #1149: orphaned monitor nodes have no resolvable environment — a
+   neutral dot, not the system-env color, so the two never read alike. */
+.rf-env-unknown { background: var(--color-text-tertiary); }
 .rf-rule-status { margin-left: auto; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
 .rf-rule-shell {
   margin-top: 6px;
