@@ -1510,6 +1510,12 @@ extends = "align_default"  # Inherits threads, memory, tags
 threads = 16  # Override inherited value
 ```
 
+`extends` chains may be multi-level: base rules are resolved first, so a
+grandchild receives values its parent only inherits. The base rule may live in
+an `[[include]]`d file; when that include declares a `namespace`, `extends`
+references to rules inside the same module are qualified automatically
+(`base` → `<namespace>::base`).
+
 ### Priority and Targeting
 
 | Field | Type | Description |
