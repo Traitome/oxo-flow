@@ -399,7 +399,7 @@ Evidence tests:
 - `postgres_storage_contract::storage_backend_contract_round_trips_on_postgres` (quota section; requires `OXO_FLOW_TEST_POSTGRES_URL`)
 
 Docs: `docs/guide/src/reference/web-api.md` → "Quota" (durable/atomic
-semantics + "Declared-resource enforcement"); 
+semantics + "Declared-resource enforcement");
 `docs/guide/src/reference/web-system-architecture.md` → "Durable runtime
 state". Commit binding: `c7e347839fa3e1f4adbf11827bd32a2479fec083`.
 
