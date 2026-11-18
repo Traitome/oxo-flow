@@ -4672,18 +4672,6 @@ fn sensitive_env_name(index: usize) -> String {
     format!("{SENSITIVE_ENV_BASE}_{index}")
 }
 
-/// The sensitive-routing variable names a rendered command references
-/// (issue #1120, audit RB-12).
-///
-/// After [`route_sensitive_values_through_env`] rewrites a command, every
-/// routed secret is referenced as `${OXO_FLOW_SENSITIVE_n}`. Container and
-/// cloud artifacts cannot carry the value, so each backend's artifact
-/// builder (docker `-e`, singularity/apptainer `*ENV_` prefix, k8s
-/// `secretKeyRef`, GCP `secretVariables`) must first discover which names
-/// to forward. This is the ONE scanner they all share — a per-backend copy
-/// would drift from the numbering [`route_sensitive_values_through_env`]
-/// assigns. Returned in sorted order so generated manifests are
-/// order-independent (BTreeSet, not HashSet).
 /// Extra variable names a routed sensitive value must also be exported under
 /// for a container environment kind (issue #1120 / ledger RB-12).
 ///
@@ -4704,6 +4692,18 @@ pub fn sensitive_env_aliases(name: &str, env_kind: &str) -> Vec<String> {
     }
 }
 
+/// The sensitive-routing variable names a rendered command references
+/// (issue #1120, audit RB-12).
+///
+/// After `route_sensitive_values_through_env` rewrites a command, every
+/// routed secret is referenced as `${OXO_FLOW_SENSITIVE_n}`. Container and
+/// cloud artifacts cannot carry the value, so each backend's artifact
+/// builder (docker `-e`, singularity/apptainer `*ENV_` prefix, k8s
+/// `secretKeyRef`, GCP `secretVariables`) must first discover which names
+/// to forward. This is the ONE scanner they all share — a per-backend copy
+/// would drift from the numbering `route_sensitive_values_through_env`
+/// assigns. Returned in sorted order so generated manifests are
+/// order-independent (BTreeSet, not HashSet).
 pub fn sensitive_env_refs(cmd: &str) -> Vec<String> {
     let needle = format!("{SENSITIVE_ENV_BASE}_");
     let mut names = std::collections::BTreeSet::new();
