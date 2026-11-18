@@ -569,6 +569,23 @@ Current CLI simulation baseline: 8/10 detections, 7/10 attributed diagnoses, 7/1
 - Independent reviewer sign-off.
 - A publication decision rule that permits a negative result.
 
+**Current state (governance layer created, gate not passed)**: the six
+artifacts are frozen under
+[`docs/superpowers/preregistration/`](../preregistration/README.md)
+(`PR-01`–`PR-06`, version 1.0.1 — amendment 1, content hashes in
+`preregistration/MANIFEST.sha256`), covering the confirmatory campaigns
+#1163, #1164, #1165, and #1166. Independent reviewer sign-off in PR-05 is
+PENDING, so the maturity stays **Planned / blocked**: signing, the per-campaign
+pre-run manifests, the sealed case sets, and the sealed analysis scripts are
+all still required before a campaign may collect confirmatory data. #1164
+already carries a ten-case pilot measured before the freeze (3/10 applied,
+3/10 verified, 3/3 of the structurally recovery-eligible class); that pilot
+is disclosed in PR-01/PR-06 and is not confirmatory — a held-out re-run is
+required. No other campaign has collected confirmatory data. Commit
+binding: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54`
+(v1.0.1 amendment-1 commit); verify with
+`shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`).
+
 ### Task 4.1: Multi-Omics Ablation & Fault-Injection Benchmark (`eval/frontier/`)
 
 **Maturity**: Simulation only
