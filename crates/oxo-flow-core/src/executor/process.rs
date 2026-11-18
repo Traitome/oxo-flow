@@ -1312,12 +1312,16 @@ impl LocalExecutor {
         // otherwise run a second `conda env create` against the same
         // prefix while the orphan is still installing — the exact
         // transaction corruption the lock exists to prevent).
-        let mut setup = Command::new("sh");
+        // Issue #1174 (RB-15): this SETUP spawn deliberately keeps the
+        // engine's full ambient environment — an accepted risk, not an
+        // oversight. The workflow-authored setup inputs (requirements file,
+        // conda YAML) already execute arbitrary code as the operator
+        // (sdist build backends, conda post-link scripts), so an env clear
+        // would be cosmetic rather than a boundary; it would also break
+        // legitimate proxy/mirror/CA configuration. See
+        // `env_tooling_shell_command` and the environment-system reference.
+        let mut setup = env_tooling_shell_command(&setup_cmd, &self.config.workdir);
         setup
-            .kill_on_drop(true)
-            .arg("-c")
-            .arg(&setup_cmd)
-            .current_dir(&self.config.workdir)
             // H2: CAPTURE both streams. This child used to inherit the
             // terminal, so `wait_bounded`'s bounded collector saw nothing:
             // every failure became the empty `setup failed: ` while the real
@@ -1364,21 +1368,13 @@ impl LocalExecutor {
                                 rule = %rule.name,
                                 "environment setup exited 0 but verification failed — tearing down and retrying once"
                             );
-                            let mut teardown_cmd = Command::new("sh");
-                            teardown_cmd
-                                .kill_on_drop(true)
-                                .arg("-c")
-                                .arg(&teardown)
-                                .current_dir(&self.config.workdir);
+                            let mut teardown_cmd =
+                                env_tooling_shell_command(&teardown, &self.config.workdir);
                             if let Ok(child) = teardown_cmd.spawn() {
                                 let _ = wait_bounded(child, None).await;
                             }
-                            let mut retry_cmd = Command::new("sh");
-                            retry_cmd
-                                .kill_on_drop(true)
-                                .arg("-c")
-                                .arg(&setup_cmd)
-                                .current_dir(&self.config.workdir);
+                            let mut retry_cmd =
+                                env_tooling_shell_command(&setup_cmd, &self.config.workdir);
                             if let Ok(child) = retry_cmd.spawn()
                                 && let Ok(waited) = wait_bounded(child, None).await
                                 && waited.status.is_some_and(|s| s.success())
@@ -1558,11 +1554,7 @@ impl LocalExecutor {
         // Command shape as the primary attempt, #524 kill_on_drop included)
         // so the re-solve exercises the identical pixi invocation.
         let reinstall = || async {
-            let mut cmd = Command::new("sh");
-            cmd.kill_on_drop(true)
-                .arg("-c")
-                .arg(setup_cmd)
-                .current_dir(&self.config.workdir);
+            let mut cmd = env_tooling_shell_command(setup_cmd, &self.config.workdir);
             match cmd.output().await {
                 Ok(o) if o.status.success() => Ok(()),
                 Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
@@ -1618,9 +1610,7 @@ impl LocalExecutor {
 
     /// Run an environment verification command (success = usable env).
     async fn env_verify(&self, verify: &str) -> bool {
-        let mut cmd = Command::new("sh");
-        cmd.kill_on_drop(true); // #524: die with the aborted task
-        cmd.arg("-c").arg(verify).current_dir(&self.config.workdir);
+        let mut cmd = env_tooling_shell_command(verify, &self.config.workdir);
         // Bounded capture (H-3): verification output is never buffered
         // unbounded. No timeout — the caller's overall env-wait budget
         // governs.
@@ -3840,14 +3830,42 @@ fn build_execution_command_inner(
     Ok(Some(base_cmd))
 }
 
+/// Build the `sh -c` command used by every engine environment-SETUP spawn:
+/// conda/mamba env create, pixi install, venv creation + `pip install`,
+/// teardown/retry, and `env_verify` (the calls in this module).
+///
+/// Issue #1174 (RB-15, accepted risk, decision (b)): unlike rule shells
+/// ([`spawn_rule_shell`]), these spawns deliberately inherit the engine
+/// process's FULL ambient environment — no `env_clear()`, no allowlist.
+/// The setup inputs are workflow-authored executable content (a
+/// requirements file can pin an sdist whose build backend runs `setup.py`;
+/// conda installs run package post-link scripts), and that code runs as
+/// the operator with filesystem access, so hiding the environment would be
+/// cosmetic rather than a security boundary. Clearing it would instead
+/// break legitimate provisioning that depends on proxy, pip/conda mirror,
+/// and CA-certificate variables the engine cannot enumerate per tool.
+/// The real boundary is the workflow-trust decision: do not run workflows
+/// you do not trust. Documented in
+/// `docs/guide/src/reference/environment-system.md`.
+fn env_tooling_shell_command(script: &str, workdir: &Path) -> Command {
+    let mut cmd = Command::new("sh");
+    cmd.kill_on_drop(true) // #524: die with the aborted task
+        .arg("-c")
+        .arg(script)
+        .current_dir(workdir);
+    cmd
+}
+
 /// Ambient variables re-admitted from the engine process into every rule
 /// (and hook) shell (issue #1108, RB-15). Rule shells do NOT inherit the
-/// engine's environment: `apply_rule_env_allowlist` clears it, so a
-/// workflow cannot read the engine's own credentials, proxy settings, or
-/// arbitrary host state. `PATH`/`HOME`/`LANG` are the minimum a POSIX
-/// shell and the tooling it invokes need to function; `LC_*` is handled
-/// separately by dynamic prefix so a new locale variable needs no edit
-/// here.
+/// engine's environment: `apply_rule_env_allowlist` clears it, so a rule
+/// shell cannot read the engine's own credentials, proxy settings, or
+/// arbitrary host state. That guarantee is rule-shell-only: environment
+/// SETUP spawns deliberately keep the full ambient environment as an
+/// accepted risk (issue #1174 — see [`env_tooling_shell_command`]).
+/// `PATH`/`HOME`/`LANG` are the minimum a POSIX shell and the tooling it
+/// invokes need to function; `LC_*` is handled separately by dynamic
+/// prefix so a new locale variable needs no edit here.
 pub(crate) const RULE_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG"];
 
 /// Ambient variables re-admitted into a rule shell **only when that rule
@@ -6852,6 +6870,84 @@ mod tests {
             found.get("DOCKER_HOST").map(String::as_str),
             Some("unix:///run/user/1000/docker.sock"),
             "a declared DOCKER_HOST must override the ambient one: {found:?}"
+        );
+    }
+
+    /// Pick an ambient variable that this test process carries and that is
+    /// NOT in the rule-shell allowlist, so the setup-vs-rule-shell
+    /// difference is observable. `None` only when the process carries none
+    /// of the candidates (the tests then skip instead of passing vacuously).
+    fn ambient_non_allowlisted_sentinel() -> Option<(String, std::ffi::OsString)> {
+        const CANDIDATES: &[&str] = &[
+            "USER",
+            "LOGNAME",
+            "CI",
+            "GITHUB_ACTIONS",
+            "SHELL",
+            "TERM",
+            "HOSTNAME",
+        ];
+        CANDIDATES
+            .iter()
+            .find_map(|name| std::env::var_os(name).map(|value| ((*name).to_string(), value)))
+    }
+
+    /// Issue #1174 (RB-15 accepted risk): environment SETUP spawns keep the
+    /// engine's full ambient environment — the deliberate opposite of the
+    /// rule-shell contract. Executed end to end through the shared setup
+    /// command builder with a sentinel that is NOT in the rule allowlist,
+    /// so the rule-shell allowlist tests cannot mask this contract.
+    #[tokio::test]
+    async fn env_setup_spawn_inherits_ambient_environment() {
+        let Some((name, expected)) = ambient_non_allowlisted_sentinel() else {
+            // This process carries none of the candidates; nothing ambient
+            // is observable, so there is no contract to assert.
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!("printf '%s' \"${name}\"");
+        let mut cmd = env_tooling_shell_command(&script, dir.path());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let out = cmd.output().await.expect("setup probe must spawn");
+        assert!(
+            out.status.success(),
+            "setup probe failed: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            expected.to_string_lossy(),
+            "env setup must inherit the ambient {name}"
+        );
+    }
+
+    /// Issue #1174: the two contracts are deliberately split — the same
+    /// ambient sentinel that reaches an environment SETUP spawn stays
+    /// hidden from a rule shell (cleared environment + allowlist). Pinning
+    /// both sides keeps a future "helpful" change from silently moving
+    /// either one.
+    #[tokio::test]
+    async fn rule_shell_does_not_inherit_the_setup_sentinel() {
+        let Some((name, _)) = ambient_non_allowlisted_sentinel() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // `${NAME-hidden}` distinguishes "unset" from "set to empty".
+        let script = format!("printf '%s' \"${{{name}-hidden}}\"");
+        let child =
+            spawn_rule_shell(&script, dir.path(), &HashMap::new()).expect("rule shell must spawn");
+        let out = child.wait_with_output().await.unwrap();
+        assert!(
+            out.status.success(),
+            "rule shell probe failed: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "hidden",
+            "a rule shell must not inherit the ambient {name} that env setup sees"
         );
     }
 
