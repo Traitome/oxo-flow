@@ -5625,6 +5625,10 @@ below list every code the engine currently emits.</p>
 <td><code>E022</code></td>
 <td>A rule has no runnable command: <code>shell</code> is missing, empty, or whitespace-only and no non-empty <code>script</code> is declared. <code>E002</code> sees <code>shell = ""</code> as a present field, and the engine then skips the rule at run time ("no shell or script defined") — this code makes that state a hard validation error. Rules driven by <code>transform</code> are exempt (their command lives in <code>transform.map</code>/<code>transform.combine</code>). The classic trigger is an imported Nextflow process whose <code>script:</code> block was not captured</td>
 </tr>
+<tr>
+<td><code>E023</code></td>
+<td>A fan-out domain is statically degenerate, so the workflow would plan zero instances or plan literal placeholders while reporting success (issue #1153, WF-02). Covers: a <code>[[rules.scatter]]</code> with an empty value domain (<code>values = []</code>, no <code>values_from</code>, or a <code>values_from</code> that resolves to an empty list) or an empty <code>variable</code>; a <code>transform</code> rule with an empty/missing <code>split.by</code>, no split source at all, a <code>split.values_from</code> that resolves to an empty list, or a <code>split.n</code> that is zero, negative, non-integer, or above the 100,000-instance expansion cap. An unresolvable <code>config.&lt;key&gt;</code> reference is left to expansion (a CLI <code>--arg</code> override or parent include may supply it); a <code>sample_pattern</code>/<code>split.glob</code> that matches zero files is a data-dependent plan-time error, not E023. The same inputs also hard-fail <code>run</code>/<code>dry-run</code> at expansion time</td>
+</tr>
 </tbody>
 </table>
 <h3 id="lint-warnings-lint">Lint warnings (<code>lint</code>)<a class="headerlink" href="#lint-warnings-lint" title="Permanent link">#</a></h3>
@@ -5779,6 +5783,10 @@ below list every code the engine currently emits.</p>
 <tr>
 <td><code>W041</code></td>
 <td>A rule references the sample domain (<code>{sample}</code>, <code>{group}</code>, <code>{meta.&lt;column&gt;}</code>, <code>{wildcard.sample}</code>, <code>{wildcard.group}</code>) with no binding source — the rule runs once and the token stays unbound (the execution-time gate rejects it). Bind the domain in <code>input</code>/<code>output</code> (a uniquely-keying <code>{meta.*}</code> OUTPUT reference or a one-row constant table also binds), declare the source (<code>sample_pattern</code>/<code>pairs_pattern</code> declarations count without data), or use <code>singleton = true</code> to silence the lint diagnosis for an intentional one-instance <code>{meta.*}</code> read (the runtime gate still requires a resolvable value). <code>{sample}</code>/<code>{group}</code> stay flagged even for a singleton</td>
+</tr>
+<tr>
+<td><code>W042</code></td>
+<td><em>(emitted by <code>validate</code>; <code>lint</code> does not raise it)</em> An empty <code>[[sample_groups]]</code> <code>samples</code> list. Downgraded from E023 (issue #1153 review): the cohort may be supplied at run time with <code>--samples @sheet.tsv</code>, so <code>validate</code> warns while <code>run</code>/<code>dry-run</code> still fail closed when no domain binds. Fix by listing samples, removing the group, or supplying the cohort at run time</td>
 </tr>
 </tbody>
 </table>

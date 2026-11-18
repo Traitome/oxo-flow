@@ -9463,18 +9463,110 @@ gather. For new workflows, prefer the unified
 </span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"per_chr"</span>
 </span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a><span class="n">scatter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">variable</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"chr"</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
-<p>A rule whose scatter fans out over <strong>zero values</strong> — declared <code>values = []</code>, or
-<code>values_from</code> referencing a config key that resolves to an empty list —
-produces zero instances and can never run. <code>oxo-flow validate</code> therefore
-skips the input-existence check (E010/W020) for such rules and excludes their
-output templates from the W033 output-collision lint, mirroring the
-<code>when</code>-gated-off exemption: a rule that cannot run must not fail validation
-over inputs it will never read. An <strong>unresolvable</strong> <code>values_from</code> (missing
-config key, non-string/array value) is deliberately NOT treated as empty —
-the executor expands zero instances silently in that case, so validate keeps
-the input-existence check to surface the typo as a missing-input diagnostic
-instead of silently passing (the stricter <code>[[values]]</code> tables and
-<code>transform.split</code> reject an unresolvable reference outright).</p>
+<p>A rule whose scatter fans out over <strong>zero values</strong> — declared <code>values = []</code>,
+no <code>values_from</code>, or <code>values_from</code> referencing a config key that resolves to an
+empty list — produces zero instances and can never run. Since issue #1153
+(WF-02) this is a hard <strong>E023</strong> validation error naming the rule and the
+variable; <code>run</code> and <code>dry-run</code> fail at expansion time with the same text. An
+empty <code>scatter.variable</code> is likewise an E023 error: there is no binding name,
+so the instances could only ever carry literal placeholders. Validate still
+skips the input-existence check (E010/W020) and the W033 output-collision lint
+for an empty-scatter rule, because a rule that cannot run must not add noise
+about inputs it will never read — but the degenerate declaration itself is
+never silently accepted.</p>
+<p>An <strong>unresolvable</strong> <code>values_from</code> (missing config key, non-string/array value)
+is deliberately NOT treated as statically empty by <code>validate</code>: a CLI <code>--arg</code>
+override or a parent <code>[[include]]</code> may still supply the key, so validate keeps
+the input-existence check to surface the typo while <code>run</code>/<code>dry-run</code> reject the
+plan when the key is still missing. The stricter <code>[[values]]</code> tables reject an
+empty or unresolvable reference at parse time.</p>
+<p>Degenerate scatter/transform domains (issue #1153, WF-02) fail closed —
+they never yield a plan that reports success while executing nothing:</p>
+<table>
+<thead>
+<tr>
+<th>Degenerate input</th>
+<th><code>validate</code></th>
+<th><code>run</code> / <code>dry-run</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>[rules.scatter]</code> <code>values = []</code> (no <code>values_from</code>)</td>
+<td>E023</td>
+<td>non-zero, names rule + variable</td>
+</tr>
+<tr>
+<td><code>[rules.scatter]</code> <code>values_from</code> resolving to an empty list</td>
+<td>E023</td>
+<td>non-zero, names rule + variable</td>
+</tr>
+<tr>
+<td><code>[rules.scatter]</code> <code>values_from</code> unresolvable (missing key)</td>
+<td>input-existence check only</td>
+<td>non-zero, names rule + variable</td>
+</tr>
+<tr>
+<td><code>[rules.scatter]</code> <code>variable = ""</code></td>
+<td>E023</td>
+<td>non-zero, names rule</td>
+</tr>
+<tr>
+<td><code>[[sample_groups]]</code> entry with <code>samples = []</code></td>
+<td>W042 warning (the cohort may be supplied with <code>--samples</code>)</td>
+<td>non-zero for rules using <code>{sample}</code>/<code>{group}</code> without run-time samples</td>
+</tr>
+<tr>
+<td><code>[[values]]</code> with <code>values = []</code> / empty <code>values_from</code></td>
+<td>parse-time error</td>
+<td>parse-time error</td>
+</tr>
+<tr>
+<td><code>sample_pattern</code> / <code>pairs_pattern</code> matching zero files</td>
+<td>passes (data may be unmounted)</td>
+<td>non-zero when a rule uses <code>{sample}</code>/<code>{group}</code> or a pair placeholder (<code>{pair_id}</code>, <code>{experiment}</code>, <code>{control}</code>, …)</td>
+</tr>
+<tr>
+<td><code>transform.split.n</code> = <code>0</code></td>
+<td>E023</td>
+<td>non-zero</td>
+</tr>
+<tr>
+<td><code>transform.split.n</code> negative</td>
+<td>E023</td>
+<td>non-zero</td>
+</tr>
+<tr>
+<td><code>transform.split.n</code> non-integer</td>
+<td>E023</td>
+<td>non-zero</td>
+</tr>
+<tr>
+<td><code>transform.split.n</code> above the 100,000-instance cap</td>
+<td>E023</td>
+<td>non-zero (never materializes the instances)</td>
+</tr>
+<tr>
+<td><code>transform.split.by</code> empty or missing</td>
+<td>E023</td>
+<td>non-zero, names rule</td>
+</tr>
+<tr>
+<td><code>transform.split</code> with no <code>values</code>/<code>values_from</code>/<code>n</code>/<code>glob</code></td>
+<td>E023</td>
+<td>non-zero</td>
+</tr>
+<tr>
+<td><code>transform.split.glob</code> matching zero files</td>
+<td>passes (data may be unmounted)</td>
+<td>non-zero</td>
+</tr>
+</tbody>
+</table>
+<p>The split-count cap reuses the engine-wide <code>MAX_COMBINATIONS</code> ceiling
+(<code>100_000</code>) that wildcard and <code>[[values]]</code> fan-out already enforce: a naive
+<code>0..n</code> expansion of an absurd count would exhaust memory instead of
+producing a usable plan.</p>
 <h3 id="expand-inputs">Expand Inputs<a class="headerlink" href="#expand-inputs" title="Permanent link">#</a></h3>
 <p>The <code>expand_inputs</code> field generates additional input combinations via Cartesian
 product expansion.</p>
@@ -10899,7 +10991,7 @@ for the full diagnostic table with coercion hints.</p>
 <tr>
 <td><code>by</code></td>
 <td>String</td>
-<td><strong>Required</strong>. Variable name for splitting (e.g., <code>"chr"</code>, <code>"sample"</code>)</td>
+<td><strong>Required</strong>. Variable name for splitting (e.g., <code>"chr"</code>, <code>"sample"</code>). Empty or missing is an E023 error (issue #1153)</td>
 </tr>
 <tr>
 <td><code>values</code></td>
@@ -10909,20 +11001,22 @@ for the full diagnostic table with coercion hints.</p>
 <tr>
 <td><code>values_from</code></td>
 <td>String</td>
-<td>Reference to config variable (e.g., <code>"config.chromosomes"</code>)</td>
+<td>Reference to config variable (e.g., <code>"config.chromosomes"</code>). A reference resolving to an empty list is an E023 error</td>
 </tr>
 <tr>
 <td><code>n</code></td>
 <td>String</td>
-<td>Number of map instances — the split values are the labels <code>"0"</code>, <code>"1"</code>, ..., <code>"n-1"</code>. It does <strong>not</strong> partition the input data</td>
+<td>Number of map instances — the split values are the labels <code>"0"</code>, <code>"1"</code>, ..., <code>"n-1"</code>. It does <strong>not</strong> partition the input data. Must be a positive integer no greater than the 100,000-instance expansion cap; zero, negative, non-integer, and oversized values are E023 errors (issue #1153)</td>
 </tr>
 <tr>
 <td><code>glob</code></td>
 <td>String</td>
-<td>Glob pattern to find split values from files</td>
+<td>Glob pattern to find split values from files. A pattern matching zero files is a plan-time error</td>
 </tr>
 </tbody>
 </table>
+<p>At least one of <code>values</code>, <code>values_from</code>, <code>n</code>, or <code>glob</code> is required — a split
+with no source is an E023 error.</p>
 <p>Priority: <code>values</code> → <code>values_from</code> → <code>n</code> → <code>glob</code></p>
 <div class="admonition warning">
 <p class="admonition-title">Split values are labels, not data partitions</p>
