@@ -12,6 +12,7 @@ mod tests;
 #[cfg(test)]
 mod transform_semantics_tests;
 
+pub(crate) use expand::SplitNResolution;
 pub(crate) use known_keys::TOP_LEVEL_KEYS;
 pub use known_keys::edit_distance;
 pub use model::*;
@@ -576,14 +577,43 @@ impl WorkflowConfig {
         &self,
         rule: &Rule,
     ) -> std::collections::BTreeSet<String> {
+        self.unbound_sample_domain_tokens_with(rule, true)
+    }
+
+    /// Plan-time variant of [`Self::unbound_sample_domain_tokens`]
+    /// (issue #1153 WF-02): a declared `sample_pattern` / `pairs_pattern`
+    /// only bounds the domain when the filesystem scan actually found
+    /// files. Lint (W041) must tolerate an unmounted data directory, but
+    /// expansion is about to BUILD the plan, where a zero-match pattern
+    /// leaves the placeholders literal — that is the empty-domain hole.
+    pub(crate) fn unbound_sample_domain_tokens_at_plan(
+        &self,
+        rule: &Rule,
+    ) -> std::collections::BTreeSet<String> {
+        self.unbound_sample_domain_tokens_with(rule, false)
+    }
+
+    fn unbound_sample_domain_tokens_with(
+        &self,
+        rule: &Rule,
+        declared_sources_bound: bool,
+    ) -> std::collections::BTreeSet<String> {
         let mut unbound = std::collections::BTreeSet::new();
         // `input_groups` discovers its own domain at plan time.
         if !rule.input_groups.is_empty() {
             return unbound;
         }
 
-        let has_pairs = !self.pairs.is_empty() || self.workflow.pairs_pattern.is_some();
-        let has_groups = !self.sample_groups.is_empty() || self.workflow.sample_pattern.is_some();
+        let has_pairs = !self.pairs.is_empty()
+            || (declared_sources_bound && self.workflow.pairs_pattern.is_some());
+        // Plan time sees the data: a `[[sample_groups]]` table whose
+        // samples lists are all empty contributes no combinations, so it
+        // must not count as a bound domain.
+        let has_groups = if declared_sources_bound {
+            !self.sample_groups.is_empty() || self.workflow.sample_pattern.is_some()
+        } else {
+            !crate::wildcard::wildcard_combinations_from_groups(&self.sample_groups).is_empty()
+        };
         let combos: Vec<crate::wildcard::WildcardValues> = if !self.sample_groups.is_empty() {
             crate::wildcard::wildcard_combinations_from_groups(&self.sample_groups)
         } else if !self.pairs.is_empty() {
@@ -592,9 +622,12 @@ impl WorkflowConfig {
             Vec::new()
         };
         // A declared discovery pattern with no data mounted cannot be
-        // judged here — assume the declared source is valid (H4).
+        // judged by lint — assume the declared source is valid (H4). At
+        // plan time the scan already ran, so a zero-match pattern does not
+        // bind anything.
         let meta_keyed = if combos.is_empty() {
-            self.workflow.sample_pattern.is_some() || self.workflow.pairs_pattern.is_some()
+            declared_sources_bound
+                && (self.workflow.sample_pattern.is_some() || self.workflow.pairs_pattern.is_some())
         } else {
             self.meta_outputs_keyed(rule, &combos)
         };

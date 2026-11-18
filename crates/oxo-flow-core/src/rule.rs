@@ -805,6 +805,12 @@ pub struct TransformConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SplitConfig {
     /// Partition variable name (e.g., "chr", "sample", "chunk").
+    ///
+    /// Deserialization defaults to an empty string so a missing field is
+    /// reported with the rule name by validate (E023) and the expansion
+    /// gate instead of a bare serde "missing field" parse error
+    /// (issue #1153 WF-02).
+    #[serde(default)]
     pub by: String,
 
     /// Direct list of values to split over.

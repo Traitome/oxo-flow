@@ -13,6 +13,26 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use std::collections::HashMap;
 
+/// Classification of `transform.split.n` (issue #1153 WF-02).
+///
+/// [`WorkflowConfig::classify_split_n`] is the single source of truth for
+/// the validate-time E023 gate and the plan-time error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SplitNResolution {
+    /// A concrete, in-range instance count.
+    Count(usize),
+    /// `split.n` names a `config.<key>` this document does not define —
+    /// a CLI `--arg` override or a parent include may still supply it.
+    UnresolvedConfig,
+    /// Statically degenerate: zero, negative, non-integer, an empty
+    /// referenced config list, or above the expansion cap.
+    Invalid {
+        /// Why the value cannot produce a plan, as a phrase completing
+        /// `split.n '<raw>' <reason>`.
+        reason: String,
+    },
+}
+
 impl WorkflowConfig {
     /// Expand rules that contain pair or group wildcards into concrete instances.
     ///
@@ -1015,6 +1035,60 @@ impl WorkflowConfig {
                 // rule (warning only for `singleton = true`) instead of
                 // silently passing an empty `--reference ''` (issue #1078
                 // H1). The `when` gate still closes (missing row → false).
+                //
+                // Issue #1153 WF-02: a sample/group placeholder that reaches
+                // this branch has no fan-out source at all — the sample
+                // domain is declared-but-empty (`[[sample_groups]]` with an
+                // empty samples list, or a `sample_pattern` that matched
+                // zero files). Planning it as a literal template would exit
+                // 0 while executing the placeholder text, so fail closed.
+                //
+                // Scope is deliberately the DECLARED sample domain: a rule
+                // with no sample source at all keeps the historical
+                // behavior (lint W041 warning + the execution-time
+                // placeholder gate), which the cluster/preview tests and
+                // the documented undeclared-wildcard contract rely on.
+                // Scatter rules are exempt: their own pass below binds the
+                // scatter variable (the W041 binding model is shared).
+                // `output_pattern` rules are exempt for the tokens their
+                // pattern declares: the runtime discovery scan projects
+                // EVERY wildcard of the pattern (including `{sample}`)
+                // from discovered filenames, so such a token is not an
+                // empty domain — it is a runtime-discovered one.
+                let sample_source_declared =
+                    !self.sample_groups.is_empty() || self.workflow.sample_pattern.is_some();
+                if rule.scatter.is_none() && sample_source_declared {
+                    let output_pattern = rule.output_pattern.as_deref().unwrap_or("");
+                    let unbound: Vec<String> = self
+                        .unbound_sample_domain_tokens_at_plan(rule)
+                        .into_iter()
+                        .filter(|token| {
+                            matches!(
+                                token.as_str(),
+                                "{sample}" | "{wildcard.sample}" | "{group}" | "{wildcard.group}"
+                            ) && !output_pattern.contains(token.as_str())
+                        })
+                        .collect();
+                    if !unbound.is_empty() {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "rule '{}' references {} but no sample domain produced any \
+                                 instance (the declared sample source is empty or matched \
+                                 no files) — an empty domain must not silently leave the \
+                                 placeholder(s) unbound",
+                                rule.name,
+                                unbound.join(", ")
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(
+                                "declare a non-empty [[sample_groups]] samples list, a \
+                                 sample_pattern that matches files, or [[pairs]] entries; \
+                                 or remove the placeholder"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                }
                 let mut expanded = rule.clone();
                 if rule.scatter.is_none() {
                     self.apply_instance_meta_guarded(
@@ -1086,6 +1160,24 @@ impl WorkflowConfig {
 
         for rule in expanded_rules {
             if let Some(ref scatter) = rule.scatter {
+                // Issue #1153 WF-02: `variable = ""` leaves the domain with
+                // no binding name — instances would fan out without binding
+                // any placeholder. Fail closed instead of planning them.
+                if scatter.variable.trim().is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "scatter rule '{}' declares an empty scatter variable — the \
+                             value domain has no binding name",
+                            rule.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "set scatter.variable to the placeholder name to bind (e.g. \
+                             variable = \"chunk\")"
+                                .to_string(),
+                        ),
+                    });
+                }
                 let mut values = scatter.values.clone();
                 if values.is_empty()
                     && let Some(ref v_from) = scatter.values_from
@@ -1229,7 +1321,26 @@ impl WorkflowConfig {
                 }
             } else if let Some(ref transform) = rule.transform {
                 // Handle transform operator: split -> map -> combine
-                let split_values = self.resolve_split_values(&transform.split)?;
+                // Issue #1153 WF-02: an empty split variable has no name to
+                // substitute, so every generated map rule would carry
+                // literal/index-only placeholders. Fail closed at plan time.
+                if transform.split.by.trim().is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "transform rule '{}' declares an empty split.by — the split \
+                             variable has no name, so generated map/combine rules cannot \
+                             bind any {{placeholder}}",
+                            rule.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "set split.by to the variable name to substitute (e.g. \
+                             by = \"chr\") and reference it as {chr} in transform.map"
+                                .to_string(),
+                        ),
+                    });
+                }
+                let split_values = self.resolve_split_values(&rule.name, &transform.split)?;
 
                 // Validate that split values are not empty
                 if split_values.is_empty() {
@@ -3015,9 +3126,71 @@ impl WorkflowConfig {
         Ok(Some(name))
     }
 
-    /// Resolve split values from SplitConfig.
+    /// Classify `transform.split.n` against the loaded `[config]`
+    /// (issue #1153 WF-02).
+    ///
+    /// One shared classification feeds BOTH the `validate` gate (E023, via
+    /// [`crate::format::validate_format`]) and the plan-time resolver
+    /// ([`Self::resolve_split_values`]), so the two gates can never
+    /// disagree about which `n` values are degenerate.
+    ///
+    /// `UnresolvedConfig` is deliberately not `Invalid`: `n =
+    /// "config.chunks"` may be satisfied by a CLI `--arg` override or a
+    /// parent include, so `validate` tolerates it while expansion (where
+    /// the final config is known) rejects it.
+    pub(crate) fn classify_split_n(&self, raw: &str) -> SplitNResolution {
+        let trimmed = raw.trim();
+        // The documented config-reference form resolves first; a bare
+        // numeric string never names a config key in practice.
+        if let Some(values) = self.resolve_config_list(trimmed) {
+            let Some(first) = values.first() else {
+                return SplitNResolution::Invalid {
+                    reason: "resolves to an empty config list".to_string(),
+                };
+            };
+            return Self::classify_split_n_literal(first);
+        }
+        if trimmed.starts_with("config.") {
+            return SplitNResolution::UnresolvedConfig;
+        }
+        Self::classify_split_n_literal(trimmed)
+    }
+
+    /// Literal half of [`Self::classify_split_n`].
+    fn classify_split_n_literal(value: &str) -> SplitNResolution {
+        // A negative literal gets its own reason; it can never be a count.
+        if let Ok(n) = value.trim().parse::<i64>()
+            && n < 0
+        {
+            return SplitNResolution::Invalid {
+                reason: "is negative — the split count must be a positive integer".to_string(),
+            };
+        }
+        match value.trim().parse::<usize>() {
+            Ok(0) => SplitNResolution::Invalid {
+                reason: "must be greater than zero".to_string(),
+            },
+            // The same ceiling wildcard/value fan-out enforces (H-8): naive
+            // `0..n` expansion of an absurd count exhausts memory, so a
+            // degenerate plan must refuse it instead of grinding.
+            Ok(n) if n > crate::wildcard::MAX_COMBINATIONS => SplitNResolution::Invalid {
+                reason: format!(
+                    "exceeds the {}-instance expansion cap — reduce the chunk count or \
+                     split the workflow",
+                    crate::wildcard::MAX_COMBINATIONS
+                ),
+            },
+            Ok(n) => SplitNResolution::Count(n),
+            Err(_) => SplitNResolution::Invalid {
+                reason: "is neither a positive integer nor a numeric config value".to_string(),
+            },
+        }
+    }
+
+    /// Resolve split values from SplitConfig for `rule`.
     pub(crate) fn resolve_split_values(
         &self,
+        rule: &str,
         split: &crate::rule::SplitConfig,
     ) -> Result<Vec<String>> {
         // Priority: values > values_from > n > glob
@@ -3030,52 +3203,48 @@ impl WorkflowConfig {
                 return Ok(vals);
             }
             return Err(OxoFlowError::Validation {
-                message: format!("cannot resolve split.values_from: {}", values_from),
-                rule: None,
+                message: format!(
+                    "transform rule '{rule}' cannot resolve split.values_from: {values_from}"
+                ),
+                rule: Some(rule.to_string()),
                 suggestion: Some("ensure config variable exists and is an array".to_string()),
             });
         }
 
         if let Some(ref n_str) = split.n {
-            // Resolve n from config (config.<key> or bare <key>) or parse as number.
-            // A value that parses to nothing must not silently become one
-            // chunk — that collapses the whole scatter and wrong-shapes
-            // every downstream per-chunk output (issue #740).
-            let n = self
-                .resolve_config_list(n_str)
-                .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()));
-            let n =
-                match n {
-                    Some(n) => n,
-                    None => match n_str.parse::<usize>() {
-                        Ok(n) => n,
-                        Err(_) => return Err(OxoFlowError::Validation {
-                            message: format!(
-                                "transform.split.n '{}' is neither a positive integer nor a \
-                             numeric config value",
-                                n_str
-                            ),
-                            rule: None,
-                            suggestion: Some(
-                                "set split.n to an integer or a config key that resolves to one; \
-                             a fallback would silently change the analysis fan-out"
-                                    .to_string(),
-                            ),
-                        }),
-                    },
-                };
-            if n == 0 {
-                return Err(OxoFlowError::Validation {
-                    message: "transform.split.n must be greater than zero".to_string(),
-                    rule: None,
+            // Resolve n from config (config.<key> or bare <key>) or parse as
+            // a number. A value that parses to nothing must not silently
+            // become one chunk — that collapses the whole scatter and
+            // wrong-shapes every downstream per-chunk output (issue #740).
+            // The classification is shared with validate E023 (issue #1153
+            // WF-02), so both gates agree on what counts as degenerate.
+            return match self.classify_split_n(n_str) {
+                SplitNResolution::Count(n) => {
+                    // Generate chunk indices: 0, 1, 2, ..., n-1
+                    Ok((0..n).map(|i| i.to_string()).collect())
+                }
+                SplitNResolution::Invalid { reason, .. } => Err(OxoFlowError::Validation {
+                    message: format!("transform rule '{rule}' split.n '{n_str}' {reason}"),
+                    rule: Some(rule.to_string()),
                     suggestion: Some(
-                        "use a positive integer or provide split.values/split.values_from"
+                        "use a positive integer within the instance cap, or provide \
+                         split.values/split.values_from"
                             .to_string(),
                     ),
-                });
-            }
-            // Generate chunk indices: 0, 1, 2, ..., n-1
-            return Ok((0..n).map(|i| i.to_string()).collect());
+                }),
+                SplitNResolution::UnresolvedConfig => Err(OxoFlowError::Validation {
+                    message: format!(
+                        "transform rule '{rule}' split.n '{n_str}' is neither a positive integer \
+                         nor a numeric config value"
+                    ),
+                    rule: Some(rule.to_string()),
+                    suggestion: Some(
+                        "set split.n to an integer or a config key that resolves to one; \
+                         a fallback would silently change the analysis fan-out"
+                            .to_string(),
+                    ),
+                }),
+            };
         }
 
         if let Some(ref glob) = split.glob {

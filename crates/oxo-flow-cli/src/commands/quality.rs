@@ -1002,31 +1002,37 @@ fn collect_bound_wildcard_missing_inputs(
 ) -> Vec<String> {
     let mut expanded = cfg.clone();
     expanded.apply_defaults();
-    if expanded.expand_wildcards().is_err() {
-        return Vec::new();
-    }
-    let report = oxo_flow_core::readiness::compute_readiness(&expanded, workflow_dir);
+    // Issue #1153 WF-02: expansion now FAILS CLOSED when a declared sample
+    // domain binds zero instances (e.g. `sample_pattern` matched no files).
+    // That error belongs to dry-run/run; validate keeps its documented
+    // warning contract and still names the concrete unproducible inputs.
+    let expand_ok = expanded.expand_wildcards().is_ok();
     let mut missing = Vec::new();
-    for status in &report.waiting {
-        for path in &status.missing {
+    if expand_ok {
+        let report = oxo_flow_core::readiness::compute_readiness(&expanded, workflow_dir);
+        for status in &report.waiting {
+            for path in &status.missing {
+                if !missing.contains(path) {
+                    missing.push(path.clone());
+                }
+            }
+        }
+        for path in &report.missing_global {
             if !missing.contains(path) {
                 missing.push(path.clone());
             }
         }
     }
-    for path in &report.missing_global {
-        if !missing.contains(path) {
-            missing.push(path.clone());
-        }
-    }
     // A declared domain that binds NO value (e.g. `sample_pattern` matched no
     // files) leaves the placeholder in the expanded rule; the run then fails
     // on its first instance with an unbound wildcard. Report the template
-    // explicitly so validate is not the only green step in the chain.
+    // explicitly so validate is not the only green step in the chain. On an
+    // expansion error the rule list is still the unexpanded template set.
+    let scan_config = if expand_ok { &expanded } else { cfg };
     let expand =
-        |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &expanded.config);
+        |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &scan_config.config);
     let mut unbound: Vec<String> = Vec::new();
-    for rule in &expanded.rules {
+    for rule in &scan_config.rules {
         for input in rule.input.iter() {
             let input = expand(input);
             if input.contains('{')

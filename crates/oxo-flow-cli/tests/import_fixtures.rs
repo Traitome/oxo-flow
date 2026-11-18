@@ -111,10 +111,28 @@ fn supported_import_fixtures_import_and_pass_the_static_gates() {
                 source.display()
             );
 
-            let (ok, stdout, stderr) = run(
-                &["dry-run", "--json", output.to_str().unwrap()],
-                work.path(),
-            );
+            // Issue #1153 WF-02: dry-run now fails closed when a declared
+            // sample domain binds zero instances — the temp dir carries no
+            // data files for the imported `sample_pattern`. Declare one
+            // sample (`--samples NAME` on a workflow without declared
+            // groups is the documented template-workflow form) so the
+            // preview has a binding; the static-acceptance intent of this
+            // corpus gate is unchanged.
+            let needs_sample_binding = config.workflow.sample_pattern.is_some()
+                && config.sample_groups.is_empty()
+                && config.pairs.is_empty();
+            let dry_run_args: Vec<&str> = if needs_sample_binding {
+                vec![
+                    "dry-run",
+                    "--json",
+                    "--samples",
+                    "SAMPLE01",
+                    output.to_str().unwrap(),
+                ]
+            } else {
+                vec!["dry-run", "--json", output.to_str().unwrap()]
+            };
+            let (ok, stdout, stderr) = run(&dry_run_args, work.path());
             assert!(
                 ok,
                 "dry-run must succeed for {}: {stderr}",
