@@ -188,7 +188,7 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype; blocks scientific-validity claims
+**Maturity**: Partial (2026-11-18) - checker false-accept fixed (issue #1107); the resolved include/override admission seam remains open (RB-04)
 
 A typed consumer can be connected to an undeclared producer without a
 diagnostic. A required reference build is compared only when both sides
@@ -279,9 +279,9 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) - resume no longer fabricates `running` without a live process group and pause/resume roll back the freeze when persistence fails (issue #1111); monotonic compare-and-set transitions and cancel-versus-completion race testing remain open
 
-Cancel writes a terminal row before signaling and can overwrite a racing completion. Pause sends `SIGSTOP` before a fallible database write. Resume can write `running` when no process group exists.
+Cancel used to write a terminal row before signaling, risking an overwrite of a racing completion; pause sends `SIGSTOP` before a fallible database write; resume could write `running` when no process group existed.
 
 Evidence:
 
@@ -303,9 +303,9 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Fixed (2026-11-18) - uploads stage to a sibling temp file and rename over the destination (issue #1109); an interrupted, oversize, or write-failure upload leaves the prior file intact
 
-The destination is truncated before multipart consumption succeeds. Oversize or read errors remove the destination, and write errors can leave a partial replacement.
+The destination used to be truncated before multipart consumption succeeded; oversize or read errors removed the destination, and write errors could leave a partial replacement.
 
 Evidence:
 
@@ -363,7 +363,7 @@ Required exit evidence:
 
 **Severity**: P0
 
-**Maturity**: Prototype
+**Maturity**: Fixed (2026-11-18) - a patch that shrinks the original's rules/includes/references is refused, and accepted fixes are written atomically (issue #1110)
 
 The recovery prompt permits a `[workflow]`-only or `[[rules]]`-only replacement block, and the
 model's own safety verdict authorizes replacement of the entire file. A `[workflow]`-only block
@@ -497,7 +497,7 @@ Required exit evidence:
 | WF-01 | P1 | Load-path parsing bypassed `extends`, so inherited rules were absent. | Implemented but unproven | Multi-level inheritance tests exist; exact commit-bound evidence still needs to be attached. |
 | WF-02 | P1 | Empty scatter domains and zero/invalid `transform.split.n` could produce a misleading successful plan. | Implemented but unproven | Fail-closed behavior and regression tests exist; exact commit-bound evidence still needs to be attached. |
 | WF-03 | P1 | Transform-generated rules lost environment, hooks, retries, staging, tags, benchmarks, and related semantics. | Implemented but unproven | Preserved semantics and tests exist; broad corpus evidence remains open. |
-| WF-04 | P1 | BioType validation can still false-accept undeclared producers, missing required builds, and declared attributes. | Planned / blocked | The checker defect is RB-04A; resolved web include/override admission remains RB-04. |
+| WF-04 | P1 | BioType validation can still false-accept undeclared producers, missing required builds, and declared attributes. | Checker fixed (#1118); admission advisory | TYPE-008/009 now report untyped-producer and build-incomplete edges (advisory at the admission gate, not blocking); resolved web include/override admission remains RB-04. |
 | WF-05 | P2 | Conda-family environment handling had duplicated and divergent paths. | Implemented but unproven | Consolidation landed; cross-backend lifecycle evidence remains incomplete. |
 | WF-06 | P1 | `job.sh` can still contain expanded secrets. | Planned / blocked | Secret-store or minimal-environment routing is required before team/HPC use. |
 
@@ -518,11 +518,11 @@ Required exit evidence:
 | WEB-01 | P0 | No OS-level tenant execution boundary. | Planned / blocked | RB-01. |
 | WEB-02 | P0 | No immutable per-run artifact snapshot. | Planned / blocked | RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
-| WEB-04 | P1 | Lifecycle transitions can contradict process state. | Planned / blocked | RB-07. |
-| WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Planned / blocked | RB-08. |
+| WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
+| WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |
 | WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
 | WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Planned / blocked | RB-06. |
-| WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Planned / blocked | Direct TOML routes through the core checker, but the checker false-accepts (RB-04A) and resolved admission remains RB-04. |
+| WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Checker parity fixed (#1118); resolved admission open | Direct TOML routes now report TYPE-008/009 for untyped-producer and build-incomplete edges (advisory at the admission gate); the resolved include/override admission seam remains RB-04. |
 | WEB-09 | P1 | Quotas are racy and process-local. | Planned / blocked | RB-09. |
 | WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Planned / blocked | Fail closed or use a durable revoke/retry protocol. Evidence: `crates/oxo-flow-web/src/domains/auth/handlers.rs:760`, `:454`. |
 | WEB-11 | P1 | Pipeline edits can silently lose updates; revision insertion is best-effort. | Planned / blocked | Add optimistic concurrency and transactional revisions. Evidence: `crates/oxo-flow-web/src/domains/workflow/handlers.rs:775`, `:853`. |
@@ -563,7 +563,7 @@ Required exit evidence:
 
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
-| AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Planned / blocked | RB-11. |
+| AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Fixed (#1117) | `--ai-recover` now rejects a patch that shrinks the original's rules/includes/references (checked through `WorkflowConfig::parse`) and writes accepted fixes atomically. See RB-11. |
 | AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
 | AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Planned / blocked | RB-14. |
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Planned / blocked | RB-13. |
