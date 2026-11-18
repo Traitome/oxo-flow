@@ -35,6 +35,23 @@ Lessons already paid for during prototyping — do not regress them:
   alone (observed in the first prototype), which defeats the measurement.
 - **One fault per seed.** Input files that exist, references that exist,
   tools absent only where the fault requires it.
+- **The fault must survive the engine's fail-closed gates.** `run_expect_exit`
+  is a contract: the planted fault must still be *reachable* under the
+  documented run-time contracts — fail-fast on a missing required source
+  input (`docs/guide/src/commands/run.md`), the wildcard charset gate,
+  declared resource-group capacity, and output validation. A runtime fault
+  that the readiness gate aborts first can never be observed, and the
+  benchmark runner would mark the seed `broken` (excluded from the
+  denominator) rather than fail — that is how `s04` silently stopped
+  measuring after input readiness became fail-closed. Seeds that depend on a
+  missing *declared* input (s01) must keep it; a silent-failure seed must
+  hide the missing file inside the shell (an UNDECLARED read) while its
+  declared input is produced upstream. `crates/oxo-flow-cli/tests/interpretation_seeds.rs`
+  runs every manifest's documented command and fails when the exit no longer
+  matches, so this class cannot return unnoticed.
+- **Host preconditions are declared, never assumed.** A seed that needs a
+  tool to be absent records it in `requires_absent` (machine-checked by the
+  same gate); the benchmark's other host assumptions stay in this README.
 - **Ground truth must name specifics.** Scoring regexes reward *naming the
   actual cause* (the missing filename, the absent binary, the exception);
   generic "check your inputs" boilerplate must not score. The v1 calibration
@@ -57,6 +74,12 @@ python3 run_bench.py                     # all seeds
 python3 run_bench.py --seeds s01,s04     # subset
 python3 run_bench.py --stamp my-label    # named results dir
 ```
+
+The seed corpus also carries a provider-free contract gate in the Rust test
+suite (`cargo test -p oxo-flow-cli --test interpretation_seeds`): it runs
+each manifest's documented command with a pinned `PATH` and asserts
+`run_expect_exit`, so a seed whose planted fault is no longer reachable
+fails CI instead of being quietly marked `broken`.
 
 ## Surfaces
 
@@ -106,10 +129,18 @@ feeds each rule's status, exit code, and a bounded stderr tail, and instructs
 the model to quote the decisive line and surface stderr warnings hidden
 behind success statuses (the `s04` silent-failure seed).
 
-The `s04` class deserves emphasis: `zcat X | wc -l > out` exits 0 with a
-poisoned output when `X` is missing. Post-fix, the interpretation explicitly
-flags the success status as misleading — exactly the behavior the seeded
-method was designed to measure.
+The `s04` class deserves emphasis: a pipeline whose last command masks an
+upstream read failure exits 0 with a poisoned output. Post-fix, the
+interpretation explicitly flags the success status as misleading — exactly
+the behavior the seeded method was designed to measure. The seed was
+re-baselined for the audit (#1168) after run-time input readiness became
+fail-closed: its original form declared the absent file as the rule input,
+so the engine aborted before the pipeline ran and the seed measured a
+fail-fast abort instead of a silent failure. The planted fault now reads an
+*undeclared* second file (`gzip -cd {input[0]} data/reads/sample_R2.fastq.gz
+| wc -l`), with the declared input produced by an upstream rule — the
+exit-0-with-error-stderr class is preserved. The historical result rows above were measured with the earlier seed text; they are not re-measured
+here and no provider was called for this change.
 
 ## Limitations
 

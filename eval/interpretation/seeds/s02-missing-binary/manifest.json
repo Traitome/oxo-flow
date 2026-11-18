@@ -2,6 +2,7 @@
   "id": "s02-missing-binary",
   "surface": "report-failed",
   "run_expect_exit": 1,
+  "requires_absent": ["bwa-mem2"],
   "expect_any": [
     "bwa-?mem2"
   ],

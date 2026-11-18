@@ -41,7 +41,7 @@ provider response usage. Cost is derived from the price table in
 # from env, or from ~/.oxo-flow/ai_config.json (never from shell rc files;
 # values are never printed)
 
-python3 run_eval.py                          # 29 intents x naive-prompt,cli
+python3 run_eval.py                          # all 36 intents x naive-prompt,cli
 python3 run_eval.py --filter rnaseq-star     # subset
 python3 run_eval.py --models deepseek-chat   # model axis (quality/cost frontier)
 python3 run_eval.py --variants naive-prompt  # cheapest full sweep
@@ -50,10 +50,13 @@ python3 run_eval.py --profile full           # Scientist Team roles (compact is 
 python3 run_eval.py --binary /path/oxo-flow  # pin the binary for a whole campaign
 ```
 
-The intent set spans 10 domains across three complexity tiers, plus three
-deliberately under-specified intents (`"vague": true`) used to measure how
-well a profile standardizes ambiguous requests. Vague cells are reported
-on their own row and are never compared against the specified tiers.
+The intent set (`intents.json`) spans 12 domains across three complexity
+tiers (5 easy / 14 medium / 17 hard), plus three deliberately
+under-specified intents (`"vague": true`) used to measure how well a
+profile standardizes ambiguous requests. Vague cells are reported
+on their own row and are never compared against the specified tiers. The
+counts in this paragraph are gated against `intents.json` by
+`test_intents_contract.py`.
 
 Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible
 endpoint) truncate before the TOML is written if the output budget is too
@@ -83,7 +86,7 @@ tokens, cost, latency).
 
 ## Known limitations
 
-- Intent set is 29 (3 of them deliberately vague); still small enough that
+- Intent set is 36 (3 of them deliberately vague); still small enough that
   single-seed absolute numbers wobble — quote the multi-seed aggregates.
 - Judging is deterministic (the three gates + substring fidelity), but
   only the naive-prompt arm is pinned to temperature 0 — the `cli` arm

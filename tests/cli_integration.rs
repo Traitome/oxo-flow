@@ -670,10 +670,13 @@ fn cli_ai_explain_without_provider_degrades_to_skeleton() {
             "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .assert()
-        // M10 degraded mode: no provider → deterministic skeleton, exit 0.
+        // M10 degraded mode: no provider → deterministic skeleton, exit 0,
+        // with the structured AI-09 degraded reason (stable code + the
+        // `ai setup` suggestion). The pre-#1122 prose ("AI provider not
+        // configured") is not the contract; the stable code is.
         .success()
         .stdout(predicate::str::contains("(deterministic skeleton)"))
-        .stderr(predicate::str::contains("AI provider not configured"))
+        .stderr(predicate::str::contains("AI degraded [AI_NOT_CONFIGURED]"))
         .stderr(predicate::str::contains("ai setup"));
 }
 
