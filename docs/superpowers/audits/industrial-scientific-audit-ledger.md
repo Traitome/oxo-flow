@@ -488,7 +488,8 @@ URLs, MCP tokens, and proxy credentials without declaring them.
 
 Evidence:
 
-- `crates/oxo-flow-core/src/executor/process.rs:3836` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/executor/process.rs:3960` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/executor/process.rs:1323` (environment setup spawn via `env_tooling_shell_command` — the accepted-risk channel described below)
 - `crates/oxo-flow-core/src/cluster.rs` `generate_{slurm,pbs,sge,lsf}_script` (HPC job scripts; isolated behind the shared allowlist in the same fix)
 
 Required exit evidence:
@@ -497,6 +498,30 @@ Required exit evidence:
 - Explicit declarations expose only the named variables.
 - Local and HPC execution paths share the same tested allowlist policy. Local docker/singularity dispatch runs inside the same cleared rule shell; its runtime plumbing is re-admitted through the narrow list below. Cloud dispatch (k8s/aws-batch/gcp-batch) has no ambient environment to clear: the engine writes only the rendered command into the manifest/spec, so a job's environment is the container image's `ENV` (or the GCP VM image environment) plus what the engine writes into the command — the rule's declared `envvars` (as `export K='V'`) and the `OXO_FLOW_SENSITIVE_<n>` secret references. The submit host's environment is never forwarded and no generated body carries an ambient `env`/`environment` channel; `kubernetes_job_body_carries_no_submit_host_environment`, `aws_batch_job_body_carries_no_submit_host_environment`, and `gcp_batch_job_body_carries_no_submit_host_environment` pin the boundary by re-executing the test binary with sentinel credentials in its ambient environment (#1171).
 - Local docker/singularity rules re-admit an exact, exported list of container-daemon variables — `CONTAINER_DAEMON_ENV_VARS` in `crates/oxo-flow-core/src/executor/process.rs` (issue #1173, RB-15 residual): `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `DOCKER_BUILDKIT`, `APPTAINER_CACHEDIR`/`SINGULARITY_CACHEDIR`, `APPTAINER_BIND`/`SINGULARITY_BIND`, `APPTAINER_TMPDIR`/`SINGULARITY_TMPDIR`, and `APPTAINER_LOCALCACHEDIR`/`SINGULARITY_LOCALCACHEDIR`. This is a deliberately narrow admission of runtime plumbing the engine itself invokes (a remote daemon is unusable otherwise), never a `DOCKER_*`/`APPTAINER_*` prefix. Declared `envvars` are applied last and override every ambient copy (including these); `OXO_FLOW_ENV_PASSTHROUGH` re-admits the same ambient value and cannot change it. The bare-local path's allowlist is unchanged. Cloud dispatch is not covered by this list because it forwards no submit-host environment at all (see the exit-evidence bullet above).
+
+**Accepted risk — environment SETUP channel (issue #1174, decision (b)).**
+Environment setup spawns (`conda/mamba env create -f <workflow spec>`,
+`pixi install`, `python3 -m venv` + `pip install -r <workflow
+requirements>`, plus their teardown/retry/verify forms) deliberately keep
+the full ambient environment; rule shells, `pre_exec`, and rule/workflow
+hooks do not. This is an accepted residual, not a resolved finding:
+RB-15 stays open. Rationale: the setup inputs are workflow-authored
+executable content — `pip install` builds pinned sdists (whose build
+backend runs `setup.py`) and conda runs package post-link scripts — and
+that code runs as the operator with ordinary filesystem access, so it can
+read `~/.aws/credentials`, `~/.docker/config.json`, or
+`$HOME/.oxo-flow/ai_config.json` whether or not the environment was
+cleared; an environment clear is cosmetic, not a boundary. Clearing would
+instead break legitimate provisioning that depends on proxy/mirror/CA
+variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `PIP_INDEX_URL`,
+`PIP_TRUSTED_HOST`, `SSL_CERT_FILE`, `CONDA_*`, corporate mirrors) the
+engine cannot enumerate per tool. The actual boundary is the
+workflow-trust decision: do not run workflows you do not trust. Pinned by
+`env_setup_spawn_inherits_ambient_environment` and
+`rule_shell_does_not_inherit_the_setup_sentinel`
+(`crates/oxo-flow-core/src/executor/process.rs`); documented in
+`docs/guide/src/reference/environment-system.md` and
+`docs/guide/src/reference/workflow-format.md`.
 
 ---
 

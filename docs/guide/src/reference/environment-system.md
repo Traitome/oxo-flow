@@ -85,6 +85,32 @@ Before executing a rule with an environment specification:
 | Modules | None (no setup — modules are loaded at execution time) |
 | System | None (no setup needed — commands run directly in the current shell) |
 
+### Setup runs with the operator's environment (accepted risk, issue #1174)
+
+The setup commands above — and their teardown, retry, and verification
+forms — run under the **full ambient environment** of the `oxo-flow`
+process. This is deliberately different from rule execution: rule shells,
+`pre_exec` hooks, and rule-/workflow-level hooks run under a cleared
+environment plus a fixed allowlist (issue #1108, RB-15), so they cannot
+read ambient secrets from their own process environment. Environment setup
+keeps proxy, mirror, and certificate configuration (`HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY`, `PIP_INDEX_URL`, `PIP_TRUSTED_HOST`,
+`SSL_CERT_FILE`, `CONDA_*`, corporate mirrors), which conda, pip, and pixi
+need in order to provision at all.
+
+This is an explicit accepted risk, not an isolation guarantee. Setup inputs
+are workflow-authored executable content: a pinned sdist's build backend
+(`setup.py`, `pyproject.toml`) runs during `pip install`, and conda
+installs run package post-link scripts. That code runs as the operator with
+ordinary filesystem access, so it can read `~/.aws/credentials`,
+`~/.docker/config.json`, or `$HOME/.oxo-flow/ai_config.json` whether or not
+its environment was cleared — clearing the environment would be cosmetic.
+The real boundary is the workflow-trust decision: **do not run workflows
+you do not trust** on a machine whose operator credentials you would not
+hand to the workflow's author. The same caveat is restated in
+[the workflow format reference](workflow-format.md#environment-specification)
+and [the run reference](../commands/run.md#rule-execution-environment-issue-1108).
+
 ### Skipping Setup
 
 Use `--skip-env-setup` when environments are pre-built:

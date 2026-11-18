@@ -851,6 +851,22 @@ environment = { conda = "envs/tools.yaml" }
 # env_group = "qc_env"
 ```
 
+**Setup runs with the operator's environment (accepted risk, issue #1174).**
+The commands that create or verify an environment (`conda env create -f`,
+`pixi install`, `python3 -m venv` plus `pip install -r`, and their
+teardown/retry forms) inherit the full ambient environment of the
+`oxo-flow` process. Rule shells do not: they run under a cleared
+environment plus a fixed allowlist (see
+[Rule execution environment](../commands/run.md#rule-execution-environment-issue-1108)),
+so a rule with no declared `envvars` cannot read ambient credentials.
+Setup is different by design: its inputs are workflow-authored executable
+content that can already run arbitrary code as the operator (sdist build
+backends, conda post-link scripts), so hiding the environment would be
+cosmetic; it is kept because conda, pip, and pixi need proxy, mirror,
+index, and CA-certificate configuration to provision anything. The
+practical boundary is not to run workflows you do not trust. See
+[the environment system reference](environment-system.md).
+
 **Container shell:** `docker`/`singularity` rules run under `bash` inside
 the container when the image provides it (falling back to `sh` otherwise).
 nf-core-derived images ship bash, and their scripts rely on bash features
