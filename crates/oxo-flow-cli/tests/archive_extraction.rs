@@ -9,7 +9,7 @@
 //! the destination, and escaping symlinks created verbatim — each case then
 //! "verified" and ran the bundled workflow successfully.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -55,6 +55,13 @@ impl RawTar {
 }
 
 const WORKFLOW: &str = "[workflow]\nname = \"archive\"\nversion = \"1.0.0\"\n\n\
+[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo ok > {output[0]}\"\n";
+
+/// A workflow that references a NESTED data file, so a legitimately published
+/// bundle carries a `data/meta.tsv` member whose manifest path is relative and
+/// nested. The manifest-path guard must keep such paths verifying.
+const NESTED_WORKFLOW: &str = "[workflow]\nname = \"nested\"\nversion = \"1.0.0\"\n\
+metadata_file = \"data/meta.tsv\"\n\n\
 [[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo ok > {output[0]}\"\n";
 
 fn manifest(files: &str) -> String {
@@ -233,4 +240,156 @@ fn clean_bundle_still_extracts_and_runs() {
         stderr(&output)
     );
     assert!(workdir.join("out.txt").is_file(), "the rule must run");
+}
+
+/// Publish a bundle, read its `manifest.json` back out of the archive, and
+/// return `(bundle_path, manifest_json_string)`.
+///
+/// `rewrite` may rewrite the manifest before it is re-packed, so a test can
+/// hand the real CLI a manifest whose checksummed `files[].path` is hostile
+/// while every byte the publisher produced stays authentic.
+fn published_bundle_with_manifest(
+    dir: &Path,
+    workflow: &str,
+    rewrite: impl FnOnce(&str) -> String,
+) -> PathBuf {
+    let wf = dir.join("wf.oxoflow");
+    std::fs::write(&wf, workflow).unwrap();
+    let publish = oxo_flow()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        publish.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&publish.stderr)
+    );
+    let bundle = dir.join("wf-bundle.tar.zst");
+    assert!(bundle.exists(), "publish must produce the bundle");
+
+    // Read the manifest back out of the archive the publisher produced.
+    let reader = zstd::stream::read::Decoder::new(std::fs::File::open(&bundle).unwrap()).unwrap();
+    let mut archive = tar::Archive::new(reader);
+    let mut manifest_json = String::new();
+    let mut members: Vec<(String, Vec<u8>)> = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if path.ends_with("manifest.json") {
+            manifest_json = String::from_utf8(data.clone()).unwrap();
+        }
+        members.push((path, data));
+    }
+    let tampered = rewrite(&manifest_json);
+    let mut out = tar::Builder::new(Vec::new());
+    for (path, data) in &members {
+        let body = if path.ends_with("manifest.json") {
+            tampered.as_bytes()
+        } else {
+            data.as_slice()
+        };
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        out.append_data(&mut header, path, body).unwrap();
+    }
+    let unpacked = out.into_inner().unwrap();
+
+    let file = std::fs::File::create(&bundle).unwrap();
+    let mut zst = zstd::stream::write::Encoder::new(file, 0).unwrap();
+    zst.write_all(&unpacked).unwrap();
+    zst.finish().unwrap();
+    bundle
+}
+
+/// The manifest `files[].path` traversal guard (#1157, audit CL-04): a
+/// crafted manifest declaring `files[].path = "../../escape.txt"` must be
+/// rejected by name, and verification must never read a file OUTSIDE the
+/// verified extraction.
+#[test]
+fn manifest_declaring_a_parent_dir_file_path_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    // A real file at the escape location, so a `join` (pre-#1157) would read
+    // it and "verify" against far-fetched checksum-outsider semantics.
+    std::fs::write(dir.path().join("escape.txt"), b"pwned").unwrap();
+    let bundle = published_bundle_with_manifest(dir.path(), WORKFLOW, |json| {
+        json.replace(r#""path": "wf.oxoflow""#, r#""path": "../../escape.txt""#)
+    });
+
+    let output = run_bundle(&bundle, &dir.path().join("work"));
+
+    assert!(
+        !output.status.success(),
+        "a manifest '..' file path must fail the bundle, stderr: {}",
+        stderr(&output)
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("../../escape.txt") && message.contains("contains '..'"),
+        "the offending manifest path must be named with the escape reason, stderr: {message}"
+    );
+}
+
+/// The absolute-path half of the same guard.
+#[test]
+fn manifest_declaring_an_absolute_file_path_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = published_bundle_with_manifest(dir.path(), WORKFLOW, |json| {
+        json.replace(r#""path": "wf.oxoflow""#, r#""path": "/etc/hostname""#)
+    });
+
+    let output = run_bundle(&bundle, &dir.path().join("work"));
+
+    assert!(
+        !output.status.success(),
+        "an absolute manifest file path must fail the bundle, stderr: {}",
+        stderr(&output)
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("/etc/hostname") && message.contains("absolute"),
+        "the offending manifest path must be named with the absolute reason, stderr: {message}"
+    );
+}
+
+/// A legitimately nested relative path must still verify — the guard rejects
+/// escapes, not depth.
+#[test]
+fn manifest_nested_relative_file_path_still_verifies() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data/meta.tsv"), b"sample\tgroup\n").unwrap();
+
+    let wf = dir.path().join("nested.oxoflow");
+    std::fs::write(&wf, NESTED_WORKFLOW).unwrap();
+    let publish = oxo_flow()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        publish.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&publish.stderr)
+    );
+    let bundle = dir.path().join("nested-bundle.tar.zst");
+    assert!(bundle.exists(), "publish must produce the bundle");
+
+    let workdir = dir.path().join("work");
+    let output = run_bundle(&bundle, &workdir);
+
+    assert!(
+        output.status.success(),
+        "a nested relative manifest path must still verify, stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("Bundle verified"),
+        "verification must still succeed, stderr: {}",
+        stderr(&output)
+    );
 }
