@@ -1,13 +1,22 @@
 //! Issue #1152 (audit ledger WF-01): the web load path (`WorkflowConfig::parse`
-//! behind `POST /api/pipelines/parse` / `POST /api/pipelines/validate`) must
-//! resolve rule-level `extends` — including multi-level chains — before it
-//! derives the plan it reports.
+//! behind `POST /api/pipelines/parse` / `POST /api/pipelines/validate`, and
+//! the staged-include path behind `POST /api/runs`) must resolve rule-level
+//! `extends` — including multi-level chains — before it derives the plan it
+//! reports.
 //!
 //! Commit-bound evidence: `WorkflowConfig::parse` never called
 //! `resolve_rule_templates` before af4929c53e67e7bc5ab7ab65c8b96edc0b47bea6
 //! (#997) wired it in. These tests fail on that parent commit: the leaf rule
 //! would report the default thread count and `system` environment instead of
 //! the values it inherits through its parent.
+//!
+//! The run-creation path had a second, include-specific bypass: it derived
+//! the plan from the host TOML string before `include_files` were staged, so
+//! a host rule extending an included base rule was rejected with
+//! "extends 'base' which does not exist", and a plain include was executed by
+//! the CLI but omitted from the reported plan. `POST /api/runs` now builds
+//! its plan from the same `from_file`-resolved config the admission gate
+//! uses.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -60,6 +69,28 @@ async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
+}
+
+/// Run-creation setup: the dedicated run limiter (5/min) and the global
+/// concurrent-run quota are process-wide, and this binary creates several
+/// runs across independent cases — mirror the other run-contract suites.
+async fn ensure_run_db() {
+    oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
+    // The durable quota charge is the RESOLVED (include-merged) rule set, so
+    // a staged-include run books its full thread/memory total, not the old
+    // `(1, 0)` host-string fallback — several such runs in this binary would
+    // otherwise exceed the default 64-thread ceiling.
+    let limits = oxo_flow_web::infra::quota::QuotaConfig {
+        max_concurrent_runs: 100,
+        max_total_threads: 100_000,
+        max_total_memory_mb: 1_000_000,
+        ..Default::default()
+    };
+    oxo_flow_web::infra::quota::global_quota_tracker().update_config(limits.clone());
+    common::ensure_db().await;
+    if let Some(backend) = oxo_flow_web::infra::db::global_backend() {
+        let _ = backend.save_quota_config(&limits).await;
+    }
 }
 
 /// The parse handler returns the loaded plan (`rules[]` + DAG). The leaf row
@@ -169,4 +200,434 @@ async fn web_validate_handler_reports_inherited_fields_for_multilevel_chain() {
             "{code} must be reported for every rule that inherits the field: {body}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Run creation: the response's `execution_plan` is the LOADED PLAN.
+// ---------------------------------------------------------------------------
+
+fn plan_names(body: &Value) -> Vec<String> {
+    let mut names: Vec<String> = body["execution_plan"]["execution_order"]
+        .as_array()
+        .expect("execution_plan.execution_order")
+        .iter()
+        .filter_map(|n| n.as_str().map(String::from))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// `POST /api/runs` with a multi-level `extends` chain reports every rule in
+/// the plan it derives. The chain itself is proven field-by-field by the
+/// parse/validate cases above; this pins the run-load path to the same
+/// resolution: the plan must not stop at the host text.
+#[tokio::test]
+async fn web_create_run_plan_contains_multilevel_extends_chain() {
+    ensure_run_db().await;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({ "toml_content": MULTILEVEL_TOML, "dry_run": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    assert_eq!(body["execution_plan"]["total_rules"], 3, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec![
+            "leaf_rule".to_string(),
+            "mid_rule".to_string(),
+            "root_rule".to_string()
+        ],
+        "the loaded plan must contain base, parent and child: {body}"
+    );
+}
+
+/// Regression for ledger WF-01's documented exit evidence on the web path:
+/// a base workflow's rules must appear in the loaded plan, not just in the
+/// merged config the CLI later executes. Before the fix the response plan
+/// carried only the host rule while the spawned CLI planned both.
+#[tokio::test]
+async fn web_create_run_plan_lists_rules_from_staged_include() {
+    ensure_run_db().await;
+
+    const BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+    const PLAIN_CHILD: &str = r#"
+[workflow]
+name = "include-plain"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": PLAIN_CHILD,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": BASE },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    assert_eq!(body["execution_plan"]["total_rules"], 2, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec!["base_align".to_string(), "child_align".to_string()],
+        "the staged base workflow's rule must appear in the loaded plan: {body}"
+    );
+    // The resource estimate is derived from the same resolved rules: the
+    // base rule's 6G is visible only once the include is merged.
+    assert_eq!(
+        body["estimated_resources"]["max_memory_mb"], 6144,
+        "estimates must be derived after include resolution: {body}"
+    );
+}
+
+/// The include-specific bypass: the host rule `extends` a rule that exists
+/// only inside a staged `[[include]]`. Before the fix, create-run parsed the
+/// host string before the include was staged and answered 400
+/// "extends 'base_align' which does not exist" for a workflow the CLI runs
+/// successfully.
+#[tokio::test]
+async fn web_create_run_resolves_extends_across_staged_include() {
+    ensure_run_db().await;
+
+    const BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+    const CHILD: &str = r#"
+[workflow]
+name = "extends-include"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": CHILD,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": BASE },
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "extends must resolve across a staged include before the plan is derived: {body}"
+    );
+    assert_eq!(body["execution_plan"]["total_rules"], 2, "{body}");
+    assert_eq!(
+        plan_names(&body),
+        vec!["base_align".to_string(), "child_align".to_string()],
+        "the include-resolved base rule must be planned: {body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Run-lifecycle reads of a staged-include run (issue #1152 review, MEDIUM).
+//
+// `pipeline_snapshot` stores the host document as submitted, which is not
+// loadable on its own for this run class (a rule extends a rule that lives
+// in a staged include). Retry, resume, DAG/status, and protected-drift must
+// read the resolved snapshot persisted in the run workdir instead.
+// ---------------------------------------------------------------------------
+
+const LIFECYCLE_BASE: &str = r#"
+[workflow]
+name = "base"
+version = "1.0.0"
+
+[[rules]]
+name = "base_align"
+threads = 5
+memory = "6G"
+output = ["base_align.txt"]
+shell = "echo base > {output}"
+"#;
+
+const LIFECYCLE_CHILD: &str = r#"
+[workflow]
+name = "extends-include"
+version = "1.0.0"
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+const PROTECTED_CHILD: &str = r#"
+[workflow]
+name = "protected-include"
+version = "1.0.0"
+
+[engine]
+protected_data_trees = ["data"]
+
+[[include]]
+path = "base.oxoflow"
+
+[[rules]]
+name = "child_align"
+extends = "base_align"
+output = ["child_align.txt"]
+shell = "echo child > {output}"
+"#;
+
+async fn get_json(uri: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let resp = server::build_router("personal").oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Poll the run until it reaches a terminal state (the spawned CLI is
+/// asynchronous). 60 s budget: a dry run of two echo rules takes well under
+/// a second; the ceiling only guards a stalled spawn.
+async fn wait_terminal(run_id: &str) -> Value {
+    for _ in 0..600 {
+        let (status, body) = get_json(&format!("/api/runs/{run_id}")).await;
+        if status == StatusCode::OK
+            && matches!(
+                body["status"].as_str(),
+                Some("completed" | "failed" | "cancelled")
+            )
+        {
+            return body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("run {run_id} did not reach a terminal state in 60 s");
+}
+
+async fn create_include_run(child_toml: &str) -> String {
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": child_toml,
+            "dry_run": true,
+            "include_files": { "base.oxoflow": LIFECYCLE_BASE },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create run failed: {body}");
+    body["run_id"]
+        .as_str()
+        .expect("run_id in create response")
+        .to_string()
+}
+
+/// Retry reconstructs the DAG from the resolved workflow. Before the fix
+/// this answered `500 DAG_ERROR "Failed to reconstruct DAG from pipeline
+/// snapshot"` for a run the CLI executes (the host snapshot cannot be parsed
+/// once a rule `extends` a staged-include base).
+#[tokio::test]
+async fn web_retry_run_uses_resolved_plan_for_staged_include() {
+    ensure_run_db().await;
+    let run_id = create_include_run(LIFECYCLE_CHILD).await;
+    wait_terminal(&run_id).await;
+
+    let (status, body) = post_json(
+        &format!("/api/runs/{run_id}/retry"),
+        // `skip_succeeded: false` makes the plan the full resolved rule set,
+        // independent of checkpoint state: both rules must be listed.
+        json!({ "skip_succeeded": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "retry failed: {body}");
+    let mut rerun: Vec<&str> = body["will_rerun"]
+        .as_array()
+        .expect("will_rerun array")
+        .iter()
+        .filter_map(|n| n.as_str())
+        .collect();
+    rerun.sort_unstable();
+    assert_eq!(
+        rerun,
+        vec!["base_align", "child_align"],
+        "retry must re-execute the resolved plan: {body}"
+    );
+}
+
+/// The DAG monitor endpoint lists every rule the run executed. The
+/// host-only snapshot omitted include-contributed rules (issue #1152 review,
+/// MEDIUM).
+#[tokio::test]
+async fn web_dag_status_lists_rules_from_staged_include() {
+    ensure_run_db().await;
+    let run_id = create_include_run(LIFECYCLE_CHILD).await;
+    wait_terminal(&run_id).await;
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/dag-status")).await;
+    assert_eq!(status, StatusCode::OK, "dag-status failed: {body}");
+    let mut ids: Vec<&str> = body["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec!["base_align", "child_align"],
+        "the monitor DAG must contain the include-resolved rules: {body}"
+    );
+}
+
+/// Protected-drift reads the host's `[engine] protected_data_trees` for a
+/// staged-include run. Before the fix the unparseable host snapshot yielded
+/// an empty tree list — a silent fail-open returning `new_trees: 0` for a
+/// tree the CLI would protect.
+#[tokio::test]
+async fn web_protected_drift_uses_protected_trees_of_include_run() {
+    ensure_run_db().await;
+    let run_id = create_include_run(PROTECTED_CHILD).await;
+    let run = wait_terminal(&run_id).await;
+    let workdir = std::path::PathBuf::from(
+        run["workdir"]
+            .as_str()
+            .expect("terminal run must carry its workdir"),
+    );
+    // A tree that exists now but has no baseline: the preview must adopt it
+    // as new instead of reporting nothing.
+    std::fs::create_dir_all(workdir.join("data")).unwrap();
+    std::fs::write(workdir.join("data/sample.txt"), "payload").unwrap();
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/protected-drift")).await;
+    assert_eq!(status, StatusCode::OK, "drift preview failed: {body}");
+    assert_eq!(
+        body["new_trees"], 1,
+        "the host's protected_data_trees must be read from the resolved workflow: {body}"
+    );
+    assert_eq!(body["drifted_files"], json!([]), "{body}");
+}
+
+/// Fail closed, never fail open: a run whose workflow sources are all gone
+/// must answer an error for protected-drift rather than report a clean
+/// `drifted_files: []`. (The host snapshot alone cannot be parsed for this
+/// run class, so removing the workdir sources leaves nothing loadable.)
+#[tokio::test]
+async fn web_protected_drift_fails_closed_when_workflow_unreadable() {
+    ensure_run_db().await;
+    let run_id = create_include_run(PROTECTED_CHILD).await;
+    let run = wait_terminal(&run_id).await;
+    let workdir = std::path::PathBuf::from(run["workdir"].as_str().expect("workdir"));
+
+    // Remove both loadable sources: the materialized host document and the
+    // persisted resolved snapshot. The host snapshot in the DB alone does
+    // not parse (it extends an included rule).
+    std::fs::remove_file(workdir.join("workflow.oxoflow")).unwrap();
+    std::fs::remove_file(workdir.join(".oxo-flow/resolved-workflow.oxoflow")).unwrap();
+
+    let (status, body) = get_json(&format!("/api/runs/{run_id}/protected-drift")).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "unreadable workflow must not report a clean drift result: {body}"
+    );
+    assert_eq!(body["code"], "WORKFLOW_UNREADABLE", "{body}");
+}
+
+/// A BioType violation contributed by a staged include keeps the stable
+/// `TYPE_CONTRACT_VIOLATION` code. The resolved config is now planned
+/// before admission, so this path must not degrade to the generic
+/// `RUN_ERROR` (issue #1152 review, LOW).
+#[tokio::test]
+async fn web_create_run_include_type_violation_keeps_typed_code() {
+    ensure_run_db().await;
+
+    const HOST: &str = r#"
+[workflow]
+name = "typed-include-violation"
+version = "1.0.0"
+
+[[include]]
+path = "modules/producer.oxoflow"
+
+[[rules]]
+name = "consumer"
+input = ["stage.sam"]
+output = ["final.vcf"]
+shell = "echo"
+
+[rules.types]
+inputs = { default = "BAM" }
+"#;
+    const PRODUCER: &str = r#"
+[workflow]
+name = "typed-producer-module"
+
+[[rules]]
+name = "producer"
+output = ["stage.sam"]
+shell = "echo"
+
+[rules.types]
+outputs = { default = "SAM" }
+"#;
+
+    let (status, body) = post_json(
+        "/api/runs",
+        json!({
+            "toml_content": HOST,
+            "dry_run": true,
+            "include_files": { "modules/producer.oxoflow": PRODUCER },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["code"], "TYPE_CONTRACT_VIOLATION",
+        "include-contributed type violations must keep the typed error code: {body}"
+    );
 }

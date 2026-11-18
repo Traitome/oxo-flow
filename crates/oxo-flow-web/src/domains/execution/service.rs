@@ -12,36 +12,79 @@ use crate::infra::db::models;
 use super::diagnostics::DiagnosticsEngine;
 use super::types::*;
 
-/// Detect a BioTypes declaration from parsed TOML structure.
+/// Why a run could not be created.
 ///
-/// Supports both table declarations (`[types.name]`, `[rules.types]`) and
-/// Create a run from pipeline TOML. Returns execution plan with resource estimates.
+/// The web handler maps each variant to a stable API error code: a declared
+/// BioType violation must keep answering `TYPE_CONTRACT_VIOLATION` (the code
+/// the resolved-admission gate has always used), while every other parse /
+/// DAG / plan failure answers `RUN_ERROR`. Folding both into one string, as
+/// the type-blocked include path did before, silently rewrote the public
+/// error code (issue #1152 review, LOW).
+#[derive(Debug)]
+pub enum CreateRunError {
+    /// Declared biological type contracts are violated.
+    TypeContract(String),
+    /// Any other parse/DAG/plan failure.
+    Other(String),
+}
+
+impl CreateRunError {
+    /// The legacy string form [`create_run`] returns.
+    fn into_message(self) -> String {
+        match self {
+            Self::TypeContract(message) | Self::Other(message) => message,
+        }
+    }
+}
+
+/// Well-formedness, DAG, and biological-type errors for an already-loaded
+/// workflow — shared by `service::create_run` (string entry point) and the
+/// staged-include path in the run handler.
 pub fn create_run(
     pipeline_toml: &str,
     config: &RunConfig,
     _pipeline_id: Option<&str>,
 ) -> Result<CreateRunResponse, String> {
     let wf = WorkflowConfig::parse(pipeline_toml).map_err(|e| format!("Parse: {e}"))?;
+    create_run_from_config(&wf, config).map_err(CreateRunError::into_message)
+}
+
+/// Build the run-creation response (plan, estimates) from an already-loaded
+/// workflow.
+///
+/// [`create_run`] is the string entry point for single-file workflows. The
+/// web run handler calls this function directly with the
+/// `from_file`-resolved config when `include_files` are staged: the string
+/// parse cannot see rules contributed by an `[[include]]`, so deriving the
+/// plan from it would report fewer rules than the spawned CLI executes, and
+/// an `extends` chain crossing an include would fail to resolve at all
+/// (issue #1152, ledger WF-01 — resolve inherited rules BEFORE deriving).
+pub fn create_run_from_config(
+    wf: &WorkflowConfig,
+    config: &RunConfig,
+) -> Result<CreateRunResponse, CreateRunError> {
     // Config expansion matches `run` (issue #707): {config.*}-routed
     // producer/consumer pairs only match after placeholder expansion.
     let dag = WorkflowDag::from_rules_with_config(&wf.rules, &wf.config_placeholder_values())
-        .map_err(|e| format!("DAG: {e}"))?;
+        .map_err(|e| CreateRunError::Other(format!("DAG: {e}")))?;
 
     // Web admission uses the same canonical biological contract gate as the
     // CLI preflight. Rejecting here prevents an invalid run from being
     // persisted or queued while deferring the failure to the spawned CLI.
-    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(&wf, &dag) {
+    if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(wf, &dag) {
         let findings = type_errors
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(format!(
+        return Err(CreateRunError::TypeContract(format!(
             "declared biological type contracts are violated: {findings}"
-        ));
+        )));
     }
 
-    let execution_order = dag.execution_order().map_err(|e| format!("Order: {e}"))?;
+    let execution_order = dag
+        .execution_order()
+        .map_err(|e| CreateRunError::Other(format!("Order: {e}")))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
 
     // When-awareness (issue #739): a rule whose gate is statically false
@@ -111,6 +154,28 @@ pub fn create_run(
             execution_order,
         },
     })
+}
+
+/// Serialize the EFFECTIVE workflow — includes merged and `extends` resolved
+/// — as a self-contained `.oxoflow` document.
+///
+/// The run row's `pipeline_snapshot` keeps the host document exactly as
+/// submitted, which is not self-contained for a run created from
+/// `include_files` (a rule may `extends` a base that lives in a staged
+/// include). The run workdir persists this document beside the staged
+/// sources so retry, resume, DAG/status, and protected-drift reload what the
+/// executor actually planned, through the pure string parser — no include
+/// resolution, no module-cache access, and no network fetch on polled
+/// endpoints (issue #1152 review, MEDIUM).
+///
+/// `include` directives are cleared: the merged rules are already in
+/// `rules`, and leaving the directives in would re-resolve — and
+/// re-fetch — them on every reload. Engine-internal state is
+/// `#[serde(skip)]` on [`WorkflowConfig`], so the output re-parses cleanly.
+pub fn resolved_snapshot_toml(wf: &WorkflowConfig) -> Result<String, String> {
+    let mut effective = wf.clone();
+    effective.includes.clear();
+    toml::to_string(&effective).map_err(|e| format!("serialize resolved workflow: {e}"))
 }
 
 /// Compute overall run status from node statuses.

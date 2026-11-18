@@ -548,6 +548,24 @@ must be readable by the acting user. This flat shape is the typed
 server, and the TypeScript client stay in lockstep. Returns
 `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
+`execution_plan` and `estimated_resources` are derived from the **resolved**
+workflow, not from `toml_content` alone: when `include_files` are supplied, the
+sources are written beside `workflow.oxoflow` and loaded through the same
+`from_file` path the executor uses before the plan is built, so rules
+contributed by an `[[include]]` — and a rule-level `extends` whose base lives in
+one — appear in the reported plan and resource estimate. Without staged
+sources the single-file parse is used, exactly as before. A BioType violation
+contributed by a staged include keeps the stable
+`400 TYPE_CONTRACT_VIOLATION` code.
+
+The effective workflow (includes merged, `extends` resolved) is also persisted
+in the run's working directory as `.oxo-flow/resolved-workflow.oxoflow`.
+Retry, checkpoint resume (quota budgeting), `/dag-status`, `/status`,
+`/instances`, and `/protected-drift` load that snapshot — falling back to the
+host document for single-document runs — so a staged-include run reports,
+budgets, and re-executes the same plan the CLI executed. The host TOML stays in
+`pipeline_snapshot` for display.
+
 Run creation pays the dedicated #213 spawn budget: `OXO_FLOW_RUNS_RATE_LIMIT`
 run-creation attempts per minute **per acting identity** (default 5; `0`
 disables the limiter). The budget is keyed by the authenticated `users.id`
@@ -749,7 +767,7 @@ Read-only drift audit of the run's `[engine] protected_data_trees`. The response
 - `new_trees` — trees declared under `[engine] protected_data_trees` that exist but have no baseline yet. The next real `oxo-flow run` adopts them; this preview never does.
 - `warnings` — per-tree problems that did not block the audit (unreadable tree, ignored empty path values).
 
-The preview is **read-only**: unlike `oxo-flow run`, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty `drifted_files` with a non-zero `new_trees`. The audit reads the tree as it exists **now**: files can still change between this call and the next run, which is exactly the window `allow_protected_drift` on Create Run covers. Returns `404` for unknown or foreign runs; `503` when runs are not available on this backend.
+The preview is **read-only**: unlike `oxo-flow run`, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty `drifted_files` with a non-zero `new_trees`. The audit reads the tree as it exists **now**: files can still change between this call and the next run, which is exactly the window `allow_protected_drift` on Create Run covers. The declared trees come from the workflow the run executed (the persisted resolved snapshot / the run workdir sources, with the host document as fallback for single-document runs). It **fails closed**: if no workflow source can be loaded, the endpoint answers `500 {"code": "WORKFLOW_UNREADABLE", …}` instead of reporting a clean empty result — "could not read the declaration" is never presented as "no drift". Returns `404` for unknown or foreign runs; `503` when runs are not available on this backend.
 
 ### Provenance Verify
 ```
