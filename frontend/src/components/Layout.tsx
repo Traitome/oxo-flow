@@ -369,10 +369,13 @@ export default function Layout() {
             className="cmd-trigger"
             onClick={() => { setCmdOpen(true); setCmdQuery(''); }}
             title={t('cmd.button')}
-            aria-label={t('cmd.button')}
+            aria-label={`${t('cmd.button')} ⌘K`}
           >
             <Search size={13} />
             <span>{t('cmd.button')}</span>
+            {/* The visible shortcut is part of the accessible name: an
+                aria-label that omitted it failed axe's
+                label-content-name-mismatch rule (issue #1151). */}
             <kbd className="cmd-kbd">⌘K</kbd>
           </button>
         </div>
