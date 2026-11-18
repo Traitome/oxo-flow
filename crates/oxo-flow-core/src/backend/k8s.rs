@@ -4,12 +4,13 @@
 //! batch/v1 Job manifests with deterministic labels. Submission/polling goes
 //! through the shared `ClusterExecutor` (`backend/cluster.rs`).
 
-use super::{sanitize_cloud_name, scheduled_resources};
+use super::{BackendJobStatus, sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
 use crate::executor::process::sensitive_env_refs;
 use crate::rule::Rule;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
@@ -209,6 +210,68 @@ pub fn generate_k8s_array_job_manifest(
     Ok(serde_json::to_string_pretty(&manifest)?)
 }
 
+/// Parse a Kubernetes index list — the `status.completedIndexes` /
+/// `status.failedIndexes` format — into the index set it names.
+///
+/// The wire format is a comma-separated list of single indexes and
+/// inclusive ranges (`"0-2,4"`). Malformed segments are ignored rather
+/// than guessed: a garbage status field must leave the element unknown,
+/// never invent a completed index (issue #1132 / ledger RB-06).
+pub fn parse_index_list(spec: &str) -> BTreeSet<u32> {
+    let mut indexes = BTreeSet::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((start, end)) => {
+                if let (Ok(start), Ok(end)) =
+                    (start.trim().parse::<u32>(), end.trim().parse::<u32>())
+                    && start <= end
+                {
+                    indexes.extend(start..=end);
+                }
+            }
+            None => {
+                if let Ok(index) = part.parse::<u32>() {
+                    indexes.insert(index);
+                }
+            }
+        }
+    }
+    indexes
+}
+
+/// The verdict an Indexed Job's status proves for one completion index.
+///
+/// `completed` / `failed` come from
+/// [`parse_index_list`] over `status.completedIndexes` /
+/// `status.failedIndexes`; `failed_count` is `status.failed`. A failed
+/// count with no `failedIndexes` data (the field is Kubernetes 1.31+)
+/// proves the Job is terminal-failed but not WHICH element failed, so
+/// that element is [`BackendJobStatus::Unknown`] — never a success and
+/// never a fabricated failure. An element that is neither recorded
+/// completed nor recorded failed, while the Job is not in that blind
+/// state, is still live.
+pub fn indexed_element_status(
+    completed: &BTreeSet<u32>,
+    failed: &BTreeSet<u32>,
+    failed_count: u64,
+    index: u32,
+) -> BackendJobStatus {
+    if completed.contains(&index) {
+        return BackendJobStatus::Completed;
+    }
+    if failed.contains(&index) {
+        return BackendJobStatus::Failed;
+    }
+    if failed_count > 0 && failed.is_empty() {
+        return BackendJobStatus::Unknown;
+    }
+    BackendJobStatus::Running
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +428,53 @@ mod tests {
         assert!(
             !plain.contains("\"env\""),
             "a reference-free job must stay byte-identical: {plain}"
+        );
+    }
+
+    /// Ledger RB-06: the Indexed Job status fields the driver's per-element
+    /// poller reads must parse into the completion-index set they name.
+    #[test]
+    fn parse_index_list_reads_the_indexed_job_status_format() {
+        assert_eq!(
+            parse_index_list("0-2,4"),
+            BTreeSet::from([0, 1, 2, 4]),
+            "ranges are inclusive and comma-separated"
+        );
+        assert_eq!(parse_index_list("3"), BTreeSet::from([3]));
+        assert_eq!(parse_index_list(""), BTreeSet::new());
+        // Defensive: junk never fabricates an index.
+        assert_eq!(parse_index_list("4-2"), BTreeSet::new());
+        assert_eq!(parse_index_list("x,1,,2-y"), BTreeSet::from([1]));
+    }
+
+    /// Ledger RB-06: per-element verdicts stay independent, and missing
+    /// failedIndexes data is Unknown — not success, and not copied onto
+    /// every element.
+    #[test]
+    fn indexed_element_status_is_per_element_and_never_fabricates() {
+        let completed = parse_index_list("0,2");
+        let failed = parse_index_list("1");
+        for (index, expected) in [
+            (0, BackendJobStatus::Completed),
+            (1, BackendJobStatus::Failed),
+            (2, BackendJobStatus::Completed),
+            // Index 3 is neither finished nor failed: still live.
+            (3, BackendJobStatus::Running),
+        ] {
+            assert_eq!(
+                indexed_element_status(&completed, &failed, 1, index),
+                expected,
+                "index {index} must have its own verdict"
+            );
+        }
+        // Kubernetes < 1.31 has status.failed but no failedIndexes: the
+        // Job is terminal-failed and the failing element is unknowable.
+        // It must be Unknown, never success and never assumed to be index 0.
+        let unknown = indexed_element_status(&BTreeSet::new(), &BTreeSet::new(), 2, 1);
+        assert_eq!(
+            unknown,
+            BackendJobStatus::Unknown,
+            "missing failedIndexes must not pin the failure on a guessed element"
         );
     }
 }

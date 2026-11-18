@@ -28,11 +28,12 @@
 //! expands empty and the rule fails — the failure is loud rather than a
 //! silent credential leak.
 
-use super::{sanitize_cloud_name, scheduled_resources};
+use super::{BackendJobStatus, sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
 use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 /// Sanitise a string for use as a GCP Batch job name (lowercase alphanumeric
 /// and hyphens, max 63 chars).
@@ -139,6 +140,51 @@ pub fn generate_gcp_batch_array_spec(
     Ok(serde_json::to_string_pretty(&payload)?)
 }
 
+/// Handle of one array element: a Batch task's `BATCH_TASK_INDEX` is
+/// ZERO-based, while the driver's element ordinal is 1-based (element 1
+/// runs task 0, matching the generated `cmd.$((index + 1)).sh` dispatch).
+///
+/// `gcloud` addresses tasks only inside a job (`gcloud batch tasks`), so
+/// the `{job}:{taskIndex}` handle is engine-owned: `ClusterExecutor::poll`
+/// resolves it by listing the job's tasks. It is not passed to the
+/// scheduler as a job id (cancellation still targets the base job).
+pub fn task_element_id(base: &str, ordinal: usize) -> String {
+    format!("{base}:{}", ordinal.saturating_sub(1))
+}
+
+/// Parse `gcloud batch tasks list --format=value(name,status.state)` rows
+/// into `task index -> status`.
+///
+/// Task names are fully qualified
+/// (`projects/P/locations/L/jobs/J/taskGroups/G/tasks/<n>`); the trailing
+/// index is what the handle from [`task_element_id`] names. Unrecognised
+/// states map to [`BackendJobStatus::Unknown`] — missing status data is
+/// never reported as success (issue #1132 / ledger RB-06).
+pub fn parse_task_states(output: &str) -> BTreeMap<u32, BackendJobStatus> {
+    let mut states = BTreeMap::new();
+    for line in output.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let mut fields = line.split_whitespace();
+        let (Some(name), Some(state)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let Some((_, index)) = name.rsplit_once("/tasks/") else {
+            continue;
+        };
+        let Ok(index) = index.parse::<u32>() else {
+            continue;
+        };
+        let status = match state.trim().to_uppercase().as_str() {
+            "PENDING" | "SCHEDULED" => BackendJobStatus::Pending,
+            "ASSIGNED" | "RUNNING" => BackendJobStatus::Running,
+            "SUCCEEDED" => BackendJobStatus::Completed,
+            "FAILED" => BackendJobStatus::Failed,
+            _ => BackendJobStatus::Unknown,
+        };
+        states.insert(index, status);
+    }
+    states
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +261,47 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(text.contains("BATCH_TASK_INDEX"));
+    }
+
+    /// Ledger RB-06: element handles are zero-based task indexes, matching
+    /// `BATCH_TASK_INDEX`.
+    #[test]
+    fn task_element_ids_are_zero_based() {
+        assert_eq!(
+            task_element_id("oxoflow-array-trim-1", 1),
+            "oxoflow-array-trim-1:0"
+        );
+        assert_eq!(
+            task_element_id("oxoflow-array-trim-1", 6),
+            "oxoflow-array-trim-1:5"
+        );
+        assert_eq!(
+            task_element_id("oxoflow-array-trim-1", 0),
+            "oxoflow-array-trim-1:0"
+        );
+    }
+
+    /// Ledger RB-06: `gcloud batch tasks list` rows resolve to independent
+    /// per-element states; unknown or malformed rows never read as success.
+    #[test]
+    fn parse_task_states_reads_per_element_outcomes() {
+        let output = "\
+projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/0\tSUCCEEDED
+projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/1\tFAILED
+projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/2\tRUNNING
+projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/3\tSOMETHING_NEW
+";
+        let states = parse_task_states(output);
+        assert_eq!(states.get(&0), Some(&BackendJobStatus::Completed));
+        assert_eq!(states.get(&1), Some(&BackendJobStatus::Failed));
+        assert_eq!(states.get(&2), Some(&BackendJobStatus::Running));
+        assert_eq!(
+            states.get(&3),
+            Some(&BackendJobStatus::Unknown),
+            "an unrecognised state must not be optimistically mapped"
+        );
+        // Malformed rows are skipped, not guessed.
+        assert!(parse_task_states("garbage\n\n").is_empty());
     }
 
     /// Issue #1171: a submit-host ambient credential must never reach a GCP

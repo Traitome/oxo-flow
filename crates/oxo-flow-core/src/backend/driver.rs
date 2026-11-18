@@ -1057,7 +1057,29 @@ impl BackendDriver {
                     inflight.remove(job_id);
                 }
                 for (job_id, f, status) in settled {
-                    let acct = accounting.get(&job_id).copied();
+                    // Array elements on a base-only backend (PBS/LSF/SGE)
+                    // carry an aggregate verdict, not an independently
+                    // observed one: this adapter's poll invocations see only
+                    // the array base id (issue #136 H4, live-verified). The
+                    // record therefore carries no base-level accounting
+                    // numbers (they are not the element's numbers) and names
+                    // its provenance in `skip_reason` below, so a checkpoint
+                    // never presents the aggregate as a per-element
+                    // measurement (issue #1132 / ledger RB-06). Cloud
+                    // backends poll elements directly and never set this.
+                    let base_only_array = (!direct && f.array_base.is_some()).then(|| {
+                        format!(
+                            "array base {} verdict {}: per-element outcome unavailable from {}",
+                            f.array_base.as_deref().unwrap_or_default(),
+                            status.label(),
+                            self.backend.name()
+                        )
+                    });
+                    let acct = if base_only_array.is_some() {
+                        None
+                    } else {
+                        accounting.get(&job_id).copied()
+                    };
                     // The driver only ever sees submit-to-settle. When the
                     // store reports how long the job RAN, the start time is
                     // recomputed from it so `benchmarks.wall_time_secs`
@@ -1148,7 +1170,13 @@ impl BackendDriver {
                                 enqueued_at: Some(f.submitted_at),
                                 started_at: Some(started_at),
                                 finished_at: Some(observed_at),
-                                exit_code: Some(acct.and_then(|a| a.exit_code).unwrap_or(0)),
+                                // A Completed verdict proves the scheduler
+                                // saw the job finish; only the accounting
+                                // store can say with WHICH code. Without an
+                                // accounting record the code is unknown, not
+                                // 0 — the same rule the Failed branch applies
+                                // below (issue #1132 / ledger RB-06).
+                                exit_code: acct.and_then(|a| a.exit_code),
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
@@ -1156,7 +1184,7 @@ impl BackendDriver {
                                     opts.sensitive_values,
                                 )),
                                 retries: 0,
-                                skip_reason: None,
+                                skip_reason: base_only_array.clone(),
                                 max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                                 cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                                 caption: crate::executor::process::rule_report_caption(
@@ -1244,7 +1272,7 @@ impl BackendDriver {
                                     opts.sensitive_values,
                                 )),
                                 retries: 0,
-                                skip_reason: None,
+                                skip_reason: base_only_array.clone(),
                                 max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                                 cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                                 caption: crate::executor::process::rule_report_caption(
@@ -1268,7 +1296,11 @@ impl BackendDriver {
                                 opts.sensitive_values,
                             )),
                             retries: 0,
-                            skip_reason: Some("cancelled".into()),
+                            skip_reason: Some(
+                                base_only_array
+                                    .clone()
+                                    .unwrap_or_else(|| "cancelled".into()),
+                            ),
                             max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                             cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                             caption: crate::executor::process::rule_report_caption(
@@ -3316,6 +3348,10 @@ shell = "echo asm > out/{assembler}.txt"
         poll_args: Vec<Vec<String>>,
         cancelled: Vec<String>,
         verdict: Option<BackendJobStatus>,
+        /// Per-id overrides for `verdict` — lets a test pin genuinely
+        /// different outcomes for array elements of one submission (ledger
+        /// RB-06: per-element outcomes must stay independent).
+        verdicts: HashMap<String, BackendJobStatus>,
         /// Element count of every array submission, in submit order.
         array_sizes: Vec<usize>,
         poll_error: bool,
@@ -3334,6 +3370,15 @@ shell = "echo asm > out/{assembler}.txt"
         }
         fn state(&self) -> Arc<std::sync::Mutex<MockState>> {
             self.inner.clone()
+        }
+        /// Pin a distinct verdict for one scheduler id (array elements).
+        fn with_verdict(self, id: &str, verdict: BackendJobStatus) -> Self {
+            self.inner
+                .lock()
+                .unwrap()
+                .verdicts
+                .insert(id.to_string(), verdict);
+            self
         }
         fn fail_polling(&self) {
             self.inner.lock().unwrap().poll_error = true;
@@ -3377,7 +3422,15 @@ shell = "echo asm > out/{assembler}.txt"
             }
             Ok(job_ids
                 .iter()
-                .map(|id| (id.clone(), st.verdict.unwrap()))
+                .map(|id| {
+                    let verdict = st
+                        .verdicts
+                        .get(id)
+                        .copied()
+                        .or(st.verdict)
+                        .expect("the mock must be configured with a verdict");
+                    (id.clone(), verdict)
+                })
                 .collect())
         }
         async fn cancel(&self, job_id: &str) -> Result<()> {
@@ -3500,7 +3553,10 @@ shell = "echo asm > out/{assembler}.txt"
     #[test]
     fn non_element_backends_poll_by_base_and_expand_to_elements() {
         // H4: a PBS/LSF/SGE-style backend sees BASE ids in poll and every
-        // element still settles.
+        // element still settles. The expansion is an aggregate, not an
+        // independently observed per-element outcome, so each element record
+        // names its provenance and carries no fabricated accounting
+        // (issue #1132 / ledger RB-06).
         let fx = setup();
         let plan = sibling_plan(fx.workdir.path(), 2);
         let to_run: HashSet<String> = plan.order.iter().cloned().collect();
@@ -3534,6 +3590,20 @@ shell = "echo asm > out/{assembler}.txt"
             ))
             .unwrap();
         assert_eq!(records.len(), 2);
+        // The aggregate success is expanded, but each element record says
+        // where the verdict came from and never claims an observed exit code.
+        for rec in &records {
+            assert_eq!(rec.status, JobStatus::Success);
+            assert_eq!(
+                rec.exit_code, None,
+                "a base-level verdict must not fabricate an element exit code: {rec:?}"
+            );
+            let reason = rec.skip_reason.as_deref().unwrap_or_default();
+            assert!(
+                reason.contains("array base job-1") && reason.contains("per-element outcome"),
+                "the record must name the aggregate verdict's provenance: {rec:?}"
+            );
+        }
         let st = backend.state();
         let st = st.lock().unwrap();
         assert!(!st.poll_args.is_empty());
@@ -3545,6 +3615,207 @@ shell = "echo asm > out/{assembler}.txt"
                 );
             }
         }
+    }
+
+    /// Ledger RB-06: a Completed verdict without an accounting record proves
+    /// the job finished, but the exit code is unknown — it must never be
+    /// reported as 0. Fail-first: before the fix the success branch
+    /// hard-coded `Some(...unwrap_or(0))`.
+    #[test]
+    fn completed_job_without_accounting_reports_unknown_exit_code() {
+        let fx = setup();
+        let mut plan = priority_plan(fx.workdir.path(), &[("solo", 0)]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        // terminal_status keeps the trait default (None): the scheduler
+        // poller said Completed, the accounting store knows nothing.
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend,
+            DriverConfig {
+                max_submitted: 1,
+                max_array_size: 0,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(5),
+                poll_timeout: Some(std::time::Duration::from_secs(10)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: false,
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Success);
+        assert_eq!(
+            records[0].exit_code, None,
+            "missing accounting is unknown, not exit code 0"
+        );
+    }
+
+    /// Ledger RB-06: when a backend polls elements directly (SLURM, and the
+    /// cloud array backends), each element settles on its own verdict — one
+    /// element's failure must not be copied onto its successful siblings.
+    #[test]
+    fn direct_backend_settles_array_elements_independently() {
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        // The array submits as base `job-1`; the driver polls the element
+        // ids `job-1_1` and `job-1_2`.
+        let backend = Arc::new(
+            MockBackend::new(true, BackendJobStatus::Running)
+                .with_verdict("job-1_1", BackendJobStatus::Completed)
+                .with_verdict("job-1_2", BackendJobStatus::Failed),
+        );
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(5),
+                poll_timeout: Some(std::time::Duration::from_secs(10)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: true,
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2, "both elements settle: {records:?}");
+        let success = records
+            .iter()
+            .find(|r| r.rule == "sib_01")
+            .expect("sib_01 record");
+        let failure = records
+            .iter()
+            .find(|r| r.rule == "sib_02")
+            .expect("sib_02 record");
+        assert_eq!(
+            success.status,
+            JobStatus::Success,
+            "a successful element must not inherit a sibling's failure: {records:?}"
+        );
+        assert_eq!(failure.status, JobStatus::Failed);
+        // One verdict per element was requested from the backend, never a
+        // base-id expansion.
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert!(
+            st.poll_args
+                .iter()
+                .any(|args| args.contains(&"job-1_1".to_string())
+                    && args.contains(&"job-1_2".to_string())),
+            "elements must be polled by their own ids: {:?}",
+            st.poll_args
+        );
+    }
+
+    /// Ledger RB-06 end-to-end: the real `ClusterExecutor` in Kubernetes
+    /// mode submits one Indexed Job and settles each element from its own
+    /// completion index. Before this change the executor was a base-only
+    /// backend for the driver: the whole array inherited one verdict.
+    #[cfg(unix)]
+    #[test]
+    fn kubernetes_indexed_array_settles_elements_independently() {
+        use std::os::unix::fs::PermissionsExt;
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let bin = tempfile::tempdir().unwrap();
+        let kubectl = bin.path().join("kubectl");
+        std::fs::write(
+            &kubectl,
+            "#!/bin/bash\n\
+             if [ \"$1\" = get ]; then\n\
+             echo '1|1|2|0|1'\n\
+             else\n\
+             echo 'job.batch/arr-job created'\n\
+             fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&kubectl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let executor = Arc::new(
+            ClusterExecutor::new(
+                ClusterBackend::Kubernetes,
+                ClusterJobConfig {
+                    backend: ClusterBackend::Kubernetes,
+                    queue: None,
+                    account: None,
+                    walltime: None,
+                    extra_args: Vec::new(),
+                },
+            )
+            .with_scheduler_dir(bin.path().to_path_buf()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_secs(10)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: true,
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2, "both elements settle: {records:?}");
+        let completed = records.iter().find(|r| r.rule == "sib_01").unwrap();
+        let failed = records.iter().find(|r| r.rule == "sib_02").unwrap();
+        assert_eq!(
+            completed.status,
+            JobStatus::Success,
+            "completion index 0 succeeded and must not inherit the sibling's failure: {records:?}"
+        );
+        assert_eq!(failed.status, JobStatus::Failed);
+        assert_eq!(
+            completed.exit_code, None,
+            "no accounting store: the exit code is unknown, not 0"
+        );
+        assert_eq!(failed.exit_code, None);
     }
 
     #[test]

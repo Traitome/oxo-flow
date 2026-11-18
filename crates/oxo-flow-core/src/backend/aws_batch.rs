@@ -40,6 +40,21 @@ pub fn sanitize_aws_batch_name(name: &str) -> String {
     sanitize_cloud_name(name, 128, false, "_")
 }
 
+/// Scheduler handle of one array element, derived from the id
+/// `submit-job` echoed for the array submission.
+///
+/// AWS Batch gives each array child a real job id of the form
+/// `<parentJobId>:<arrayIndex>` with a ZERO-based array index, while the
+/// driver's element ordinal is 1-based (element 1 runs
+/// `AWS_BATCH_JOB_ARRAY_INDEX=0`, matching the generated
+/// `cmd.$((index + 1)).sh` dispatch). The child id is directly
+/// describable, so the driver can settle each element on its own status
+/// instead of expanding the parent's verdict (issue #1132 / ledger
+/// RB-06).
+pub fn array_child_id(base: &str, ordinal: usize) -> String {
+    format!("{base}:{}", ordinal.saturating_sub(1))
+}
+
 /// Build the AWS Batch `resourceRequirements` entries shared by single and
 /// array jobs: VCPU + MEMORY plus the optional GPU entry (`gpu` or
 /// `gpu_spec`). Array specs previously dropped the GPU requirement,
@@ -188,6 +203,17 @@ mod tests {
         assert_eq!(container["command"][2], "STAR --genomeDir ref");
         assert_eq!(container["resourceRequirements"][0]["type"], "VCPU");
         assert_eq!(container["resourceRequirements"][0]["value"], "16");
+    }
+
+    /// Ledger RB-06: array elements are addressed by their real AWS Batch
+    /// child ids, whose array index is zero-based while the driver's
+    /// element ordinal is one-based.
+    #[test]
+    fn array_child_ids_are_zero_based_real_job_ids() {
+        assert_eq!(array_child_id("abc-123", 1), "abc-123:0");
+        assert_eq!(array_child_id("abc-123", 4), "abc-123:3");
+        // Defensive: ordinal 0 cannot underflow into a bogus negative index.
+        assert_eq!(array_child_id("abc-123", 0), "abc-123:0");
     }
 
     #[test]

@@ -224,6 +224,33 @@ pub fn parse_status_line(
     }
 }
 
+/// Split a Kubernetes array-element handle (`{jobName}_{ordinal}`) into the
+/// base Job name and the ZERO-based completion index it names.
+///
+/// The base is what the driver submitted (`array_element_id` composes the
+/// ordinal, 1-based, onto the base), and Kubernetes Job names are sanitized
+/// to lowercase alphanumerics and dashes — so the last underscore is
+/// unambiguous. `None` means the id is a plain Job name.
+fn k8s_element_index(element_id: &str) -> Option<(&str, u32)> {
+    let (base, ordinal) = element_id.rsplit_once('_')?;
+    if base.is_empty() || ordinal.is_empty() || !ordinal.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let ordinal: u32 = ordinal.parse().ok()?;
+    Some((base, ordinal.checked_sub(1)?))
+}
+
+/// Split a GCP Batch array-element handle (`{job}:{taskIndex}`) into the
+/// base job id and the ZERO-based task index. `None` means the id is a
+/// plain job id.
+fn gcp_element_index(element_id: &str) -> Option<(&str, u32)> {
+    let (base, index) = element_id.rsplit_once(':')?;
+    if base.is_empty() || index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((base, index.parse().ok()?))
+}
+
 /// The scheduler invocations that report `job_ids`, in the form each
 /// scheduler actually accepts: `(program, arguments)`, one entry per call.
 ///
@@ -288,21 +315,27 @@ pub fn status_invocations(
                 )
             })
             .collect(),
-        ClusterBackend::AwsBatch => vec![(
-            "aws",
-            vec![
+        ClusterBackend::AwsBatch => {
+            // `--jobs` is a LIST parameter: each id must be its own argv
+            // entry (a single space-joined argument becomes one invalid
+            // id). Array elements are real child job ids (`{parent}:{n}`),
+            // so this path answers per element too.
+            let mut args = vec![
                 "batch".to_string(),
                 "describe-jobs".to_string(),
                 "--jobs".to_string(),
-                job_ids.join(" "),
-                // The driver poller reads the same `id|STATE` rows — one
-                // query shape, one parser.
+            ];
+            args.extend(job_ids.iter().cloned());
+            // The driver poller reads the same `id|STATE` rows — one
+            // query shape, one parser.
+            args.extend([
                 "--query".to_string(),
                 "jobs[].join(|,[jobId,status])".to_string(),
                 "--output".to_string(),
                 "text".to_string(),
-            ],
-        )],
+            ]);
+            vec![("aws", args)]
+        }
         ClusterBackend::GcpBatch => job_ids
             .iter()
             .map(|id| {
@@ -976,34 +1009,58 @@ impl super::ExecutorBackend for ClusterExecutor {
             }
             ClusterBackend::Kubernetes => {
                 let mut statuses = HashMap::new();
+                // Element handles (`{jobName}_{ordinal}`, minted by
+                // `array_element_id`) resolve against the Indexed Job's
+                // per-index status; every other id is a plain Job name.
+                let mut by_base: std::collections::BTreeMap<&str, Vec<(&String, u32)>> =
+                    std::collections::BTreeMap::new();
                 for id in job_ids {
-                    let out = match self
-                        .run_cmd(
-                            "kubectl",
-                            &[
-                                "get",
-                                "job",
-                                id,
-                                "-o",
-                                // succeeded + failed + spec.completions in
-                                // one probe: with `backoffLimit: 0` a failed
-                                // pod fails the Job while `succeeded` stays
-                                // 0, so reading succeeded alone polled a
-                                // dead job forever.
-                                "jsonpath={.status.succeeded} {.status.failed} {.spec.completions}",
-                            ],
-                        )
-                        .await
-                    {
-                        Ok(o) => o,
-                        Err(_) => continue,
-                    };
-                    if out.status.success() {
-                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        let mut fields = text.split_whitespace();
-                        let succeeded: u64 = fields.next().unwrap_or("").parse().unwrap_or(0);
-                        let failed: u64 = fields.next().unwrap_or("").parse().unwrap_or(0);
-                        let completions: u64 = fields.next().unwrap_or("").parse().unwrap_or(0);
+                    let Some((base, index)) = k8s_element_index(id) else {
+                        // succeeded + failed + spec.completions in one
+                        // probe: with `backoffLimit: 0` a failed pod fails
+                        // the Job while `succeeded` stays 0, so reading
+                        // succeeded alone polled a dead job forever.
+                        // Pipe-separated so a missing field leaves an empty
+                        // cell instead of shifting the columns.
+                        let out = match self
+                            .run_cmd(
+                                "kubectl",
+                                &[
+                                    "get",
+                                    "job",
+                                    id,
+                                    "-o",
+                                    "jsonpath={.status.succeeded}|{.status.failed}|{.spec.completions}",
+                                ],
+                            )
+                            .await
+                        {
+                            Ok(o) => o,
+                            Err(_) => continue,
+                        };
+                        if !out.status.success() {
+                            continue;
+                        }
+                        let text = String::from_utf8_lossy(&out.stdout);
+                        let trimmed = text.trim();
+                        // With the pipe template the three cells always
+                        // print (absent fields leave EMPTY cells). An empty
+                        // answer is not a status at all → Unknown. The pipe
+                        // shape is what stops an absent `succeeded` from
+                        // shifting `spec.completions` into its cell and
+                        // fabricating success (ledger RB-06).
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        let cells: Vec<&str> = trimmed.split('|').collect();
+                        if cells.len() < 3 {
+                            continue;
+                        }
+                        // Kubernetes omits zero-valued counters, so an empty
+                        // cell is 0, not missing data.
+                        let succeeded = cells[0].trim().parse::<u64>().unwrap_or(0);
+                        let failed = cells[1].trim().parse::<u64>().unwrap_or(0);
+                        let completions = cells[2].trim().parse::<u64>().unwrap_or(0);
                         let st = if failed > 0 {
                             BackendJobStatus::Failed
                         } else if succeeded > 0 && (completions == 0 || succeeded >= completions) {
@@ -1014,6 +1071,79 @@ impl super::ExecutorBackend for ClusterExecutor {
                             BackendJobStatus::Running
                         };
                         statuses.insert(id.clone(), st);
+                        continue;
+                    };
+                    by_base.entry(base).or_default().push((id, index));
+                }
+                for (base, elements) in by_base {
+                    // One probe per array base: the Indexed Job keeps every
+                    // element's outcome in its own status fields, so no
+                    // element inherits a sibling's verdict (ledger RB-06).
+                    let out = match self
+                        .run_cmd(
+                            "kubectl",
+                            &[
+                                "get",
+                                "job",
+                                base,
+                                "-o",
+                                // completedIndexes/failedIndexes are the
+                                // per-index record; the counts are the
+                                // fallback for clusters predating them.
+                                "jsonpath={.status.succeeded}|{.status.failed}|{.spec.completions}|{.status.completedIndexes}|{.status.failedIndexes}",
+                            ],
+                        )
+                        .await
+                    {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    if !out.status.success() {
+                        continue;
+                    }
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let trimmed = text.trim();
+                    // The template prints five cells (two literal pipes plus
+                    // three more) even when every field is absent; anything
+                    // shorter is not a status answer → Unknown.
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let cells: Vec<&str> = trimmed.split('|').collect();
+                    if cells.len() < 5 {
+                        continue;
+                    }
+                    let number = |i: usize| cells.get(i).and_then(|v| v.trim().parse::<u64>().ok());
+                    // `status.failed` is omitempty: an empty cell is zero
+                    // failures, not missing data. Requiring a value here
+                    // would keep every healthy array in flight until the
+                    // blind-settlement guard failed it.
+                    let failed_count = number(1).unwrap_or(0);
+                    let succeeded = number(0);
+                    let completions = number(2);
+                    let completed =
+                        super::k8s::parse_index_list(cells.get(3).copied().unwrap_or_default());
+                    let failed_indexes =
+                        super::k8s::parse_index_list(cells.get(4).copied().unwrap_or_default());
+                    for (element_id, index) in elements {
+                        let mut verdict = super::k8s::indexed_element_status(
+                            &completed,
+                            &failed_indexes,
+                            failed_count,
+                            index,
+                        );
+                        // Clusters that do not publish completedIndexes leave
+                        // the set empty even for a fully successful Job; the
+                        // aggregate counts still prove every index completed.
+                        if verdict == BackendJobStatus::Running
+                            && completed.is_empty()
+                            && let (Some(succeeded), Some(completions)) = (succeeded, completions)
+                            && completions > 0
+                            && succeeded >= completions
+                        {
+                            verdict = BackendJobStatus::Completed;
+                        }
+                        statuses.insert(element_id.clone(), verdict);
                     }
                 }
                 Ok(statuses)
@@ -1026,23 +1156,20 @@ impl super::ExecutorBackend for ClusterExecutor {
                 if job_ids.is_empty() {
                     return Ok(HashMap::new());
                 }
-                let list = job_ids.join(" ");
-                let out = match self
-                    .run_cmd(
-                        "aws",
-                        &[
-                            "batch",
-                            "describe-jobs",
-                            "--jobs",
-                            &list,
-                            "--query",
-                            r"jobs[].join(|,[jobId,status])",
-                            "--output",
-                            "text",
-                        ],
-                    )
-                    .await
-                {
+                // `--jobs` takes a list: each id is its own argv entry (a
+                // single space-joined argument would be one invalid id).
+                // Element ids are real AWS Batch child job ids
+                // (`{parent}:{arrayIndex}`), so one describe answers per
+                // element — no base-verdict expansion (ledger RB-06).
+                let mut args: Vec<String> =
+                    vec!["batch".into(), "describe-jobs".into(), "--jobs".into()];
+                args.extend(job_ids.iter().cloned());
+                args.push("--query".into());
+                args.push(r"jobs[].join(|,[jobId,status])".into());
+                args.push("--output".into());
+                args.push("text".into());
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let out = match self.run_cmd("aws", &arg_refs).await {
                     Ok(out) => out,
                     Err(err) => {
                         // Same contract as the PBS/LSF listing: a transient
@@ -1069,26 +1196,64 @@ impl super::ExecutorBackend for ClusterExecutor {
             }
             ClusterBackend::GcpBatch => {
                 let mut statuses = HashMap::new();
+                // Element handles (`{job}:{taskIndex}`, minted by
+                // `array_element_id`) resolve through the job's tasks; every
+                // other id is a plain job.
+                let mut by_base: std::collections::BTreeMap<&str, Vec<(&String, u32)>> =
+                    std::collections::BTreeMap::new();
                 for id in job_ids {
-                    let mut args = vec!["batch".to_string(), "jobs".to_string()];
+                    let Some((base, index)) = gcp_element_index(id) else {
+                        let mut args = vec!["batch".to_string(), "jobs".to_string()];
+                        args.extend(self.gcloud_location_args());
+                        args.push("describe".to_string());
+                        args.push(id.clone());
+                        args.push("--format=value(status.state)".to_string());
+                        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                        let out = match self.run_cmd("gcloud", &arg_refs).await {
+                            Ok(o) => o,
+                            Err(_) => continue,
+                        };
+                        if !out.status.success() {
+                            continue;
+                        }
+                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        // Empty or unrecognized output is missing status
+                        // data: UNKNOWN, never a live state (which would
+                        // poll forever) and never success (ledger RB-06).
+                        let st = match text.as_str() {
+                            "SUCCEEDED" => BackendJobStatus::Completed,
+                            "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
+                            "RUNNING" => BackendJobStatus::Running,
+                            "QUEUED" | "SCHEDULED" => BackendJobStatus::Pending,
+                            _ => BackendJobStatus::Unknown,
+                        };
+                        statuses.insert(id.clone(), st);
+                        continue;
+                    };
+                    by_base.entry(base).or_default().push((id, index));
+                }
+                for (base, elements) in by_base {
+                    let mut args = vec!["batch".to_string(), "tasks".to_string()];
                     args.extend(self.gcloud_location_args());
-                    args.push("describe".to_string());
-                    args.push(id.clone());
-                    args.push("--format=value(status.state)".to_string());
+                    args.push("list".to_string());
+                    args.push(format!("--job={base}"));
+                    args.push("--format=value(name,status.state)".to_string());
                     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                     let out = match self.run_cmd("gcloud", &arg_refs).await {
                         Ok(o) => o,
                         Err(_) => continue,
                     };
-                    if out.status.success() {
-                        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        let st = match text.as_str() {
-                            "SUCCEEDED" => BackendJobStatus::Completed,
-                            "FAILED" => BackendJobStatus::Failed,
-                            "RUNNING" => BackendJobStatus::Running,
-                            _ => BackendJobStatus::Pending,
-                        };
-                        statuses.insert(id.clone(), st);
+                    if !out.status.success() {
+                        continue;
+                    }
+                    let states =
+                        super::gcp_batch::parse_task_states(&String::from_utf8_lossy(&out.stdout));
+                    for (element_id, index) in elements {
+                        // A task the store does not describe is unknown —
+                        // the driver's blind-settlement guard ends it, and
+                        // no sibling's verdict is copied onto it.
+                        let state = states.get(&index).copied().unwrap_or_default();
+                        statuses.insert(element_id.clone(), state);
                     }
                 }
                 Ok(statuses)
@@ -1199,21 +1364,35 @@ impl super::ExecutorBackend for ClusterExecutor {
     }
 
     fn polls_elements_directly(&self) -> bool {
-        // squeue lists array elements as `{jobid}_{index}`; qstat/bjobs
-        // report only the array base id (issue #136 H4).
-        matches!(self.backend, ClusterBackend::Slurm)
+        // squeue lists array elements as `{jobid}_{index}`; a Kubernetes
+        // Indexed Job reports completed/failed indexes; AWS Batch child
+        // jobs and GCP Batch tasks are individually addressable. qstat /
+        // bjobs report only the array base id in the invocations this
+        // adapter issues (issue #136 H4, live-verified for PBS/SGE), so
+        // those three keep base-level polling with explicit aggregate
+        // provenance (issue #1132 / ledger RB-06).
+        matches!(
+            self.backend,
+            ClusterBackend::Slurm
+                | ClusterBackend::Kubernetes
+                | ClusterBackend::AwsBatch
+                | ClusterBackend::GcpBatch
+        )
     }
 
     fn array_element_id(&self, base: &str, index: usize) -> String {
         // OpenPBS echoes an array submission as `38[]` and addresses its
         // elements as `38[1]` … ; LSF echoes the bare array id and
         // addresses elements `44[2]` — the SLURM `{base}_{index}` form is
-        // not a queryable id on either.
+        // not a queryable id on either. AWS Batch child ids and GCP Batch
+        // task indexes are zero-based and both shaped `{base}:{index}`.
         match self.backend {
             ClusterBackend::Pbs if base.contains("[]") => {
                 base.replacen("[]", &format!("[{index}]"), 1)
             }
             ClusterBackend::Pbs | ClusterBackend::Lsf => format!("{base}[{index}]"),
+            ClusterBackend::AwsBatch => super::aws_batch::array_child_id(base, index),
+            ClusterBackend::GcpBatch => super::gcp_batch::task_element_id(base, index),
             _ => format!("{base}_{index}"),
         }
     }
@@ -1824,6 +2003,25 @@ mod tests {
                 ("qstat", vec!["-j".to_string(), "202".to_string()]),
             ]
         );
+        // AWS Batch takes `--jobs` as a list: each id is its own argv
+        // entry (a single space-joined argument is one invalid id).
+        assert_eq!(
+            status_invocations(&ClusterBackend::AwsBatch, &ids),
+            vec![(
+                "aws",
+                vec![
+                    "batch".to_string(),
+                    "describe-jobs".to_string(),
+                    "--jobs".to_string(),
+                    "101".to_string(),
+                    "202".to_string(),
+                    "--query".to_string(),
+                    "jobs[].join(|,[jobId,status])".to_string(),
+                    "--output".to_string(),
+                    "text".to_string(),
+                ]
+            )]
+        );
     }
 
     #[test]
@@ -1974,6 +2172,238 @@ mod tests {
         );
         // LSF echoes the bare array id and addresses elements `44[2]`.
         assert_eq!(exec(ClusterBackend::Lsf).array_element_id("44", 2), "44[2]");
+        // AWS Batch child jobs are real ids with a zero-based array index.
+        assert_eq!(
+            exec(ClusterBackend::AwsBatch).array_element_id("abc-123", 2),
+            "abc-123:1"
+        );
+        // GCP Batch tasks are zero-based; the engine-owned `{job}:{task}`
+        // handle is resolved through `gcloud batch tasks list`.
+        assert_eq!(
+            exec(ClusterBackend::GcpBatch).array_element_id("oxoflow-array-qc-7", 3),
+            "oxoflow-array-qc-7:2"
+        );
+    }
+
+    /// Write an executable scheduler shim (`kubectl`, `aws`, `gcloud`)
+    /// into `dir` so `ClusterExecutor::with_scheduler_dir` resolves it
+    /// without touching the real CLIs (ledger RB-06 wire tests).
+    #[cfg(unix)]
+    fn write_scheduler_shim(dir: &Path, program: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(program);
+        std::fs::write(&path, format!("#!/bin/bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Ledger RB-06: a Kubernetes Indexed Job's completedIndexes /
+    /// failedIndexes status is settled per element — one element failing
+    /// does not turn its successful siblings into failures. The single
+    /// base probe is what makes this per-element evidence, not a copy.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kubernetes_indexed_elements_report_independent_statuses() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let calls = runs.path().join("calls");
+        write_scheduler_shim(
+            bin.path(),
+            "kubectl",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {calls}\n\
+                 if [ \"$1\" = get ] && [ \"$2\" = job ]; then\n\
+                 echo '1|1|2|0|1'\n\
+                 fi\n\
+                 exit 0",
+                calls = calls.display()
+            ),
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&["arr_1".to_string(), "arr_2".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            statuses.get("arr_1"),
+            Some(&BackendJobStatus::Completed),
+            "completion index 0 is recorded completed: {statuses:?}"
+        );
+        assert_eq!(
+            statuses.get("arr_2"),
+            Some(&BackendJobStatus::Failed),
+            "completion index 1 is recorded failed: {statuses:?}"
+        );
+        // Both verdicts come from ONE probe of the base Job, and it asks
+        // for the per-index fields.
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        let probes: Vec<&str> = calls
+            .lines()
+            .filter(|l| l.contains("jsonpath={.status.succeeded}"))
+            .collect();
+        assert_eq!(
+            probes.len(),
+            1,
+            "both elements resolve from ONE base-Job probe: {calls}"
+        );
+        assert!(
+            calls.contains("completedIndexes"),
+            "the probe must read the per-index status: {calls}"
+        );
+    }
+
+    /// Ledger RB-06: when a cluster does not publish failedIndexes, the
+    /// failed element cannot be identified — it must be Unknown, never a
+    /// fabricated failure pinned on an arbitrary index.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kubernetes_missing_failed_indexes_are_unknown_not_guessed() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "kubectl",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '0|1|2||'; fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&["arr_1".to_string(), "arr_2".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            statuses.get("arr_1"),
+            Some(&BackendJobStatus::Unknown),
+            "missing failedIndexes must not call element 1 failed: {statuses:?}"
+        );
+        assert_eq!(statuses.get("arr_2"), Some(&BackendJobStatus::Unknown));
+    }
+
+    /// Ledger RB-06: Kubernetes omits zero-valued counters, so they print
+    /// as EMPTY cells in the pipe template. They must read as zero — the
+    /// old space-delimited probe shifted `spec.completions` into the
+    /// `succeeded` slot and fabricated success for a just-created Job.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kubernetes_unset_counters_do_not_shift_columns() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "kubectl",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '||3'; fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec.poll(&["single-job".to_string()]).await.unwrap();
+        assert_eq!(
+            statuses.get("single-job"),
+            Some(&BackendJobStatus::Running),
+            "a 0-succeeded / 3-completion Job is running, not completed: {statuses:?}"
+        );
+    }
+
+    /// Ledger RB-06: an empty status answer is not a verdict — the job
+    /// stays in flight (Unknown) instead of being fabricated as Running.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kubernetes_empty_status_answer_stays_unknown() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "kubectl",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo ''; fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec.poll(&["single-job".to_string()]).await.unwrap();
+        assert!(
+            !statuses.contains_key("single-job"),
+            "an empty status answer must stay absent (Unknown): {statuses:?}"
+        );
+    }
+
+    /// Ledger RB-06: AWS Batch array elements are real child job ids and
+    /// settle on their own rows. The `--jobs` list is passed as separate
+    /// argv entries (one space-joined argument is a single invalid id).
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn aws_batch_child_jobs_report_independent_statuses() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
+        write_scheduler_shim(
+            bin.path(),
+            "aws",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {args_log}\n\
+                 echo 'arr:0|SUCCEEDED'\n\
+                 echo 'arr:1|FAILED'\n\
+                 exit 0",
+                args_log = args_log.display()
+            ),
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&["arr:0".to_string(), "arr:1".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(statuses.get("arr:0"), Some(&BackendJobStatus::Completed));
+        assert_eq!(statuses.get("arr:1"), Some(&BackendJobStatus::Failed));
+        let argv: Vec<String> = std::fs::read_to_string(&args_log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let jobs_at = argv.iter().position(|a| a == "--jobs").unwrap();
+        assert_eq!(
+            &argv[jobs_at + 1..jobs_at + 3],
+            &["arr:0".to_string(), "arr:1".to_string()],
+            "each job id is its own argv entry: {argv:?}"
+        );
+    }
+
+    /// Ledger RB-06: GCP Batch array elements resolve through the job's
+    /// task list, one status per task index.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn gcp_batch_tasks_report_independent_statuses() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "gcloud",
+            "echo 'projects/p/locations/l/jobs/arr/taskGroups/group0/tasks/0\tSUCCEEDED'\n\
+             echo 'projects/p/locations/l/jobs/arr/taskGroups/group0/tasks/1\tFAILED'\n\
+             exit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&["arr:0".to_string(), "arr:1".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(statuses.get("arr:0"), Some(&BackendJobStatus::Completed));
+        assert_eq!(statuses.get("arr:1"), Some(&BackendJobStatus::Failed));
+    }
+
+    /// Ledger RB-06: an empty / unrecognised `gcloud` state is Unknown,
+    /// never Pending (which polls forever) and never success.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn gcp_batch_missing_state_is_unknown_not_pending() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "gcloud",
+            "if [ \"$1\" = batch ] && [ \"$2\" = jobs ]; then echo 'SOMETHING_NEW'; fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec.poll(&["solo-job".to_string()]).await.unwrap();
+        assert_eq!(
+            statuses.get("solo-job"),
+            Some(&BackendJobStatus::Unknown),
+            "an unrecognised state is missing data, not a live job: {statuses:?}"
+        );
     }
 
     #[test]
