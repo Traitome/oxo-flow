@@ -466,6 +466,22 @@ local runs once the results are pulled back. The remote host needs the
 `oxo-flow` CLI on `PATH`, `tar`, and non-interactive SSH access (key
 auth, `BatchMode`).
 
+!!! warning "Result pulls are validated before a run can finalize"
+    The pulled result stream is parsed by oxo-flow's own archive reader,
+    not the host `tar`. A member whose path is absolute or contains `..`,
+    a symlink or hard link whose target resolves outside the pulled
+    directory, or a member type other than file/directory/link rejects the
+    whole extraction and fails the run with the offending member named —
+    nothing is written outside the local workdir. After extraction every
+    member is re-checked on disk, and the run's `execution.log` and
+    `.exit-code` records must both be present; a stream that stops early
+    therefore fails the run instead of reporting a partial tree as
+    complete. The failure is recorded in the run's `artifacts_incomplete`
+    note and the run is **never** reported as `completed`. Result trees
+    that intentionally leave symlinks pointing outside the workdir (for
+    example an externally rooted `OXO_FLOW_ENV_STORE` link) are rejected
+    by this check — pulled results must be self-contained.
+
 Cluster connection management is admin-only outside personal mode.
 Details: [Cluster Connections & Remote
 Execution](../reference/web-api.md#cluster-connections-remote-execution)

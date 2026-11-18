@@ -20,6 +20,7 @@
 //! the whole run's process group, so cancel kills the group — the CLI and
 //! every rule subprocess die with the wrapper instead of surviving it.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -80,14 +81,18 @@ struct SshCommand {
     _identity: Option<SshIdentity>,
 }
 
-/// Build an SSH command for `cluster`. The stored `ssh_key` may be sealed
-/// (OXO_FLOW_MASTER_KEY set, #517) and may be a path or key material; both
-/// are resolved through [`SshIdentity`].
-fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
-    let mut cmd = tokio::process::Command::new("ssh");
-    for arg in ssh_base_args(cluster.ssh_port as u16) {
-        cmd.arg(arg);
-    }
+/// The `ssh` argument list for `cluster` (options, optional identity, target)
+/// plus the identity guard the caller must keep alive until ssh exits.
+///
+/// One definition serves both the async command builder ([`ssh`]) and the
+/// blocking result pull — the two must issue byte-identical ssh invocations.
+fn ssh_args(
+    cluster: &ClusterRow,
+) -> std::io::Result<(Vec<std::ffi::OsString>, Option<SshIdentity>)> {
+    let mut args: Vec<std::ffi::OsString> = ssh_base_args(cluster.ssh_port as u16)
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect();
     let identity = cluster
         .ssh_key
         .as_deref()
@@ -95,12 +100,23 @@ fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
         .map(|key| SshIdentity::resolve(&key))
         .transpose()?;
     if let Some(identity) = &identity {
-        cmd.arg("-i").arg(identity.path());
+        args.push(std::ffi::OsString::from("-i"));
+        args.push(identity.path().as_os_str().to_os_string());
     }
-    cmd.arg(ssh_target_string(
+    args.push(std::ffi::OsString::from(ssh_target_string(
         cluster.ssh_user.as_deref(),
         &cluster.ssh_host,
-    ));
+    )));
+    Ok((args, identity))
+}
+
+/// Build an SSH command for `cluster`. The stored `ssh_key` may be sealed
+/// (OXO_FLOW_MASTER_KEY set, #517) and may be a path or key material; both
+/// are resolved through [`SshIdentity`].
+fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
+    let (args, identity) = ssh_args(cluster)?;
+    let mut cmd = tokio::process::Command::new("ssh");
+    cmd.args(&args);
     Ok(SshCommand {
         cmd,
         _identity: identity,
@@ -210,35 +226,79 @@ async fn stage_directory(
     Ok(())
 }
 
+/// Members every completed remote run must pull back (issue #1157, audit
+/// CL-04). The wrapper redirects the run into `execution.log` and records the
+/// CLI exit code in `.exit-code`; a pull stream missing either one is a
+/// partial transfer and must fail the run, not silently produce a run with
+/// no log and no exit record.
+const REQUIRED_RESULT_MEMBERS: &[&str] = &["execution.log", ".exit-code"];
+
+/// Extract one pulled result stream into the local workdir through the shared
+/// validated extractor: absolute/`..` names and escaping symlink or hard-link
+/// targets are rejected by name, every member is verified on disk, and the
+/// two required run records must be present.
+fn extract_pulled_results<R: Read>(reader: R, local_dir: &Path) -> std::io::Result<()> {
+    oxo_flow_core::archive::extract_tar_requiring(reader, local_dir, REQUIRED_RESULT_MEMBERS)
+        .map(|_| ())
+}
+
 /// Pull a remote directory back over tar-over-stdio.
+///
+/// The tar stream is parsed and extracted by the shared pure-Rust extractor
+/// (issue #1157): the previous implementation piped it into the host `tar`,
+/// whose path-traversal handling is platform-dependent and unproven, and which
+/// reports success for an archive that simply omits members.
 async fn pull_directory(
     cluster: &ClusterRow,
     remote_dir: &str,
     local_dir: &Path,
 ) -> std::io::Result<()> {
-    let mut ssh_cmd = ssh(cluster)?;
-    ssh_cmd
-        .cmd
-        .arg(format!("tar -C {} -cf - .", shell_quote(remote_dir)));
-    ssh_cmd.cmd.stdout(Stdio::piped());
+    let (args, identity) = ssh_args(cluster)?;
+    let remote_dir = remote_dir.to_string();
+    let local_dir = local_dir.to_path_buf();
 
-    let mut tar = tokio::process::Command::new("tar");
-    tar.arg("-C").arg(local_dir).arg("-xf").arg("-");
-    tar.stdin(Stdio::piped());
-    tar.stdout(Stdio::null());
+    // The extraction is a blocking stream parse; run the whole ssh+extract in
+    // a blocking task so stdout is consumed synchronously while ssh writes.
+    tokio::task::spawn_blocking(move || {
+        // Keep key material on disk until ssh has been reaped.
+        let _identity = identity;
+        let mut cmd = std::process::Command::new("ssh");
+        cmd.args(&args)
+            .arg(format!("tar -C {} -cf - .", shell_quote(&remote_dir)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn()?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let mut stderr = child.stderr.take().expect("piped stderr");
+        // Drain stderr concurrently: a full stderr pipe would otherwise block
+        // ssh while the extractor waits on stdout.
+        let stderr_task = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf).into_owned()
+        });
 
-    let mut ssh_child = ssh_cmd.cmd.spawn()?;
-    let ssh_stdout = ssh_child.stdout.take().expect("piped stdout");
-    let mut tar_child = tar.spawn()?;
-    let mut tar_stdin = tar_child.stdin.take().expect("piped stdin");
-    tokio::io::copy(&mut tokio::io::BufReader::new(ssh_stdout), &mut tar_stdin).await?;
-    drop(tar_stdin);
-    let ssh_status = ssh_child.wait().await?;
-    let tar_status = tar_child.wait().await?;
-    if !ssh_status.success() || !tar_status.success() {
-        return Err(std::io::Error::other("pulling results failed"));
-    }
-    Ok(())
+        let extracted = extract_pulled_results(stdout, &local_dir);
+        if extracted.is_err() {
+            // Stop the transfer promptly; dropping stdout above already
+            // closes the read end, but killing is deterministic.
+            let _ = child.kill();
+        }
+        let status = child.wait()?;
+        let ssh_stderr = stderr_task.join().unwrap_or_default();
+        match extracted {
+            Ok(()) if status.success() => Ok(()),
+            Ok(()) => Err(std::io::Error::other(format!(
+                "pulling results failed (ssh exit {}): {}",
+                status.code().unwrap_or(-1),
+                ssh_stderr.trim()
+            ))),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+    .map_err(|e| std::io::Error::other(format!("result pull task failed: {e}")))?
 }
 
 /// The remote launcher for one run.
@@ -928,5 +988,114 @@ mod tests {
         // Assert
         assert_eq!(decision, RemoteFinalize::Finalize);
         assert_eq!(crate::executor::final_status_from_exit(7 == 0), "failed");
+    }
+
+    /// Minimal raw-tar writer (the tar crate's `Builder` refuses `..` and
+    /// absolute paths, so hostile archives must be built byte-for-byte).
+    struct RawTar {
+        bytes: Vec<u8>,
+    }
+
+    impl RawTar {
+        fn new() -> Self {
+            Self { bytes: Vec::new() }
+        }
+
+        fn add(&mut self, name: &str, typeflag: u8, linkname: &str, data: &[u8]) -> &mut Self {
+            let mut header = [0u8; 512];
+            header[..name.len()].copy_from_slice(name.as_bytes());
+            header[100..107].copy_from_slice(b"0000644");
+            header[108..115].copy_from_slice(b"0000000");
+            header[116..123].copy_from_slice(b"0000000");
+            header[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
+            header[136..147].copy_from_slice(b"00000000000");
+            header[148..156].copy_from_slice(b"        ");
+            header[156] = typeflag;
+            if !linkname.is_empty() {
+                header[157..157 + linkname.len()].copy_from_slice(linkname.as_bytes());
+            }
+            header[257..263].copy_from_slice(b"ustar\0");
+            header[263..265].copy_from_slice(b"00");
+            let checksum: u32 = header.iter().map(|b| u32::from(*b)).sum();
+            header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+            self.bytes.extend_from_slice(&header);
+            self.bytes.extend_from_slice(data);
+            let pad = (512 - data.len() % 512) % 512;
+            self.bytes.extend(std::iter::repeat_n(0u8, pad));
+            self
+        }
+
+        fn finish(&mut self) -> Vec<u8> {
+            self.bytes.extend(std::iter::repeat_n(0u8, 1024));
+            std::mem::take(&mut self.bytes)
+        }
+    }
+
+    /// Issue #1157 / audit CL-04: the result extraction must fail when the
+    /// pull stream is missing a member every completed run writes — the old
+    /// external-`tar` pull exited 0 and finalized the run anyway.
+    #[test]
+    fn result_extraction_fails_when_required_members_are_missing() {
+        // Arrange — a syntactically valid tar with only one of the two
+        // records a completed wrapper always writes.
+        let mut tar = RawTar::new();
+        tar.add("./execution.log", b'0', "", b"run log");
+        let bytes = tar.finish();
+        let dir = tempfile::tempdir().unwrap();
+
+        // Act
+        let err = extract_pulled_results(bytes.as_slice(), dir.path())
+            .expect_err("a missing required member must fail the pull");
+
+        // Assert — the missing record is named, the run cannot finalize.
+        assert!(err.to_string().contains(".exit-code"), "got: {err}");
+    }
+
+    /// A clean archive carrying both required records extracts and is
+    /// accepted by the existing finalize decision.
+    #[test]
+    fn clean_result_archive_extracts_and_finalizes() {
+        // Arrange
+        let mut tar = RawTar::new();
+        tar.add("./execution.log", b'0', "", b"run log");
+        tar.add("./.exit-code", b'0', "", b"0\n");
+        tar.add("./wf.oxoflow", b'0', "", b"[workflow]\n");
+        let bytes = tar.finish();
+        let dir = tempfile::tempdir().unwrap();
+
+        // Act
+        let pulled = extract_pulled_results(bytes.as_slice(), dir.path());
+
+        // Assert — the existing decision helper finalizes a successful pull.
+        assert!(pulled.is_ok(), "clean pull failed: {pulled:?}");
+        assert!(dir.path().join("execution.log").is_file());
+        assert!(dir.path().join(".exit-code").is_file());
+        assert_eq!(
+            decide_remote_finalize("run-1", 0, &pulled),
+            RemoteFinalize::Finalize
+        );
+    }
+
+    /// A hostile stream is rejected by name and never writes outside the
+    /// local workdir — the check replaced the platform-dependent host `tar`.
+    #[test]
+    fn result_extraction_rejects_parent_dir_members() {
+        // Arrange
+        let mut tar = RawTar::new();
+        tar.add("./execution.log", b'0', "", b"run log");
+        tar.add("./.exit-code", b'0', "", b"0\n");
+        tar.add("../escape.txt", b'0', "", b"pwned");
+        let bytes = tar.finish();
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("workdir");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Act
+        let err = extract_pulled_results(bytes.as_slice(), &dir)
+            .expect_err("a '..' member must be rejected");
+
+        // Assert
+        assert!(err.to_string().contains("../escape.txt"), "got: {err}");
+        assert!(!parent.path().join("escape.txt").exists());
     }
 }

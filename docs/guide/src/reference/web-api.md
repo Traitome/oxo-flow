@@ -1271,8 +1271,12 @@ private `0600` temp file for the SSH invocation, so either form works.
 the remote host (tar over stdio — no rsync), launches it detached (own
 session via `setsid`, with `nohup` fallback) so the launch call returns
 while the workflow keeps running, and pulls the results back on completion
-so every downstream endpoint (logs, files, report) works unchanged. If that
-pull fails, the run is **not** finalized as a success — it is failed with the
+so every downstream endpoint (logs, files, report) works unchanged. The
+pulled stream is extracted through the engine's validated archive reader:
+absolute/`..` member paths and link targets escaping the workdir are
+rejected by name, every member is verified on disk, and `execution.log` +
+`.exit-code` must both be present (issue #1157 / audit CL-04). If that pull
+fails, the run is **not** finalized as a success — it is failed with the
 pull error and the run row records `artifacts_incomplete` (see
 [Run Detail](#run-detail)), because the local workdir the downstream
 endpoints read may be missing or stale (issue #1112 / audit RB-05).

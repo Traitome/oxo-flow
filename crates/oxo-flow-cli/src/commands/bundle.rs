@@ -88,11 +88,13 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         ),
         BundleFormat::TarGz => Box::new(flate2::read::GzDecoder::new(file)),
     };
-    let mut archive = tar::Archive::new(reader);
 
-    // Extract all files
-    archive
-        .unpack(extract_dir.path())
+    // Extract all files through the shared validated extractor (issue #1157,
+    // audit CL-04): absolute paths, `..` members, and symlink/hard-link
+    // targets escaping the extraction root are rejected by name instead of
+    // being silently skipped, rewritten, or created — and every member is
+    // re-checked on disk after extraction.
+    let extracted = oxo_flow_core::archive::extract_tar(reader, extract_dir.path())
         .context("failed to extract bundle")?;
 
     // Read and verify manifest
@@ -166,13 +168,17 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
             .as_str()
             .context("file entry missing 'sha256'")?;
 
-        let file_path = extract_dir.path().join(path);
-        if !file_path.exists() {
+        // The manifest is attacker-supplied data too: a `..`/absolute path
+        // here would make the checksum read files OUTSIDE the verified
+        // extraction (audit #669 sibling). Reject before touching disk.
+        crate::commands::publish::ensure_safe_bundle_path(path)?;
+        if !extracted.contains(path) {
             anyhow::bail!(
                 "file '{}' declared in manifest but missing from archive",
                 path
             );
         }
+        let file_path = extract_dir.path().join(path);
 
         let actual_sha = compute_sha256(&file_path)?;
         if actual_sha != expected_sha {

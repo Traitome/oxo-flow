@@ -231,23 +231,21 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-17) — result-pull failure is fixed; archive extraction and cancellation hardening remain Prototype
+**Maturity**: Partial (2026-11-18) — result-pull failure and archive extraction are fixed; restart-safe cancellation remains Prototype
 
-A failed result pull used to be logged while the remote exit code was still used to finalize the run. That is fixed (issue #1112): when the pull fails the run is failed through the shared non-success path (`mark_failed`) with the pull error as its reason, and the run row records the reason in `artifacts_incomplete` so downstream consumers can distinguish "ran and succeeded" from "raced a broken transfer". Archive extraction still trusts the remote tar stream, and cancellation still relies on an in-memory registry and wrapper-only process targeting.
+A failed result pull used to be logged while the remote exit code was still used to finalize the run. That is fixed (issue #1112): when the pull fails the run is failed through the shared non-success path (`mark_failed`) with the pull error as its reason, and the run row records the reason in `artifacts_incomplete` so downstream consumers can distinguish "ran and succeeded" from "raced a broken transfer". Archive extraction no longer trusts the stream: the remote pull and bundle verification both go through `oxo-flow-core::archive::extract_tar_requiring`, which rejects absolute/`..` member paths and escaping symlink/hard-link targets by name, re-verifies every member on disk, and requires the run records (`execution.log`, `.exit-code`) to be present (#1189). Cancellation still relies on an in-memory registry and wrapper-only process targeting.
 
 Evidence:
 
-- `crates/oxo-flow-web/src/domains/clusters/remote.rs:132`
-- `crates/oxo-flow-web/src/domains/clusters/remote.rs:152`
-- `crates/oxo-flow-web/src/domains/clusters/remote.rs:389`
-- `crates/oxo-flow-web/src/domains/clusters/remote.rs:392`
-- `crates/oxo-flow-web/src/domains/clusters/remote.rs:27`
+- `crates/oxo-flow-core/src/archive.rs` (`extract_tar_requiring`, `ensure_link_stays_inside`)
+- `crates/oxo-flow-web/src/domains/clusters/remote.rs` (`pull_directory`, `REQUIRED_RESULT_MEMBERS`, `decide_remote_finalize`)
+- `crates/oxo-flow-cli/src/commands/bundle.rs` (`extract_and_verify_bundle`)
 
 Required exit evidence:
 
-- Pull and extraction integrity checks must pass before a run can become `completed`. [DONE for the pull (a failed pull can no longer finalize as `completed`); extraction integrity check remains open.]
-- Malicious path traversal in an archive is rejected. [OPEN — not addressed by #1112.]
-- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs. [OPEN — not addressed by #1112.]
+- Pull and extraction integrity checks must pass before a run can become `completed`. [DONE — a failed pull cannot finalize as `completed` (#1112); extraction verifies every member and the required run records before the finalize decision (#1189).]
+- Malicious path traversal in an archive is rejected. [DONE (#1189) — `../escape.txt`, absolute members, and symlink/hard-link targets resolving outside the destination fail extraction with the member named; tests `archive::tests::parent_dir_member_is_rejected_and_nothing_is_written_outside`, `absolute_member_is_rejected_instead_of_rewritten`, `escaping_symlink_is_rejected_and_never_created`, `escaping_hard_link_is_rejected`, `result_extraction_rejects_parent_dir_members`, `bundle_with_parent_dir_member_is_rejected`, `bundle_with_absolute_member_is_rejected`, `bundle_with_escaping_symlink_is_rejected`.]
+- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs. [OPEN — not addressed by #1112 or #1189.]
 
 ### RB-06: Scheduler and cluster outcomes are not scientifically reliable
 
@@ -545,7 +543,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | CL-01 | P1 | Post-submit failures could orphan accepted jobs before local job registration. | Implemented but unproven | Best-effort cancel covers the registration window; success must not be claimed when cleanup itself fails. |
 | CL-02 | P1 | Cluster artifacts and commands could expose sensitive values. | Implemented but unproven | Artifact permissions tightened and command logging masked; scheduler/container secret artifacts remain RB-12. |
 | CL-03 | P1 | Cancellation and per-element accounting remain unreliable. | Planned / blocked | See RB-06. |
-| CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Pull fixed (#1112); extraction open | A failed result pull now fails the run and records `artifacts_incomplete`; archive path-traversal rejection remains. See RB-05. |
+| CL-04 | P1 | Remote pull and extraction can claim success with missing artifacts. | Fixed (#1189) | A failed result pull fails the run and records `artifacts_incomplete` (#1112). Extraction now runs through `oxo-flow-core::archive::extract_tar_requiring`: absolute/`..` members and symlink/hard-link targets escaping the destination are rejected by name, every extracted member is re-verified on disk, and the remote pull requires `execution.log` + `.exit-code` or the run fails. Tests: `archive::tests::*`, `result_extraction_*`, `bundle_with_*_is_rejected`, `bundle_missing_a_declared_member_fails_naming_it`. See RB-05. |
 | CL-05 | P2 | Cloud backend tests are mostly mock and CLI-wrapper tests. | Prototype | Live cloud campaigns are required before cloud-native claims. |
 
 ### 5.3 Web, API, Auth, and Storage
