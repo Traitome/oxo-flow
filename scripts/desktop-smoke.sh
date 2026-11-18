@@ -66,6 +66,7 @@ if [[ "$(uname -s)" == "Linux" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}"
   # WebKitGTK without a GPU: software compositing avoids EGL init failures
   # under Xvfb.
   export WEBKIT_DISABLE_COMPOSITING_MODE=1
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
   export LIBGL_ALWAYS_SOFTWARE=1
   for _ in $(seq 1 50); do
     [[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]] && break
