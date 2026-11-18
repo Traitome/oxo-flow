@@ -22,7 +22,36 @@ pub(crate) use model::{
 pub use parse::resolve_rule_templates;
 
 use crate::error::{OxoFlowError, Result};
-use crate::rule::Rule;
+use crate::rule::{EnvironmentSpec, Rule};
+use std::collections::HashMap;
+
+/// The environment a rule executes in, under the documented precedence:
+/// `env_groups[rule.env_group]` → the rule's inline spec → `[defaults]
+/// environment`.
+///
+/// THE single definition of environment selection (issue #1210):
+/// [`WorkflowConfig::resolve_environment`] returns it for readers
+/// (`env list` / `env check`, lint W008, the software-versions report) and
+/// [`WorkflowConfig::apply_defaults`] folds the same value onto every rule
+/// before `run`, `dry-run`, cluster submission, and the web DAG status
+/// resolve it again — so the listing and the executed backend cannot
+/// disagree. A `rule.env_group` naming an undefined group falls through to
+/// the inline/default spec (validate reports E010 separately).
+fn effective_rule_environment(
+    env_groups: &HashMap<String, EnvironmentSpec>,
+    default_environment: Option<&EnvironmentSpec>,
+    rule: &Rule,
+) -> Option<EnvironmentSpec> {
+    if let Some(group_name) = rule.env_group.as_deref()
+        && let Some(env) = env_groups.get(group_name)
+    {
+        return Some(env.clone());
+    }
+    if !rule.environment.is_empty() {
+        return Some(rule.environment.clone());
+    }
+    default_environment.cloned()
+}
 
 /// Environment variable that overrides the execution-time placeholder gate.
 pub const STRICT_PLACEHOLDERS_ENV: &str = "OXO_FLOW_STRICT_PLACEHOLDERS";

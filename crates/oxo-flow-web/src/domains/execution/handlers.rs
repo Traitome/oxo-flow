@@ -1060,17 +1060,15 @@ pub async fn get_dag_status(
         None => node_items,
     };
     // Per-rule environment from the run's own snapshot (issue #1149),
-    // mirroring the RUN path exactly rather than a prettier intent:
-    // `[defaults] environment` is folded onto rules by the shared
-    // `WorkflowConfig::apply_defaults` (the same call `run`/`dry-run` make)
-    // and the executor wraps each rule with `rule.environment.kind()`.
-    // `env_group` is deliberately NOT expanded here: the run path itself
-    // never consults it (preflight and the executor read `rule.environment`
-    // after defaults), so labelling an `env_group` rule with its group's
-    // backend would claim a wrapping the run never performs — the same
-    // class of misrepresentation this fix removes. Node names are base rule
-    // names (`with_all_rules` aggregates instance statuses), so this map
-    // covers every normal node; an orphan keeps `None` instead of a
+    // mirroring the RUN path exactly rather than a prettier intent: the
+    // shared `WorkflowConfig::apply_defaults` (the same call `run`/
+    // `dry-run` make) folds the documented precedence onto every rule —
+    // `env_group` → the rule's inline environment → `[defaults]
+    // environment` (issue #1210) — and the executor wraps each rule with
+    // `rule.environment.kind()`. Because this is the SAME fold, the label
+    // cannot claim a wrapping the run never performs. Node names are base
+    // rule names (`with_all_rules` aggregates instance statuses), so this
+    // map covers every normal node; an orphan keeps `None` instead of a
     // fabricated `system`.
     if let Some(wf) = workflow.as_mut() {
         wf.apply_defaults();
