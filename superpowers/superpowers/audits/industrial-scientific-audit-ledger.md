@@ -478,13 +478,14 @@ URLs, MCP tokens, and proxy credentials without declaring them.
 
 Evidence:
 
-- `crates/oxo-flow-core/src/executor/process.rs:3223`
+- `crates/oxo-flow-core/src/executor/process.rs:3836` (base `spawn_rule_shell`; the local fix routes it through `apply_rule_env_allowlist`)
+- `crates/oxo-flow-core/src/cluster.rs` `generate_{slurm,pbs,sge,lsf}_script` (HPC job scripts; isolated behind the shared allowlist in the same fix)
 
 Required exit evidence:
 
 - A rule with no declared environment cannot observe sentinel ambient secrets.
 - Explicit declarations expose only the named variables.
-- Local, container, HPC, and cloud execution paths share the same tested allowlist policy.
+- Local and HPC execution paths share the same tested allowlist policy. Container (docker/singularity) and cloud (k8s/aws-batch/gcp-batch) dispatch paths do NOT yet route through the shared allowlist and are clean only by omission — bringing them under the same policy is still required.
 
 ---
 
