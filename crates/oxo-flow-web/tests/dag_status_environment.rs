@@ -3,11 +3,12 @@
 //!
 //! The monitor's DAG canvas used to hard-code `environment: 'system'` for
 //! every node, so a conda/docker/singularity rule was rendered as a system
-//! rule. The handler now resolves each node's environment from the run's own
-//! pipeline snapshot with the run's precedence (`env_group` → rule
-//! `environment` → `[defaults] environment`, i.e.
-//! `WorkflowConfig::resolve_environment`) and reports `null` when a node no
-//! longer maps to a snapshot rule — never a fabricated `system`.
+//! rule. The handler now reports each node's environment as the RUN resolves
+//! it — `[defaults] environment` folded onto rules (`apply_defaults`, the
+//! shared run helper), then the rule's inline environment. `env_group` is
+//! not expanded because the run path does not consult it, and a node that no
+//! longer maps to a snapshot rule reports `null` — never a fabricated
+//! `system`.
 //!
 //! All tests drive the production router (`build_router("personal")`) against
 //! the shared file-backed DB harness (`common::ensure_db`).
