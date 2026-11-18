@@ -3220,6 +3220,43 @@ Transform rules expand into:
 - Map rules: `{rule_name}_{split_value}` (e.g., `variant_calling_chr1`)
 - Combine rule: `{rule_name}_combine` (e.g., `variant_calling_combine`)
 
+### Generated-Rule Semantics
+
+The engine does not synthesize map/combine rules from a default rule: each
+generated rule is a **clone of the authored rule**, with only the fields the
+operator owns replaced (issue #1154, ledger WF-03). Every other field an
+author set survives onto every generated rule unchanged — including
+`environment` and `env_group`, the hooks `pre_exec` / `on_success` /
+`on_failure`, `retries` / `retry_delay`, staging (`staging_mode`, `pipe`),
+`tags`, `benchmark`, `log`, `report`, `group`, `priority`, `target`,
+`optional`, `required`, `depends_on`, `extends`, `temporary`, `scratch`,
+`singleton`, `temp_output`, `protected_output`, `input_function`, `envvars`,
+`checkpoint` / `checkpoint_manifest`, `params`, the resource shorthand and
+`resources`, `resource_hint`, `rule_metadata`, `cache_key`, `interpreter`,
+`format_hint`, `checksum`, `script`, and `types`.
+
+Only these fields are replaced on generated rules:
+
+| Field | Map rule | Combine rule |
+|---|---|---|
+| `name` | `{rule}_{value}` | `{rule}_combine` |
+| `input` | authored `input` with the split variable substituted (other placeholders stay literal) | every chunk output |
+| `output` | the authored output with the split variable substituted when it references one; otherwise the per-chunk path `.oxo-flow/chunks/{by}/{value}.<ext>` | the authored output |
+| `shell` | `transform.map` with the split variable substituted | `transform.combine.shell` (or the generated aggregate command) |
+| `cleanup_chunks` | `false` | `transform.cleanup` |
+| `transform` | cleared | cleared |
+| `scatter`, `output_pattern` | cleared — neither can reach the transform branch (`scatter` wins the branch, `output_pattern` is a validated exclusion) | cleared |
+
+`expand_inputs` is carried over and materialized independently on each
+generated rule; the expanded literals are appended after the transformed
+inputs.
+
+The exhaustive contract is pinned by `config::transform_semantics_tests`
+(`crates/oxo-flow-core/src/config/transform_semantics_tests.rs`): the test
+factory fills every `Rule` field, and the assertion helper destructures the
+struct without a rest pattern, so adding a field to `Rule` fails that suite
+at compile time until the new field is covered.
+
 ---
 
 ## Multi-line Strings
