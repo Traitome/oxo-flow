@@ -3566,13 +3566,17 @@ mod workdir_guard_tests {
         );
     }
 
-    /// The admission claim must hold with a pooled, file-backed database
-    /// (multiple connections), not just the single-connection in-memory
-    /// fixture: the unique partial index plus `ON CONFLICT DO NOTHING` is
-    /// the guarantee, and SQLite's writer serialization must not surface a
-    /// busy error to the loser.
+    /// The guarded insert must serialize across a POOLED, file-backed
+    /// database (multiple connections), not just the single-connection
+    /// in-memory fixture: two concurrent claims still admit exactly one row
+    /// and the loser sees `false`, never a `SQLITE_BUSY` error. This checks
+    /// the guard's cross-connection behavior only — it does NOT isolate the
+    /// partial unique index (the claim is already covered by `NOT EXISTS` on
+    /// SQLite; see `pipeline_unique_index_blocks_the_other_guard_column` and
+    /// `live_admission_indexes_reject_bare_duplicate_live_rows` for the
+    /// index mechanism).
     #[tokio::test]
-    async fn pipeline_guard_is_atomic_with_a_pooled_file_database() {
+    async fn pipeline_guard_serializes_across_pooled_connections() {
         let dir = tempfile::tempdir().unwrap();
         let url = format!(
             "sqlite:{}?mode=rwc",
@@ -3603,6 +3607,81 @@ mod workdir_guard_tests {
         .await
         .unwrap();
         assert_eq!(live, 1, "only one live row may exist for the pipeline");
+    }
+
+    /// F2 isolation (review of #1218): the guard COLUMN and the partial
+    /// unique INDEX are two independent mechanisms, and each alone rejects
+    /// the loser. The end-to-end concurrency test cannot tell them apart —
+    /// on SQLite either one is sufficient — so this pins the interplay
+    /// directly:
+    ///
+    /// 1. a WORKDIR-guarded claim (the "wrong" column for a saved-pipeline
+    ///    run) still loses when the row collides on `pipeline_id`, because
+    ///    `idx_runs_live_pipeline` rejects it — the index alone protects a
+    ///    future `claim_run_row` refactor;
+    /// 2. a PIPELINE-guarded claim is likewise rejected against an existing
+    ///    live row both when it collides on `pipeline_id` (the `NOT EXISTS`
+    ///    predicate) and when it collides on `workdir` (the workdir index).
+    ///
+    /// If `idx_runs_live_pipeline` is dropped or made non-unique, step 1
+    /// admits the second row and this test fails — the property the reviewer
+    /// found unprotected.
+    #[tokio::test]
+    async fn pipeline_unique_index_blocks_the_other_guard_column() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        seed_run_parents(&backend, "pipe-f2").await;
+
+        // A live saved-pipeline run exists.
+        assert!(
+            backend
+                .create_run_if_pipeline_idle(&pipeline_row("f2-live", "pipe-f2", "/f2-live"))
+                .await
+                .unwrap()
+        );
+
+        // (1) Same pipeline, DIFFERENT workdir, but claimed through the
+        // WORKDIR guard: the `NOT EXISTS` predicate on workdir passes, so
+        // only the partial unique index on pipeline_id can reject it.
+        assert!(
+            !backend
+                .create_run_if_workdir_idle(&pipeline_row("f2-loser", "pipe-f2", "/f2-other"))
+                .await
+                .unwrap(),
+            "idx_runs_live_pipeline must reject a same-pipeline row even when the \
+             guard column is `workdir`"
+        );
+
+        // (2a) The PIPELINE guard rejects a pipeline_id collision via
+        // `NOT EXISTS`, independent of any index.
+        assert!(
+            !backend
+                .create_run_if_pipeline_idle(&pipeline_row("f2-loser", "pipe-f2", "/f2-other"))
+                .await
+                .unwrap(),
+            "the pipeline guard's NOT EXISTS must reject a same-pipeline row"
+        );
+
+        // (2b) A workdir collision under the PIPELINE guard is rejected by
+        // `idx_runs_live_workdir` (different pipeline, same workdir).
+        assert!(
+            !backend
+                .create_run_if_pipeline_idle(&pipeline_row("f2-loser", "pipe-f2", "/f2-live"))
+                .await
+                .unwrap(),
+            "idx_runs_live_workdir must reject a same-workdir row even when the \
+             guard column is `pipeline_id`"
+        );
+
+        let live: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .fetch_one(backend.inner_pool())
+        .await
+        .unwrap();
+        assert_eq!(live, 1, "only the first live row may exist");
     }
 
     /// The partial unique indexes are the enforcement layer, not just a
