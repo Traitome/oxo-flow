@@ -6,17 +6,24 @@
 //
 // Write-back splices instead of regenerating: cardsToToml takes the current
 // document as its base and replaces ONLY the rules sections, patching
-// name/version into the existing [workflow] header. Everything the card
-// model does not express ([engine], [ai], [config], depends_on, when,
-// script, resources.*, …) is carried over verbatim — an edit used to
-// rewrite the whole file and silently drop it.
+// name/version into the existing [workflow] header.
+//
+// Issue #1143 (audit UX-01): splicing alone is not a round-trip guarantee —
+// the card model still regenerates every managed key, so documents using
+// constructs it cannot represent ([[values]], [engine], when, resources,
+// script, [rules.*] sub-tables, map/dir input/output …) are REFUSED here
+// instead. detectGuidedUnsupported lists what would be lost; the form is
+// replaced by an explicit refusal with a switch-to-TOML affordance, and
+// the page refuses its Save path too. Guided mode never writes a lossy
+// document.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import Glossary from './Glossary';
 import { useI18n } from '../context/I18n';
-import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
+import { scanTomlTopLevelSections, splitSectionStatements, statementKey } from '../utils/tomlSections';
+import { MODELED_RULE_KEYS, detectGuidedUnsupported } from '../utils/guidedSafety';
 
 interface RuleCard {
   name: string;
@@ -37,6 +44,8 @@ interface RuleCard {
 interface GuidedRuleBuilderProps {
   toml: string;
   onChange: (toml: string) => void;
+  /** Leave guided mode and open the raw TOML editor (refusal affordance). */
+  onSwitchToToml?: () => void;
 }
 
 const EMPTY_CARD: RuleCard = {
@@ -53,16 +62,10 @@ const EMPTY_CARD: RuleCard = {
 
 // Keys the card fields fully own: regenerated from the model on every
 // write-back, so they must NOT also ride along from the original text (a
-// kept duplicate would conflict with the edited value).
-const CARD_MANAGED_KEYS = new Set(['name', 'input', 'output', 'threads', 'memory', 'environment', 'shell']);
-
-// Top-level key of a TOML statement, bare or quoted (dotted keys like
-// `resources.memory` come back whole). Returns '' when the text does not
-// look like a key = value statement (comments, continuations).
-function statementKey(stmt: string): string {
-  const m = stmt.match(/^[ \t]*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))[ \t]*=/);
-  return m ? (m[1] ?? m[2] ?? m[3] ?? '') : '';
-}
+// kept duplicate would conflict with the edited value). This IS the
+// detector's modeled-key set — one definition, so the splice and the
+// guided-refusal gate can never disagree about what the form owns.
+const CARD_MANAGED_KEYS = MODELED_RULE_KEYS;
 
 // Escape a value for interpolation into a TOML basic string: a raw quote
 // or backslash in a name/path used to emit UNPARSEABLE TOML, silently
@@ -238,20 +241,33 @@ function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: s
   return out.join('').replace(/\n+$/, '\n');
 }
 
-export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderProps) {
+export default function GuidedRuleBuilder({ toml, onChange, onSwitchToToml }: GuidedRuleBuilderProps) {
   const { t } = useI18n();
   const [cards, setCards] = useState<RuleCard[]>([]);
   const [workflowName, setWorkflowName] = useState('my-pipeline');
   const [workflowVersion, setWorkflowVersion] = useState('0.1.0');
+  // Edits are only allowed once the document has been imported: cards is
+  // [] until the async parse resolves, and emitting from that state would
+  // delete every rule (a second silent-loss path).
+  const [imported, setImported] = useState(false);
+  const [parseFailed, setParseFailed] = useState(false);
   // The TOML we generated ourselves — changes matching it are our own
   // echoes and must not re-import (that would clobber mid-typing state).
   const lastEmitted = useRef('');
+
+  // Constructs the card model cannot represent, computed from the same
+  // document the cards are imported from. Non-empty ⇒ guided editing and
+  // the guided Save path are refused (issue #1143).
+  const unsupported = useMemo(() => detectGuidedUnsupported(toml), [toml]);
+  const blocked = unsupported.length > 0;
 
   // Re-import into cards ONLY on external TOML changes (canvas, AI chat,
   // template load). Guided edits emit TOML directly and skip the echo.
   useEffect(() => {
     if (toml === lastEmitted.current) return;
     let cancelled = false;
+    setImported(false);
+    setParseFailed(false);
     // Captured from the same document the parse below validates: the raw
     // statements/sub-tables each card must carry through its next edit.
     const preserved = rulePreserved(toml);
@@ -287,22 +303,29 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
             originalTails: preserved[i]?.tails ?? '',
           })),
         );
+        setImported(true);
       })
-      .catch(() => setCards([]));
+      .catch(() => {
+        if (cancelled) return;
+        setCards([]);
+        setParseFailed(true);
+      });
     return () => { cancelled = true; };
   }, [toml]);
 
   const updateCards = useCallback(
     (next: RuleCard[]) => {
+      if (blocked || !imported) return;
       setCards(next);
       const generated = cardsToToml(next, workflowName, workflowVersion, toml);
       lastEmitted.current = generated;
       onChange(generated);
     },
-    [workflowName, workflowVersion, toml, onChange],
+    [blocked, imported, workflowName, workflowVersion, toml, onChange],
   );
 
   const emitMeta = (name: string, version: string) => {
+    if (blocked || !imported) return;
     const generated = cardsToToml(cards, name, version, toml);
     lastEmitted.current = generated;
     onChange(generated);
@@ -318,6 +341,53 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+
+  // Refusal (issue #1143): never present editable cards for a document the
+  // form cannot represent. The message names every construct that a guided
+  // save would drop or rewrite, and the only action is the TOML editor.
+  if (blocked) {
+    return (
+      <div
+        className="dash-card"
+        role="alert"
+        data-testid="guided-refusal"
+        style={{ borderColor: 'var(--color-error)' }}
+      >
+        <h3 style={{ marginTop: 0 }}>{t('guided.blocked.title')}</h3>
+        <p>{t('guided.blocked.body').replace('{{features}}', unsupported.join(', '))}</p>
+        <p className="muted">{t('guided.blocked.detail')}</p>
+        {onSwitchToToml && (
+          <button className="btn-run" onClick={onSwitchToToml} data-testid="guided-switch-toml">
+            {t('guided.blocked.switch')}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // A document the parser rejects cannot be card-edited safely either:
+  // the empty card list would serialize over the original text.
+  if (parseFailed) {
+    return (
+      <div
+        className="dash-card"
+        role="alert"
+        data-testid="guided-unparsable"
+        style={{ borderColor: 'var(--color-error)' }}
+      >
+        <p style={{ marginTop: 0 }}>{t('guided.blocked.unparsable')}</p>
+        {onSwitchToToml && (
+          <button className="btn-run" onClick={onSwitchToToml} data-testid="guided-switch-toml">
+            {t('guided.blocked.switch')}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (!imported) {
+    return <div className="empty-state">{t('common.loading')}</div>;
+  }
 
   return (
     <div>

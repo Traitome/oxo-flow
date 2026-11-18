@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react';
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose, Sparkles, Shield, FileSpreadsheet, AlignLeft, X, Upload } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, describeApiError } from '../api/client';
@@ -12,6 +12,7 @@ import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
 import { scanTomlTopLevelSections, splitSectionStatements } from '../utils/tomlSections';
+import { detectGuidedUnsupported } from '../utils/guidedSafety';
 
 // Lazy: guided mode (the default) never mounts these, so @xyflow/react,
 // d3-dag and CodeMirror stay out of the initial editor load (issue #79).
@@ -249,6 +250,12 @@ export default function PipelineEditor() {
     localStorage.setItem('oxo_editor_mode', mode);
     setViewMode(mode);
   };
+
+  // Issue #1143 (audit UX-01): the guided form cannot represent advanced
+  // TOML constructs. The builder renders a refusal instead of editable
+  // cards, and the guided Save path below refuses to run — the same
+  // detector drives both so the message and the guard cannot drift.
+  const guidedUnsupported = useMemo(() => detectGuidedUnsupported(toml), [toml]);
 
   // Guided mode has no canvas toolbar, so expose the same Run/Dry-Run entry
   // points and switch the user into Canvas + TOML before opening the dialog.
@@ -591,6 +598,16 @@ export default function PipelineEditor() {
   };
 
   const handleSave = async () => {
+    // Issue #1143: a guided save on a document the guided form does not
+    // model is refused outright — never write a lossy document. The TOML
+    // editor path (canvas mode) is untouched and stores the full text.
+    if (viewMode === 'guided' && guidedUnsupported.length > 0) {
+      session.setRunResult({
+        message: t('editor.guidedSaveRefused').replace('{{features}}', guidedUnsupported.join(', ')),
+        type: 'error',
+      });
+      return;
+    }
     // Issue #79 P1-09: Save reported success even for TOML with 23 errors
     // or cycles. Invalid content is refused with the error list instead.
     // Validate the exact content being saved: the debounced result can be
@@ -734,8 +751,11 @@ export default function PipelineEditor() {
           <div className="action-row">
             <button
               className="btn-sm"
+              data-testid="guided-save"
               onClick={() => void handleSave()}
-              title={t('editor.save')}
+              title={guidedUnsupported.length > 0
+                ? t('editor.guidedSaveRefused').replace('{{features}}', guidedUnsupported.join(', '))
+                : t('editor.save')}
             >
               <Save size={14} /> {t('editor.save')}
             </button>
@@ -756,7 +776,11 @@ export default function PipelineEditor() {
               <Play size={16} /> {t('editor.run')}
             </button>
           </div>
-          <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
+          <GuidedRuleBuilder
+            toml={toml}
+            onChange={(v) => setToml(v)}
+            onSwitchToToml={() => switchViewMode('canvas')}
+          />
         </div>
       )}
 

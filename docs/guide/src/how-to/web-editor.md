@@ -22,6 +22,30 @@ The choice persists across sessions. Validation errors now carry line
 numbers; clicking a `line N` chip scrolls the TOML editor to the failing
 line.
 
+### Guided mode refuses documents it cannot represent
+
+Guided mode models the `[workflow]` name/version and, per rule, `name`,
+`shell`, `input`, `output`, `threads`, `memory`, and `environment` only.
+It would silently drop or rewrite anything else — `[[values]]`, `[engine]`,
+`[config]`, `when` gates, `depends_on`, hooks/retries, `script` bodies,
+resources other than threads/memory, `[rules.*]` sub-tables, and map or
+directory forms of `input`/`output` (issue #1143, audit UX-01).
+
+When the loaded workflow contains any of those, Guided mode replaces the
+form with a refusal that names every construct found, and its **Save**
+refuses without writing anything. Use **Switch to TOML editor** (or the
+**Canvas + TOML** mode button) to edit and save the full document — the
+TOML editor path is unchanged and never strips advanced semantics.
+`[workflow]` keys such as `description` are preserved and do not trigger
+the refusal.
+
+Table-header spelling is normalized to TOML semantics: `[[rules]]`,
+`[[ rules ]]`, `[rules."resources"]`, dotted keys, inner whitespace, and
+CRLF documents are read identically, and header-looking lines inside
+multi-line strings stay string content. A line that starts like a table
+header but cannot be parsed fails closed (the guided form refuses the
+document) instead of being silently absorbed into the previous section.
+
 ## Canvas edits preserve your comments
 
 Canvas, palette, and inspector edits are position-aware: the backend
