@@ -673,7 +673,7 @@ fn cli_ai_explain_without_provider_degrades_to_skeleton() {
         // M10 degraded mode: no provider → deterministic skeleton, exit 0.
         .success()
         .stdout(predicate::str::contains("(deterministic skeleton)"))
-        .stderr(predicate::str::contains("AI provider not configured"))
+        .stderr(predicate::str::contains("AI degraded [AI_NOT_CONFIGURED]"))
         .stderr(predicate::str::contains("ai setup"));
 }
 
