@@ -9,7 +9,7 @@ import {
   lintArgs,
   versionArgs,
 } from "./core/cliArgs";
-import { DEFAULT_EXECUTABLE, parseCliVersion, runCli } from "./core/exec";
+import { DEFAULT_EXECUTABLE, parseCliVersion, runCli, type CliResult } from "./core/exec";
 import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
 import {
@@ -19,12 +19,9 @@ import {
   type ReportContext,
   type ReportEnvironment,
 } from "./core/reportIssue";
-import {
-  buildGenerationPrompt,
-  extractToml,
-  pipelineSlug,
-  resolveBackend,
-} from "./core/aiBackend";
+import { pipelineSlug, resolveBackend } from "./core/aiBackend";
+import { generateValidatedDraft, type DraftChatTurn, type DraftOutcome } from "./core/aiDraft";
+import { isSnapshotBasename, withContentSnapshot } from "./core/contentSnapshot";
 import { ruleLensInfos } from "./core/ruleIndex";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCodeActionProvider } from "./providers/codeActions";
@@ -96,16 +93,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // External .oxoflow changes (git checkout, teammates, generators) do not
   // fire editor events: refresh the CLI probe and re-diagnose any open copy.
-  const watcher = vscode.workspace.createFileSystemWatcher("**/*.oxoflow");
+  // Hidden validation snapshots are internal staging files — ignore them so
+  // diagnostics/AI generation does not trigger a CLI probe per draft.
+  const isSnapshotUri = (uri: vscode.Uri): boolean =>
+    isSnapshotBasename(uri.path.slice(uri.path.lastIndexOf("/") + 1));
   const reDiagnose = (uri: vscode.Uri): void => {
+    if (isSnapshotUri(uri)) return;
     const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
     if (doc) void diagnostics.diagnose(doc);
   };
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.oxoflow");
   watcher.onDidChange((uri) => {
+    if (isSnapshotUri(uri)) return;
     void statusBar.refresh();
     reDiagnose(uri);
   });
   watcher.onDidCreate((uri) => {
+    if (isSnapshotUri(uri)) return;
     void statusBar.refresh();
     reDiagnose(uri);
   });
@@ -355,12 +359,28 @@ async function runQualityCommand(
   const target = await pipelineTarget();
   if (!target) return;
   const doc = vscode.window.activeTextEditor?.document;
-  const dirty = doc?.uri.toString() === target.file.toString() && doc.isDirty;
+  // An unsaved buffer is analyzed AS IS through a same-directory CLI
+  // snapshot — never the stale saved file with only a warning.
+  const buffer = doc?.uri.toString() === target.file.toString() && doc.isDirty ? doc : undefined;
   const executable = statusBar.executable();
-  const args = kind === "validate" ? validateArgs(target.file.fsPath) : lintArgs(target.file.fsPath);
-  const res = await withOxoProgress(`oxo-flow: ${kind}…`, () =>
-    runCli(executable, args, { cwd: target.folder.uri.fsPath })
-  );
+  const argsFor = (file: string) => (kind === "validate" ? validateArgs(file) : lintArgs(file));
+  const displayArgs = argsFor(target.file.fsPath);
+
+  let res: CliResult;
+  try {
+    res = await withOxoProgress(`oxo-flow: ${kind}…`, () =>
+      buffer
+        ? withContentSnapshot(target.file.fsPath, buffer.getText(), (snapshot) =>
+            runCli(executable, argsFor(snapshot), { cwd: target.folder.uri.fsPath })
+          )
+        : runCli(executable, argsFor(target.file.fsPath), { cwd: target.folder.uri.fsPath })
+    );
+  } catch (e) {
+    void showErrorWithReport(
+      `Cannot analyze the unsaved buffer: ${e instanceof Error ? e.message : String(e)}. Save the file and run again.`
+    );
+    return;
+  }
 
   if (res.spawnError) {
     void showErrorWithReport(
@@ -369,8 +389,8 @@ async function runQualityCommand(
     return;
   }
 
-  const lines = [`$ oxo-flow ${args.map((a) => JSON.stringify(a)).join(" ")}`];
-  if (dirty) lines.push("(document has unsaved changes — the saved file was analyzed)");
+  const lines = [`$ oxo-flow ${displayArgs.map((a) => JSON.stringify(a)).join(" ")}`];
+  if (buffer) lines.push("(document has unsaved changes — the in-editor buffer was analyzed)");
   if (res.stderr.trim()) lines.push(res.stderr.trimEnd());
   try {
     const report = parseReport(res.stdout);
@@ -525,9 +545,11 @@ async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFol
 }
 
 /**
- * Editor language-model path (zero-config): generate with the picked model,
- * write the file, then ground it through `oxo-flow validate` with ONE
- * repair round feeding the findings back to the model.
+ * Editor language-model path (zero-config): generate with the picked model
+ * and VALIDATE BEFORE APPLYING. The draft is staged as a sibling snapshot
+ * and grounded through `oxo-flow validate` with ONE repair round before any
+ * byte reaches the chosen destination — a draft that still fails is surfaced
+ * and leaves the destination untouched (see core/aiDraft.ts).
  */
 async function generateWithIdeModel(
   output: vscode.OutputChannel,
@@ -553,52 +575,68 @@ async function generateWithIdeModel(
   if (!target) return;
 
   await withOxoProgress("oxo-flow: generating pipeline via the editor model…", async () => {
-    const prompt = buildGenerationPrompt(description);
-    const chat = async (messages: vscode.LanguageModelChatMessage[]): Promise<string> => {
+    const chat = async (turns: readonly DraftChatTurn[]): Promise<string> => {
+      const messages = turns.map((turn) =>
+        turn.role === "assistant"
+          ? vscode.LanguageModelChatMessage.Assistant(turn.text)
+          : vscode.LanguageModelChatMessage.User(turn.text)
+      );
       const request = await pick.model.sendRequest(messages, {});
       let text = "";
       for await (const chunk of request.text) text += chunk;
+      appendLog(output, `[ai:ide:${pick.model.family}] ${text.slice(0, 500)}`);
       return text;
     };
 
-    let response = await chat([vscode.LanguageModelChatMessage.User(prompt)]);
-    appendLog(output, `[ai:ide:${pick.model.family}] ${response.slice(0, 500)}`);
-    let toml = extractToml(response);
-    if (!toml) {
+    let outcome: DraftOutcome;
+    try {
+      outcome = await generateValidatedDraft(description, {
+        targetPath: target.fsPath,
+        executable: statusBar.executable(),
+        cwd: folder.uri.fsPath,
+        chat,
+        apply: async (toml) => {
+          await vscode.workspace.fs.writeFile(target, Buffer.from(toml, "utf8"));
+        },
+        log: (line) => appendLog(output, line),
+      });
+    } catch (e) {
+      void showErrorWithReport(
+        `AI generation failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+      output.show(true);
+      return;
+    }
+
+    if (outcome.status === "no-pipeline") {
       void showErrorWithReport("The model response contained no [workflow] pipeline — see the oxo-flow output panel.");
       output.show(true);
       return;
     }
-    await vscode.workspace.fs.writeFile(target, Buffer.from(toml, "utf8"));
-
-    // Grounding gate: the engine validates every draft; on failure, feed the
-    // findings back for exactly one repair round before surfacing the result.
-    const verdict = await runCli(statusBar.executable(), validateArgs(target.fsPath), {
-      cwd: folder.uri.fsPath,
-    });
-    if (verdict.exitCode !== 0) {
-      appendLog(output, "[ai:ide] draft failed validation — one repair round");
-      const findings = `${verdict.stderr.trim() || verdict.stdout.trim()}`.slice(0, 2000);
-      const repaired = await chat([
-        vscode.LanguageModelChatMessage.User(prompt),
-        vscode.LanguageModelChatMessage.Assistant(response),
-        vscode.LanguageModelChatMessage.User(
-          `That pipeline failed \`oxo-flow validate\`:\n\n${findings}\n\nReturn the corrected COMPLETE pipeline as one fenced toml block.`
-        ),
-      ]);
-      const fixed = extractToml(repaired);
-      if (fixed) {
-        toml = fixed;
-        await vscode.workspace.fs.writeFile(target, Buffer.from(fixed, "utf8"));
-      } else {
-        appendLog(output, "[ai:ide] repair round produced no toml block — keeping the unvalidated draft");
-        void vscode.window.showWarningMessage(
-          "The repair round produced no pipeline — the file holds the original UNVALIDATED draft. Check the oxo-flow output panel."
-        );
-      }
+    if (outcome.status === "unavailable") {
+      appendLog(output, `[ai:ide] cannot validate the draft — ${outcome.detail}`);
+      output.show(true);
+      void showErrorWithReport(
+        `AI generation could not validate the draft: ${outcome.detail}. Nothing was written.`
+      );
+      return;
+    }
+    if (outcome.status === "rejected") {
+      appendLog(
+        output,
+        `[ai:ide] draft NOT written — validation failed:\n${outcome.detail}\n\n` +
+          `Rejected draft (NOT written to ${vscode.workspace.asRelativePath(target)}):\n${outcome.toml}`
+      );
+      output.show(true);
+      void showErrorWithReport(
+        "The generated pipeline failed oxo-flow validation and was NOT written. The findings and the rejected draft are in the oxo-flow output panel."
+      );
+      return;
     }
     void vscode.window.showInformationMessage(
-      `Pipeline written to ${vscode.workspace.asRelativePath(target)} (via ${via}).`
+      `Validated pipeline written to ${vscode.workspace.asRelativePath(target)} (via ${via}${
+        outcome.attempts === 2 ? ", after one repair round" : ""
+      }).`
     );
   });
 }

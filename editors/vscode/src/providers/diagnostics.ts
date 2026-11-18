@@ -1,14 +1,16 @@
 import * as vscode from "vscode";
-import { DEFAULT_EXECUTABLE, runCli } from "../core/exec";
+import { DEFAULT_EXECUTABLE, runCli, type CliResult } from "../core/exec";
 import {
   dedupeFindings,
   findingsFromLint,
   findingsFromValidate,
   parseReport,
+  saveFirstFinding,
   type Finding,
 } from "../core/jsonReport";
 import { indexToml } from "../core/tomlIndex";
 import { lintArgs, validateArgs } from "../core/cliArgs";
+import { withContentSnapshot } from "../core/contentSnapshot";
 
 const DEBOUNCE_MS = 600;
 
@@ -66,55 +68,43 @@ export class OxoflowDiagnostics implements vscode.Disposable {
     const log = (msg: string) => {
       if (trace) this.output.appendLine(msg);
     };
-    log(`[diagnostics] ${executable} validate ${doc.uri.fsPath}${includeLint ? " + lint" : ""}`);
 
     const onSpawn = (kill: () => void) => {
       if (this.generations.get(uriKey) === generation) this.killCurrent.set(uriKey, kill);
     };
 
-    const [validateRes, lintRes] = await Promise.allSettled([
-      runCli(executable, validateArgs(doc.uri.fsPath), { cwd, onSpawn }),
-      includeLint
-        ? runCli(executable, lintArgs(doc.uri.fsPath), { cwd, onSpawn })
-        : Promise.resolve(null),
-    ]);
+    /** Run both checks against ONE path (the saved file or a buffer snapshot). */
+    const runChecks = async (file: string): Promise<Finding[]> => {
+      log(`[diagnostics] ${executable} validate ${file}${includeLint ? " + lint" : ""}`);
+      const [validateRes, lintRes] = await Promise.allSettled([
+        runCli(executable, validateArgs(file), { cwd, onSpawn }),
+        includeLint ? runCli(executable, lintArgs(file), { cwd, onSpawn }) : Promise.resolve(null),
+      ]);
+      return collectFindings(validateRes, lintRes, executable, log);
+    };
+
+    let findings: Finding[];
+    if (doc.isDirty) {
+      // The editor shows content the saved file does not have. Analyze the
+      // BUFFER (staged as a sibling `.oxoflow` snapshot, so relative
+      // [[include]] resolution is unchanged); never fall back to the stale
+      // disk content. If staging fails, refuse loudly instead.
+      try {
+        findings = await withContentSnapshot(doc.uri.fsPath, text, (snapshotPath) => {
+          log(`[diagnostics] unsaved buffer — analyzing snapshot ${snapshotPath}`);
+          return runChecks(snapshotPath);
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`[diagnostics] cannot stage unsaved buffer: ${message}`);
+        findings = [saveFirstFinding(message)];
+      }
+    } else {
+      findings = await runChecks(doc.uri.fsPath);
+    }
 
     // A newer run superseded this one — drop the result.
     if (this.generations.get(uriKey) !== generation) return;
-
-    const findings: Finding[] = [];
-    if (validateRes.status === "fulfilled") {
-      const res = validateRes.value;
-      if (res.spawnError) {
-        log(`[diagnostics] cannot run ${executable}: ${res.spawnError}`);
-      } else {
-        try {
-          const report = parseReport(res.stdout);
-          if (report.command === "validate") findings.push(...findingsFromValidate(report));
-        } catch (e) {
-          log(`[diagnostics] validate parse failure: ${e instanceof Error ? e.message : String(e)}`);
-          findings.push(unparseable("validate", res));
-        }
-      }
-    } else {
-      log(`[diagnostics] validate failed: ${String(validateRes.reason)}`);
-      findings.push(unparseable("validate", null));
-    }
-
-    if (lintRes.status === "fulfilled" && lintRes.value) {
-      const res = lintRes.value;
-      if (res.spawnError) {
-        log(`[diagnostics] cannot run ${executable} (lint): ${res.spawnError}`);
-      } else {
-        try {
-          const report = parseReport(res.stdout);
-          if (report.command === "lint") findings.push(...findingsFromLint(report));
-        } catch (e) {
-          log(`[diagnostics] lint parse failure: ${e instanceof Error ? e.message : String(e)}`);
-          findings.push(unparseable("lint", res));
-        }
-      }
-    }
 
     this.collection.set(doc.uri, toDiagnostics(text, dedupeFindings(findings)));
   }
@@ -172,6 +162,49 @@ export class OxoflowDiagnostics implements vscode.Disposable {
 
 function dirname(uri: vscode.Uri): string {
   return uri.with({ path: uri.path.replace(/\/[^/]*$/, "") }).fsPath;
+}
+
+/** Turn the two CLI results into findings (shared by file and snapshot runs). */
+function collectFindings(
+  validateRes: PromiseSettledResult<CliResult>,
+  lintRes: PromiseSettledResult<CliResult | null>,
+  executable: string,
+  log: (msg: string) => void
+): Finding[] {
+  const findings: Finding[] = [];
+  if (validateRes.status === "fulfilled") {
+    const res = validateRes.value;
+    if (res.spawnError) {
+      log(`[diagnostics] cannot run ${executable}: ${res.spawnError}`);
+    } else {
+      try {
+        const report = parseReport(res.stdout);
+        if (report.command === "validate") findings.push(...findingsFromValidate(report));
+      } catch (e) {
+        log(`[diagnostics] validate parse failure: ${e instanceof Error ? e.message : String(e)}`);
+        findings.push(unparseable("validate", res));
+      }
+    }
+  } else {
+    log(`[diagnostics] validate failed: ${String(validateRes.reason)}`);
+    findings.push(unparseable("validate", null));
+  }
+
+  if (lintRes.status === "fulfilled" && lintRes.value) {
+    const res = lintRes.value;
+    if (res.spawnError) {
+      log(`[diagnostics] cannot run ${executable} (lint): ${res.spawnError}`);
+    } else {
+      try {
+        const report = parseReport(res.stdout);
+        if (report.command === "lint") findings.push(...findingsFromLint(report));
+      } catch (e) {
+        log(`[diagnostics] lint parse failure: ${e instanceof Error ? e.message : String(e)}`);
+        findings.push(unparseable("lint", res));
+      }
+    }
+  }
+  return findings;
 }
 
 /** Human-output fallback when the JSON document cannot be recovered. */
