@@ -332,6 +332,18 @@ mod tests {
         assert_eq!(key_ref["key"], "OXO_FLOW_SENSITIVE_0");
     }
 
+    /// Issue #1171: a submit-host ambient credential must never reach a
+    /// Kubernetes job body. The manifest is built from the rule and the
+    /// rendered command only; the pod's environment is the image `ENV` plus
+    /// what this generator writes, and it writes no ambient state. The probe
+    /// runs in a child process that carries sentinel credentials (the crate
+    /// forbids `std::env::set_var`), so a future change that forwards the
+    /// submit host's environment or inlines its values fails here.
+    #[test]
+    fn kubernetes_job_body_carries_no_submit_host_environment() {
+        crate::backend::assert_cloud_body_ignores_submit_host_env("kubernetes");
+    }
+
     /// Indexed jobs dispatch to per-index command files, so the dispatch line
     /// carries no reference — the driver passes the union in. The env block is
     /// still attached, and ordinary (reference-free) jobs stay untouched.

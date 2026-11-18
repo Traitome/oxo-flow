@@ -437,6 +437,52 @@ fn build_rule(
     }))
 }
 
+/// Re-exec the test binary with sentinel ambient credentials exported and
+/// assert that `backend`'s generated job bodies carry none of them (issue
+/// #1171).
+///
+/// The cloud generators build their body from the rule and the rendered
+/// command only — the job's environment is the image ENV plus what the
+/// engine writes into the manifest, never the submit host's ambient
+/// environment. This probe pins that boundary per backend.
+///
+/// A child process is required because `std::env::set_var` is unsafe in
+/// edition 2024 and this crate is `#![forbid(unsafe_code)]`, so the test
+/// cannot inject the sentinels into its own environment. The child is
+/// re-executed with `--ignored --exact` and runs
+/// [`tests::submit_host_ambient_probe_child`].
+#[cfg(test)]
+pub(crate) fn assert_cloud_body_ignores_submit_host_env(backend: &str) {
+    let exe = std::env::current_exe().expect("test binary path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "backend::tests::submit_host_ambient_probe_child",
+            "--ignored",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env("PROBE_CLOUD_BACKEND", backend)
+        .env("SENTINEL_AMBIENT", "leak-canary")
+        .env("ANTHROPIC_AUTH_TOKEN", "leak-token")
+        .env("OXO_FLOW_MASTER_KEY", "leak-key")
+        .output()
+        .expect("failed to re-exec the test binary for the ambient-leak probe");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the {backend} job body leaked submit-host ambient state\n\
+         --- child stdout ---\n{stdout}\n--- child stderr ---\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // A filter that matches no test exits 0, so the handshake is what proves
+    // the probe actually ran (a renamed child must not make this vacuous).
+    assert!(
+        stdout.contains(&format!("CLOUD_AMBIENT_PROBE_OK {backend}")),
+        "the ambient-leak probe child did not run for {backend}\n--- child stdout ---\n{stdout}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +729,148 @@ mod tests {
             assert!(!rule.shell_cmd.contains("SHORTVALUE-7"));
             assert!(!rule.shell_cmd.contains("A-MUCH-LONGER-VALUE-9"));
         }
+    }
+
+    /// Fail when a generated cloud job body carries any `env`/`environment`
+    /// object key: with no `sensitive = true` references the body must have
+    /// no environment channel at all (issue #1171 — the container's
+    /// environment is the image ENV plus what the engine writes, and the
+    /// engine writes none of the submit host's state).
+    fn assert_no_env_channel(value: &serde_json::Value, backend: &str, shape: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    assert!(
+                        key != "env" && key != "environment",
+                        "{backend} {shape} body must carry no environment channel, found '{key}': {value}"
+                    );
+                    assert_no_env_channel(child, backend, shape);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    assert_no_env_channel(item, backend, shape);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Child half of [`assert_cloud_body_ignores_submit_host_env`]: runs in a
+    /// process that carries sentinel ambient credentials and builds the real
+    /// cloud job bodies from a rule whose command prints them. Nothing the
+    /// submit host carries may appear in the body, while declared `envvars`
+    /// must still reach it through the documented command channel
+    /// (`export K='V'`).
+    #[test]
+    #[ignore = "child process of assert_cloud_body_ignores_submit_host_env"]
+    fn submit_host_ambient_probe_child() {
+        let backend_name = std::env::var("PROBE_CLOUD_BACKEND")
+            .expect("the probe child must be started by assert_cloud_body_ignores_submit_host_env");
+        let sentinels = [
+            ("SENTINEL_AMBIENT", "leak-canary"),
+            ("ANTHROPIC_AUTH_TOKEN", "leak-token"),
+            ("OXO_FLOW_MASTER_KEY", "leak-key"),
+        ];
+        for (name, value) in sentinels {
+            assert_eq!(
+                std::env::var(name).as_deref(),
+                Ok(value),
+                "the probe child must inherit the ambient sentinel {name}"
+            );
+        }
+
+        let rule = Rule {
+            name: "ambient_probe".to_string(),
+            shell: Some(
+                "echo $SENTINEL_AMBIENT $ANTHROPIC_AUTH_TOKEN $OXO_FLOW_MASTER_KEY $DECLARED_VAR"
+                    .to_string(),
+            ),
+            envvars: HashMap::from([("DECLARED_VAR".to_string(), "declared-value".to_string())]),
+            resources: crate::rule::Resources {
+                threads: 2,
+                memory: Some("4G".to_string()),
+                ..Default::default()
+            },
+            environment: crate::rule::EnvironmentSpec {
+                docker: Some("ubuntu:latest".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let shell_cmd = build_execution_command(
+            &rule,
+            &HashMap::new(),
+            &HashMap::new(),
+            crate::scheduler::detect_system_limits(),
+        )
+        .expect("the probe rule's command must render")
+        .expect("a shell rule must render a command");
+        let config = crate::cluster::ClusterJobConfig {
+            backend: match backend_name.as_str() {
+                "kubernetes" => crate::cluster::ClusterBackend::Kubernetes,
+                "aws-batch" => crate::cluster::ClusterBackend::AwsBatch,
+                "gcp-batch" => crate::cluster::ClusterBackend::GcpBatch,
+                other => panic!("unknown probe backend {other}"),
+            },
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: Vec::new(),
+        };
+
+        let (single, array) = match backend_name.as_str() {
+            "kubernetes" => (
+                crate::backend::k8s::generate_k8s_job_manifest(&rule, &shell_cmd, &config)
+                    .expect("k8s manifest"),
+                crate::backend::k8s::generate_k8s_array_job_manifest(
+                    &rule,
+                    "run/cmds",
+                    3,
+                    &[],
+                    &config,
+                )
+                .expect("k8s array manifest"),
+            ),
+            "aws-batch" => (
+                crate::backend::aws_batch::generate_aws_batch_job_spec(&rule, &shell_cmd, &config)
+                    .expect("aws batch spec"),
+                crate::backend::aws_batch::generate_aws_batch_array_spec(
+                    &rule, "run/cmds", 3, &config,
+                )
+                .expect("aws batch array spec"),
+            ),
+            "gcp-batch" => (
+                crate::backend::gcp_batch::generate_gcp_batch_job_spec(&rule, &shell_cmd, &config)
+                    .expect("gcp batch spec"),
+                crate::backend::gcp_batch::generate_gcp_batch_array_spec(
+                    &rule, "run/cmds", 3, &config,
+                )
+                .expect("gcp batch array spec"),
+            ),
+            other => panic!("unknown probe backend {other}"),
+        };
+
+        for (shape, body) in [("single", &single), ("array", &array)] {
+            for (name, value) in sentinels {
+                assert!(
+                    !body.contains(value),
+                    "{backend_name} {shape} body carries the ambient {name} value: {body}"
+                );
+            }
+            let val: serde_json::Value =
+                serde_json::from_str(body).expect("job body must be valid json");
+            assert_no_env_channel(&val, &backend_name, shape);
+        }
+
+        // Declared `envvars` travel in the rendered command, not in an env
+        // array: the body must still carry them (issue #1171 check).
+        assert!(
+            single.contains("export DECLARED_VAR='declared-value'"),
+            "declared envvars must reach the {backend_name} job body through the command channel: {single}"
+        );
+        // Handshake so the parent can tell a real run from an empty filter
+        // match (a renamed child would otherwise make the probe vacuous).
+        println!("CLOUD_AMBIENT_PROBE_OK {backend_name}");
     }
 }
