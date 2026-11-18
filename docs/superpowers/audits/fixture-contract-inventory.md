@@ -169,6 +169,13 @@ checker (`check_gold.reference_graph`) calls the **unexpanded**
 vacuously. `eval/schema.md` simultaneously claims the graph "also connects …
 scatter-aware links" — true only for `--expanded`.
 
+The correct expectation, derived independently of the current CSV, is
+`[["haplotype_caller", "gather_gvcf"]]`: the gather target consumes the
+scattered rule's per-chromosome outputs, which the engine's own runtime
+plan (`dry-run`) and expanded graph both encode. A probe confirmed that
+switching the checker to `--expanded` keeps every other local row green
+and makes that edge checkable.
+
 Why it is left open: correcting the expectation means (a) changing the
 checker's graph surface to `--expanded` (verified to keep all 16 local rows
 green in a probe), (b) editing a reviewed gold field, and (c) minting a new
