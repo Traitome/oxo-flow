@@ -2,6 +2,7 @@ import { buildGenerationPrompt, extractToml } from "./aiBackend";
 import { validateArgs } from "./cliArgs";
 import { withContentSnapshot } from "./contentSnapshot";
 import { runCli, type CliResult } from "./exec";
+import { findingsFromValidate, parseReport, type Finding } from "./jsonReport";
 
 /**
  * Validate-before-apply guard for the editor-model AI generation path.
@@ -13,6 +14,10 @@ import { runCli, type CliResult } from "./exec";
  * draft is re-validated under the same rule. A draft that still fails is
  * surfaced to the caller with the CLI findings and is not applied, so an
  * invalid generation can never land on disk (or overwrite an existing file).
+ *
+ * Infrastructure failures (missing binary, timeout, staging I/O) are NOT
+ * validation failures: they are reported as `unavailable`, name the real
+ * cause, and do not burn the repair round.
  */
 
 export interface DraftChatTurn {
@@ -44,7 +49,11 @@ export interface DraftGenerationDeps {
 
 export interface DraftVerdict {
   readonly ok: boolean;
-  /** CLI output (stderr, else stdout) for the repair prompt / user report. */
+  /** The CLI could not judge the draft at all (spawn/timeout/staging), so the
+   * draft is neither valid nor invalid — never consume the repair round. */
+  readonly unavailable: boolean;
+  /** Structured findings (code/rule/message/hint) for the repair prompt and
+   * the user report; raw CLI output when the report cannot be parsed. */
   readonly detail: string;
 }
 
@@ -57,6 +66,12 @@ export type DraftOutcome =
       /** Last complete candidate rejected by validation (never written). */
       readonly toml: string;
       readonly detail: string;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly attempts: 1 | 2;
+      /** The real infrastructure cause (cannot run, timed out, staging I/O). */
+      readonly detail: string;
     };
 
 const MAX_DETAIL_CHARS = 4000;
@@ -64,6 +79,36 @@ const MAX_DETAIL_CHARS = 4000;
 /** Build the single repair-round prompt from the failed validation output. */
 export function repairPrompt(detail: string): string {
   return `That pipeline failed \`oxo-flow validate\`:\n\n${detail}\n\nReturn the corrected COMPLETE pipeline as one fenced toml block.`;
+}
+
+/** Render findings so the model (and the user report) sees code, rule,
+ * message and hint — not the CLI's stderr bail summary. */
+export function formatFindings(findings: readonly Finding[]): string {
+  return findings
+    .map((f) => {
+      const rule = f.rule ? ` (rule: ${f.rule})` : "";
+      const hint = f.suggestion ? `\n  hint: ${f.suggestion}` : "";
+      return `${f.code}: ${f.message}${rule}${hint}`;
+    })
+    .join("\n")
+    .slice(0, MAX_DETAIL_CHARS);
+}
+
+/**
+ * Extract actionable findings from `validate --json` stdout. `--json` sends
+ * findings to stdout while stderr only carries a bail summary, so preferring
+ * stderr would hand the model nothing to fix. Returns null when stdout is not
+ * a usable validate report.
+ */
+function structuredFindings(res: CliResult): string | null {
+  try {
+    const report = parseReport(res.stdout);
+    if (report.command !== "validate") return null;
+    const findings = findingsFromValidate(report);
+    return findings.length > 0 ? formatFindings(findings) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -82,18 +127,27 @@ export async function validateDraftContent(
         cwd: deps.cwd,
         timeoutMs: deps.timeoutMs,
       });
-      const output = (res.stderr.trim() || res.stdout.trim()).slice(0, MAX_DETAIL_CHARS);
       if (res.spawnError) {
-        return { ok: false, detail: `cannot run ${deps.executable}: ${res.spawnError}` };
+        return {
+          ok: false,
+          unavailable: true,
+          detail: `cannot run ${deps.executable}: ${res.spawnError}`,
+        };
       }
       if (res.timedOut) {
-        return { ok: false, detail: `oxo-flow validate timed out${output ? `\n${output}` : ""}` };
+        return { ok: false, unavailable: true, detail: "oxo-flow validate timed out" };
       }
-      return { ok: res.exitCode === 0, detail: output };
+      if (res.exitCode === 0) return { ok: true, unavailable: false, detail: "" };
+      const raw = (res.stderr.trim() || res.stdout.trim()).slice(0, MAX_DETAIL_CHARS);
+      return { ok: false, unavailable: false, detail: structuredFindings(res) ?? raw };
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { ok: false, detail: `cannot stage the draft for validation: ${message}` };
+    return {
+      ok: false,
+      unavailable: true,
+      detail: `cannot stage the draft for validation: ${message}`,
+    };
   }
 }
 
@@ -111,6 +165,9 @@ export async function generateValidatedDraft(
   if (!draft) return { status: "no-pipeline", response };
 
   const first = await validateDraftContent(deps, draft);
+  if (first.unavailable) {
+    return { status: "unavailable", attempts: 1, detail: first.detail };
+  }
   if (first.ok) {
     await deps.apply(draft);
     return { status: "applied", toml: draft, attempts: 1 };
@@ -133,6 +190,9 @@ export async function generateValidatedDraft(
   }
 
   const second = await validateDraftContent(deps, fixed);
+  if (second.unavailable) {
+    return { status: "unavailable", attempts: 2, detail: second.detail };
+  }
   if (!second.ok) {
     return { status: "rejected", attempts: 2, toml: fixed, detail: second.detail };
   }

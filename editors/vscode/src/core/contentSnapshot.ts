@@ -11,8 +11,12 @@ import * as path from "node:path";
  * preserves relative `[[include]]` / sample-pattern resolution, and the
  * `.oxoflow` suffix keeps the CLI's file checks identical to a saved file.
  *
- * Snapshots are always removed, including when the body throws.
+ * Snapshots are always removed, including when the write itself fails partway
+ * through (ENOSPC/quota) and when the body throws.
  */
+
+/** Basename prefix of a staged snapshot — shared with the file-watcher guard. */
+export const SNAPSHOT_PREFIX = ".oxo-flow-snapshot-";
 
 let counter = 0;
 
@@ -20,7 +24,17 @@ let counter = 0;
 export function snapshotPathFor(anchorPath: string, token?: string): string {
   const dir = path.dirname(anchorPath);
   const tag = token ?? `${process.pid}-${Date.now().toString(36)}-${(counter += 1)}`;
-  return path.join(dir, `.oxo-flow-snapshot-${tag}.oxoflow`);
+  return path.join(dir, `${SNAPSHOT_PREFIX}${tag}.oxoflow`);
+}
+
+/** True when `basename` names a staging snapshot (never a user workflow). */
+export function isSnapshotBasename(basename: string): boolean {
+  return basename.startsWith(SNAPSHOT_PREFIX);
+}
+
+export interface SnapshotOptions {
+  /** Test seam for the staging write; defaults to node's `fs.writeFile`. */
+  readonly write?: (snapshotPath: string, content: string) => Promise<void>;
 }
 
 /** Write `content` to a temporary `.oxoflow` next to `anchorPath`, run
@@ -28,11 +42,15 @@ export function snapshotPathFor(anchorPath: string, token?: string): string {
 export async function withContentSnapshot<T>(
   anchorPath: string,
   content: string,
-  body: (snapshotPath: string) => Promise<T>
+  body: (snapshotPath: string) => Promise<T>,
+  opts: SnapshotOptions = {}
 ): Promise<T> {
   const snapshotPath = snapshotPathFor(anchorPath);
-  await fs.writeFile(snapshotPath, content, "utf8");
+  const write = opts.write ?? ((p: string, c: string) => fs.writeFile(p, c, "utf8"));
   try {
+    // The write is inside the guard: a partial file left by a failed write
+    // must be removed as well.
+    await write(snapshotPath, content);
     return await body(snapshotPath);
   } finally {
     await fs.rm(snapshotPath, { force: true });

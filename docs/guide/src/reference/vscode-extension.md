@@ -109,11 +109,18 @@ engine's own generation loop owns validation.
 The editor-model backend is **validate-before-apply**: the model's draft is
 staged as a temporary sibling `.oxoflow` snapshot and grounded through
 `oxo-flow validate` (the same CLI path diagnostics use). On failure the
-findings go back to the model for exactly one repair round, and the repaired
-draft is validated again. Only a passing pipeline is written to the chosen
-destination — an invalid generation (including a failed repair) is surfaced
-as an error, the findings and the rejected draft appear in the *oxo-flow*
-output channel, and the destination file is left untouched.
+CLI's structured findings — code, message, rule and hint, parsed from the
+`--json` report — go back to the model for exactly one repair round, and the
+repaired draft is validated again. Only a passing pipeline is written to the
+chosen destination — an invalid generation (including a failed repair) is
+surfaced as an error, the findings and the rejected draft appear in the
+*oxo-flow* output channel, and the destination file is left untouched.
+
+Infrastructure failures are reported as such, not as validation failures: if
+`oxo-flow` cannot be launched (check `oxo-flow.executablePath`), the check
+times out, or the draft cannot be staged (read-only directory), generation
+names that cause, writes nothing, and does not spend the single repair round
+on a condition the model cannot fix.
 
 ## Formatting
 

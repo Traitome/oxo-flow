@@ -21,7 +21,7 @@ import {
 } from "./core/reportIssue";
 import { pipelineSlug, resolveBackend } from "./core/aiBackend";
 import { generateValidatedDraft, type DraftChatTurn, type DraftOutcome } from "./core/aiDraft";
-import { withContentSnapshot } from "./core/contentSnapshot";
+import { isSnapshotBasename, withContentSnapshot } from "./core/contentSnapshot";
 import { ruleLensInfos } from "./core/ruleIndex";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCodeActionProvider } from "./providers/codeActions";
@@ -93,16 +93,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // External .oxoflow changes (git checkout, teammates, generators) do not
   // fire editor events: refresh the CLI probe and re-diagnose any open copy.
-  const watcher = vscode.workspace.createFileSystemWatcher("**/*.oxoflow");
+  // Hidden validation snapshots are internal staging files — ignore them so
+  // diagnostics/AI generation does not trigger a CLI probe per draft.
+  const isSnapshotUri = (uri: vscode.Uri): boolean =>
+    isSnapshotBasename(uri.path.slice(uri.path.lastIndexOf("/") + 1));
   const reDiagnose = (uri: vscode.Uri): void => {
+    if (isSnapshotUri(uri)) return;
     const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
     if (doc) void diagnostics.diagnose(doc);
   };
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.oxoflow");
   watcher.onDidChange((uri) => {
+    if (isSnapshotUri(uri)) return;
     void statusBar.refresh();
     reDiagnose(uri);
   });
   watcher.onDidCreate((uri) => {
+    if (isSnapshotUri(uri)) return;
     void statusBar.refresh();
     reDiagnose(uri);
   });
@@ -604,6 +611,14 @@ async function generateWithIdeModel(
     if (outcome.status === "no-pipeline") {
       void showErrorWithReport("The model response contained no [workflow] pipeline — see the oxo-flow output panel.");
       output.show(true);
+      return;
+    }
+    if (outcome.status === "unavailable") {
+      appendLog(output, `[ai:ide] cannot validate the draft — ${outcome.detail}`);
+      output.show(true);
+      void showErrorWithReport(
+        `AI generation could not validate the draft: ${outcome.detail}. Nothing was written.`
+      );
       return;
     }
     if (outcome.status === "rejected") {
