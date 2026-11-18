@@ -30,8 +30,9 @@ All edit commands are sent to a single endpoint, with the pipeline ID in the URL
 POST /api/pipeline/{id}/command
 ```
 
-The pipeline ID is a logical key for the undo/redo stacks — it does not need to
-reference a saved pipeline.
+The pipeline ID is a logical key for the undo/redo stacks (paired with the
+acting identity — see [History scope, caps, and lifetime](#history-scope-caps-and-lifetime))
+— it does not need to reference a saved pipeline.
 
 ## Commands
 
@@ -257,7 +258,9 @@ into that table (comments preserved); everything else is replaced wholesale.
 
 ## Undo & Redo
 
-The DAG Edit API maintains an undo/redo stack per pipeline ID with a maximum depth of 50 entries.
+The DAG Edit API maintains one undo/redo stack per **(acting identity,
+pipeline id)** pair, with documented depth and pipeline caps (see
+[History scope, caps, and lifetime](#history-scope-caps-and-lifetime)).
 
 ### `undo`
 
@@ -272,10 +275,16 @@ Content-Type: application/json
 
 The request **requires** a JSON body with `toml_content` set to the caller's
 current TOML state. The undo stack's top transition is applied only when its
-resulting state matches that content exactly — a stale or out-of-sync client
-receives `404` with code `NO_UNDO` rather than a corrupted state. The same
-`404 NO_UNDO` is returned when the undo stack is empty (or, e.g., after a
-server restart, since stacks are in-memory).
+resulting state matches that content exactly.
+
+Failure codes (all fail closed — no edit is produced and no history is
+consumed):
+
+| Status | Code | Meaning |
+|---|---|---|
+| 409 | `EDIT_HISTORY_UNAVAILABLE` | No history exists for this identity/pipeline — the first edit has not happened, or the stack was lost to a server restart or LRU eviction. `suggestion` tells the caller to re-apply the change. |
+| 409 | `EDIT_HISTORY_STALE` | History exists, but the supplied `toml_content` is not the tip of the recorded history (stale or racing client). |
+| 404 | `NO_UNDO` | History exists but every recorded edit is already undone. |
 
 Returns `{ "toml_content": "<previous TOML>" }` — i.e. the state *before* the
 last edit.
@@ -292,10 +301,33 @@ Content-Type: application/json
 ```
 
 Same contract as `undo`: the JSON body is required, and `toml_content` must
-match the current state (the result of the last undo), otherwise `404` with
-code `NO_REDO`.
+match the current state (the result of the last undo). The failure codes are
+the same: `409 EDIT_HISTORY_UNAVAILABLE`, `409 EDIT_HISTORY_STALE`, and
+`404 NO_REDO` when history exists but nothing was undone.
 
 **Note:** Performing a new edit after an undo clears the redo stack (standard undo/redo semantics).
+
+### History scope, caps, and lifetime
+
+Defined in `crates/oxo-flow-web/src/domains/dag/service.rs` (issue #1137):
+
+- **Scope** — a stack is keyed by the acting identity *and* the pipeline id.
+  The identity is the `users.id` the auth middleware resolves for the request
+  (session or API key); personal mode has no auth middleware, so every
+  request falls back to the `default` pseudo-user. Two identities editing the
+  same pipeline id get independent stacks: neither can observe or undo the
+  other's edits.
+- **Depth cap** — `MAX_EDIT_HISTORY_DEPTH` = **50** transitions per stack.
+  Pushing past the cap drops the oldest transition, so undo can walk back at
+  most 50 edits.
+- **Pipeline cap** — `MAX_EDIT_HISTORY_PIPELINES` = **256** stacks
+  process-wide. Recording an edit for a new (identity, pipeline) pair evicts
+  the least-recently-used stack.
+- **Lifetime** — history lives in RAM only; it is not persisted. A server
+  restart (or LRU eviction) empties a stack, and a subsequent `undo`/`redo`
+  **fails closed** with `409 EDIT_HISTORY_UNAVAILABLE` and a remediation
+  suggestion. It never silently no-ops, and it never applies an edit to a
+  document the server no longer holds history for.
 
 ---
 
@@ -338,7 +370,7 @@ via `depends_on` edits surfaces immediately as `success: false` with the
 atomically). See [DAG Engine](./dag-engine.md).
 
 - **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.
-- **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.
+- **Undo/redo is in-memory, identity-scoped, and bounded.** Stacks are keyed by (acting identity, pipeline id), capped at 50 transitions each and 256 stacks process-wide (LRU), and live only for the duration of the server process. They do not persist across server restarts; undo/redo after a restart fails closed with `409 EDIT_HISTORY_UNAVAILABLE` (see [History scope, caps, and lifetime](#history-scope-caps-and-lifetime)).
 
 ---
 
