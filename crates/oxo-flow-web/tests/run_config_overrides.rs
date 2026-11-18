@@ -8,7 +8,7 @@
 //! This is a dedicated test binary on purpose: the run-creation rate
 //! limiter (#213) is a process-wide sliding window. This binary uses the
 //! limiter's atomic test seam without mutating process environment; the
-//! limiter's own behavior stays pinned by the `handlers::run_rate_limit`
+//! limiter's own behavior stays pinned by the `execution::run_limit`
 //! unit tests.
 
 use axum::body::Body;
