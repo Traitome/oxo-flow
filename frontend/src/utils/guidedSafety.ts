@@ -108,13 +108,13 @@ export function detectGuidedUnsupported(toml: string): string[] {
     labels.push(`unrecognized table header at line ${line}: ${header.text}`);
   }
 
-  // No recognized section header in a non-empty document: the splice has
-  // no anchors (cardsToToml would regenerate the whole file from the card
-  // model), so guided editing is unsafe regardless of the content.
+  // No recognized section header in a document with any content: the splice
+  // has no anchors (cardsToToml would regenerate the whole file from the
+  // card model), so guided editing is unsafe regardless of the content.
+  // Comments count as content: a comment-only preamble carries the author's
+  // intent, and the regeneration would silently drop it.
   if (sections.length === 0) {
-    const hasContent = toml
-      .split('\n')
-      .some((line) => line.trim() !== '' && !line.trim().startsWith('#'));
+    const hasContent = toml.split('\n').some((line) => line.trim() !== '');
     if (hasContent) labels.push('unrecognized document layout (no readable section headers)');
     return [...new Set(labels)];
   }

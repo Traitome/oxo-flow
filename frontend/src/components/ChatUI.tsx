@@ -83,8 +83,9 @@ function ChatContent({ content }: { content: string }) {
   for (;;) {
     const start = rest.indexOf('```');
     if (start === -1) break;
-    // Skip the language tag on the opening fence ("```toml\n").
-    const afterFence = rest.slice(start + 3).replace(/^\w*\n/, '');
+    // Skip the language tag on the opening fence ("```toml\n" — CR-safe, so
+    // a CRLF stream does not leave a stray "\r" inside the code pane).
+    const afterFence = rest.slice(start + 3).replace(/^\w*\r?\n/, '');
     const end = afterFence.indexOf('```');
     if (start > 0) parts.push({ kind: 'text', text: rest.slice(0, start) });
     if (end === -1) {
