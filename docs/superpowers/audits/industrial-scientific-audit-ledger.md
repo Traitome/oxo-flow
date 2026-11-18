@@ -424,29 +424,51 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) - [AI-04] generic-token release is gated on an explicit
+operator origin allowlist (issue #1123, commit `ced0f3ad`); the [AI-05] read-to-egress
+data-release decision remains open.
 
 A generic MCP bearer token is sent to any activated public MCP endpoint unless a per-server token
-exists, with no operator trust decision. Automatically approved project reads and outbound fetches
-form a data-exfiltration path for project `.env` files and unpublished results. Malformed tool-call
-arguments are repaired to `{}` and remain executable, which can turn a truncated destructive call
-into a valid defaults invocation.
+exists, with no operator trust decision. [FIXED (#1123, commit `ced0f3ad`): the generic
+`OXO_FLOW_MCP_TOKEN` is now released only to exact origins listed in
+`OXO_FLOW_MCP_TRUSTED_ORIGINS`; per-server `OXO_FLOW_MCP_TOKEN_<SERVER>` tokens remain available
+because their variable name is derived from the endpoint identity — destination-scoped by
+construction — so setting one is itself the operator's per-endpoint decision.] Automatically
+approved project reads and outbound fetches form a data-exfiltration path for project `.env` files
+and unpublished results. [OPEN.]
 
 Evidence:
 
-- `crates/oxo-flow-ai/src/mcp.rs:177`, `:423`, `:545`
-- `crates/oxo-flow-ai/src/tools/builtin.rs:12`, `:140`, `:177`
-- `crates/oxo-flow-ai/src/tools/mod.rs:30`
-- `crates/oxo-flow-ai/src/agent/orchestrator.rs:160`, `:498`
-- `crates/oxo-flow-ai/src/provider.rs:1097`, `:1256`
-- `crates/oxo-flow-cli/src/commands/ai_runtime.rs:70`, `:88`
+- `crates/oxo-flow-ai/src/mcp.rs:160` (MCP tools never read-only), `:258` (trust-entry
+  canonicalization), `:278` (trust-list parsing), `:298` (exact-origin match), `:320`
+  (token selection), `:340` (per-endpoint resolution), `:373` (`token_env_var`), `:735` (header
+  attach)
+- `crates/oxo-flow-ai/src/tools/builtin.rs:51` (`resolve_scoped_path` — no content denylist),
+  `:140` (scoped read is auto-approved), `:469` (`FetchUrlTool` — no `is_read_only` override)
+- `crates/oxo-flow-ai/src/tools/mod.rs:31` (trait default `is_read_only() == true`)
+- `crates/oxo-flow-ai/src/agent/orchestrator.rs:625` (`tool_call_approved` short-circuits on
+  read-only), `:1683` (fail-closed malformed-arguments regression test)
+- `crates/oxo-flow-cli/src/commands/ai_runtime.rs:87`, `:113` (manifest-declared `mcp://` origin
+  connected + registered)
 
 Required exit evidence:
 
-- Generic credentials are sent only to an explicit operator-approved origin.
+- Generic credentials are sent only to an explicit operator-approved origin. [DONE for the generic
+  MCP token (#1123): `OXO_FLOW_MCP_TRUSTED_ORIGINS` gates release on an exact origin and withholds
+  the generic token otherwise; adversarial tests cover unapproved, lookalike, and approved
+  origins (wire-level for the first and the approved case) plus per-server precedence.
+  Per-server tokens are destination-scoped by construction.]
 - Read followed by network egress requires an explicit data-release decision and visible summary.
-- Invalid tool arguments are rejected or retried; no executable `{}` call reaches approval.
-- Adversarial project-skill, MCP-output, and prompt-injection tests cover each path.
+  [OPEN.]
+- Invalid tool arguments are rejected or retried; no executable `{}` call reaches approval. [DONE —
+  the orchestrator's JSON-validity gate fails closed before approval/execution (AI-07,
+  `malformed_tool_arguments_fail_closed_with_a_reemit_tool_result`). The earlier `{}`-repair claim
+  was refuted against shipped code and removed from this entry.]
+- Adversarial project-skill, MCP-output, and prompt-injection tests cover each path. [PARTIAL — the
+  generic-token release path now has project-skill-selected-endpoint wire tests
+  (`generic_token_is_not_sent_to_an_unapproved_origin`,
+  `bearer_token_env_is_propagated_with_per_server_precedence`); the read-to-egress path remains
+  uncovered.]
 
 ### RB-14: Workflow-scoped AI policy is parsed but not enforced
 
@@ -601,7 +623,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Fixed (#1117) | `--ai-recover` now rejects a patch that shrinks the original's rules/includes/references (checked through `WorkflowConfig::parse`) and writes accepted fixes atomically. See RB-11. |
 | AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
 | AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Planned / blocked | RB-14. |
-| AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Planned / blocked | RB-13. |
+| AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Fixed (#1123) | The generic `OXO_FLOW_MCP_TOKEN` is released only to exact origins listed in `OXO_FLOW_MCP_TRUSTED_ORIGINS` (unset/empty = never released; unparseable entries warned and ignored); per-server tokens are destination-scoped by construction. Tests cover unapproved, lookalike, and approved origins (wire-level for the first and the approved case) plus per-server precedence; the SSRF screen is unchanged. See RB-13. |
 | AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Planned / blocked | RB-13. |
 | AI-06 | P1 | CLI and web admission evaluate different graphs when includes or overrides change the workflow. | Implemented but unproven | Direct TOML BioTypes now share the core gate; include/override admission parity is still absent. RB-04 defines the exit seam. |
 | AI-07 | P2 | Malformed tool arguments are converted to `{}` and remain executable. | Implemented and verified for model-emitted arguments | Provider parsers pass model argument strings through raw (never repaired to `{}`), the orchestrator's JSON-validity gate rejects them with a fail-closed tool-result message before the registry, and `ToolRegistry::execute` re-checks. Wire-format echoes (Anthropic `tool_use.input`, Ollama `arguments`) keep a protocol-valid `{}` fallback but are never executed. MCP-side argument handling is unchanged. |
