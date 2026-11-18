@@ -355,7 +355,8 @@ The CLI resolves one config chain before building the provider
 4. Project `.oxo-flow/ai.toml` (the workflow's directory, or the invocation
    directory for workflow-less commands such as `template --ai`)
 5. Workflow `[ai]` section
-6. CLI flags (`--ai-max-retries`, `--ai-team-profile`)
+6. CLI flags — no flag currently selects a provider or model; `--ai-max-retries`
+   and `--ai-team-profile` override their own settings at this tier
 
 `OXO_FLOW_AI_PROVIDER=disabled` is the one exception: it is a hard pin above
 every tier and cannot be overridden by a project or workflow provider. The
