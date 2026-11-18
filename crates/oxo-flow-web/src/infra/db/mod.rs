@@ -324,10 +324,11 @@ pub trait StorageBackend: Send + Sync {
     /// fails the request closed (required) or warns (best-effort) per the
     /// classification in `crate::audit::audit_durability_for`. Two direct
     /// handler call sites remain, both in `domains/auth/handlers.rs`
-    /// (best-effort; that file is reserved for an in-flight PR and must
-    /// migrate when it lands): the successful-login row and the
-    /// license-upload metadata row. The middleware's REQUIRED
+    /// (best-effort): the successful-login row and the license-upload
+    /// metadata row. The middleware's REQUIRED
     /// `POST /api/license/upload` row already covers that action.
+    /// Migrating both rows to the shared helpers is unblocked follow-up
+    /// work tracked in the WEB-15 ledger entry.
     async fn record_audit_log(
         &self,
         user_id: &str,

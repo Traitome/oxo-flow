@@ -21,11 +21,11 @@
 //! Handlers must use [`audit_required`] or [`audit_best_effort`] rather than
 //! calling the storage method directly, so the class is visible at the call
 //! site. Two direct call sites remain outside this module, both in
-//! `domains/auth/handlers.rs` (that file is reserved for an in-flight PR):
-//! the successful-login row and the license-upload metadata row. The
-//! middleware still writes a REQUIRED row for `POST /api/license/upload`;
-//! the handler's own metadata row stays best-effort until that file can
-//! migrate here.
+//! `domains/auth/handlers.rs`: the successful-login row and the
+//! license-upload metadata row. The middleware still writes a REQUIRED row
+//! for `POST /api/license/upload`; the handler's own metadata row stays
+//! best-effort. Migrating both rows to the shared helpers is unblocked
+//! follow-up work tracked in the WEB-15 ledger entry.
 
 use axum::Json;
 use axum::http::StatusCode;
