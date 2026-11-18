@@ -99,3 +99,103 @@ tokens, cost, latency).
 - `--profile full` measures the Scientist Team roles (contract, curator,
   review); each role's marginal value is only interpretable against the
   compact profile on the SAME model, seeds, and ceilings.
+
+## Fault-injection repair benchmark (`fault_injection.py`, issue #1164)
+
+A sibling harness measures the fault pipeline end to end — not just static
+detection — across 10 seeded fault cases (4 BioTypes contract violations,
+3 scientific-preflight guardrail violations, 3 infrastructure resource
+faults). It quantifies six independent stages per case:
+
+1. Pre-execution static detection (`lint --json` / `dry-run` text).
+2. Diagnostic attribution to the affected rule.
+3. Repair-proposal availability.
+4. Repair application.
+5. Repair verification.
+6. Successful workflow execution after repair.
+
+### The executable-repair arm
+
+Stages 4-6 are MEASURED, not declared. For every case the harness writes the
+seeded workflow plus an `[ai]`-enabled copy (`auto_fix = "always"`), runs the
+REAL CLI:
+
+```bash
+oxo-flow run workflow_ai.oxoflow --ai-recover --ai-max-retries 1
+```
+
+then parses the engine's repair evidence — the `REPAIR_APPLIED` /
+`REPAIR_VERIFIED` narration prefixes and the checkpoint's
+`repair_record.applied` / `.verified` when present, with a documented legacy
+fallback to the pre-#1164 narration (`✓ Fix applied to …`, `AI fix not
+auto-applied: …`) — and finally re-runs the (possibly patched) workflow.
+Every false stage carries the exact WHY (which gate rejected the patch, the
+provider error, or the rerun exit code).
+
+The AI provider is read from the environment, never hardcoded:
+`OXO_FLOW_AI_PROVIDER` + `OPENAI_BASE_URL` / `OPENAI_API_KEY` /
+`OPENAI_MODEL` / `OXO_FLOW_AI_TIMEOUT_SECS` (or the Anthropic/DeepSeek
+equivalents). Without a provider the arm runs in DRY mode: the provider is
+pinned to `disabled` in the child environment (an explicit `disabled`
+always wins, so a host's saved `~/.oxo-flow/ai_config.json` cannot fire a
+live call), and stages 4-6 report false with reason "provider not
+configured" — never fabricated. Dry mode is deterministic: repeated runs
+produce byte-identical measured fields.
+
+### Stub tool design
+
+The repaired workflow must be able to genuinely re-run to success on the
+measurement host WITHOUT real bioinformatics tools. The harness materializes
+a `stubbin/` directory prepended to `PATH` (rule shells receive `PATH` via
+the engine's allowlist) whose scripts (`samtools`, `gatk`, `bcftools`,
+`bwa`, `vep`, `tabix`, `featureCounts`, …) exit 0, print plausible stdout,
+and CREATE every file a real invocation would write — required because the
+engine validates declared outputs post-rule. Detection is unaffected: the
+TYPE-*/SCI-* checks pattern-match the workflow TOML text and command
+strings, not the binaries.
+
+Infrastructure faults use a `simtool` fault simulator whose failure is
+PARAMETERIZED by a declared `[config]` key (e.g. `simtool memhog
+--need-mb 8192 --have-mb {config.mem_mb}`): the seeded allocation (2048)
+is below the workload's stated requirement (8192), so the rule fails with
+the exact exit code / stderr the diagnostics engine classifies (137 OOM,
+152 SIGXCPU, ENOSPC), and a repair that raises the allocation genuinely
+flips the rerun to success. The subcommand names deliberately avoid the
+diagnostic code tokens so stage-1 static detection stays engine-grounded
+(infrastructure faults are runtime-only and correctly measure
+`static_detected = false` there; the gate checks their runtime attribution
+instead).
+
+### What the measured counts mean — and what they do NOT
+
+- `executability_verified` proves each case ships a reference repair that
+  runs to success with stubs. It says nothing about whether the ENGINE's
+  own recovery produced that repair.
+- `repair_applied` / `repair_verified` are evidence-traceable (narration
+  prefix and/or checkpoint field, recorded per case in `applied_evidence`).
+- `workflow_success_on_rerun` is judged by rerun EXIT STATUS only — repair
+  quality is NOT measured for biological correctness (stubs, not real
+  tools, produce the outputs). A rerun that "succeeds" with a scientifically
+  wrong patch still counts; this is a mechanical fix-and-rerun measure.
+- Class limits are measured honestly: BioTypes faults abort at the type
+  admission gate BEFORE any rule executes, and the rule-failure AI recovery
+  path never engages for them; SCI preflight findings are advisory
+  (warn, never abort), so the seeded workflow executes successfully and
+  there is no failure for recovery to repair. The per-case
+  `repair_stage_why` records exactly this.
+
+### Usage
+
+```bash
+python3 eval/frontier/fault_injection.py --binary target/release/oxo-flow
+python3 eval/frontier/fault_injection.py --skip-repair        # stages 1-3 only
+python3 eval/frontier/fault_injection.py --out-json report.json
+```
+
+Raw per-case logs (seeded/patched/repaired workflows, lint JSON, fault-run
+and rerun output, checkpoint) land in
+`eval/frontier/results/fault_repair_logs/<fault_id>/` (gitignored); every
+record references them, so every measured number traces to its evidence.
+The exit gate fails on: a static-detection regression for the static fault
+classes, a runtime-attribution regression for the infrastructure class, or
+any case whose reference repair does not execute to success.

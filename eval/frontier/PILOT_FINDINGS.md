@@ -258,3 +258,65 @@ fastp rule declaring `conda = "bioconda::fastp=1.3.6 bioconda::samtools=1.24"`):
 The lifecycle found and fixed one more engine gap (missing dependency
 channel) that no gate could see — gates check the recipe, only a real run
 exercises the kitchen.
+
+## Verified-repair campaign (pending live run)
+
+The fault-injection harness (`fault_injection.py`, issue #1164) now
+MEASURES the repair-application, verification, and verified-rerun stages
+instead of declaring them false: per case it drives the real CLI
+(`oxo-flow run workflow_ai.oxoflow --ai-recover --ai-max-retries 1` with
+`[ai] auto_fix = "always"`), parses the engine's `REPAIR_APPLIED` /
+`REPAIR_VERIFIED` narration prefixes and the checkpoint
+`repair_record.applied` / `.verified` (with a legacy fallback to the
+pre-#1164 "Fix applied to" narration), re-runs the (possibly patched)
+workflow, and records the exact WHY for every false stage. Repair quality
+is judged by rerun success only — NOT biological correctness (stubs, not
+real tools, produce the outputs).
+
+Dry-mode plumbing campaign (no provider; measured 2026-11-18, 10/10 cases
+executable-repair verified, dry runs byte-identical across repeats —
+deterministic; repair stages honestly false with "provider not configured"):
+
+| case | static | attributed | proposed | executability | fault manifested | applied | rerun ok |
+|---|---|---|---|---|---|---|---|
+| bio_sort_order_mismatch | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_missing_companion_index | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_reference_build_conflict | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_compression_mismatch | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| sci_vqsr_small_cohort | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| sci_featurecounts_no_strand | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| sci_mutect2_tumor_only | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| infra_oom_failure | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| infra_timeout_failure | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| infra_disk_pressure_enospc | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+
+Infrastructure faults are runtime-only (no static phase exists for a
+stderr OOM that has not happened yet), so their `static` column is false
+by design and their runtime attribution is what the gate checks. The dry
+`why` column for every repair stage reads "provider not configured — AI
+recovery cannot run" (BioTypes/infra) or "seeded run exited 0 — the SCI
+preflight finding is advisory, so no runtime failure exists for AI
+recovery to engage" (preflight). No live numbers are claimed here.
+
+### Live campaign command (orchestrator runs this)
+
+The provider is read from the environment, never hardcoded; values below
+are placeholders the orchestrator substitutes:
+
+```bash
+OXO_FLOW_AI_PROVIDER=openai \
+OPENAI_BASE_URL=<provider-endpoint> \
+OPENAI_API_KEY=<provider-key> \
+OPENAI_MODEL=<model> \
+OXO_FLOW_AI_TIMEOUT_SECS=300 \
+OXO_FLOW_AI_MAX_TOKENS=16384 \
+python3 eval/frontier/fault_injection.py \
+  --binary target/release/oxo-flow \
+  --out-json eval/frontier/results/fault_repair_logs/live_summary.json
+```
+
+Expected cost: at most one recovery round per case (10 cases, `--ai-max-retries 1`).
+Results land in the JSON plus per-case raw logs under
+`eval/frontier/results/fault_repair_logs/<fault_id>/`; the measured table
+goes HERE once the live run completes — this section stays a placeholder
+until then.
