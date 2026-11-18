@@ -410,8 +410,9 @@ Required exit evidence:
 
 - A sentinel declared `sensitive = true` never appears in generated local, HPC, Kubernetes, AWS, or
   GCP artifacts or child argv. [DONE for local containers (docker/singularity) and for the cloud
-  job bodies of Kubernetes / AWS Batch / GCP Batch — the plan routes each value to an
-  `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is built (issue #1120). HPC script bodies
+  job bodies of Kubernetes / AWS Batch / GCP Batch — both the `run --profile` driver and
+  `cluster submit` route each value to an `OXO_FLOW_SENSITIVE_<n>` reference before any manifest is
+  built (issue #1120), with one shared binding table per run. HPC script bodies
   (SLURM/PBS/SGE/LSF) still materialize the literal — open.]
 - Each backend obtains the value through a restricted secret-injection path. [Kubernetes carries a
   `secretKeyRef` to the documented `oxoflow-secrets` Secret; docker/singularity forward the routed

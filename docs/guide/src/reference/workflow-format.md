@@ -402,12 +402,16 @@ Values are accessible as `{config.<name>}` in shell commands, input/output
 paths, and `when` conditions:
 
 > **`sensitive = true` and execution artifacts (issue #1120).** A sensitive
-> value is not only masked in captured output — on the cluster (`run
-> --cluster`) cloud backends it is also routed out of the rendered job body
+> value is not only masked in captured output — on the cloud cluster backends
+> (`run --profile <NAME>` with `[cluster] backend = "kubernetes"`,
+> `"aws-batch"`, or `"gcp-batch"`, and the same backends via
+> `cluster submit -b …`) it is also routed out of the rendered job body
 > before any manifest is built. Each value becomes a numbered
 > `OXO_FLOW_SENSITIVE_<n>` environment reference, identical across every rule
-> and every array element. The value itself must come from the backend's
-> secret channel:
+> and every array element. Names are assigned once per run: values are
+> ordered longest-first (then lexically), and values shorter than 4
+> characters stay on the command line because they cannot be replaced
+> safely. The value itself must come from the backend's secret channel:
 >
 > - **Kubernetes** — the manifest attaches `env[].valueFrom.secretKeyRef`
 >   pointing at the Secret `oxoflow-secrets` (key = the variable name).
@@ -416,18 +420,20 @@ paths, and `when` conditions:
 > - **AWS Batch** — the SubmitJob payload has no secrets field; map each
 >   `OXO_FLOW_SENSITIVE_<n>` name on the job definition's
 >   `containerProperties.secrets` (or `environment`).
-> - **GCP Batch** — the operator sets
->   `taskSpec.environment.secretVariables` at submission, pointing each name
->   at `projects/<PROJECT>/secrets/<SECRET>/versions/<VERSION>` and granting
->   the Batch service account `roles/secretmanager.secretAccessor`. The engine
->   does not know the project, so it does not invent a path.
+> - **GCP Batch** — set `taskSpec.environment.secretVariables` at submission,
+>   pointing each name at
+>   `projects/<PROJECT>/secrets/<SECRET>/versions/<VERSION>` and granting the
+>   Batch service account `roles/secretmanager.secretAccessor`. The engine
+>   does not know the project, so it does not invent a path; a hand-kept
+>   submission wrapper is the place to add it.
 >
 > Local `docker`/`singularity` runs forward the same variables by name
-> (`docker run -e NAME`, `APPTAINERENV_NAME`), so the value never enters the
-> container argv either. Without the operator-side secret the reference
-> expands empty and the rule fails — loudly, instead of leaking the value into
-> the artifact. HPC job-script bodies (SLURM/PBS/SGE/LSF) are **not** covered
-> yet; that half of RB-12 remains open.
+> (`docker run -e NAME`, and `APPTAINERENV_NAME`/`SINGULARITYENV_NAME` in the
+> child environment), so the value never enters the container argv either.
+> Without the operator-side secret the reference expands empty and the rule
+> fails — loudly, instead of leaking the value into the artifact. HPC
+> job-script bodies (SLURM/PBS/SGE/LSF) are **not** covered yet; that half of
+> RB-12 remains open.
 
 ```toml
 [[rules]]

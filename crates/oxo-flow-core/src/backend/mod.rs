@@ -632,4 +632,56 @@ mod tests {
         assert!(plan.rules.is_empty());
         assert_eq!(plan.order, vec!["noop".to_string()]);
     }
+
+    /// Cloud job bodies are rendered from `shell_cmd`, and an array job's
+    /// elements share one secret channel — so the routing table must be
+    /// shared across the WHOLE plan. Two rules that use different subsets of
+    /// the declared values still agree on every variable name (issue #1120 /
+    /// RB-12; review D4).
+    #[test]
+    fn plan_sensitive_routing_shares_one_binding_table_across_rules() {
+        let mk = |cmd: &str| ScheduledRule {
+            rule: crate::rule::Rule::default(),
+            template: "t".to_string(),
+            shell_cmd: cmd.to_string(),
+            workdir: std::path::PathBuf::from("/tmp/wf"),
+            dependencies: Vec::new(),
+            wildcard_values: HashMap::new(),
+        };
+        let mut plan = ScheduledPlan {
+            order: vec!["a".to_string(), "b".to_string()],
+            groups: Vec::new(),
+            rules: HashMap::from([
+                // Rule `a` uses only the shorter value; rule `b` only the
+                // longer one. Per-command numbering would bind index 0 to
+                // two different values.
+                ("a".to_string(), mk("tool --short SHORTVALUE-7")),
+                ("b".to_string(), mk("tool --long A-MUCH-LONGER-VALUE-9")),
+            ]),
+            dispatch: crate::scheduler::DispatchKeys::default(),
+        };
+
+        let env = plan.route_sensitive_values(&[
+            "SHORTVALUE-7".to_string(),
+            "A-MUCH-LONGER-VALUE-9".to_string(),
+        ]);
+
+        // Longest-first binding: index 0 = the longer value.
+        assert_eq!(
+            plan.rules["a"].shell_cmd,
+            "tool --short ${OXO_FLOW_SENSITIVE_1}"
+        );
+        assert_eq!(
+            plan.rules["b"].shell_cmd,
+            "tool --long ${OXO_FLOW_SENSITIVE_0}"
+        );
+        assert_eq!(env.len(), 2);
+        assert_eq!(env["OXO_FLOW_SENSITIVE_0"], "A-MUCH-LONGER-VALUE-9");
+        assert_eq!(env["OXO_FLOW_SENSITIVE_1"], "SHORTVALUE-7");
+        // No literal survives in either command.
+        for rule in plan.rules.values() {
+            assert!(!rule.shell_cmd.contains("SHORTVALUE-7"));
+            assert!(!rule.shell_cmd.contains("A-MUCH-LONGER-VALUE-9"));
+        }
+    }
 }

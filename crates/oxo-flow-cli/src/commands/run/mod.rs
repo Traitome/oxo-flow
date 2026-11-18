@@ -24,7 +24,7 @@ pub mod debug;
 pub mod dry_run;
 mod env_knobs;
 mod failure;
-mod findings;
+pub(crate) mod findings;
 mod hooks;
 mod narrate;
 mod overrides;

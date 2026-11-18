@@ -1333,28 +1333,8 @@ impl EnvironmentBackend for SingularityBackend {
         let escaped_cmd = escape_for_sh_single_quote(command);
         let quoted_spec = escape_for_sh_single_quote(&spec);
 
-        // Sensitive-value routing (issue #1120, audit RB-12). The host side
-        // splices each `sensitive = true` value out of the command and
-        // leaves a `${OXO_FLOW_SENSITIVE_n}` reference; apptainer/
-        // singularity only inject a host variable into the container when
-        // it carries the `APPTAINERENV_` / `SINGULARITYENV_` prefix. Emit a
-        // prefixed assignment that COPIES the already-populated child
-        // variable (`spawn_rule_shell` sets `.envs(rule_envs)`), so the
-        // value is expanded by the wrapping shell and never lands in the
-        // container argv (`ps` inside is not exposed; the assignment is a
-        // shell builtin, not an execve argument).
-        let env_prefix = if self.binary == "apptainer" {
-            "APPTAINERENV_"
-        } else {
-            "SINGULARITYENV_"
-        };
-        let sensitive_prefix = sensitive_env_refs(command)
-            .iter()
-            .map(|name| format!("{env_prefix}{name}=\"${{{name}}}\" "))
-            .collect::<String>();
-
         Ok(format!(
-            "{sensitive_prefix}{} exec --bind '{quoted_workdir}':'{quoted_workdir}' '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
+            "{} exec --bind '{quoted_workdir}':'{quoted_workdir}' '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }
@@ -5025,9 +5005,18 @@ mod tests {
             !wrapped.contains(sentinel),
             "sentinel leaked into the singularity argv: {wrapped}"
         );
+        // The wrapper must NOT start with a shell assignment: `numactl … --
+        // <cmd>` execs the first word directly, and an assignment sent to
+        // execve fails with ENOENT (issue #1120 review, D2). The prefixed
+        // variables are exported through the child environment instead
+        // (pinned by the executor-side test in `executor::process`).
         assert!(
-            wrapped.contains("ENV_OXO_FLOW_SENSITIVE_0=\"${OXO_FLOW_SENSITIVE_0}\""),
-            "singularity wrapper must export the sensitive var by name: {wrapped}"
+            wrapped.starts_with(backend.binary.as_str()),
+            "wrapper must begin with the runtime binary: {wrapped}"
+        );
+        assert!(
+            !wrapped.contains("ENV_OXO_FLOW_SENSITIVE_0="),
+            "no inline assignment may precede the runtime: {wrapped}"
         );
     }
 }
