@@ -20,6 +20,7 @@
 //! the whole run's process group, so cancel kills the group — the CLI and
 //! every rule subprocess die with the wrapper instead of surviving it.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -80,14 +81,18 @@ struct SshCommand {
     _identity: Option<SshIdentity>,
 }
 
-/// Build an SSH command for `cluster`. The stored `ssh_key` may be sealed
-/// (OXO_FLOW_MASTER_KEY set, #517) and may be a path or key material; both
-/// are resolved through [`SshIdentity`].
-fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
-    let mut cmd = tokio::process::Command::new("ssh");
-    for arg in ssh_base_args(cluster.ssh_port as u16) {
-        cmd.arg(arg);
-    }
+/// The `ssh` argument list for `cluster` (options, optional identity, target)
+/// plus the identity guard the caller must keep alive until ssh exits.
+///
+/// One definition serves both the async command builder ([`ssh`]) and the
+/// blocking result pull — the two must issue byte-identical ssh invocations.
+fn ssh_args(
+    cluster: &ClusterRow,
+) -> std::io::Result<(Vec<std::ffi::OsString>, Option<SshIdentity>)> {
+    let mut args: Vec<std::ffi::OsString> = ssh_base_args(cluster.ssh_port as u16)
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect();
     let identity = cluster
         .ssh_key
         .as_deref()
@@ -95,12 +100,23 @@ fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
         .map(|key| SshIdentity::resolve(&key))
         .transpose()?;
     if let Some(identity) = &identity {
-        cmd.arg("-i").arg(identity.path());
+        args.push(std::ffi::OsString::from("-i"));
+        args.push(identity.path().as_os_str().to_os_string());
     }
-    cmd.arg(ssh_target_string(
+    args.push(std::ffi::OsString::from(ssh_target_string(
         cluster.ssh_user.as_deref(),
         &cluster.ssh_host,
-    ));
+    )));
+    Ok((args, identity))
+}
+
+/// Build an SSH command for `cluster`. The stored `ssh_key` may be sealed
+/// (OXO_FLOW_MASTER_KEY set, #517) and may be a path or key material; both
+/// are resolved through [`SshIdentity`].
+fn ssh(cluster: &ClusterRow) -> std::io::Result<SshCommand> {
+    let (args, identity) = ssh_args(cluster)?;
+    let mut cmd = tokio::process::Command::new("ssh");
+    cmd.args(&args);
     Ok(SshCommand {
         cmd,
         _identity: identity,
@@ -210,35 +226,155 @@ async fn stage_directory(
     Ok(())
 }
 
+/// Run-specific completion record appended to the result stream by the
+/// wrapper AFTER the whole result tree (#1157). Because the shell writes the
+/// directory tar first and this segment second onto the same stdout stream, a
+/// transfer truncated anywhere inside the tree cannot carry it — the record is
+/// the proof that every tarred member arrived.
+const RESULT_SENTINEL: &str = ".oxo-flow-pull-complete";
+
+/// Members every completed remote run must pull back (issue #1157, audit
+/// CL-04). The wrapper redirects the run into `execution.log`, records the CLI
+/// exit code in `.exit-code`, and appends the completion record; a stream
+/// missing any of them is a partial transfer and must fail the run, not
+/// silently produce a run with no log and no exit record.
+const REQUIRED_RESULT_MEMBERS: &[&str] = &["execution.log", ".exit-code", RESULT_SENTINEL];
+
+/// Upper bound on captured ssh stderr. The stream is drained fully (or ssh
+/// would block on a full pipe) but only the tail is retained — the same
+/// 64 KiB window convention as the engine's rule output tails.
+const MAX_CAPTURED_STDERR: usize = 64 * 1024;
+
+/// Drain a stderr stream to EOF, retaining only the last [`MAX_CAPTURED_STDERR`]
+/// bytes.
+fn drain_stderr_capped<R: Read>(mut reader: R) -> String {
+    let mut tail: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                tail.extend_from_slice(&chunk[..n]);
+                if tail.len() > MAX_CAPTURED_STDERR {
+                    let excess = tail.len() - MAX_CAPTURED_STDERR;
+                    tail.drain(..excess);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&tail).into_owned()
+}
+
+/// The remote command that streams one run's result tree followed by its
+/// completion record.
+///
+/// The directory tar and the sentinel tar are sequential writes to the same
+/// stdout, so the sentinel can only arrive if the directory segment did. The
+/// sentinel lives in a temp dir outside the result tree (never archived by
+/// the first tar) and carries the run id, so a stale record left by an
+/// earlier pull of the same persistent workdir cannot satisfy this run.
+fn pull_command(remote_dir: &str, run_id: &str) -> String {
+    let remote_dir_q = shell_quote(remote_dir);
+    let run_id_q = shell_quote(run_id);
+    let sentinel_q = shell_quote(RESULT_SENTINEL);
+    format!(
+        "d=$(mktemp -d) || exit 1; \
+         printf '%s' {run_id_q} > \"$d\"/{sentinel_q} || exit 1; \
+         tar -C {remote_dir_q} -cf - . ; rc=$?; \
+         tar -C \"$d\" -cf - {sentinel_q} ; rm -rf \"$d\" ; exit $rc"
+    )
+}
+
+/// Extract one pulled result stream into the local workdir through the shared
+/// validated extractor: absolute/`..` names and escaping symlink or hard-link
+/// targets are rejected by name, every member is verified on disk, and the
+/// run records (including the run-id sentinel) must be present. The sentinel's
+/// content is checked against `run_id` and the file removed afterwards.
+fn extract_pulled_results<R: Read>(
+    reader: R,
+    local_dir: &Path,
+    run_id: &str,
+) -> std::io::Result<()> {
+    oxo_flow_core::archive::extract_tar_requiring(reader, local_dir, REQUIRED_RESULT_MEMBERS)?;
+
+    let sentinel_path = local_dir.join(RESULT_SENTINEL);
+    let recorded = std::fs::read(&sentinel_path).map_err(|e| {
+        std::io::Error::other(format!(
+            "result stream completion record '{}' is unreadable: {e}",
+            sentinel_path.display()
+        ))
+    })?;
+    if recorded != run_id.as_bytes() {
+        return Err(std::io::Error::other(format!(
+            "result stream completion record does not belong to run {run_id} — \
+             refusing a stale or forged pull"
+        )));
+    }
+    // Bookkeeping only; the extracted tree is what the run serves.
+    let _ = std::fs::remove_file(&sentinel_path);
+    Ok(())
+}
+
 /// Pull a remote directory back over tar-over-stdio.
+///
+/// The tar stream is parsed and extracted by the shared pure-Rust extractor
+/// (issue #1157): the previous implementation piped it into the host `tar`,
+/// whose path-traversal handling is platform-dependent and unproven, and which
+/// reports success for an archive that simply omits members. The trailing
+/// run-id completion record makes a truncated stream detectable (#1189
+/// review).
 async fn pull_directory(
     cluster: &ClusterRow,
     remote_dir: &str,
     local_dir: &Path,
+    run_id: &str,
 ) -> std::io::Result<()> {
-    let mut ssh_cmd = ssh(cluster)?;
-    ssh_cmd
-        .cmd
-        .arg(format!("tar -C {} -cf - .", shell_quote(remote_dir)));
-    ssh_cmd.cmd.stdout(Stdio::piped());
+    let (args, identity) = ssh_args(cluster)?;
+    let remote_cmd = pull_command(remote_dir, run_id);
+    let local_dir = local_dir.to_path_buf();
+    let run_id = run_id.to_string();
 
-    let mut tar = tokio::process::Command::new("tar");
-    tar.arg("-C").arg(local_dir).arg("-xf").arg("-");
-    tar.stdin(Stdio::piped());
-    tar.stdout(Stdio::null());
+    // The extraction is a blocking stream parse; run the whole ssh+extract in
+    // a blocking task so stdout is consumed synchronously while ssh writes.
+    tokio::task::spawn_blocking(move || {
+        // Keep key material on disk until ssh has been reaped.
+        let _identity = identity;
+        let mut cmd = std::process::Command::new("ssh");
+        cmd.args(&args)
+            .arg(remote_cmd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn()?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        // Drain stderr concurrently: a full stderr pipe would otherwise block
+        // ssh while the extractor waits on stdout. Only a bounded tail is
+        // retained (a verbose or hostile remote cannot exhaust memory).
+        let stderr_task = std::thread::spawn(move || drain_stderr_capped(stderr));
 
-    let mut ssh_child = ssh_cmd.cmd.spawn()?;
-    let ssh_stdout = ssh_child.stdout.take().expect("piped stdout");
-    let mut tar_child = tar.spawn()?;
-    let mut tar_stdin = tar_child.stdin.take().expect("piped stdin");
-    tokio::io::copy(&mut tokio::io::BufReader::new(ssh_stdout), &mut tar_stdin).await?;
-    drop(tar_stdin);
-    let ssh_status = ssh_child.wait().await?;
-    let tar_status = tar_child.wait().await?;
-    if !ssh_status.success() || !tar_status.success() {
-        return Err(std::io::Error::other("pulling results failed"));
-    }
-    Ok(())
+        let extracted = extract_pulled_results(stdout, &local_dir, &run_id);
+        if extracted.is_err() {
+            // Stop the transfer promptly; dropping stdout above already
+            // closes the read end, but killing is deterministic.
+            let _ = child.kill();
+        }
+        let status = child.wait()?;
+        let ssh_stderr = stderr_task.join().unwrap_or_default();
+        match extracted {
+            Ok(()) if status.success() => Ok(()),
+            Ok(()) => Err(std::io::Error::other(format!(
+                "pulling results failed (ssh exit {}): {}",
+                status.code().unwrap_or(-1),
+                ssh_stderr.trim()
+            ))),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+    .map_err(|e| std::io::Error::other(format!("result pull task failed: {e}")))?
 }
 
 /// The remote launcher for one run.
@@ -585,7 +721,8 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
                 Some(PollOutcome::Exited(code)) => {
                     // 4. pull results back so the local file layer serves
                     //    them like any other run.
-                    let pull_result = pull_directory(&cluster, &remote_dir, &local_workdir).await;
+                    let pull_result =
+                        pull_directory(&cluster, &remote_dir, &local_workdir, &run_id).await;
                     match decide_remote_finalize(&run_id, code, &pull_result) {
                         RemoteFinalize::Finalize => {
                             crate::executor::finalize_run(
@@ -928,5 +1065,235 @@ mod tests {
         // Assert
         assert_eq!(decision, RemoteFinalize::Finalize);
         assert_eq!(crate::executor::final_status_from_exit(7 == 0), "failed");
+    }
+
+    /// Minimal raw-tar writer (the tar crate's `Builder` refuses `..` and
+    /// absolute paths, so hostile archives must be built byte-for-byte).
+    struct RawTar {
+        bytes: Vec<u8>,
+    }
+
+    impl RawTar {
+        fn new() -> Self {
+            Self { bytes: Vec::new() }
+        }
+
+        fn add(&mut self, name: &str, typeflag: u8, linkname: &str, data: &[u8]) -> &mut Self {
+            let mut header = [0u8; 512];
+            header[..name.len()].copy_from_slice(name.as_bytes());
+            header[100..107].copy_from_slice(b"0000644");
+            header[108..115].copy_from_slice(b"0000000");
+            header[116..123].copy_from_slice(b"0000000");
+            header[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
+            header[136..147].copy_from_slice(b"00000000000");
+            header[148..156].copy_from_slice(b"        ");
+            header[156] = typeflag;
+            if !linkname.is_empty() {
+                header[157..157 + linkname.len()].copy_from_slice(linkname.as_bytes());
+            }
+            header[257..263].copy_from_slice(b"ustar\0");
+            header[263..265].copy_from_slice(b"00");
+            let checksum: u32 = header.iter().map(|b| u32::from(*b)).sum();
+            header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+            self.bytes.extend_from_slice(&header);
+            self.bytes.extend_from_slice(data);
+            let pad = (512 - data.len() % 512) % 512;
+            self.bytes.extend(std::iter::repeat_n(0u8, pad));
+            self
+        }
+
+        fn finish(&mut self) -> Vec<u8> {
+            self.bytes.extend(std::iter::repeat_n(0u8, 1024));
+            std::mem::take(&mut self.bytes)
+        }
+
+        /// Member bytes with no zero terminator — mirrors a stream that stops
+        /// exactly on a member boundary (the transfer-truncation shape).
+        fn finish_unterminated(&mut self) -> Vec<u8> {
+            std::mem::take(&mut self.bytes)
+        }
+    }
+
+    const TEST_RUN_ID: &str = "run-1";
+
+    /// A result stream shaped like the remote wrapper's: the result tree,
+    /// then a second tar segment carrying the run-id completion record.
+    fn result_stream(include_output: bool, sentinel: Option<&str>) -> Vec<u8> {
+        let mut tree = RawTar::new();
+        tree.add("./execution.log", b'0', "", b"run log");
+        tree.add("./.exit-code", b'0', "", b"0\n");
+        if include_output {
+            tree.add("./outputs/out.txt", b'0', "", b"result");
+        }
+        let mut bytes = tree.finish();
+        if let Some(token) = sentinel {
+            let mut tail = RawTar::new();
+            tail.add("./.oxo-flow-pull-complete", b'0', "", token.as_bytes());
+            bytes.extend_from_slice(&tail.finish());
+        }
+        bytes
+    }
+
+    /// Issue #1157 / audit CL-04: the result extraction must fail when the
+    /// pull stream is missing a member every completed run writes — the old
+    /// external-`tar` pull exited 0 and finalized the run anyway.
+    #[test]
+    fn result_extraction_fails_when_required_members_are_missing() {
+        // Arrange — only one of the records a completed wrapper writes.
+        let mut tar = RawTar::new();
+        tar.add("./execution.log", b'0', "", b"run log");
+        let bytes = tar.finish();
+        let dir = tempfile::tempdir().unwrap();
+
+        // Act
+        let err = extract_pulled_results(bytes.as_slice(), dir.path(), TEST_RUN_ID)
+            .expect_err("a missing required member must fail the pull");
+
+        // Assert — the missing record is named, the run cannot finalize.
+        assert!(err.to_string().contains(".exit-code"), "got: {err}");
+        assert!(
+            err.to_string().contains(RESULT_SENTINEL),
+            "the absent completion record must be named: {err}"
+        );
+    }
+
+    /// Review probe (#1189): a stream carrying only the two bookkeeping
+    /// records — no declared output, no completion record — used to extract
+    /// cleanly and finalize the run as `completed` with `outputs/` absent.
+    /// The completion record is written only after the whole tree, so a
+    /// stream that stops before the output cannot carry it.
+    #[test]
+    fn result_extraction_fails_when_a_declared_output_is_missing() {
+        // Arrange — exactly the probe: those two members and no terminator.
+        let mut tree = RawTar::new();
+        tree.add("./execution.log", b'0', "", b"run log");
+        tree.add("./.exit-code", b'0', "", b"0\n");
+        let bytes = tree.finish_unterminated();
+        let dir = tempfile::tempdir().unwrap();
+
+        // Act
+        let pulled = extract_pulled_results(bytes.as_slice(), dir.path(), TEST_RUN_ID);
+
+        // Assert — the pull fails, the declared output is absent, and the
+        // existing decision machinery cannot finalize the run as completed.
+        let err = pulled.expect_err("a truncated stream must fail the pull");
+        assert!(err.to_string().contains(RESULT_SENTINEL), "got: {err}");
+        assert!(
+            !dir.path().join("outputs/out.txt").exists(),
+            "the declared output is absent from the extracted tree"
+        );
+        match decide_remote_finalize(TEST_RUN_ID, 0, &Err(err)) {
+            RemoteFinalize::FailArtifactsIncomplete(reason) => {
+                assert!(reason.contains(RESULT_SENTINEL), "got: {reason}");
+            }
+            RemoteFinalize::Finalize => panic!("a truncated pull must not finalize"),
+        }
+    }
+
+    /// A stale completion record (left by an earlier pull into the same
+    /// persistent workdir, or forged) must not satisfy this run.
+    #[test]
+    fn result_extraction_rejects_a_stale_completion_record() {
+        let bytes = result_stream(true, Some("some-other-run"));
+        let dir = tempfile::tempdir().unwrap();
+
+        let err = extract_pulled_results(bytes.as_slice(), dir.path(), TEST_RUN_ID)
+            .expect_err("a completion record for another run must be rejected");
+        assert!(
+            err.to_string().contains("does not belong to run run-1"),
+            "got: {err}"
+        );
+    }
+
+    /// A clean stream with both records and the run-id completion record
+    /// extracts and is accepted by the existing finalize decision; the
+    /// bookkeeping sentinel is removed from the served tree.
+    #[test]
+    fn clean_result_archive_extracts_and_finalizes() {
+        let bytes = result_stream(true, Some(TEST_RUN_ID));
+        let dir = tempfile::tempdir().unwrap();
+
+        let pulled = extract_pulled_results(bytes.as_slice(), dir.path(), TEST_RUN_ID);
+
+        assert!(pulled.is_ok(), "clean pull failed: {pulled:?}");
+        assert!(dir.path().join("execution.log").is_file());
+        assert!(dir.path().join(".exit-code").is_file());
+        assert!(dir.path().join("outputs/out.txt").is_file());
+        assert!(
+            !dir.path().join(RESULT_SENTINEL).exists(),
+            "the completion record is bookkeeping, not a served artifact"
+        );
+        assert_eq!(
+            decide_remote_finalize(TEST_RUN_ID, 0, &pulled),
+            RemoteFinalize::Finalize
+        );
+    }
+
+    /// A hostile stream is rejected by name and never writes outside the
+    /// local workdir — the check replaced the platform-dependent host `tar`.
+    #[test]
+    fn result_extraction_rejects_parent_dir_members() {
+        // Arrange
+        let mut tar = RawTar::new();
+        tar.add("./execution.log", b'0', "", b"run log");
+        tar.add("./.exit-code", b'0', "", b"0\n");
+        tar.add("../escape.txt", b'0', "", b"pwned");
+        let bytes = tar.finish();
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("workdir");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Act
+        let err = extract_pulled_results(bytes.as_slice(), &dir, TEST_RUN_ID)
+            .expect_err("a '..' member must be rejected");
+
+        // Assert
+        assert!(err.to_string().contains("../escape.txt"), "got: {err}");
+        assert!(!parent.path().join("escape.txt").exists());
+    }
+
+    /// The pull command must emit the completion record strictly after the
+    /// result-tree tar on the same stream, and stay valid POSIX shell.
+    #[test]
+    fn pull_command_appends_the_completion_record_after_the_tree() {
+        let script = pull_command("oxo-flow-runs/runs/run-1", "run-1");
+
+        let tree_at = script
+            .find("tar -C 'oxo-flow-runs/runs/run-1' -cf - .")
+            .expect("tree tar must be present");
+        let sentinel_at = script
+            .find("tar -C \"$d\" -cf - '.oxo-flow-pull-complete'")
+            .expect("sentinel tar must be present");
+        assert!(
+            tree_at < sentinel_at,
+            "the completion record must be tarred after the tree: {script}"
+        );
+        assert!(script.contains("printf '%s' 'run-1'"), "got: {script}");
+        assert!(script.contains("exit $rc"), "the tree tar status must win");
+        let status = std::process::Command::new("sh")
+            .args(["-n", "-c", &script])
+            .status()
+            .expect("sh runs");
+        assert!(status.success(), "invalid POSIX shell: {script}");
+    }
+
+    /// Review finding (#1189): stderr capture must stay bounded while the
+    /// pipe is still fully drained.
+    #[test]
+    fn stderr_capture_keeps_only_a_bounded_tail() {
+        // Arrange — 4× the cap, ends with a recognizable marker.
+        let mut payload: Vec<u8> = vec![b'x'; MAX_CAPTURED_STDERR * 4];
+        payload.extend_from_slice(b"TAIL-MARKER");
+        let expected_tail = payload[payload.len() - MAX_CAPTURED_STDERR..].to_vec();
+
+        // Act
+        let captured = drain_stderr_capped(std::io::Cursor::new(payload));
+
+        // Assert — bounded, and the retained window is the tail.
+        assert_eq!(captured.len(), MAX_CAPTURED_STDERR);
+        assert_eq!(captured.as_bytes(), expected_tail.as_slice());
+        assert!(captured.ends_with("TAIL-MARKER"));
+        // A small stream passes through untouched.
+        assert_eq!(drain_stderr_capped(&b"short"[..]), "short");
     }
 }

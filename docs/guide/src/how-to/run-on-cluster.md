@@ -486,6 +486,29 @@ local runs once the results are pulled back. The remote host needs the
 `oxo-flow` CLI on `PATH`, `tar`, and non-interactive SSH access (key
 auth, `BatchMode`).
 
+!!! warning "Result pulls are validated before a run can finalize"
+    The pulled result stream is parsed by oxo-flow's own archive reader,
+    not the host `tar`. A member whose path is absolute or contains `..`,
+    a symlink or hard link whose target is absolute or contains any `..` (extraction targets are created empty or from regular files only, so no pre-existing symlink can be traversed)
+    component (even one that would "cancel out" lexically — it can escape
+    through a symlinked path segment), or a member type other than
+    file/directory/link rejects the whole extraction and fails the run
+    with the offending member named — nothing is written outside the
+    local workdir. After extraction every member is re-checked on disk.
+    The wrapper appends a run-specific completion record to the stream
+    **after** the result tree, so a transfer that stops early cannot carry
+    it: a truncated pull fails the run instead of reporting a partial
+    tree as complete, and `execution.log` plus `.exit-code` are required
+    as well. The failure is recorded in the run's `artifacts_incomplete`
+    note and the run is **never** reported as `completed`. The pull
+    verifies that the complete tree arrived — it does not re-derive the
+    expanded output list locally; declared outputs are verified by the
+    engine on the remote host before the run exits 0, and a non-zero
+    remote exit always fails the run. Result trees that intentionally
+    leave symlinks pointing outside the workdir (for example an externally
+    rooted `OXO_FLOW_ENV_STORE` link, or any link target containing `..`)
+    are rejected by this check — pulled results must be self-contained.
+
 Cluster connection management is admin-only outside personal mode.
 Details: [Cluster Connections & Remote
 Execution](../reference/web-api.md#cluster-connections-remote-execution)
