@@ -241,7 +241,7 @@ shell = "cp {input} {output}"
         &[
             "per_sample",
             "{sample}",
-            "no sample domain produced any instance",
+            "no sample/pair domain produced any instance",
         ],
     );
 }

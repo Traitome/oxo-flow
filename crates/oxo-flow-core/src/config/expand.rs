@@ -1121,8 +1121,8 @@ impl WorkflowConfig {
                     if !unbound.is_empty() {
                         return Err(OxoFlowError::Validation {
                             message: format!(
-                                "rule '{}' references {} but no sample domain produced any \
-                                 instance (the declared sample source is empty or matched \
+                                "rule '{}' references {} but no sample/pair domain produced any \
+                                 instance (the declared source is empty or matched \
                                  no files) — an empty domain must not silently leave the \
                                  placeholder(s) unbound",
                                 rule.name,

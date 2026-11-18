@@ -1665,7 +1665,7 @@ fn expand_rejects_empty_sample_group_domain() {
         &[
             "rule 'per_sample'",
             "{sample}",
-            "no sample domain produced any instance",
+            "no sample/pair domain produced any instance",
         ],
     );
 }
@@ -1689,7 +1689,7 @@ fn expand_rejects_zero_match_sample_pattern_domain() {
         &[
             "rule 'per_sample'",
             "{sample}",
-            "no sample domain produced any instance",
+            "no sample/pair domain produced any instance",
         ],
     );
 }

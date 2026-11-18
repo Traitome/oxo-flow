@@ -123,11 +123,12 @@ pub async fn validate_command(
                             eprintln!("    hint: {}", suggestion);
                         }
                     }
-                } else {
-                    // Warnings from the format/validation pass (e.g. W042:
-                    // an empty sample group that `--samples` may supply at
-                    // run time) must reach the user too — a diagnostic that
-                    // is computed but never printed is not shipped.
+                } else if d.code == "W042" {
+                    // Validate's contract is runnability, not style: surface
+                    // only the format-pass warnings that bear on whether the
+                    // workflow can run (W042: an empty sample group that
+                    // `--samples` may supply at run time). The full
+                    // best-practice sweep stays `lint`'s job.
                     warnings.push(d.clone());
                 }
             }
