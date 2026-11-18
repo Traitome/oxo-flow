@@ -6084,6 +6084,40 @@ Generates Dockerfile or Singularity definition.</p>
 </span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>DELETE /api/pipelines/{id}         # Delete pipeline
 </span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>POST   /api/pipelines/search       # Search by name, tags, content
 </span></code></pre></div>
+<h4 id="visibility-policy-web-13-issue-1138">Visibility policy (WEB-13 / issue #1138)<a class="headerlink" href="#visibility-policy-web-13-issue-1138" title="Permanent link">#</a></h4>
+<p>Every list, read, and write route evaluates ONE exported predicate —
+<code>domains::workflow::visibility::can_read_pipeline</code> (re-exported at the
+workflow domain root) — for reads, plus <code>can_write_pipeline</code> for mutations.
+The policy is explicit and tested:</p>
+<ul>
+<li><strong>Owner:</strong> a pipeline is always visible to its <code>user_id</code> owner.</li>
+<li><strong>Shared ("template"):</strong> <code>visibility = "workspace"</code> makes a pipeline
+  visible to every signed-in user. Personal mode has a single <code>default</code>
+  pseudo-user, so there every pipeline is simply "own".</li>
+<li><strong>Other tenants:</strong> another tenant's <code>private</code> or <code>link</code> pipeline is
+  invisible. <code>link</code> is NOT a read grant — it exists so the owner can mint a
+  share token, and the token (not this predicate) authorizes
+  <code>GET /api/share/{token}</code> and <code>POST /api/pipelines/import</code>.</li>
+<li><strong>Admin override:</strong> admins see every tenant's pipelines (and, as before,
+  may modify them). This is the documented audit/administration exception.</li>
+<li><strong>Deleted:</strong> deletion is a hard delete (the row is removed in both
+  storage backends); a deleted pipeline is invisible to everyone — admins
+  included — and every read answers <code>404</code>.</li>
+<li><strong>Unknown visibility values</strong> fail closed as private.</li>
+</ul>
+<p>List and search routes FILTER with the predicate; read/write routes answer
+<code>404 NOT_FOUND</code> — never <code>403</code> — when it returns false, so the existence of
+another tenant's pipeline cannot be probed. Covered paths: <code>GET
+/api/pipelines</code>, <code>POST /api/pipelines/search</code>, <code>GET</code>/<code>PUT</code>/<code>DELETE
+/api/pipelines/{id}</code>, both revision routes, rollback, fork, share, <code>POST
+/api/runs</code> with a <code>pipeline_id</code>, <code>POST /api/ai/optimize</code> with a
+<code>pipeline_id</code>, and <code>POST /api/pipelines/diff</code>/<code>export</code> when they resolve
+saved ids.</p>
+<p>Deliberate exemptions: the share landing and import routes authorize via
+the share token; the <code>/api/templates</code> library is a global shared resource
+whose rows carry no per-tenant visibility column (writes stay
+owner/admin-gated); and the DAG edit endpoints operate on caller-supplied
+TOML only, never on a stored pipeline.</p>
 <p>The pipeline's <code>version</code> is always derived from the stored TOML's
 <code>[workflow] version</code> key — the TOML is the source of truth.
 An explicit <code>version</code> field on POST/PUT is ignored (never stored), so a

@@ -4262,7 +4262,10 @@ accepted on import.</p>
 <li>Checks share expiration before allowing import</li>
 </ul>
 <h2 id="permissions-model">Permissions Model<a class="headerlink" href="#permissions-model" title="Permanent link">#</a></h2>
-<p>A simple three-state visibility model:</p>
+<p>A simple three-state visibility model (<code>private</code>, <code>workspace</code>, <code>link</code>)
+plus an admin override — enforced by one server-side predicate
+(<code>domains::workflow::visibility::can_read_pipeline</code>), documented in the
+<a href="../../reference/web-api/#visibility-policy-web-13-issue-1138">Web API reference</a>:</p>
 <table>
 <thead>
 <tr>
@@ -4273,11 +4276,15 @@ accepted on import.</p>
 <tbody>
 <tr>
 <td>Private</td>
-<td>Only the owner can view/edit (the default for imported pipelines)</td>
+<td>Only the owner (or an admin) can view/edit — the default for imported pipelines</td>
 </tr>
 <tr>
-<td>Shared (<code>link</code> / <code>workspace</code>)</td>
-<td>Read-only access via share/import</td>
+<td>Workspace</td>
+<td>Readable by every signed-in user; writable only by the owner (or an admin)</td>
+</tr>
+<tr>
+<td>Link</td>
+<td>Not readable through the pipeline API; a minted share token grants anonymous read-only access</td>
 </tr>
 <tr>
 <td>Admin</td>
