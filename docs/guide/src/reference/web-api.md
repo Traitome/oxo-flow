@@ -850,6 +850,10 @@ The read-only result-delivery layer:
   inline image bytes; other types return `415 NO_PREVIEW`
 - paths are sandboxed to the run's workdir (traversal rejected); sensitive
   filenames (.env, keys, credentials) are never served
+- browser downloads use the SPA's authenticated `fetch` path (`Authorization: Bearer`
+  header → Blob → object URL); no token is placed in a download URL's query
+  string, and an unauthenticated `401` redirects the SPA to the login page
+  instead of saving an empty file (WEB-14 / issue #1139)
 
 ### Instances
 ```
