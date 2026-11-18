@@ -102,7 +102,7 @@ Required exit evidence:
 
 **Maturity**: Fixed (2026-11-18) — every run now owns a unique `runs/<run_id>/`
 workdir and saved-pipeline admission is one atomic guarded insert keyed on
-`pipeline_id` (issue #1130, commit `bd42d14a`).
+`pipeline_id` (issue #1130, implementation commit `7bded48d`).
 
 Runs created from a saved pipeline shared the persistent pipeline directory
 as their `workdir`, so a later run overwrote an earlier run's workflow,
