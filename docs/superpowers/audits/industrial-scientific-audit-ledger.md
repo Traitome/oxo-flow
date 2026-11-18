@@ -374,11 +374,15 @@ Exit evidence:
   concurrent `POST /api/runs` against a limit of one yield exactly one 200
   and one `429 QUOTA_EXCEEDED`, and the loser leaves no run row. Fail-first
   probe: the pre-fix check-then-record shape admitted 8/8.
-- Durable and shared quota state — MET. A second backend instance (and a
-  simulated restart with a fresh pool) reads the counters the first wrote;
-  a release through one instance is visible through the other; the limits
-  row round-trips. PostgreSQL parity is covered by the live storage
-  contract test.
+- Durable and shared quota state — MET on SQLite. A second backend instance
+  (and a simulated restart with a fresh pool) reads the counters the first
+  wrote; a release through one instance is visible through the other; the
+  limits row round-trips. The PostgreSQL implementation (same idempotent
+  schema bootstrap, same single-statement CAS) is compile-checked
+  (`--features postgres --all-targets`) and the live storage contract test
+  gained a quota section, but that contract requires
+  `OXO_FLOW_TEST_POSTGRES_URL` and was NOT executed in this environment —
+  live PostgreSQL parity is not claimed here.
 - Enforced resource ceilings with observable rejection — PARTIAL. Local
   Linux runs: proven end-to-end — a stub CLI allocating 520 MiB under a
   512 MiB declaration fails the run, while the identical stub with no
