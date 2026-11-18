@@ -421,7 +421,7 @@ On clusters, the scheduler enforces resources based on the generated directives.
     definition's `containerProperties.secrets`, or GCP Batch
     `taskSpec.environment.secretVariables` — or the reference expands empty
     and the rule fails. Details:
-    [workflow-format: `[config]`](../reference/workflow-format.md#config--configuration-variables).
+    [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables).
     HPC scheduler scripts (SLURM/PBS/SGE/LSF) still materialize the value in
     the generated script; that half of the hardening is not yet done.
 
