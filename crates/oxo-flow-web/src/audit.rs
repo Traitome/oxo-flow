@@ -20,12 +20,14 @@
 //! [`StorageBackend::record_audit_log`](crate::infra::db::StorageBackend::record_audit_log).
 //! Handlers must use [`audit_required`] or [`audit_best_effort`] rather than
 //! calling the storage method directly, so the class is visible at the call
-//! site. Two direct call sites remain outside this module, both in
-//! `domains/auth/handlers.rs`: the successful-login row and the
-//! license-upload metadata row. The middleware still writes a REQUIRED row
-//! for `POST /api/license/upload`; the handler's own metadata row stays
-//! best-effort. Migrating both rows to the shared helpers is unblocked
-//! follow-up work tracked in the WEB-15 ledger entry.
+//! site; this module is now the only production caller (WEB-15 / #1199
+//! migrated the last two handler-owned rows). The successful-login row is
+//! REQUIRED — the login handler owns it because only it knows the
+//! authenticated identity, and a lost row fails the sign-in response closed
+//! with the generic may-have-been-applied honesty plus a sign-in-specific
+//! note ([`audit_required_with_hint`]). The license-upload metadata row stays
+//! best-effort: the middleware already writes the REQUIRED row for
+//! `POST /api/license/upload`.
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -194,7 +196,9 @@ pub async fn audit_middleware(
     // Successful sign-ins are recorded by the login handler itself, which
     // knows the authenticated identity — the middleware only sees the
     // pre-auth request, so every login row it writes would be misattributed
-    // to the `default` pseudo-user (web-api.md §Audit Logs contract).
+    // to the `default` pseudo-user (web-api.md §Audit Logs contract). That
+    // handler row is REQUIRED (WEB-15 / #1199): its failure already replaced
+    // the response with the structured 500, and a 5xx is preserved below.
     // Failed attempts still fall through here (actor unknown → `default`,
     // result: "failure" — the actionable brute-force signal).
     if login_success_is_handler_recorded(&path, status) {
@@ -271,6 +275,27 @@ pub async fn audit_required(
     result: &str,
     metadata: Option<&str>,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
+    audit_required_with_hint(actor, action, target, result, metadata, None).await
+}
+
+/// [`audit_required`] with one caller-supplied honesty sentence appended to
+/// the structured error's suggestion.
+///
+/// Use it when the caller knows a concrete consequence the generic
+/// "verify the current state" remediation cannot name. The motivating case
+/// is the successful-login row (WEB-15 / #1199): the session is persisted
+/// before the audit write, so a `500 AUDIT_WRITE_FAILED` means a session
+/// token may already have been minted — the caller must not read it as a
+/// refused sign-in. The code, status, message and detail stay identical to
+/// [`audit_required`]; only the suggestion is extended.
+pub async fn audit_required_with_hint(
+    actor: &str,
+    action: &str,
+    target: &str,
+    result: &str,
+    metadata: Option<&str>,
+    suggestion_hint: Option<&str>,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
     match write_audit(actor, action, target, result, metadata).await {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -280,7 +305,11 @@ pub async fn audit_required(
                 error = %error,
                 "required audit write failed — refusing the request (fail closed)"
             );
-            Err(audit_failure_error(action, &error))
+            Err(audit_failure_error_with_hint(
+                action,
+                &error,
+                suggestion_hint,
+            ))
         }
     }
 }
@@ -313,6 +342,26 @@ pub async fn audit_best_effort(
 /// committed. The message must not claim the request was "refused", and the
 /// suggestion must warn that a blind retry can duplicate the effect.
 pub fn audit_failure_error(action: &str, error: &str) -> (StatusCode, Json<ApiError>) {
+    audit_failure_error_with_hint(action, error, None)
+}
+
+/// [`audit_failure_error`] with an optional caller-specific sentence
+/// appended to the suggestion. Everything else is unchanged, so every caller
+/// still answers the one documented `500 AUDIT_WRITE_FAILED` shape.
+fn audit_failure_error_with_hint(
+    action: &str,
+    error: &str,
+    suggestion_hint: Option<&str>,
+) -> (StatusCode, Json<ApiError>) {
+    let mut suggestion = String::from(
+        "Verify the current state (list or inspect the affected resource) before \
+         retrying — retrying may duplicate the effect. Then check that the database is \
+         writable and the audit_logs table exists.",
+    );
+    if let Some(hint) = suggestion_hint {
+        suggestion.push(' ');
+        suggestion.push_str(hint);
+    }
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError {
@@ -322,12 +371,7 @@ pub fn audit_failure_error(action: &str, error: &str) -> (StatusCode, Json<ApiEr
                  have been applied"
             ),
             detail: Some(error.to_string()),
-            suggestion: Some(
-                "Verify the current state (list or inspect the affected resource) before \
-                 retrying — retrying may duplicate the effect. Then check that the database is \
-                 writable and the audit_logs table exists."
-                    .into(),
-            ),
+            suggestion: Some(suggestion),
         }),
     )
 }
@@ -358,7 +402,8 @@ fn audit_actor_id(user: Option<&crate::domains::auth::current_user::CurrentUser>
 }
 
 /// Successful sign-ins are recorded by the login handler (which owns the
-/// authenticated identity); the middleware records failed attempts only.
+/// authenticated identity) as a REQUIRED row; the middleware records failed
+/// attempts only.
 fn login_success_is_handler_recorded(path: &str, status: u16) -> bool {
     path == "/api/auth/login" && (200..300).contains(&status)
 }

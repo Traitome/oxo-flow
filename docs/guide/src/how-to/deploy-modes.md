@@ -94,14 +94,14 @@ entry's durability is explicit per action (WEB-15 / issue #1140):
 The audit row is written after the handler, not in the same transaction, so
 a REQUIRED-audit `500` means the action **may already have been applied** —
 verify the affected resource before retrying, since a blind retry can
-duplicate the effect. For every mutation the middleware handles, the
-structured event stream emits an `audit` event even when the database insert
-fails. The successful-login path is the exception: the login handler owns
-that best-effort row and emits no structured event, so a successful login on
-broken storage leaves neither a row nor an event (failed logins are
-REQUIRED middleware rows). Do not treat a missing entry as proof that no
-action occurred; check the structured event stream as well. The trail spans
-all users and is admin-only outside personal mode.
+duplicate the effect. Successful sign-ins are a handler-owned REQUIRED row
+(the middleware only sees the pre-auth request and would misattribute it);
+the session is persisted before the audit write, so a login `500` means a
+session token may already have been minted. For every mutation the
+middleware handles, the structured event stream emits an `audit` event even
+when the database insert fails. Do not treat a missing entry as proof that
+no action occurred; check the structured event stream as well. The trail
+spans all users and is admin-only outside personal mode.
 
 **Workspace isolation**:
 ```

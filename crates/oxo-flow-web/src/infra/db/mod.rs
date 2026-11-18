@@ -305,10 +305,11 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<String, String>;
     /// Convenience: record a successful audit action without metadata.
     ///
-    /// Request-handler call sites must go through
+    /// Request-handler call sites go through
     /// `crate::audit::{audit_required, audit_best_effort}` so the audit's
-    /// durability class is explicit (WEB-15 / issue #1140). This trait
-    /// method exists for the storage contract and legacy call sites only.
+    /// durability class is explicit (WEB-15 / issue #1140); since #1199 no
+    /// handler calls this method. It remains for the storage contract and
+    /// storage-level tests.
     async fn log_action_with_metadata(
         &self,
         user_id: &str,
@@ -322,13 +323,10 @@ pub trait StorageBackend: Send + Sync {
     /// Do not call this directly from request handlers: use
     /// `crate::audit::{audit_required, audit_best_effort}` so a failed write
     /// fails the request closed (required) or warns (best-effort) per the
-    /// classification in `crate::audit::audit_durability_for`. Two direct
-    /// handler call sites remain, both in `domains/auth/handlers.rs`
-    /// (best-effort): the successful-login row and the license-upload
-    /// metadata row. The middleware's REQUIRED
-    /// `POST /api/license/upload` row already covers that action.
-    /// Migrating both rows to the shared helpers is unblocked follow-up
-    /// work tracked in the WEB-15 ledger entry.
+    /// classification in `crate::audit::audit_durability_for`. Since #1199
+    /// no handler calls this method — `crate::audit::write_audit` is the only
+    /// production caller, and this stays public for the storage contract and
+    /// storage-level tests.
     async fn record_audit_log(
         &self,
         user_id: &str,
