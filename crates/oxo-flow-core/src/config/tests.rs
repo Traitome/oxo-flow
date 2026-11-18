@@ -1515,7 +1515,7 @@ fn resolve_split_values_from_config() {
         glob: None,
     };
 
-    let values = config.resolve_split_values(&split).unwrap();
+    let values = config.resolve_split_values("test_rule", &split).unwrap();
     assert_eq!(
         values,
         vec!["chr1".to_string(), "chr2".to_string(), "chr3".to_string()]
@@ -1544,7 +1544,7 @@ fn resolve_split_values_direct() {
         glob: None,
     };
 
-    let values = config.resolve_split_values(&split).unwrap();
+    let values = config.resolve_split_values("test_rule", &split).unwrap();
     assert_eq!(values, vec!["chr1".to_string(), "chr2".to_string()]);
 }
 
@@ -1570,10 +1570,13 @@ fn resolve_split_values_rejects_invalid_n_instead_of_single_chunk_fallback() {
         glob: None,
     };
 
-    let err = config.resolve_split_values(&split).unwrap_err();
+    let err = config
+        .resolve_split_values("test_rule", &split)
+        .unwrap_err();
     let message = err.to_string();
     assert!(message.contains("split.n"), "{message}");
     assert!(message.contains("chr1"), "{message}");
+    assert!(message.contains("test_rule"), "{message}");
 }
 
 #[test]
@@ -1599,6 +1602,357 @@ fn expand_scatter_rejects_empty_value_domain() {
     assert!(message.contains("empty value domain"), "{message}");
     assert!(message.contains("per_chunk"), "{message}");
     assert!(message.contains("chunk"), "{message}");
+}
+
+// ── Issue #1153 WF-02: degenerate scatter/split domains fail closed ──────
+// One core test per degenerate input; the CLI integration suite
+// (`crates/oxo-flow-cli/tests/degenerate_domains.rs`) pins the same inputs
+// to a non-zero process exit with the diagnostic text.
+
+/// Parse + defaults + expand helper: expect a Validation error containing
+/// every needle.
+fn expand_err_containing(toml: &str, needles: &[&str]) -> String {
+    let mut config = WorkflowConfig::parse(toml).expect("workflow parses");
+    config.apply_defaults();
+    let err = config
+        .expand_wildcards()
+        .expect_err("expansion must fail closed");
+    let message = err.to_string();
+    for needle in needles {
+        assert!(message.contains(needle), "missing {needle:?} in: {message}");
+    }
+    message
+}
+
+#[test]
+fn expand_scatter_rejects_empty_variable() {
+    expand_err_containing(
+        r#"
+        [workflow]
+        name = "empty_scatter_variable"
+
+        [[rules]]
+        name = "per"
+        input = ["sample.txt"]
+        output = ["out/a.bam"]
+        shell = "cp {input} {output}"
+
+        [rules.scatter]
+        variable = ""
+        values = ["a", "b"]
+        "#,
+        &["scatter rule 'per'", "empty scatter variable"],
+    );
+}
+
+#[test]
+fn expand_rejects_empty_sample_group_domain() {
+    expand_err_containing(
+        r#"
+        [workflow]
+        name = "empty_sample_group"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = []
+
+        [[rules]]
+        name = "per_sample"
+        input = ["raw/{sample}.txt"]
+        output = ["out/{sample}.txt"]
+        shell = "cp {input} {output}"
+        "#,
+        &[
+            "rule 'per_sample'",
+            "{sample}",
+            "no sample/pair domain produced any instance",
+        ],
+    );
+}
+
+#[test]
+fn expand_rejects_zero_match_sample_pattern_domain() {
+    // No files exist for the declared pattern, so the discovered domain is
+    // empty. Lint/validate tolerate an unmounted tree, but planning cannot.
+    expand_err_containing(
+        r#"
+        [workflow]
+        name = "zero_match_sample_pattern"
+        sample_pattern = "data/{sample}.txt"
+
+        [[rules]]
+        name = "per_sample"
+        input = ["{sample}.txt"]
+        output = ["out/{sample}.txt"]
+        shell = "cp {input} {output}"
+        "#,
+        &[
+            "rule 'per_sample'",
+            "{sample}",
+            "no sample/pair domain produced any instance",
+        ],
+    );
+}
+
+#[test]
+fn expand_transform_rejects_empty_split_by() {
+    expand_err_containing(
+        r#"
+        [workflow]
+        name = "empty_split_by"
+
+        [[rules]]
+        name = "chunked"
+        input = ["sample.bam"]
+        output = ["merged.vcf"]
+
+        [rules.transform.split]
+        by = ""
+        values = ["a", "b"]
+
+        [rules.transform]
+        map = "call {input}"
+
+        [rules.transform.combine]
+        shell = "cat {chunks} > {output}"
+        "#,
+        &["transform rule 'chunked'", "empty split.by"],
+    );
+}
+
+#[test]
+fn expand_transform_rejects_degenerate_split_n_matrix() {
+    let workflow = |n: &str| {
+        format!(
+            r#"
+        [workflow]
+        name = "split_n_matrix"
+
+        [[rules]]
+        name = "chunked"
+        input = ["sample.bam"]
+        output = ["merged.vcf"]
+
+        [rules.transform.split]
+        by = "chunk"
+        n = "{n}"
+
+        [rules.transform]
+        map = "call {{input}}"
+
+        [rules.transform.combine]
+        shell = "cat {{chunks}} > {{output}}"
+        "#
+        )
+    };
+    // zero / negative / non-integer / above the shared expansion cap /
+    // integer overflow — each must name the rule, the raw value and the
+    // reason, never plan a single chunk fallback.
+    for (n, needle) in [
+        ("0", "must be greater than zero"),
+        ("-3", "is negative"),
+        ("not-a-number", "neither a positive integer"),
+        ("100001", "expansion cap"),
+        ("99999999999999999999999999", "neither a positive integer"),
+    ] {
+        let message = expand_err_containing(&workflow(n), &["transform rule 'chunked'", n]);
+        assert!(message.contains(needle), "n={n}: {message}");
+    }
+}
+
+#[test]
+fn expand_transform_rejects_no_split_source() {
+    expand_err_containing(
+        r#"
+        [workflow]
+        name = "no_split_source"
+
+        [[rules]]
+        name = "chunked"
+        input = ["sample.bam"]
+        output = ["merged.vcf"]
+
+        [rules.transform.split]
+        by = "chunk"
+
+        [rules.transform]
+        map = "call {input}"
+        "#,
+        &["transform rule 'chunked'", "has no split values"],
+    );
+}
+
+#[test]
+fn classify_split_n_distinguishes_config_refs_from_degenerate_literals() {
+    use crate::config::SplitNResolution;
+    let config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "classify"
+
+        [config]
+        chunks = ["4"]
+        empty = []
+
+        [[rules]]
+        name = "r"
+        shell = "true"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(config.classify_split_n("4"), SplitNResolution::Count(4));
+    assert_eq!(
+        config.classify_split_n("config.chunks"),
+        SplitNResolution::Count(4)
+    );
+    assert_eq!(
+        config.classify_split_n("config.undefined"),
+        SplitNResolution::UnresolvedConfig,
+        "a config ref may be supplied by --arg or a parent include"
+    );
+    for degenerate in ["0", "-1", "abc"] {
+        assert!(matches!(
+            config.classify_split_n(degenerate),
+            SplitNResolution::Invalid { .. }
+        ));
+    }
+    assert!(matches!(
+        config.classify_split_n("config.empty"),
+        SplitNResolution::Invalid { .. }
+    ));
+    assert!(matches!(
+        config.classify_split_n("100001"),
+        SplitNResolution::Invalid { .. }
+    ));
+}
+
+#[test]
+fn validate_reports_e023_for_statically_degenerate_domains() {
+    // Validate is the first gate and must not wave these through; E023 is
+    // the documented code (glossary + validate.md + workflow-format.md).
+    let cases = [
+        (
+            r#"
+            [workflow]
+            name = "v"
+
+            [[rules]]
+            name = "per_chunk"
+            input = ["in.txt"]
+            output = ["chunks/{chunk}.bam"]
+            shell = "cp {input} {output}"
+
+            [rules.scatter]
+            variable = "chunk"
+            values = []
+            "#,
+            "per_chunk",
+        ),
+        (
+            r#"
+            [workflow]
+            name = "v"
+
+            [[rules]]
+            name = "chunked"
+            input = ["in.bam"]
+            output = ["out.vcf"]
+
+            [rules.transform.split]
+            by = "chunk"
+            n = "0"
+
+            [rules.transform]
+            map = "call {input}"
+            "#,
+            "chunked",
+        ),
+    ];
+    for (toml, needle) in cases {
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = crate::format::validate_format(&config);
+        let hits: Vec<&crate::format::Diagnostic> = result
+            .errors()
+            .into_iter()
+            .filter(|d| d.code == "E023")
+            .collect();
+        assert!(!hits.is_empty(), "expected E023 for {needle}: {result:?}");
+        assert!(
+            hits.iter().any(|d| d.message.contains(needle)),
+            "E023 must name {needle}: {hits:?}"
+        );
+    }
+
+    // An empty sample group is deliberately a WARNING, not E023: the cohort
+    // may be supplied at run time with `--samples @sheet.tsv`, and validate
+    // takes no samples (review of #1153, D1). Expansion still fails closed
+    // without a domain.
+    let config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "v"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = []
+
+        [[rules]]
+        name = "per_sample"
+        input = ["{sample}.txt"]
+        output = ["out/{sample}.txt"]
+        shell = "cp {input} {output}"
+        "#,
+    )
+    .unwrap();
+    let result = crate::format::validate_format(&config);
+    assert!(
+        result.errors().iter().all(|d| d.code != "E023"),
+        "empty sample group must not be a static error: {result:?}"
+    );
+    let warn = result
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "W042")
+        .expect("W042 warning for the empty sample group");
+    assert!(warn.message.contains("cohort"), "{warn:?}");
+}
+
+#[test]
+fn validate_e023_respects_split_source_priority() {
+    // Documented priority is values > values_from > n > glob. When a
+    // higher-priority source is declared, a lower one is dead config: the
+    // expansion never reads it, so validate must not flag it either (the
+    // two gates may not disagree).
+    let mut config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "priority"
+
+        [[rules]]
+        name = "chunked"
+        input = ["in.bam"]
+        output = ["out.vcf"]
+
+        [rules.transform.split]
+        by = "chunk"
+        values = ["a", "b"]
+        n = "0"
+
+        [rules.transform]
+        map = "call {chunk} {input}"
+        "#,
+    )
+    .unwrap();
+    let result = crate::format::validate_format(&config);
+    assert!(
+        result.errors().iter().all(|d| d.code != "E023"),
+        "values wins over n, so the dead n = 0 is not statically degenerate: {result:?}"
+    );
+    config.apply_defaults();
+    config
+        .expand_wildcards()
+        .expect("values source plans the map rules");
+    assert_eq!(config.rules.len(), 2, "two split values, no combine stage");
 }
 
 #[test]

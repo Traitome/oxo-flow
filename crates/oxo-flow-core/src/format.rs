@@ -1246,6 +1246,165 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E023 (issue #1153 WF-02): statically degenerate fan-out domains must
+    // fail the first gate, not just expansion. The old behavior let
+    // `validate` exit 0 for an empty scatter domain, a zero/negative/
+    // non-integer `transform.split.n`, an empty `split.by`, and an empty
+    // `[[sample_groups]]` samples list — the workflow then either planned
+    // zero instances or planned literal placeholders. Every branch below is
+    // statically decidable from the document (data-dependent zero-match
+    // sources stay plan-time errors in `expand_wildcards`).
+    for rule in &config.rules {
+        if let Some(scatter) = &rule.scatter {
+            if scatter.variable.trim().is_empty() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "scatter rule '{}' declares an empty scatter variable — the value \
+                         domain has no binding name",
+                        rule.name
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "E023".to_string(),
+                    suggestion: Some(
+                        "set scatter.variable to the placeholder name to bind (e.g. \
+                         variable = \"chunk\")"
+                            .to_string(),
+                    ),
+                });
+            } else if config.scatter_fan_out_is_empty(rule) {
+                let variable = &scatter.variable;
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "scatter rule '{}' has an empty value domain for '{}' — the rule \
+                         would expand to zero instances and silently remove this analysis \
+                         branch",
+                        rule.name, variable
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "E023".to_string(),
+                    suggestion: Some(
+                        "define at least one value in scatter.values or ensure \
+                         scatter.values_from resolves to a non-empty list; an empty domain \
+                         would silently remove this analysis branch"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+        if let Some(transform) = &rule.transform {
+            let split = &transform.split;
+            if split.by.trim().is_empty() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "transform rule '{}' declares an empty split.by — the split \
+                         variable has no name, so generated map/combine rules cannot \
+                         bind any {{placeholder}}",
+                        rule.name
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "E023".to_string(),
+                    suggestion: Some(
+                        "set split.by to the variable name to substitute (e.g. \
+                         by = \"chr\") and reference it as {chr} in transform.map"
+                            .to_string(),
+                    ),
+                });
+            }
+            // Source checks follow the documented priority
+            // `values > values_from > n > glob`: a lower-priority source is
+            // dead config when a higher one is declared, so validating it
+            // would disagree with the expansion path (which simply never
+            // reads it).
+            if split.values.is_empty() {
+                if let Some(values_from) = &split.values_from {
+                    // A values_from reference that RESOLVES to an empty
+                    // list is statically empty. An unresolvable key may
+                    // still be supplied by `--arg` or a parent include, so
+                    // only expansion rejects it.
+                    if let Some(values) = config.resolve_config_list(values_from)
+                        && values.is_empty()
+                    {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            message: format!(
+                                "transform rule '{}' split.values_from '{}' resolved to no \
+                                 values — the transform would expand to zero map instances",
+                                rule.name, values_from
+                            ),
+                            rule: Some(rule.name.clone()),
+                            code: "E023".to_string(),
+                            suggestion: Some(
+                                "define the config key as a non-empty array or comma list, \
+                                 or use split.values/split.n instead"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                } else if let Some(n_str) = &split.n {
+                    if let crate::config::SplitNResolution::Invalid { reason } =
+                        config.classify_split_n(n_str)
+                    {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            message: format!(
+                                "transform rule '{}' split.n '{}' {}",
+                                rule.name, n_str, reason
+                            ),
+                            rule: Some(rule.name.clone()),
+                            code: "E023".to_string(),
+                            suggestion: Some(
+                                "use a positive integer within the instance cap, or provide \
+                                 split.values/split.values_from"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                } else if split.glob.is_none() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "transform rule '{}' has no split values — declare split.values, \
+                             split.values_from, split.n, or split.glob",
+                            rule.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E023".to_string(),
+                        suggestion: Some(
+                            "provide values, values_from, n, or glob in split config".to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    // An empty declared sample group fans out to zero (group, sample)
+    // combinations. It is always author error — data-driven groups come
+    // from `sample_pattern`/`sample_groups_file`, both of which are fully
+    // loaded before validation.
+    for group in &config.sample_groups {
+        if group.samples.is_empty() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "sample group '{}' has no samples — a run that binds {{sample}}/{{group}} \
+                     to this group will fail closed unless samples are supplied at run time",
+                    group.name
+                ),
+                rule: None,
+                code: "W042".to_string(),
+                suggestion: Some(
+                    "list at least one sample, remove the group, or supply the cohort at \
+                     run time with `--samples @sheet.tsv` (validate has no data to judge); \
+                     dry-run/run still fail closed when no domain binds"
+                        .to_string(),
+                ),
+            });
+        }
+    }
+
     let valid = !diagnostics.iter().any(|d| d.severity == Severity::Error);
 
     ValidationResult {

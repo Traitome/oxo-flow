@@ -1727,18 +1727,49 @@ name = "per_chr"
 scatter = { variable = "chr", values = ["chr1", "chr2", "chr3"] }
 ```
 
-A rule whose scatter fans out over **zero values** — declared `values = []`, or
-`values_from` referencing a config key that resolves to an empty list —
-produces zero instances and can never run. `oxo-flow validate` therefore
-skips the input-existence check (E010/W020) for such rules and excludes their
-output templates from the W033 output-collision lint, mirroring the
-`when`-gated-off exemption: a rule that cannot run must not fail validation
-over inputs it will never read. An **unresolvable** `values_from` (missing
-config key, non-string/array value) is deliberately NOT treated as empty —
-the executor expands zero instances silently in that case, so validate keeps
-the input-existence check to surface the typo as a missing-input diagnostic
-instead of silently passing (the stricter `[[values]]` tables and
-`transform.split` reject an unresolvable reference outright).
+A rule whose scatter fans out over **zero values** — declared `values = []`,
+no `values_from`, or `values_from` referencing a config key that resolves to an
+empty list — produces zero instances and can never run. Since issue #1153
+(WF-02) this is a hard **E023** validation error naming the rule and the
+variable; `run` and `dry-run` fail at expansion time with the same text. An
+empty `scatter.variable` is likewise an E023 error: there is no binding name,
+so the instances could only ever carry literal placeholders. Validate still
+skips the input-existence check (E010/W020) and the W033 output-collision lint
+for an empty-scatter rule, because a rule that cannot run must not add noise
+about inputs it will never read — but the degenerate declaration itself is
+never silently accepted.
+
+An **unresolvable** `values_from` (missing config key, non-string/array value)
+is deliberately NOT treated as statically empty by `validate`: a CLI `--arg`
+override or a parent `[[include]]` may still supply the key, so validate keeps
+the input-existence check to surface the typo while `run`/`dry-run` reject the
+plan when the key is still missing. The stricter `[[values]]` tables reject an
+empty or unresolvable reference at parse time.
+
+Degenerate scatter/transform domains (issue #1153, WF-02) fail closed —
+they never yield a plan that reports success while executing nothing:
+
+| Degenerate input | `validate` | `run` / `dry-run` |
+|---|---|---|
+| `[rules.scatter]` `values = []` (no `values_from`) | E023 | non-zero, names rule + variable |
+| `[rules.scatter]` `values_from` resolving to an empty list | E023 | non-zero, names rule + variable |
+| `[rules.scatter]` `values_from` unresolvable (missing key) | input-existence check only | non-zero, names rule + variable |
+| `[rules.scatter]` `variable = ""` | E023 | non-zero, names rule |
+| `[[sample_groups]]` entry with `samples = []` | W042 warning (the cohort may be supplied with `--samples`) | non-zero for rules using `{sample}`/`{group}` without run-time samples |
+| `[[values]]` with `values = []` / empty `values_from` | parse-time error | parse-time error |
+| `sample_pattern` / `pairs_pattern` matching zero files | passes (data may be unmounted) | non-zero when a rule uses `{sample}`/`{group}` or a pair placeholder (`{pair_id}`, `{experiment}`, `{control}`, …) |
+| `transform.split.n` = `0` | E023 | non-zero |
+| `transform.split.n` negative | E023 | non-zero |
+| `transform.split.n` non-integer | E023 | non-zero |
+| `transform.split.n` above the 100,000-instance cap | E023 | non-zero (never materializes the instances) |
+| `transform.split.by` empty or missing | E023 | non-zero, names rule |
+| `transform.split` with no `values`/`values_from`/`n`/`glob` | E023 | non-zero |
+| `transform.split.glob` matching zero files | passes (data may be unmounted) | non-zero |
+
+The split-count cap reuses the engine-wide `MAX_COMBINATIONS` ceiling
+(`100_000`) that wildcard and `[[values]]` fan-out already enforce: a naive
+`0..n` expansion of an absurd count would exhaust memory instead of
+producing a usable plan.
 
 ### Expand Inputs
 
@@ -3099,11 +3130,14 @@ shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {outp
 
 | Field | Type | Description |
 |---|---|---|
-| `by` | String | **Required**. Variable name for splitting (e.g., `"chr"`, `"sample"`) |
+| `by` | String | **Required**. Variable name for splitting (e.g., `"chr"`, `"sample"`). Empty or missing is an E023 error (issue #1153) |
 | `values` | Array | Direct list of split values |
-| `values_from` | String | Reference to config variable (e.g., `"config.chromosomes"`) |
-| `n` | String | Number of map instances — the split values are the labels `"0"`, `"1"`, ..., `"n-1"`. It does **not** partition the input data |
-| `glob` | String | Glob pattern to find split values from files |
+| `values_from` | String | Reference to config variable (e.g., `"config.chromosomes"`). A reference resolving to an empty list is an E023 error |
+| `n` | String | Number of map instances — the split values are the labels `"0"`, `"1"`, ..., `"n-1"`. It does **not** partition the input data. Must be a positive integer no greater than the 100,000-instance expansion cap; zero, negative, non-integer, and oversized values are E023 errors (issue #1153) |
+| `glob` | String | Glob pattern to find split values from files. A pattern matching zero files is a plan-time error |
+
+At least one of `values`, `values_from`, `n`, or `glob` is required — a split
+with no source is an E023 error.
 
 Priority: `values` → `values_from` → `n` → `glob`
 
