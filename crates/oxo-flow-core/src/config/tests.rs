@@ -1867,23 +1867,6 @@ fn validate_reports_e023_for_statically_degenerate_domains() {
             "#,
             "chunked",
         ),
-        (
-            r#"
-            [workflow]
-            name = "v"
-
-            [[sample_groups]]
-            name = "cohort"
-            samples = []
-
-            [[rules]]
-            name = "per_sample"
-            input = ["{sample}.txt"]
-            output = ["out/{sample}.txt"]
-            shell = "cp {input} {output}"
-            "#,
-            "cohort",
-        ),
     ];
     for (toml, needle) in cases {
         let config = WorkflowConfig::parse(toml).unwrap();
@@ -1899,6 +1882,39 @@ fn validate_reports_e023_for_statically_degenerate_domains() {
             "E023 must name {needle}: {hits:?}"
         );
     }
+
+    // An empty sample group is deliberately a WARNING, not E023: the cohort
+    // may be supplied at run time with `--samples @sheet.tsv`, and validate
+    // takes no samples (review of #1153, D1). Expansion still fails closed
+    // without a domain.
+    let config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "v"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = []
+
+        [[rules]]
+        name = "per_sample"
+        input = ["{sample}.txt"]
+        output = ["out/{sample}.txt"]
+        shell = "cp {input} {output}"
+        "#,
+    )
+    .unwrap();
+    let result = crate::format::validate_format(&config);
+    assert!(
+        result.errors().iter().all(|d| d.code != "E023"),
+        "empty sample group must not be a static error: {result:?}"
+    );
+    let warn = result
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "W042")
+        .expect("W042 warning for the empty sample group");
+    assert!(warn.message.contains("cohort"), "{warn:?}");
 }
 
 #[test]

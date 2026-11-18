@@ -56,6 +56,28 @@ fn assert_validate_e023(dir: &Path, name: &str, needles: &[&str]) {
     }
 }
 
+/// `validate` must stay green but WARN: an empty `[[sample_groups]]` list can
+/// be supplied at run time with `--samples`, so it is not a static error
+/// (review of #1153, D1). The plan still fails closed without data.
+fn assert_validate_warns(dir: &Path, name: &str, needles: &[&str]) {
+    let (ok, stdout, stderr) = run_cli(dir, &["validate", name]);
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        ok,
+        "validate must stay green (runtime-suppliable) for {name}: {combined}"
+    );
+    assert!(
+        combined.contains("W042"),
+        "W042 warning missing for {name}: {combined}"
+    );
+    for needle in needles {
+        assert!(
+            combined.contains(needle),
+            "warning for {name} must contain {needle:?}: {combined}"
+        );
+    }
+}
+
 /// `dry-run --json` must fail with all needles in the error payload.
 fn assert_dry_run_fails(dir: &Path, name: &str, needles: &[&str]) {
     let (ok, stdout, stderr) = run_cli(dir, &["--json", "dry-run", name]);
@@ -212,7 +234,7 @@ output = ["out/{sample}.txt"]
 shell = "cp {input} {output}"
 "#,
     );
-    assert_validate_e023(dir.path(), "w.oxoflow", &["cohort", "has no samples"]);
+    assert_validate_warns(dir.path(), "w.oxoflow", &["cohort", "has no samples"]);
     assert_dry_run_fails(
         dir.path(),
         "w.oxoflow",
@@ -577,4 +599,28 @@ map = "call --chunk {{chunk}} {{input}}"
 shell = "cat {{chunks}} > {{output}}"
 "#
     )
+}
+
+/// A zero-match `pairs_pattern` is the same empty-domain hole as
+/// `sample_pattern` (review of #1153, D3): the plan must fail closed instead
+/// of emitting one literal-template rule.
+#[test]
+fn zero_match_pairs_pattern_fails_closed_on_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    write_wf(
+        dir.path(),
+        "pairs.oxoflow",
+        r#"
+[workflow]
+name = "zero_pairs"
+pairs_pattern = "aligned/{pair_id}/{experiment}_vs_{control}.bam"
+
+[[rules]]
+name = "call"
+input = ["aligned/{pair_id}/{experiment}_vs_{control}.bam"]
+output = ["calls/{pair_id}.txt"]
+shell = "cp {input} {output}"
+"#,
+    );
+    assert_dry_run_fails(dir.path(), "pairs.oxoflow", &["call", "empty domain"]);
 }

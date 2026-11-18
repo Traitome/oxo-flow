@@ -1387,17 +1387,18 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     for group in &config.sample_groups {
         if group.samples.is_empty() {
             diagnostics.push(Diagnostic {
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 message: format!(
-                    "sample group '{}' has no samples — the {{sample}}/{{group}} fan-out \
-                     domain would be empty, so rules referencing it would stay unbound",
+                    "sample group '{}' has no samples — a run that binds {{sample}}/{{group}} \
+                     to this group will fail closed unless samples are supplied at run time",
                     group.name
                 ),
                 rule: None,
-                code: "E023".to_string(),
+                code: "W042".to_string(),
                 suggestion: Some(
-                    "list at least one sample in samples, or remove the group; \
-                     sample_pattern / sample_groups_file populate groups at load time"
+                    "list at least one sample, remove the group, or supply the cohort at \
+                     run time with `--samples @sheet.tsv` (validate has no data to judge); \
+                     dry-run/run still fail closed when no domain binds"
                         .to_string(),
                 ),
             });

@@ -580,13 +580,13 @@ impl WorkflowConfig {
         self.unbound_sample_domain_tokens_with(rule, true)
     }
 
-    /// Plan-time variant of [`Self::unbound_sample_domain_tokens`]
+    /// Plan-time variant of `unbound_sample_domain_tokens`
     /// (issue #1153 WF-02): a declared `sample_pattern` / `pairs_pattern`
     /// only bounds the domain when the filesystem scan actually found
     /// files. Lint (W041) must tolerate an unmounted data directory, but
     /// expansion is about to BUILD the plan, where a zero-match pattern
     /// leaves the placeholders literal — that is the empty-domain hole.
-    pub(crate) fn unbound_sample_domain_tokens_at_plan(
+    pub fn unbound_sample_domain_tokens_at_plan(
         &self,
         rule: &Rule,
     ) -> std::collections::BTreeSet<String> {
@@ -684,6 +684,15 @@ impl WorkflowConfig {
                 let name = match token {
                     "{sample}" | "{wildcard.sample}" => "sample",
                     "{group}" | "{wildcard.group}" => "group",
+                    // Pair domains ([[pairs]] / pairs_pattern) are the same
+                    // empty-domain hole as samples (review of #1153, D3).
+                    "{pair_id}" | "{wildcard.pair_id}" => "pair_id",
+                    "{experiment}" | "{wildcard.experiment}" => "experiment",
+                    "{control}" | "{wildcard.control}" => "control",
+                    "{tumor}" | "{wildcard.tumor}" => "tumor",
+                    "{normal}" | "{wildcard.normal}" => "normal",
+                    "{experiment_type}" | "{wildcard.experiment_type}" => "experiment_type",
+                    "{tumor_type}" | "{wildcard.tumor_type}" => "tumor_type",
                     _ => continue,
                 };
                 if !bound.contains(name) {

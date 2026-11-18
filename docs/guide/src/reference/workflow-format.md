@@ -1755,9 +1755,9 @@ they never yield a plan that reports success while executing nothing:
 | `[rules.scatter]` `values_from` resolving to an empty list | E023 | non-zero, names rule + variable |
 | `[rules.scatter]` `values_from` unresolvable (missing key) | input-existence check only | non-zero, names rule + variable |
 | `[rules.scatter]` `variable = ""` | E023 | non-zero, names rule |
-| `[[sample_groups]]` entry with `samples = []` | E023 | non-zero for rules using `{sample}`/`{group}` |
+| `[[sample_groups]]` entry with `samples = []` | W042 warning (the cohort may be supplied with `--samples`) | non-zero for rules using `{sample}`/`{group}` without run-time samples |
 | `[[values]]` with `values = []` / empty `values_from` | parse-time error | parse-time error |
-| `sample_pattern` matching zero files | passes (data may be unmounted) | non-zero when a rule uses `{sample}`/`{group}` |
+| `sample_pattern` / `pairs_pattern` matching zero files | passes (data may be unmounted) | non-zero when a rule uses `{sample}`/`{group}` or a pair placeholder (`{pair_id}`, `{experiment}`, `{control}`, …) |
 | `transform.split.n` = `0` | E023 | non-zero |
 | `transform.split.n` negative | E023 | non-zero |
 | `transform.split.n` non-integer | E023 | non-zero |

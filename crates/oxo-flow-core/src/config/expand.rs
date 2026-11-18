@@ -1055,18 +1055,67 @@ impl WorkflowConfig {
                 // EVERY wildcard of the pattern (including `{sample}`)
                 // from discovered filenames, so such a token is not an
                 // empty domain — it is a runtime-discovered one.
-                let sample_source_declared =
-                    !self.sample_groups.is_empty() || self.workflow.sample_pattern.is_some();
-                if rule.scatter.is_none() && sample_source_declared {
+                let domain_source_declared = !self.sample_groups.is_empty()
+                    || self.workflow.sample_pattern.is_some()
+                    || !self.pairs.is_empty()
+                    || self.workflow.pairs_pattern.is_some();
+                if rule.scatter.is_none() && domain_source_declared {
                     let output_pattern = rule.output_pattern.as_deref().unwrap_or("");
                     let unbound: Vec<String> = self
                         .unbound_sample_domain_tokens_at_plan(rule)
                         .into_iter()
                         .filter(|token| {
-                            matches!(
-                                token.as_str(),
-                                "{sample}" | "{wildcard.sample}" | "{group}" | "{wildcard.group}"
-                            ) && !output_pattern.contains(token.as_str())
+                            // Pair domains ([[pairs]] / pairs_pattern) are the
+                            // same empty-domain hole as samples (review of
+                            // #1153, D3): a zero-match pairs_pattern leaves a
+                            // literal {pair_id}/{experiment}/{control} rule.
+                            const PAIR_DOMAIN_TOKENS: &[&str] = &[
+                                "{pair_id}",
+                                "{wildcard.pair_id}",
+                                "{experiment}",
+                                "{wildcard.experiment}",
+                                "{control}",
+                                "{wildcard.control}",
+                                "{tumor}",
+                                "{wildcard.tumor}",
+                                "{normal}",
+                                "{wildcard.normal}",
+                                "{experiment_type}",
+                                "{wildcard.experiment_type}",
+                                "{tumor_type}",
+                                "{wildcard.tumor_type}",
+                            ];
+                            const DOMAIN_TOKENS: &[&str] = &[
+                                "{sample}",
+                                "{wildcard.sample}",
+                                "{group}",
+                                "{wildcard.group}",
+                                "{pair_id}",
+                                "{wildcard.pair_id}",
+                                "{experiment}",
+                                "{wildcard.experiment}",
+                                "{control}",
+                                "{wildcard.control}",
+                                "{tumor}",
+                                "{wildcard.tumor}",
+                                "{normal}",
+                                "{wildcard.normal}",
+                                "{experiment_type}",
+                                "{wildcard.experiment_type}",
+                                "{tumor_type}",
+                                "{wildcard.tumor_type}",
+                            ];
+                            // Pair placeholders are only an empty-domain
+                            // hole when a `pairs_pattern` discovery source
+                            // was declared and matched nothing. A `[[pairs]]`
+                            // table emptied by `--samples` filtering keeps
+                            // the documented issue-#639 contract: the rule
+                            // survives unexpanded with a plan-time warning.
+                            let pair_token = PAIR_DOMAIN_TOKENS.contains(&token.as_str());
+                            let pair_active = self.workflow.pairs_pattern.is_some();
+                            DOMAIN_TOKENS.contains(&token.as_str())
+                                && (!pair_token || pair_active)
+                                && !output_pattern.contains(token.as_str())
                         })
                         .collect();
                     if !unbound.is_empty() {
@@ -1082,8 +1131,9 @@ impl WorkflowConfig {
                             rule: Some(rule.name.clone()),
                             suggestion: Some(
                                 "declare a non-empty [[sample_groups]] samples list, a \
-                                 sample_pattern that matches files, or [[pairs]] entries; \
-                                 or remove the placeholder"
+                                 sample_pattern that matches files, non-empty [[pairs]] \
+                                 entries or a pairs_pattern that matches files; or remove \
+                                 the placeholder"
                                     .to_string(),
                             ),
                         });

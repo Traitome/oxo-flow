@@ -123,6 +123,12 @@ pub async fn validate_command(
                             eprintln!("    hint: {}", suggestion);
                         }
                     }
+                } else {
+                    // Warnings from the format/validation pass (e.g. W042:
+                    // an empty sample group that `--samples` may supply at
+                    // run time) must reach the user too — a diagnostic that
+                    // is computed but never printed is not shipped.
+                    warnings.push(d.clone());
                 }
             }
 
@@ -1028,21 +1034,33 @@ fn collect_bound_wildcard_missing_inputs(
     // on its first instance with an unbound wildcard. Report the template
     // explicitly so validate is not the only green step in the chain. On an
     // expansion error the rule list is still the unexpanded template set.
+    // Share the plan-time binding semantics instead of guessing from the
+    // text: an expansion failure for an UNRELATED reason (e.g. a transform
+    // `split.glob` matching nothing) must not manufacture a "declared sample
+    // domain binds no value" finding for a workflow whose cohort is valid
+    // (review of #1153, D2).
     let scan_config = if expand_ok { &expanded } else { cfg };
     let expand =
         |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &scan_config.config);
     let mut unbound: Vec<String> = Vec::new();
     for rule in &scan_config.rules {
+        let unbound_tokens = cfg.unbound_sample_domain_tokens_at_plan(rule);
+        if unbound_tokens.is_empty() {
+            continue;
+        }
         for input in rule.input.iter() {
             let input = expand(input);
             if input.contains('{')
-                && SAMPLE_PLACEHOLDERS.iter().any(|ph| input.contains(ph))
+                && unbound_tokens
+                    .iter()
+                    .any(|token| input.contains(token.as_str()))
                 && !unbound.contains(&input)
             {
                 unbound.push(input);
             }
         }
     }
+
     for input in unbound {
         missing.push(format!("{input} (declared sample domain binds no value)"));
     }
