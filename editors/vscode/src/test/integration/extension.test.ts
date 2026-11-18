@@ -187,6 +187,55 @@ describe("oxo-flow extension", () => {
     });
   });
 
+  it("diagnoses the unsaved buffer instead of the stale saved file", async function () {
+    const bin = process.env.OXOFLOW_TEST_BIN;
+    if (!bin) {
+      this.skip();
+      return;
+    }
+    await withTestBinary(bin, async () => {
+      const doc = await openFixture("valid.oxoflow");
+      await vscode.window.showTextDocument(doc);
+      const cfg = vscode.workspace.getConfiguration("oxo-flow");
+      await cfg.update("diagnosticMode", "type", vscode.ConfigurationTarget.Workspace);
+      try {
+        // The saved fixture is VALID; introducing a broken dependency only in
+        // the buffer means E007 can only come from analyzing the buffer.
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(
+          doc.uri,
+          doc.positionAt(doc.getText().length),
+          '\n[[rules]]\nname = "buffer_only"\ndepends_on = ["ghost_rule"]\nshell = "true"\n'
+        );
+        await vscode.workspace.applyEdit(edit);
+        assert.ok(doc.isDirty, "the edit must leave the buffer unsaved");
+
+        const diags = await waitFor("buffer-accurate diagnostics", () => {
+          const found = vscode.languages.getDiagnostics(doc.uri).filter((d) => d.source === "oxo-flow");
+          return found.some((d) => String(d.code) === "E007") ? found : undefined;
+        });
+        const e007 = diags.find((d) => String(d.code) === "E007")!;
+        const ruleLine = doc
+          .getText()
+          .split("\n")
+          .findIndex((l) => l.includes('name = "buffer_only"'));
+        assert.equal(e007.range.start.line, ruleLine, "E007 should anchor to the buffer's rule line");
+
+        // Cross-check: the on-disk file still holds the original valid
+        // fixture, so the diagnostic cannot have come from disk content.
+        const disk = Buffer.from(await vscode.workspace.fs.readFile(doc.uri)).toString("utf8");
+        assert.ok(!disk.includes("ghost_rule"), "saved file must still be the valid fixture");
+      } finally {
+        try {
+          await vscode.commands.executeCommand("workbench.action.files.revert");
+        } catch {
+          // Best-effort buffer cleanup; the config restore below always runs.
+        }
+        await cfg.update("diagnosticMode", undefined, vscode.ConfigurationTarget.Workspace);
+      }
+    });
+  });
+
   it("offers quick actions on oxo-flow diagnostics", async function () {
     const bin = process.env.OXOFLOW_TEST_BIN;
     if (!bin) {

@@ -88,6 +88,33 @@ Problems-panel diagnostics:
 - trigger on save by default (`oxo-flow.diagnosticMode: save`); switch to
   `type` for debounced live diagnostics or `off` to disable
 
+**Unsaved buffers are diagnosed as they are shown.** The CLI reads workflows
+from a path, so a dirty buffer is staged as a temporary hidden `.oxoflow`
+file beside the document before `validate`/`lint` run on it — relative
+`[[include]]` and sample-pattern resolution are unchanged, and the snapshot is
+always deleted. Diagnostics therefore describe the editor content, never the
+stale saved file; the Validate/Lint commands use the same snapshot path when
+the buffer is dirty. If the snapshot cannot be created (read-only directory,
+disk error), the extension refuses with an `UNSAVED` warning telling you to
+save — it does **not** quietly report the saved file's findings.
+
+## AI pipeline generation
+
+`oxo-flow: Generate Pipeline with AI…` picks a backend from
+`oxo-flow.ai.backend` (`auto` prefers a configured CLI provider, otherwise an
+editor language model). The CLI backend runs
+`oxo-flow template "<description>" --ai -o <file>` as a task, where the
+engine's own generation loop owns validation.
+
+The editor-model backend is **validate-before-apply**: the model's draft is
+staged as a temporary sibling `.oxoflow` snapshot and grounded through
+`oxo-flow validate` (the same CLI path diagnostics use). On failure the
+findings go back to the model for exactly one repair round, and the repaired
+draft is validated again. Only a passing pipeline is written to the chosen
+destination — an invalid generation (including a failed repair) is surfaced
+as an error, the findings and the rejected draft appear in the *oxo-flow*
+output channel, and the destination file is left untouched.
+
 ## Formatting
 
 `oxo-flow: Format Document` (and the standard *Format Document* action) runs
@@ -150,7 +177,7 @@ title bar.
 | Resume from Checkpoint | `oxo-flow resume <checkpoint>` (quick pick over `**/.oxo-flow/checkpoint.json`) |
 | Show Run Status | `oxo-flow status <checkpoint> --timing` (quick pick over checkpoint files) |
 | Clean Outputs… | `oxo-flow clean <file> -n` preview → confirmation → `--force` (optionally `--orphans`) |
-| Generate Pipeline with AI… | `oxo-flow template "<description>" --ai -o <file>` |
+| Generate Pipeline with AI… | CLI backend: `oxo-flow template "<description>" --ai -o <file>` as a task; editor-model backend: `oxo-flow validate` gate before writing (see [AI pipeline generation](#ai-pipeline-generation)) |
 | Show AI Provider Status | `oxo-flow ai` |
 | Export JSON Schema | `oxo-flow schema > oxo-flow-schema.json` |
 | Open Documentation | opens the guide in the system browser |
@@ -197,7 +224,7 @@ the description.
 | `oxo-flow.runArgs` | `[]` | Extra arguments for Run Pipeline |
 | `oxo-flow.formatOnSave` | `false` | Format the document with `oxo-flow format` on every save |
 | `oxo-flow.autoOpenGraph` | `false` | Open the DAG graph after a successful run (last picked format, default ASCII) |
-| `oxo-flow.ai.backend` | `auto` | Backend for **Generate Pipeline with AI**: `auto` uses the CLI provider when configured, else the editor language model; `cli` / `ide` force one path (the `ide` path always grounds drafts through `oxo-flow validate` with one repair round) |
+| `oxo-flow.ai.backend` | `auto` | Backend for **Generate Pipeline with AI**: `auto` uses the CLI provider when configured, else the editor language model; `cli` / `ide` force one path (the `ide` path validates every draft, re-validates the one repair round, and only then writes the file) |
 | `oxo-flow.trace` | `false` | Log CLI invocations to the *oxo-flow* output channel |
 
 ## Remote and untrusted workspaces
