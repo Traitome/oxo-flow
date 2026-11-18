@@ -835,6 +835,24 @@ is narrower — that the fixtures which measure those contracts still reach
 them. One open suspect (`wf-004` scatter/gather edge) is documented, not
 silently accepted.
 
+Wave-7 pre-registration evidence (2026-11-18, #1167): the six Task 4.0
+governance artifacts are frozen under
+`docs/superpowers/preregistration/` (`PR-01` outcomes/statistical models,
+`PR-02` case rules, `PR-03` manifests, `PR-04` leakage/custody, `PR-05`
+reviewer sign-off, `PR-06` publication decision rule), version 1.0.1
+(amendment 1, review fixes), with
+SHA-256 content bindings in `preregistration/MANIFEST.sha256`, covering
+#1163, #1164, #1165, and #1166. This does **not** pass Gate 3. Independent
+sign-off (PR-05) is PENDING for all four campaigns, and the per-campaign
+pre-run manifests, sealed case sets, and sealed analysis scripts do not yet
+exist. #1163, #1165, and #1166 have collected no confirmatory data. #1164
+is the exception that must not be misread: a ten-case pilot was measured
+before the freeze (repair applied 3/10, verified rerun 3/10, 3/3 of the
+structurally recovery-eligible class), is disclosed in PR-01 §C2 and PR-06
+§C2, and is pilot evidence only — it cannot be cited as a pre-registered or
+confirmatory result, and a held-out re-run is required. No campaign result
+is claimed by #1167.
+
 ### Gate 4: Publication
 
 - Measured hardware and cohort study, not projections.
@@ -857,7 +875,7 @@ The following work remains serial and must not be hidden behind roadmap completi
 4. Tests/benches/examples wave: proof that fixtures exercise real contracts and do not encode stale semantics. **Audited 2026-11-18 (#1168).** Artifact: `docs/superpowers/audits/fixture-contract-inventory.md` (20 families: 18 traceable, 1 annotated, 1 open suspect). Five families were suspect at audit time; four were corrected against their contracts (`eval/frontier/README.md` counts, `eval/interpretation/seeds/s04-silent-failure`, `benches/comparative/README.md` Snakefile line count, and the stale AI-explanation assertion in `tests/cli_integration.rs`) and one (`eval/gold/workflow.csv` `wf-004`) is annotated open because its correction needs a checker-surface change plus a human evidence re-attestation under #172. Demonstrated stale fixture and fail-first regression: `EV-07` in §5.5; gate `crates/oxo-flow-cli/tests/interpretation_seeds.rs`. Commit binding: ece15a26a28828f9608f5aa1cbd0fa10eaac5219 (PR #1214).
 5. Scripts/data wave: provenance, reproducible regeneration, and removal of synthetic claims from publication-facing artifacts.
 6. Linux qualification wave through the designated `tx-ubuntu` host only.
-7. Scientific campaign design review before any large-scale compute or human-subjects expenditure.
+7. Scientific campaign design review before any large-scale compute or human-subjects expenditure. **Pre-registration layer created 2026-11-18 (#1167).** Artifacts: `docs/superpowers/preregistration/` (`PR-01`–`PR-06`, version 1.0.1 — amendment 1 addressing the PR #1225 review, content hashes in `MANIFEST.sha256`, amendment log in `AMENDMENTS.md`). Status: artifacts frozen; independent reviewer sign-off PENDING for #1163/#1164/#1165/#1166; no campaign has collected confirmatory data under the protocol. #1164's ten-case pilot (3/10 applied, 3/10 verified, 3/3 recovery-eligible) predates the freeze and remains non-confirmatory; #1163/#1165/#1166 have no confirmatory data. The design review is therefore not complete: PR-05 signature, the per-campaign pre-run manifests, and the sealed case/analysis hashes are still outstanding, and Gate 3 remains unpassed. Commit bindings: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54` (v1.0.1 amendment-1 commit); verify the frozen text with `shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`.
 
 ---
 
