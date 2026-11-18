@@ -7,9 +7,8 @@ use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{
-    ApiError, can_read_pipeline, can_write_pipeline, db_err, err, get_backend, now_iso,
-};
+use crate::domains::workflow::handlers::{ApiError, db_err, err, get_backend, now_iso};
+use crate::domains::workflow::visibility::{can_read_pipeline, can_write_pipeline};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;

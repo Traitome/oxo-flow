@@ -16,19 +16,11 @@ use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::observability::types::*;
 use crate::infra::db::models;
 
-/// Pipeline read permission (issue #82 P0-4): admins and the owner always
-/// pass; `workspace`-visibility pipelines are readable by any
-/// authenticated user; everything else is private.
-pub(crate) fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
-    user.is_admin() || row.user_id == user.id || row.visibility == "workspace"
-}
-
-/// Pipeline write permission: owner or admin only. `pub(crate)` because
-/// share/fork endpoints in other domains gate on the same rule — retyping
-/// it inline let the fork endpoint drift from this definition.
-pub(crate) fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
-    user.is_admin() || row.user_id == user.id
-}
+/// The pipeline visibility predicates live in [`super::visibility`] — the
+/// single home for the WEB-13 / issue #1138 policy. They are re-exported
+/// here because `domains/execution/` imports `can_read_pipeline` from this
+/// module; the re-export is the SAME item, not a second definition.
+pub(crate) use super::visibility::{can_read_pipeline, can_write_pipeline};
 
 /// A pipeline response that also carries its optimistic-concurrency token
 /// (issue #1136). The token is an HTTP `ETag`, not a JSON field, so the body
@@ -512,9 +504,10 @@ pub async fn search_pipelines(
     let backend = get_backend()?;
 
     // Search saved pipelines from DB. The visibility predicate rides in the
-    // SQL (audit #664): filtering AFTER `LIMIT 50` let foreign private rows
-    // crowd the caller's own results out of the window entirely. The
-    // in-memory `can_read_pipeline` filter below stays as defense-in-depth.
+    // SQL as a candidate window (audit #664): filtering AFTER `LIMIT 50` let
+    // foreign private rows crowd the caller's own results out of the window
+    // entirely. `can_read_pipeline` (WEB-13 / issue #1138) is the
+    // authoritative filter and is applied here on every returned row.
     let pipeline_rows = backend
         .search_pipelines(&req.query, Some(&user.id), user.is_admin(), 50)
         .await
@@ -673,14 +666,21 @@ pub async fn list_pipelines(
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
-    // Ownership scoping (issue #82 P0-4): non-admins see their own
-    // pipelines plus workspace-visible ones; admins see everything.
+    // The storage query is a candidate window: it scopes by owner/shared
+    // visibility BEFORE `LIMIT` so foreign private rows cannot crowd the
+    // caller's own results out of the page (audit #664). The authoritative
+    // filter is `can_read_pipeline` (WEB-13 / issue #1138) — every list path
+    // filters with the SAME predicate the read paths 404 on.
     let rows = backend
         .list_pipelines_visible(&user.id, user.is_admin(), 100)
         .await
         .map_err(|e| db_err(format!("DB error listing pipelines: {e}")))?;
 
-    let list: Vec<Pipeline> = rows.into_iter().map(Pipeline::from).collect();
+    let list: Vec<Pipeline> = rows
+        .into_iter()
+        .filter(|row| can_read_pipeline(&user, row))
+        .map(Pipeline::from)
+        .collect();
 
     Ok(Json(list))
 }

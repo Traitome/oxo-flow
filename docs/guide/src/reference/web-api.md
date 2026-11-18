@@ -358,6 +358,43 @@ DELETE /api/pipelines/{id}         # Delete pipeline
 POST   /api/pipelines/search       # Search by name, tags, content
 ```
 
+#### Visibility policy (WEB-13 / issue #1138)
+
+Every list, read, and write route evaluates ONE exported predicate —
+`domains::workflow::visibility::can_read_pipeline` (re-exported at the
+workflow domain root) — for reads, plus `can_write_pipeline` for mutations.
+The policy is explicit and tested:
+
+- **Owner:** a pipeline is always visible to its `user_id` owner.
+- **Shared ("template"):** `visibility = "workspace"` makes a pipeline
+  visible to every signed-in user. Personal mode has a single `default`
+  pseudo-user, so there every pipeline is simply "own".
+- **Other tenants:** another tenant's `private` or `link` pipeline is
+  invisible. `link` is NOT a read grant — it exists so the owner can mint a
+  share token, and the token (not this predicate) authorizes
+  `GET /api/share/{token}` and `POST /api/pipelines/import`.
+- **Admin override:** admins see every tenant's pipelines (and, as before,
+  may modify them). This is the documented audit/administration exception.
+- **Deleted:** deletion is a hard delete (the row is removed in both
+  storage backends); a deleted pipeline is invisible to everyone — admins
+  included — and every read answers `404`.
+- **Unknown visibility values** fail closed as private.
+
+List and search routes FILTER with the predicate; read/write routes answer
+`404 NOT_FOUND` — never `403` — when it returns false, so the existence of
+another tenant's pipeline cannot be probed. Covered paths: `GET
+/api/pipelines`, `POST /api/pipelines/search`, `GET`/`PUT`/`DELETE
+/api/pipelines/{id}`, both revision routes, rollback, fork, share, `POST
+/api/runs` with a `pipeline_id`, `POST /api/ai/optimize` with a
+`pipeline_id`, and `POST /api/pipelines/diff`/`export` when they resolve
+saved ids.
+
+Deliberate exemptions: the share landing and import routes authorize via
+the share token; the `/api/templates` library is a global shared resource
+whose rows carry no per-tenant visibility column (writes stay
+owner/admin-gated); and the DAG edit endpoints operate on caller-supplied
+TOML only, never on a stored pipeline.
+
 The pipeline's `version` is always derived from the stored TOML's
 `[workflow] version` key — the TOML is the source of truth.
 An explicit `version` field on POST/PUT is ignored (never stored), so a
