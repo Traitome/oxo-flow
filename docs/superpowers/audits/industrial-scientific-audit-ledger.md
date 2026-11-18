@@ -320,23 +320,83 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) — atomic admission and durable/shared state are Fixed (issue #1133); declared-memory enforcement is proven for local Linux runs, while non-Linux platforms and remote (cluster) runs remain advisory (follow-up #1221)
 
-Admission checks and records are separate operations. Counters and reservations are process-local, reset on restart, and are not shared across instances. Declared resources are not enforced by cgroups or rlimits.
+Pre-fix behavior (verified on `main` before #1133): `QuotaTracker` kept all
+usage in a process-local `Mutex<HashMap>` (`infra/quota.rs:66` before the
+rewrite), `RUN_RESERVATIONS` was a process-local map (`:197`), and
+`check()` (`:86`) / `record_start()` (`:133`) were separate operations with
+a wide window between them; the execution handlers performed the check at
+`domains/execution/handlers.rs:420` and the record at `:605`, so two
+concurrent creates could both pass and both be counted, and every restart
+or second instance started from zero. Declared resources were never
+enforced (advisory counts only).
 
-Evidence:
+Mechanism (issue #1133):
 
-- `crates/oxo-flow-web/src/infra/quota.rs:61`
-- `crates/oxo-flow-web/src/infra/quota.rs:85`
-- `crates/oxo-flow-web/src/infra/quota.rs:128`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:420`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:605`
+- Quota state now routes through the unified `StorageBackend` — three
+  idempotent tables created by both the SQLite and PostgreSQL `init`
+  bootstraps: `quota_usage` (per-user counters + rolling 24 h window
+  anchor), `quota_reservations` (per-run resource claims; the release
+  source) and `quota_config` (singleton admin limits row).
+- Admission is ONE storage operation: a compare-and-swap
+  `INSERT ... ON CONFLICT(user_id) DO UPDATE ... WHERE <every limit>`
+  whose rows-affected is the decision, plus the reservation insert in the
+  same transaction. A rejected request rolls back its reservation insert,
+  so nothing is recorded; re-admitting a reserved run id is an idempotent
+  replay. Release is a select+delete+decrement transaction guarded by the
+  DELETE's rows-affected (idempotent under cancel-vs-failure races).
+- Handlers call `admit_spawn_budget` immediately before the atomic workdir
+  claim (create/retry/resume) and give the reservation back on any later
+  error path; every terminal path calls the now-async
+  `quota::release_and_complete`. Startup reconciliation
+  (`quota::reconcile_stale`, wired into `init_database`) reclaims
+  reservations whose run row is terminal or missing.
+- Enforcement: `executor::apply_memory_rlimit` installs `RLIMIT_DATA` on
+  the spawned CLI process tree at the run's declared total memory
+  (`[rules.resources] memory` sum, 512 MB floor for engine overhead) for
+  local runs on Linux; exceeding it fails the allocation, the rule dies,
+  and the run fails. The budget is derived from the RESOLVED workflow
+  (include expansion before derivation — AGENTS invariant) for create, and
+  from the workdir's workflow file for retry/resume, so included modules'
+  own declarations count. The in-memory `QuotaTracker` remains only as the
+  no-backend fallback (single-lock `try_admit`) and the limits cache.
+- The crate attribute moved from `forbid(unsafe_code)` to
+  `deny(unsafe_code)` with ONE localized `#[allow(unsafe_code)]` on the
+  `pre_exec` rlimit helper (no safe API exists for a post-fork syscall).
 
-Required exit evidence:
+Exit evidence:
 
-- Atomic admission under concurrent requests.
-- Durable and shared quota state.
-- Enforced resource ceilings with observable rejection behavior.
+- Atomic admission under concurrent requests — MET. Eight simultaneous
+  admission calls against `max_concurrent_runs = 2` (two backend instances,
+  one database) yield exactly two approvals; at the HTTP layer, two
+  concurrent `POST /api/runs` against a limit of one yield exactly one 200
+  and one `429 QUOTA_EXCEEDED`, and the loser leaves no run row. Fail-first
+  probe: the pre-fix check-then-record shape admitted 8/8.
+- Durable and shared quota state — MET. A second backend instance (and a
+  simulated restart with a fresh pool) reads the counters the first wrote;
+  a release through one instance is visible through the other; the limits
+  row round-trips. PostgreSQL parity is covered by the live storage
+  contract test.
+- Enforced resource ceilings with observable rejection — PARTIAL. Local
+  Linux runs: proven end-to-end — a stub CLI allocating 520 MiB under a
+  512 MiB declaration fails the run, while the identical stub with no
+  declaration completes. Non-Linux (Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS`
+  with EINVAL) and remote cluster runs remain advisory; follow-up #1221.
+
+Evidence tests:
+
+- `infra::db::sqlite::quota_tests::quota_admission_is_atomic_durable_and_releasable`
+- `domains::execution::handlers::quota_tests::resolved_quota_counts_include_declared_resources`
+- `quota_durable::quota_state_is_atomic_durable_and_shared_across_instances`
+- `quota_durable::concurrent_create_requests_admit_exactly_one_under_the_limit`
+- `quota_memory_enforcement::declared_memory_is_enforced_with_rlimit_and_rejection_is_observable` (Linux-gated)
+- `postgres_storage_contract::storage_backend_contract_round_trips_on_postgres` (quota section; requires `OXO_FLOW_TEST_POSTGRES_URL`)
+
+Docs: `docs/guide/src/reference/web-api.md` → "Quota" (durable/atomic
+semantics + "Declared-resource enforcement"); 
+`docs/guide/src/reference/web-system-architecture.md` → "Durable runtime
+state". Commit binding: __COMMIT__.
 
 ### RB-10: Cross-platform editing can silently destroy scientific semantics
 
@@ -710,7 +770,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
 | WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Planned / blocked | RB-06. |
 | WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Checker parity fixed (#1118); resolved admission open | Direct TOML routes now report TYPE-008/009 for untyped-producer and build-incomplete edges (advisory at the admission gate); the resolved include/override admission seam remains RB-04. |
-| WEB-09 | P1 | Quotas are racy and process-local. | Planned / blocked | RB-09. |
+| WEB-09 | P1 | Quotas are racy and process-local. | Partially fixed (#1133) | RB-09. Admission is one atomic storage CAS + reservation insert and quota state is durable/shared through `StorageBackend` (SQLite+PostgreSQL); declared memory is OS-enforced for local Linux runs (`RLIMIT_DATA`). Non-Linux and remote cluster runs stay advisory (follow-up #1221). |
 | WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Planned / blocked | Fail closed or use a durable revoke/retry protocol. Evidence: `crates/oxo-flow-web/src/domains/auth/handlers.rs:760`, `:454`. |
 | WEB-11 | P1 | Pipeline edits can silently lose updates; revision insertion is best-effort. | Fixed (#1136) | Baseline re-confirmed on main @ ccf1d4ffa: the update path wrote the row unconditionally (`crates/oxo-flow-web/src/domains/workflow/handlers.rs:802` at that base — the issue's `:775` had drifted) and `record_revision` (`:31`) logged-and-continued on DB failure, so the request reported success without its snapshot. Mechanism: a new monotonic `pipelines.revision` column (default 1) is the concurrency token (distinct from the TOML-derived `version`); it travels as a strong HTTP validator — `ETag: "<revision>"` on GET/create/PUT/rollback responses and back in `If-Match` on PUT/rollback — so the mirrored JSON response contract (`frontend/src/api/types.ts`) is unchanged. The storage layer performs a single-statement compare-and-swap (`UPDATE ... SET revision = revision + 1 WHERE id = ? AND (? IS NULL OR revision = ?)`, rows-affected checked) implemented in both the SQLite and PostgreSQL `StorageBackend` impls (`create_pipeline_with_revision`, `update_pipeline_cas`), so the guard is the atomic write, not a read-then-write. A stale validator writes nothing and answers `409 {code:"PIPELINE_VERSION_CONFLICT", detail:"expected revision N but the stored revision is M", suggestion:"Re-read GET /api/pipelines/{id} for its current ETag and retry with If-Match ..."}`; a malformed validator answers `400 INVALID_IF_MATCH`; omitting the header keeps the historical unconditional update (documented backward compatibility, token still advances). Atomicity statement: create (row + initial snapshot) and update/rollback (CAS row write + pre-write snapshot + 50-row prune) each run in ONE storage transaction per backend, so either both commit or the request fails; failure injection (dropping `pipeline_revisions` on a dedicated in-memory DB, no production test hooks) proves the update/create rolls back and cannot report success. Remaining boundary (documented): the fork/import `save_pipeline` upsert path writes no revision rows (copies start at revision 1 with no history), and the permission/default read before the CAS is outside the transaction — the write itself is guarded by the token, not by that read. Evidence tests: `interleaved_writers_one_conflicts_and_the_winner_survives`, `update_without_if_match_stays_backward_compatible`, `malformed_if_match_is_rejected_not_ignored`, `quoted_and_unquoted_if_match_both_work`, `cas_applies_once_and_records_the_pre_write_snapshot`, `stale_token_is_a_conflict_and_writes_nothing`, `failed_revision_insert_rolls_back_the_pipeline_update`, `failed_initial_revision_insert_rolls_back_the_create` (`crates/oxo-flow-web/tests/pipeline_concurrency.rs`). Docs: `docs/guide/src/reference/web-api.md` → "Optimistic concurrency (`ETag` / `If-Match`)" and Version History transaction semantics. Commit binding: 755259911e93dc68feb6c64daf0761c5e7aa90ba. |
 | WEB-12 | P1/P2 | DAG edit history is unowned, process-global, unbounded, and non-durable. | Fixed (#1191) | Commit binding: `7636a2ab67b683fa6f68a8e27795729fe2cca5e1` (PR #1191, issue #1137). Stacks are now keyed by `(CurrentUser.id, pipeline id)` — the same `resolve(Option<Extension<CurrentUser>>)` identity the other pipeline handlers use, with the `default` pseudo-user in personal mode — so two identities editing the same pipeline id own independent stacks. Bounds are documented constants in `crates/oxo-flow-web/src/domains/dag/service.rs`: `MAX_EDIT_HISTORY_DEPTH` = 50 transitions per stack (oldest dropped) and `MAX_EDIT_HISTORY_PIPELINES` = 256 stacks process-wide (LRU eviction on a monotonic use clock). Restart semantics are fail-closed and documented, not persisted: history remains in RAM, undo/redo return a typed `HistoryOutcome`, and the HTTP layer answers `409 EDIT_HISTORY_UNAVAILABLE` (no stack: never edited, restart, or LRU loss) or `409 EDIT_HISTORY_STALE` (supplied TOML is not the history tip) with remediation suggestions; `404 NO_UNDO`/`NO_REDO` remain only for a genuinely exhausted direction. Tests: `domains::dag::service::tests::{edit_history_is_scoped_by_owner, edit_history_depth_cap_drops_the_oldest_transition, edit_history_lru_evicts_the_oldest_pipeline, undo_and_redo_without_history_are_unavailable, exhausted_undo_is_distinguished_from_unavailable_history}`; `domains::dag::handlers::tests::{undo_is_scoped_to_the_acting_user, undo_after_restart_fails_closed_with_structured_code, redo_after_restart_fails_closed_with_structured_code, stale_undo_fails_closed_without_consuming_history, undo_with_no_remaining_transitions_keeps_no_undo}`. Docs: `docs/guide/src/reference/web-api.md` (DAG editing scope/caps/lifetime/codes), `docs/guide/src/reference/dag-edit-api.md` ("History scope, caps, and lifetime" + failure-code table), `docs/guide/src/reference/web-system-architecture.md` (error-code table). |

@@ -189,6 +189,19 @@ Server process environment:
 | **infra/sse** | `src/sse.rs` | Real-time SSE broadcast channel for execution events |
 | **hpc** | core `cluster.rs::generate_submit_script` (`crates/oxo-flow-core/src/cluster.rs`) | Slurm submit-script generation; scheduler detection stays in the web crate |
 
+### Durable runtime state
+
+Quota state — per-user counters, per-run resource reservations, and the
+limits row — lives in the storage backend (`quota_usage`,
+`quota_reservations`, `quota_config`), not in process memory. Admission is
+one atomic compare-and-swap plus reservation insert, so concurrent requests
+serialize on the database, restarts preserve usage, and multiple server
+instances sharing a database enforce the same counters and limits (RB-09 /
+issue #1133). Locally executed runs on Linux additionally enforce the
+workflow's declared memory with `RLIMIT_DATA` on the spawned CLI process
+tree; other platforms and remote (cluster) runs remain advisory — see
+[Quota → Declared-resource enforcement](web-api.md#declared-resource-enforcement).
+
 ---
 
 ## API Namespace

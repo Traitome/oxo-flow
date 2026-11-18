@@ -367,6 +367,74 @@ async fn storage_backend_contract_round_trips_on_postgres() {
         .await
         .expect("update server AI config");
 
+    // ── Durable quota surface (RB-09 / issue #1133) ────────────────────
+    // Same contract as the SQLite implementation: atomic admission,
+    // idempotent replay/release, persisted limits, rolling window.
+    let quota_user = format!("pg_quota_{suffix}");
+    let limits = oxo_flow_web::infra::quota::QuotaConfig {
+        max_concurrent_runs: 1,
+        max_total_threads: 8,
+        max_total_memory_mb: 4096,
+        max_runs_per_day: 10,
+    };
+    backend
+        .save_quota_config(&limits)
+        .await
+        .expect("save quota limits");
+    assert_eq!(
+        backend
+            .load_quota_config()
+            .await
+            .expect("load quota limits"),
+        Some(limits.clone()),
+        "persisted limits round-trip"
+    );
+    let now_ms = 1_800_000_000_000i64;
+    let (allowed, usage) = backend
+        .quota_admit("pg-run-1", &quota_user, 2, 256, &limits, now_ms)
+        .await
+        .expect("first quota admission");
+    assert!(allowed);
+    assert_eq!(usage.active_runs, 1);
+    assert_eq!(usage.used_memory_mb, 256);
+    let (allowed, usage) = backend
+        .quota_admit("pg-run-2", &quota_user, 2, 256, &limits, now_ms)
+        .await
+        .expect("second quota admission");
+    assert!(!allowed, "limit of one concurrent run rejects the second");
+    assert_eq!(usage.active_runs, 1, "a rejected admission records nothing");
+    let (replay, _) = backend
+        .quota_admit("pg-run-1", &quota_user, 2, 256, &limits, now_ms)
+        .await
+        .expect("idempotent replay");
+    assert!(replay, "re-admitting a reserved run id is a replay");
+    assert!(
+        backend
+            .quota_release("pg-run-1")
+            .await
+            .expect("release quota reservation")
+    );
+    assert!(
+        !backend
+            .quota_release("pg-run-1")
+            .await
+            .expect("second release is a no-op")
+    );
+    let usage = backend
+        .quota_usage(&quota_user, now_ms)
+        .await
+        .expect("quota usage after release");
+    assert_eq!(usage.active_runs, 0);
+    assert_eq!(usage.runs_today, 1);
+    assert!(
+        backend
+            .quota_stale_reservations()
+            .await
+            .expect("stale reservations")
+            .is_empty(),
+        "released reservations are not stale"
+    );
+
     backend.delete_user(&user.id).await.expect("delete user");
     backend
         .delete_user(&other_user.id)

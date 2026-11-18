@@ -326,6 +326,34 @@ impl StorageBackend for PostgresBackend {
             );
             CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
 
+            -- RB-09 (issue #1133): durable quota state — same tables as the
+            -- SQLite init, idempotent on every boot.
+            CREATE TABLE IF NOT EXISTS quota_usage (
+                user_id TEXT PRIMARY KEY,
+                active_runs BIGINT NOT NULL DEFAULT 0,
+                used_threads BIGINT NOT NULL DEFAULT 0,
+                used_memory_mb BIGINT NOT NULL DEFAULT 0,
+                runs_today BIGINT NOT NULL DEFAULT 0,
+                window_started_at BIGINT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS quota_reservations (
+                run_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                threads BIGINT NOT NULL DEFAULT 0,
+                memory_mb BIGINT NOT NULL DEFAULT 0,
+                created_at BIGINT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_quota_reservations_user ON quota_reservations(user_id);
+
+            CREATE TABLE IF NOT EXISTS quota_config (
+                id BIGINT PRIMARY KEY CHECK (id = 1),
+                max_concurrent_runs BIGINT NOT NULL,
+                max_total_threads BIGINT NOT NULL,
+                max_total_memory_mb BIGINT NOT NULL,
+                max_runs_per_day BIGINT NOT NULL
+            );
+
             -- Indexes (parity with the SQLite init in sqlite.rs — keep the
             -- index list in sync there when adding one here).
             CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON pipelines(user_id);
@@ -2072,6 +2100,222 @@ impl StorageBackend for PostgresBackend {
             .map_err(|e| e.to_string())
         }
     }
+
+    // ── Durable quota state (RB-09 / issue #1133) ───────────────────────
+
+    async fn quota_admit(
+        &self,
+        run_id: &str,
+        user_id: &str,
+        threads: u32,
+        memory_mb: u64,
+        limits: &crate::infra::quota::QuotaConfig,
+        now_ms: i64,
+    ) -> Result<(bool, crate::infra::quota::QuotaUsage), String> {
+        let cutoff = now_ms - crate::infra::quota::QUOTA_WINDOW_MS;
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        // The reservation insert is the idempotency gate: a run id that is
+        // already reserved is a replay, not a second admission.
+        let reserved = sqlx::query(
+            "INSERT INTO quota_reservations \
+             (run_id, user_id, threads, memory_mb, created_at) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (run_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(user_id)
+        .bind(i64::from(threads))
+        .bind(memory_mb as i64)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if reserved.rows_affected() == 0 {
+            let usage = read_quota_usage(&mut tx, user_id, now_ms).await?;
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok((true, usage));
+        }
+        // ONE statement checks every limit against the row it updates: the
+        // condition and the increment cannot be split by a concurrent
+        // admission (RB-09).
+        let admitted = sqlx::query(
+            "INSERT INTO quota_usage \
+             (user_id, active_runs, used_threads, used_memory_mb, runs_today, window_started_at) \
+             VALUES ($1, 1, $2, $3, 1, $4) \
+             ON CONFLICT (user_id) DO UPDATE SET \
+                 active_runs = quota_usage.active_runs + 1, \
+                 used_threads = quota_usage.used_threads + EXCLUDED.used_threads, \
+                 used_memory_mb = quota_usage.used_memory_mb + EXCLUDED.used_memory_mb, \
+                 runs_today = CASE WHEN quota_usage.window_started_at <= $5 THEN 1 \
+                                   ELSE quota_usage.runs_today + 1 END, \
+                 window_started_at = CASE WHEN quota_usage.window_started_at <= $5 \
+                                          THEN EXCLUDED.window_started_at \
+                                          ELSE quota_usage.window_started_at END \
+             WHERE quota_usage.active_runs + 1 <= $6 \
+               AND quota_usage.used_threads + EXCLUDED.used_threads <= $7 \
+               AND quota_usage.used_memory_mb + EXCLUDED.used_memory_mb <= $8 \
+               AND (CASE WHEN quota_usage.window_started_at <= $5 THEN 1 \
+                         ELSE quota_usage.runs_today + 1 END) <= $9",
+        )
+        .bind(user_id)
+        .bind(i64::from(threads))
+        .bind(memory_mb as i64)
+        .bind(now_ms)
+        .bind(cutoff)
+        .bind(i64::from(limits.max_concurrent_runs))
+        .bind(i64::from(limits.max_total_threads))
+        .bind(limits.max_total_memory_mb as i64)
+        .bind(i64::from(limits.max_runs_per_day))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if admitted.rows_affected() == 1 {
+            let usage = read_quota_usage(&mut tx, user_id, now_ms).await?;
+            tx.commit().await.map_err(|e| e.to_string())?;
+            Ok((true, usage))
+        } else {
+            // Roll back the reservation insert with the rejected increment:
+            // nothing was claimed, so nothing can leak.
+            tx.rollback().await.map_err(|e| e.to_string())?;
+            let usage = self.quota_usage(user_id, now_ms).await?;
+            Ok((false, usage))
+        }
+    }
+
+    async fn quota_release(&self, run_id: &str) -> Result<bool, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let reservation: Option<(String, i64, i64)> = sqlx::query_as(
+            "SELECT user_id, threads, memory_mb FROM quota_reservations WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some((user_id, threads, memory_mb)) = reservation else {
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok(false);
+        };
+        // The DELETE is the gate: a concurrent release that already removed
+        // the row affects 0 rows here and must not decrement again.
+        let deleted = sqlx::query("DELETE FROM quota_reservations WHERE run_id = $1")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        if deleted.rows_affected() == 0 {
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE quota_usage SET \
+                 active_runs = CASE WHEN active_runs > 0 THEN active_runs - 1 ELSE 0 END, \
+                 used_threads = CASE WHEN used_threads >= $1 THEN used_threads - $1 ELSE 0 END, \
+                 used_memory_mb = CASE WHEN used_memory_mb >= $2 THEN used_memory_mb - $2 ELSE 0 END \
+             WHERE user_id = $3",
+        )
+        .bind(threads)
+        .bind(memory_mb)
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    async fn quota_usage(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<crate::infra::quota::QuotaUsage, String> {
+        let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
+        read_quota_usage(&mut conn, user_id, now_ms).await
+    }
+
+    async fn save_quota_config(
+        &self,
+        config: &crate::infra::quota::QuotaConfig,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO quota_config \
+             (id, max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day) \
+             VALUES (1, $1, $2, $3, $4) \
+             ON CONFLICT (id) DO UPDATE SET \
+                 max_concurrent_runs = EXCLUDED.max_concurrent_runs, \
+                 max_total_threads = EXCLUDED.max_total_threads, \
+                 max_total_memory_mb = EXCLUDED.max_total_memory_mb, \
+                 max_runs_per_day = EXCLUDED.max_runs_per_day",
+        )
+        .bind(i64::from(config.max_concurrent_runs))
+        .bind(i64::from(config.max_total_threads))
+        .bind(config.max_total_memory_mb as i64)
+        .bind(i64::from(config.max_runs_per_day))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn load_quota_config(&self) -> Result<Option<crate::infra::quota::QuotaConfig>, String> {
+        let row: Option<(i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT max_concurrent_runs, max_total_threads, max_total_memory_mb, \
+             max_runs_per_day FROM quota_config WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(
+            |(runs, threads, memory, per_day)| crate::infra::quota::QuotaConfig {
+                max_concurrent_runs: runs.max(0) as u32,
+                max_total_threads: threads.max(0) as u32,
+                max_total_memory_mb: memory.max(0) as u64,
+                max_runs_per_day: per_day.max(0) as u32,
+            },
+        ))
+    }
+
+    async fn quota_stale_reservations(&self) -> Result<Vec<String>, String> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT qr.run_id FROM quota_reservations qr \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM runs r WHERE r.id = qr.run_id \
+                   AND r.status IN ('queued', 'running', 'paused'))",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+}
+
+/// Read a user's durable quota counters inside (or outside) a transaction.
+///
+/// `runs_today` is normalized against the rolling window at read time, so an
+/// expired window reports 0 without a write.
+async fn read_quota_usage(
+    conn: &mut sqlx::PgConnection,
+    user_id: &str,
+    now_ms: i64,
+) -> Result<crate::infra::quota::QuotaUsage, String> {
+    let row: Option<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT active_runs, used_threads, used_memory_mb, \
+         CASE WHEN window_started_at <= $1 THEN 0 ELSE runs_today END \
+         FROM quota_usage WHERE user_id = $2",
+    )
+    .bind(now_ms - crate::infra::quota::QUOTA_WINDOW_MS)
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(
+        row.map_or_else(Default::default, |(active, threads, memory, today)| {
+            crate::infra::quota::QuotaUsage {
+                active_runs: active.max(0) as u32,
+                used_threads: threads.max(0) as u32,
+                used_memory_mb: memory.max(0) as u64,
+                runs_today: today.max(0) as u32,
+            }
+        }),
+    )
 }
 
 // Live-PostgreSQL smoke tests (issue #207 evidence upgrade). Compiled only

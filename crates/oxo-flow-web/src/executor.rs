@@ -275,6 +275,59 @@ pub(crate) fn final_status_from_exit(success: bool) -> &'static str {
 pub const EXIT_CODE_WRAPPER_SCRIPT: &str =
     r#"f="$1"; shift; "$@"; rc=$?; printf '%s' "$rc" > "$f"; exit "$rc""#;
 
+/// Lowest data-segment ceiling the executor will install for a web-run
+/// workflow (RB-09 / issue #1133).
+///
+/// The declared memory is a budget for the workflow's *rules*, but the same
+/// rlimit is inherited by the `oxo-flow` CLI process itself (thread stacks,
+/// DAG/checkpoint state). A declaration below this floor is therefore
+/// enforced at the floor: still a hard, observable ceiling, just one wide
+/// enough for the engine to run. Declarations at or above it are enforced
+/// exactly as declared.
+pub const MIN_ENFORCED_MEMORY_MB: u64 = 512;
+
+/// Enforce a run's declared memory as an OS ceiling on the spawned CLI and
+/// every process it spawns (RB-09 / issue #1133).
+///
+/// `RLIMIT_DATA` bounds the data segment plus anonymous mappings — the
+/// memory rules actually allocate — while leaving file-backed mappings
+/// (reference/BAM mmaps) alone. Exceeding it makes the allocation fail, so
+/// the offending rule dies and the run fails with a real error instead of
+/// the overage being silently added to a counter.
+///
+/// Linux only: Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` changes with EINVAL,
+/// so there the ceiling remains advisory and this is a no-op (documented in
+/// the web API reference). A declaration of `0` means the workflow claims no
+/// memory and nothing is enforced.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)] // pre_exec is the only way to install a rlimit before exec
+fn apply_memory_rlimit(cmd: &mut Command, memory_limit_mb: u64) {
+    let Some(ceiling_mb) =
+        (memory_limit_mb > 0).then(|| memory_limit_mb.max(MIN_ENFORCED_MEMORY_MB))
+    else {
+        return;
+    };
+    let bytes = ceiling_mb.saturating_mul(1024 * 1024) as nix::libc::rlim_t;
+    // SAFETY: the closure runs in the child between fork and exec; it only
+    // calls setrlimit (async-signal-safe) and touches no shared state. A
+    // failure (e.g. an unexpected kernel restriction) must not abort the
+    // spawn — the run proceeds with the ceiling unapplied rather than
+    // failing for a reason the user cannot act on.
+    unsafe {
+        cmd.pre_exec(move || {
+            let limit = nix::libc::rlimit {
+                rlim_cur: bytes,
+                rlim_max: bytes,
+            };
+            let _ = nix::libc::setrlimit(nix::libc::RLIMIT_DATA, &limit);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_memory_rlimit(_cmd: &mut Command, _memory_limit_mb: u64) {}
+
 /// Execution options carried from the run request to the CLI subprocess.
 #[derive(Debug, Clone, Default)]
 pub struct RunFlags {
@@ -319,6 +372,13 @@ pub struct RunFlags {
     /// set, the engine computes the closure in the DAG and forces
     /// re-execution of the whole downstream chain. `None` = full run.
     pub from_rule: Option<String>,
+    /// The run's declared total memory in MB (sum of the rules'
+    /// `[rules.resources] memory` declarations; `0` = none declared).
+    ///
+    /// RB-09 (#1133): this is the ceiling the web executor enforces with an
+    /// OS rlimit on the spawned CLI's process tree — the number was
+    /// previously only counted against the user's quota and never enforced.
+    pub memory_limit_mb: u64,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -441,11 +501,24 @@ pub fn spawn_background_run(
         },
     };
     let args = build_cli_args(&run_dir.join("workflow.oxoflow"), &run_dir, &flags);
-    spawn_background_run_with_args(run_id, username, auth_type, os_user, workdir, args);
+    let memory_limit_mb = flags.memory_limit_mb;
+    spawn_background_run_with_args(
+        run_id,
+        username,
+        auth_type,
+        os_user,
+        workdir,
+        args,
+        memory_limit_mb,
+    );
 }
 
 /// Spawn a background CLI run with an explicit argument vector (used by
 /// the checkpoint-resume path, issue #81 web exposure).
+///
+/// `memory_limit_mb` is the run's declared total memory (0 = none): the
+/// executor turns it into an OS ceiling on the spawned process tree where
+/// the platform supports one (RB-09 / issue #1133).
 pub fn spawn_background_run_with_args(
     run_id: String,
     username: String,
@@ -453,6 +526,7 @@ pub fn spawn_background_run_with_args(
     os_user: String,
     workdir: Option<PathBuf>,
     cli_args: Vec<std::ffi::OsString>,
+    memory_limit_mb: u64,
 ) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
@@ -576,6 +650,11 @@ pub fn spawn_background_run_with_args(
 
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
+
+        // RB-09 (#1133): enforce the run's declared memory as an OS ceiling
+        // on the CLI and every rule subprocess it spawns. Applied before the
+        // spawn below; a no-op off Linux (see the helper).
+        apply_memory_rlimit(&mut cmd, memory_limit_mb);
 
         // Transient fork failures (EAGAIN/ENOMEM under full-workspace
         // parallel test load, issue #120) must not permanently fail the run
@@ -718,7 +797,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // Release the run's quota reservation on EVERY terminal path — the
     // cancelled early-return below must not leak the reservation (issue:
     // cancelled runs burned active_runs/threads/memory until restart).
-    crate::infra::quota::release_and_complete(run_id);
+    crate::infra::quota::release_and_complete(run_id).await;
 
     if run_is_cancelled(run_id).await {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
@@ -1130,7 +1209,7 @@ async fn mark_run_failed(run_id: &str) {
     // missing pool can't pin resources until restart.
     let Some(backend) = crate::infra::db::global_backend() else {
         error!("Storage backend unavailable — cannot mark run {run_id} failed");
-        crate::infra::quota::release_and_complete(run_id);
+        crate::infra::quota::release_and_complete(run_id).await;
         return;
     };
 
@@ -1143,7 +1222,7 @@ async fn mark_run_failed(run_id: &str) {
             // The run already reached a terminal state (e.g. the user's
             // cancel won the race) — broadcasting a failure would lie.
             info!("Run {run_id} is already terminal; not marking it failed");
-            crate::infra::quota::release_and_complete(run_id);
+            crate::infra::quota::release_and_complete(run_id).await;
             return;
         }
         Err(e) => {
@@ -1170,7 +1249,7 @@ async fn mark_run_failed(run_id: &str) {
         user_id.as_deref(),
     );
 
-    crate::infra::quota::release_and_complete(run_id);
+    crate::infra::quota::release_and_complete(run_id).await;
     crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
 }
 
@@ -1228,6 +1307,7 @@ mod tests {
             allow_protected_drift: false,
             provenance: false,
             from_rule: None,
+            memory_limit_mb: 0,
         };
         let args = build_cli_args(
             std::path::Path::new("wf.oxoflow"),

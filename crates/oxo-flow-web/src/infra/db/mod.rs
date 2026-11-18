@@ -430,4 +430,67 @@ pub trait StorageBackend: Send + Sync {
         is_admin: bool,
         limit: u32,
     ) -> Result<Vec<models::PipelineRow>, String>;
+
+    // ── Durable quota state (RB-09 / issue #1133) ───────────────────────
+    //
+    // Quota counters used to live in a process-local `Mutex<HashMap>`:
+    // admission was a separate check-then-record pair and every restart (or
+    // second instance) started from zero. These methods route the state
+    // through the same storage abstraction as runs/audit/users.
+
+    /// Atomically admit a run: check the per-user limits and record the
+    /// run's resource reservation in ONE transaction.
+    ///
+    /// Returns `(allowed, usage)` — usage is the post-admission snapshot
+    /// when allowed, the current (unchanged) snapshot when rejected. The
+    /// check and the reservation are a single compare-and-swap, so two
+    /// concurrent admissions cannot both pass under a limit of one. The
+    /// reservation insert doubles as the idempotency gate: re-admitting an
+    /// already-reserved `run_id` returns `(true, current usage)` without
+    /// double-counting.
+    ///
+    /// `now_ms` is Unix epoch milliseconds; the daily window starts fresh
+    /// when the stored `window_started_at` is older than 24 h.
+    async fn quota_admit(
+        &self,
+        run_id: &str,
+        user_id: &str,
+        threads: u32,
+        memory_mb: u64,
+        limits: &crate::infra::quota::QuotaConfig,
+        now_ms: i64,
+    ) -> Result<(bool, crate::infra::quota::QuotaUsage), String>;
+
+    /// Release a run's reservation and decrement its user's counters.
+    ///
+    /// Idempotent: `Ok(false)` means no reservation existed (already
+    /// released, never admitted, or reclaimed by reconciliation) and
+    /// nothing was decremented. The select+delete+decrement runs in one
+    /// transaction so concurrent releases cannot double-decrement.
+    async fn quota_release(&self, run_id: &str) -> Result<bool, String>;
+
+    /// A user's current durable usage. `runs_today` reports 0 when the
+    /// stored 24 h window has elapsed (the window is lazily restarted on
+    /// the next admission, so a read never writes).
+    async fn quota_usage(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<crate::infra::quota::QuotaUsage, String>;
+
+    /// Persist the quota limits (single row) so every instance enforces the
+    /// same configuration after restart.
+    async fn save_quota_config(
+        &self,
+        config: &crate::infra::quota::QuotaConfig,
+    ) -> Result<(), String>;
+
+    /// Load the persisted quota limits; `None` means the database has never
+    /// stored a configuration (callers fall back to the process default).
+    async fn load_quota_config(&self) -> Result<Option<crate::infra::quota::QuotaConfig>, String>;
+
+    /// Reservations whose run row is terminal or missing — released at
+    /// startup so a crash between admission and the run-row insert cannot
+    /// pin quota forever.
+    async fn quota_stale_reservations(&self) -> Result<Vec<String>, String>;
 }

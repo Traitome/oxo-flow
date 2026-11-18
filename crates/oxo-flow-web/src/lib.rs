@@ -1,4 +1,9 @@
-#![forbid(unsafe_code)]
+// RB-09 (#1133): `deny` rather than `forbid`, because the ONE justified
+// exception — installing RLIMIT_DATA on the spawned CLI via
+// `Command::pre_exec` in executor.rs — needs an unsafe block (there is no
+// safe API for a post-fork syscall). That function carries its own
+// `#[allow(unsafe_code)]` + SAFETY comment; every other item stays denied.
+#![deny(unsafe_code)]
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring
@@ -300,6 +305,19 @@ pub async fn init_database() -> anyhow::Result<()> {
         crate::db::init_db(&database_url).await?;
         crate::db::recover_orphaned_runs().await?;
     }
+
+    // RB-09 (#1133): release durable quota reservations whose run row is
+    // terminal or gone. A crash between admission and the run-row insert (or
+    // between a terminal write and its release) would otherwise pin the
+    // user's counters across restarts. Runs that `recover_orphaned_runs`
+    // just finalized release themselves; this sweep is the backstop.
+    if let Some(backend) = crate::infra::db::global_backend() {
+        match crate::infra::quota::reconcile_stale(backend.as_ref()).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("Released {n} stale quota reservation(s) at startup"),
+            Err(e) => tracing::warn!("Quota reservation reconciliation failed: {e}"),
+        }
+    }
     Ok(())
 }
 
@@ -427,9 +445,11 @@ pub async fn start_server_with_mode(
 ///
 /// Idempotent — a second call is a no-op — so both `oxo-flow serve` (this
 /// library) and the standalone `oxo-flow-web` binary can call it without
-/// double-spawning. The daily quota reset is the load-bearing one: without
-/// it `runs_today` only ever grows and every `POST /api/runs` answers 429
-/// until the process restarts.
+/// double-spawning. The daily quota reset is the load-bearing one for the
+/// no-backend fallback: without it `runs_today` only ever grows and every
+/// `POST /api/runs` answers 429 until the process restarts. Durable quota
+/// rows (RB-09 / #1133) do not depend on this loop — their rolling 24 h
+/// window is normalized at admission and read time.
 pub fn start_background_tasks() {
     if BACKGROUND_TASKS_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;

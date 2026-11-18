@@ -407,6 +407,7 @@ fn spawn_real_run(run_id: &str, workdir: &std::path::Path) {
         "local".to_string(),
         Some(workdir.to_path_buf()),
         args,
+        0,
     );
 }
 
