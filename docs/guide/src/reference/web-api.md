@@ -366,6 +366,52 @@ next GET, and updating content without touching `[workflow] version`
 bumps the reported version to match. This mirrors the CLI, where the
 file on disk defines the version.
 
+#### Optimistic concurrency (`ETag` / `If-Match`)
+
+Every pipeline row carries a monotonic stored `revision`: it starts at `1`
+on create and increments by exactly one on every successful write (PUT or
+rollback). It is deliberately separate from the TOML `version` — a content
+edit that leaves `[workflow] version` untouched still advances the token,
+because the token detects writes, not semantic releases. It is not a JSON
+body field; it travels as a strong HTTP validator so the response contract
+stays backward compatible:
+
+- `GET /api/pipelines/{id}`, `POST /api/pipelines` (create),
+  `PUT /api/pipelines/{id}`, and `POST /api/pipelines/{id}/rollback`
+  answer with `ETag: "<revision>"` (e.g. `ETag: "7"`).
+- To make a write conditional, echo that value in `If-Match`:
+
+```
+PUT /api/pipelines/{id}
+If-Match: "7"
+Content-Type: application/json
+
+{"toml_content": "<TOML>"}
+```
+
+The compare-and-swap is atomic in the storage backend — a single
+`UPDATE ... WHERE id = ? AND revision = ?` guarded by the rows-affected
+count, implemented in both the SQLite and PostgreSQL `StorageBackend` — not
+a read-then-write race. A stale validator changes nothing and answers:
+
+```
+HTTP/1.1 409 Conflict
+
+{"code": "PIPELINE_VERSION_CONFLICT",
+ "message": "Pipeline <id> was modified by another writer",
+ "detail": "expected revision 7 but the stored revision is 9",
+ "suggestion": "Re-read GET /api/pipelines/<id> for its current ETag and retry with If-Match: \"9\"."}
+```
+
+A successful PUT answers `200` with the body and the NEW `ETag`. Omitting
+`If-Match` keeps the historical unconditional update for backward
+compatibility (the stored revision still advances, so a later conditional
+writer can detect the intervening write); clients that care about lost
+updates SHOULD always send it. `POST /api/pipelines/{id}/rollback` shares
+the same contract. A malformed validator — non-integer, zero, negative, a
+weak `W/"7"` form, a multi-token list, or `*` — is rejected with
+`400 INVALID_IF_MATCH` rather than silently ignored.
+
 ---
 
 ## Execution & Runs
@@ -1174,6 +1220,16 @@ POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
 ```
 Every save/update snapshots the previous content; rollback preserves the
 current version as a new revision (nothing is lost).
+
+Snapshot insertion is transactional with the pipeline write (issue #1136):
+on create the row and its initial snapshot, and on update/rollback the row
+write and its pre-write snapshot (plus the 50-row retention prune), commit
+in one storage transaction. If the snapshot insert fails, the pipeline
+write rolls back and the request fails — a successful response can never
+be missing its revision row. The snapshots and the compare-and-swap both
+run on SQLite and PostgreSQL. (The pre-existing `save_pipeline` upsert
+used by fork/import does not write revision rows; fork/import copies carry
+`revision = 1` and no history.)
 
 ## Run Administration
 

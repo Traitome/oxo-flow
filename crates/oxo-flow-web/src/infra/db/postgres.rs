@@ -75,6 +75,48 @@ impl PostgresBackend {
     fn now() -> String {
         chrono::Utc::now().to_rfc3339()
     }
+
+    /// Insert one `pipeline_revisions` row on `conn` and prune that
+    /// pipeline's history to the newest 50 — the PostgreSQL twin of
+    /// `SqliteBackend::insert_revision_row` (issue #1136), shared by the
+    /// create write, the compare-and-swap write, and the standalone
+    /// `record_pipeline_revision`.
+    ///
+    /// The caller owns the connection/transaction: every call site runs this
+    /// inside a transaction so the snapshot and the pipeline write commit or
+    /// roll back together.
+    async fn insert_revision_row(
+        conn: &mut sqlx::PgConnection,
+        pipeline_id: &str,
+        user_id: &str,
+        version: &str,
+        toml_content: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(pipeline_id)
+        .bind(user_id)
+        .bind(version)
+        .bind(toml_content)
+        .bind(created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "DELETE FROM pipeline_revisions WHERE pipeline_id = $1 AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2                ORDER BY created_at DESC, id DESC LIMIT 50)",
+        )
+        .bind(pipeline_id)
+        .bind(pipeline_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -137,7 +179,8 @@ impl StorageBackend for PostgresBackend {
                 forked_from TEXT,
                 visibility TEXT NOT NULL DEFAULT 'private',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                revision BIGINT NOT NULL DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS runs (
@@ -334,6 +377,15 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| format!("PG migration artifacts_incomplete: {e}"))?;
 
+        // Optimistic-concurrency token on pipelines (issue #1136), with the
+        // same semantics as the SQLite column: historical rows start at 1.
+        sqlx::query(
+            "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG migration pipelines.revision: {e}"))?;
+
         // Vocabulary migration (parity with the SQLite init): legacy
         // executors wrote `success` for completed runs; the canonical
         // terminal set is completed|failed|cancelled. Idempotent — safe to
@@ -507,10 +559,15 @@ impl StorageBackend for PostgresBackend {
             p.id.clone()
         };
 
+        // An upsert on an EXISTING row still advances the concurrency token
+        // (issue #1136): a raw `save_pipeline` must never leave a reader's
+        // `revision` token valid across a write. Content writers go through
+        // `update_pipeline_cas`; this path is for new rows (create/fork/
+        // import) and tests.
         sqlx::query(
             r#"
-            INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at, revision)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT(id) DO UPDATE SET
                 name = EXCLUDED.name,
                 version = EXCLUDED.version,
@@ -518,7 +575,8 @@ impl StorageBackend for PostgresBackend {
                 rules_count = EXCLUDED.rules_count,
                 forked_from = EXCLUDED.forked_from,
                 visibility = EXCLUDED.visibility,
-                updated_at = EXCLUDED.updated_at
+                updated_at = EXCLUDED.updated_at,
+                revision = pipelines.revision + 1
             "#,
         )
         .bind(&id)
@@ -531,6 +589,7 @@ impl StorageBackend for PostgresBackend {
         .bind(&p.visibility)
         .bind(&p.created_at)
         .bind(&now)
+        .bind(p.revision.max(1))
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -538,6 +597,131 @@ impl StorageBackend for PostgresBackend {
         self.get_pipeline(&id)
             .await
             .and_then(|opt| opt.ok_or_else(|| format!("pipeline {id} disappeared after upsert")))
+    }
+
+    async fn create_pipeline_with_revision(&self, p: &models::PipelineRow) -> Result<(), String> {
+        if p.id.is_empty() {
+            return Err("create_pipeline_with_revision requires a caller-assigned id".to_string());
+        }
+        let now = Self::now();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            r#"
+            INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at, revision)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(&p.id)
+        .bind(&p.user_id)
+        .bind(&p.name)
+        .bind(&p.version)
+        .bind(&p.toml_content)
+        .bind(p.rules_count)
+        .bind(&p.forked_from)
+        .bind(&p.visibility)
+        .bind(&p.created_at)
+        .bind(&now)
+        .bind(p.revision.max(1))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Self::insert_revision_row(
+            &mut tx,
+            &p.id,
+            &p.user_id,
+            &p.version,
+            &p.toml_content,
+            &now,
+        )
+        .await?;
+
+        tx.commit().await.map_err(|e| e.to_string())
+    }
+
+    async fn update_pipeline_cas(
+        &self,
+        p: &models::PipelineRow,
+        expected_revision: Option<i64>,
+        snapshot: Option<&models::RevisionSnapshot<'_>>,
+    ) -> Result<super::PipelineWriteOutcome, String> {
+        use super::PipelineWriteOutcome;
+
+        let now = Self::now();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+
+        // One statement, so the compare and the swap cannot interleave.
+        // PostgreSQL re-evaluates the WHERE clause after the row lock is
+        // released by a concurrent writer (READ COMMITTED, EvalPlanQual), so
+        // the loser of a race sees `revision` already advanced and matches
+        // zero rows. A `None` guard binds SQL NULL and keeps the
+        // backward-compatible unconditional case on the same SQL; a numeric
+        // guard only matches that exact revision (no sentinel value can ever
+        // mean "no guard", so a stray `Some(0)` cannot bypass the check).
+        let result = sqlx::query(
+            r#"
+            UPDATE pipelines SET
+                name = $1,
+                version = $2,
+                toml_content = $3,
+                rules_count = $4,
+                forked_from = $5,
+                visibility = $6,
+                updated_at = $7,
+                revision = revision + 1
+            WHERE id = $8 AND ($9::BIGINT IS NULL OR revision = $9)
+            "#,
+        )
+        .bind(&p.name)
+        .bind(&p.version)
+        .bind(&p.toml_content)
+        .bind(p.rules_count)
+        .bind(&p.forked_from)
+        .bind(&p.visibility)
+        .bind(&now)
+        .bind(&p.id)
+        .bind(expected_revision)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if result.rows_affected() == 0 {
+            // Nothing was written. Classify outside the transaction: a stale
+            // token and a deleted row are different answers (409 vs 404).
+            drop(tx);
+            let current: Option<(i64,)> =
+                sqlx::query_as("SELECT revision FROM pipelines WHERE id = $1")
+                    .bind(&p.id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            return Ok(match current {
+                Some((revision,)) => PipelineWriteOutcome::Conflict {
+                    current_revision: revision,
+                },
+                None => PipelineWriteOutcome::NotFound,
+            });
+        }
+
+        if let Some(snapshot) = snapshot {
+            Self::insert_revision_row(
+                &mut tx,
+                &p.id,
+                snapshot.user_id,
+                snapshot.version,
+                snapshot.toml_content,
+                &now,
+            )
+            .await?;
+        }
+
+        let (revision,): (i64,) = sqlx::query_as("SELECT revision FROM pipelines WHERE id = $1")
+            .bind(&p.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(PipelineWriteOutcome::Applied { revision })
     }
 
     async fn get_pipeline(&self, id: &str) -> Result<Option<models::PipelineRow>, String> {
@@ -1757,30 +1941,10 @@ impl StorageBackend for PostgresBackend {
         toml_content: &str,
     ) -> Result<(), String> {
         let now = Self::now();
-        let rev_id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at)              VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(&rev_id)
-        .bind(pipeline_id)
-        .bind(user_id)
-        .bind(version)
-        .bind(toml_content)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            "DELETE FROM pipeline_revisions WHERE pipeline_id = $1 AND id NOT IN              (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2                ORDER BY created_at DESC, id DESC LIMIT 50)",
-        )
-        .bind(pipeline_id)
-        .bind(pipeline_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        Ok(())
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        Self::insert_revision_row(&mut tx, pipeline_id, user_id, version, toml_content, &now)
+            .await?;
+        tx.commit().await.map_err(|e| e.to_string())
     }
 
     async fn list_pipeline_revisions(

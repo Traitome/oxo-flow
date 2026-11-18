@@ -78,6 +78,7 @@ pub async fn fork_pipeline(
         visibility: "private".to_string(),
         created_at: now.clone(),
         updated_at: now.clone(),
+        revision: 1,
     };
 
     backend
@@ -289,6 +290,7 @@ pub async fn import_pipeline(
         visibility: "private".to_string(),
         created_at: now.clone(),
         updated_at: now.clone(),
+        revision: 1,
     };
 
     backend

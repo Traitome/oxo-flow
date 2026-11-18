@@ -4,7 +4,11 @@
 //! Zero business logic here — all logic lives in `service.rs`.
 
 use crate::extract::ApiJson;
-use axum::{Extension, Json, extract::Path, http::StatusCode};
+use axum::{
+    Extension, Json,
+    extract::Path,
+    http::{HeaderMap, StatusCode, header},
+};
 
 use super::service;
 use super::types::*;
@@ -26,22 +30,84 @@ pub(crate) fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) 
     user.is_admin() || row.user_id == user.id
 }
 
-/// Snapshot a pipeline into `pipeline_revisions` (issue #82 P1-14). Keeps
-/// the last 50 revisions per pipeline; older snapshots are pruned.
-async fn record_revision(pipeline_id: &str, user_id: &str, version: &str, toml_content: &str) {
-    let Some(backend) = crate::infra::db::global_backend() else {
-        return;
+/// A pipeline response that also carries its optimistic-concurrency token
+/// (issue #1136). The token is an HTTP `ETag`, not a JSON field, so the body
+/// contract mirrored by `frontend/src/api/types.ts` stays unchanged.
+type PipelineResult = Result<(HeaderMap, Json<Pipeline>), (StatusCode, Json<ApiError>)>;
+
+/// Build the `ETag: "<revision>"` response header (a strong validator).
+/// Revisions are positive integers, so the quoting has no escaping hazards.
+fn pipeline_response(pipeline: Pipeline, revision: i64) -> (HeaderMap, Json<Pipeline>) {
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = format!("\"{revision}\"").parse() {
+        headers.insert(header::ETAG, value);
+    }
+    (headers, Json(pipeline))
+}
+
+/// Parse the optional `If-Match` optimistic-concurrency token from a
+/// pipeline write request (issue #1136). The value is the `ETag` a previous
+/// GET/PUT returned: a revision in the form `"7"` (quotes optional for
+/// tolerance). A present but malformed guard is rejected instead of
+/// silently dropped — dropping it would turn an intended conditional write
+/// into an unconditional one. `*`, weak validators (`W/"7"`), and
+/// multi-token lists are not supported and answer the same 400.
+fn if_match_revision(headers: &HeaderMap) -> Result<Option<i64>, (StatusCode, Json<ApiError>)> {
+    let Some(raw) = headers.get(header::IF_MATCH) else {
+        return Ok(None);
     };
-    if let Err(error) = backend
-        .record_pipeline_revision(pipeline_id, user_id, version, toml_content)
-        .await
-    {
-        tracing::error!(
-            pipeline_id,
-            version,
-            error = %error,
-            "failed to persist pipeline revision"
-        );
+    let invalid = || {
+        err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_IF_MATCH",
+            "If-Match must carry a single strong pipeline revision, e.g. \"7\"".into(),
+        )
+    };
+    let raw = raw.to_str().map_err(|_| invalid())?.trim();
+    let raw = raw
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(raw);
+    raw.parse::<i64>()
+        .ok()
+        .filter(|revision| *revision >= 1)
+        .map(Some)
+        .ok_or_else(invalid)
+}
+
+/// Turn a compare-and-swap outcome into the new revision or the structured
+/// HTTP error (issue #1136): `409 PIPELINE_VERSION_CONFLICT` when the token
+/// is stale, `404 NOT_FOUND` when the row vanished. One definition so the
+/// update and rollback paths cannot drift apart.
+fn applied_revision(
+    id: &str,
+    expected_revision: Option<i64>,
+    outcome: crate::infra::db::PipelineWriteOutcome,
+) -> Result<i64, (StatusCode, Json<ApiError>)> {
+    use crate::infra::db::PipelineWriteOutcome;
+    match outcome {
+        PipelineWriteOutcome::Applied { revision } => Ok(revision),
+        PipelineWriteOutcome::Conflict { current_revision } => Err((
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                code: "PIPELINE_VERSION_CONFLICT".into(),
+                message: format!("Pipeline {id} was modified by another writer"),
+                detail: Some(match expected_revision {
+                    Some(expected) => format!(
+                        "expected revision {expected} but the stored revision is {current_revision}"
+                    ),
+                    None => format!("the stored revision is {current_revision}"),
+                }),
+                suggestion: Some(format!(
+                    "Re-read GET /api/pipelines/{id} for its current ETag and retry with If-Match: \"{current_revision}\"."
+                )),
+            }),
+        )),
+        PipelineWriteOutcome::NotFound => Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )),
     }
 }
 
@@ -457,18 +523,7 @@ pub async fn search_pipelines(
     let pipelines: Vec<Pipeline> = pipeline_rows
         .into_iter()
         .filter(|r| can_read_pipeline(&user, r))
-        .map(|r| Pipeline {
-            id: r.id,
-            user_id: r.user_id,
-            name: r.name,
-            version: r.version,
-            toml_content: r.toml_content,
-            rules_count: r.rules_count as usize,
-            forked_from: r.forked_from,
-            visibility: r.visibility,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
+        .map(Pipeline::from)
         .collect();
 
     // Search templates from DB via backend
@@ -506,11 +561,14 @@ pub async fn search_pipelines(
         (status = 400, description = "Error", body = ApiError),
     )
 )]
-/// POST /api/pipelines — create a new pipeline from TOML
+/// POST /api/pipelines — create a new pipeline from TOML.
+///
+/// The response carries `ETag: "1"` — the optimistic-concurrency token for
+/// the new pipeline (issue #1136).
 pub async fn save_pipeline(
     authenticated: Option<axum::Extension<CurrentUser>>,
     ApiJson(req): ApiJson<serde_json::Value>,
-) -> ApiResult<Pipeline> {
+) -> PipelineResult {
     let toml_content = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -570,28 +628,32 @@ pub async fn save_pipeline(
         visibility: visibility.to_string(),
         created_at: now.clone(),
         updated_at: now.clone(),
+        // The initial save is revision 1 of the pipeline's history (issue
+        // #1136); the row and its first snapshot commit in one transaction,
+        // so a create can never report success without its history row.
+        revision: 1,
     };
     let backend = get_backend()?;
     backend
-        .save_pipeline(&pipeline_row)
+        .create_pipeline_with_revision(&pipeline_row)
         .await
         .map_err(|e| db_err(format!("DB error creating pipeline: {e}")))?;
 
-    // The initial save is revision 1 of the pipeline's history.
-    record_revision(&id, &user_id, &version, toml_content).await;
-
-    Ok(Json(Pipeline {
-        id,
-        user_id: user_id.clone(),
-        name: name.to_string(),
-        version: version.to_string(),
-        toml_content: toml_content.to_string(),
-        rules_count: rules_count as usize,
-        forked_from: None,
-        visibility: visibility.to_string(),
-        created_at: now.clone(),
-        updated_at: now,
-    }))
+    Ok(pipeline_response(
+        Pipeline {
+            id,
+            user_id: user_id.clone(),
+            name: name.to_string(),
+            version: version.to_string(),
+            toml_content: toml_content.to_string(),
+            rules_count: rules_count as usize,
+            forked_from: None,
+            visibility: visibility.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        },
+        1,
+    ))
 }
 
 #[utoipa::path(
@@ -618,21 +680,7 @@ pub async fn list_pipelines(
         .await
         .map_err(|e| db_err(format!("DB error listing pipelines: {e}")))?;
 
-    let list: Vec<Pipeline> = rows
-        .into_iter()
-        .map(|r| Pipeline {
-            id: r.id,
-            user_id: r.user_id,
-            name: r.name,
-            version: r.version,
-            toml_content: r.toml_content,
-            rules_count: r.rules_count as usize,
-            forked_from: r.forked_from,
-            visibility: r.visibility,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect();
+    let list: Vec<Pipeline> = rows.into_iter().map(Pipeline::from).collect();
 
     Ok(Json(list))
 }
@@ -647,10 +695,13 @@ pub async fn list_pipelines(
     )
 )]
 /// GET /api/pipelines/{id}
+///
+/// The response carries `ETag: "<revision>"` (issue #1136); send that value
+/// back in `If-Match` on PUT/rollback to make the write conditional.
 pub async fn get_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-) -> ApiResult<Pipeline> {
+) -> PipelineResult {
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
 
@@ -672,18 +723,10 @@ pub async fn get_pipeline(
     }
 
     match row {
-        Some(r) => Ok(Json(Pipeline {
-            id: r.id,
-            user_id: r.user_id,
-            name: r.name,
-            version: r.version,
-            toml_content: r.toml_content,
-            rules_count: r.rules_count as usize,
-            forked_from: r.forked_from,
-            visibility: r.visibility,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })),
+        Some(r) => {
+            let revision = r.revision;
+            Ok(pipeline_response(Pipeline::from(r), revision))
+        }
         None => Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -697,18 +740,31 @@ pub async fn get_pipeline(
     path = "/api/pipelines/{id}",
     tag = "workflow",
     responses(
-        (status = 200, description = "Success", body = Pipeline),
+        (status = 200, description = "Success (ETag carries the new revision)", body = Pipeline),
+        (status = 400, description = "Malformed If-Match (INVALID_IF_MATCH)", body = ApiError),
         (status = 404, description = "Error", body = ApiError),
+        (status = 409, description = "Stale If-Match (PIPELINE_VERSION_CONFLICT)", body = ApiError),
     )
 )]
 /// PUT /api/pipelines/{id}
+///
+/// Optimistic concurrency (issue #1136): send the `ETag` from a previous
+/// GET/PUT back in `If-Match` to make the write conditional. A stale token
+/// answers `409 PIPELINE_VERSION_CONFLICT` and nothing is written. Omitting
+/// the header keeps the historical unconditional update (backward
+/// compatibility); the stored revision still advances, so a later
+/// conditional write can detect it. The response's `ETag` carries the new
+/// revision. The pre-update snapshot and the row update commit in one
+/// storage transaction — success always means both landed.
 pub async fn update_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     ApiJson(req): ApiJson<serde_json::Value>,
-) -> ApiResult<Pipeline> {
+) -> PipelineResult {
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
+    let expected_revision = if_match_revision(&headers)?;
 
     let existing = backend
         .get_pipeline(&id)
@@ -783,9 +839,6 @@ pub async fn update_pipeline(
     };
 
     let now = now_iso();
-    // Snapshot the pre-update content so rollback can restore it.
-    record_revision(&id, &user.id, &existing.version, &existing.toml_content).await;
-
     let updated_pipeline = models::PipelineRow {
         id: id.clone(),
         user_id: existing.user_id.clone(),
@@ -797,24 +850,39 @@ pub async fn update_pipeline(
         visibility: visibility.clone(),
         created_at: existing.created_at.clone(),
         updated_at: now.clone(),
+        // The stored revision, not a caller value: the storage layer
+        // increments it under the compare-and-swap guard.
+        revision: existing.revision,
     };
-    backend
-        .save_pipeline(&updated_pipeline)
+    // The pre-update snapshot rides in the SAME transaction as the row
+    // write (issue #1136). If either fails — including the snapshot insert —
+    // the request fails and neither is visible.
+    let snapshot = models::RevisionSnapshot {
+        user_id: &user.id,
+        version: &existing.version,
+        toml_content: &existing.toml_content,
+    };
+    let outcome = backend
+        .update_pipeline_cas(&updated_pipeline, expected_revision, Some(&snapshot))
         .await
         .map_err(|e| db_err(format!("DB error updating pipeline {id}: {e}")))?;
+    let revision = applied_revision(&id, expected_revision, outcome)?;
 
-    Ok(Json(Pipeline {
-        id,
-        user_id: existing.user_id,
-        name,
-        version,
-        toml_content,
-        rules_count: rules_count as usize,
-        forked_from: existing.forked_from,
-        visibility,
-        created_at: existing.created_at,
-        updated_at: now,
-    }))
+    Ok(pipeline_response(
+        Pipeline {
+            id,
+            user_id: existing.user_id,
+            name,
+            version,
+            toml_content,
+            rules_count: rules_count as usize,
+            forked_from: existing.forked_from,
+            visibility,
+            created_at: existing.created_at,
+            updated_at: now,
+        },
+        revision,
+    ))
 }
 
 #[utoipa::path(
@@ -867,6 +935,27 @@ pub async fn delete_pipeline(
 // ---------------------------------------------------------------------------
 // Templates
 // ---------------------------------------------------------------------------
+
+/// Single conversion from the storage row to the API pipeline type — the
+/// search, list, and get handlers all surface rows, so they share this
+/// mapping (reuse, never retype) instead of three hand-copied field lists
+/// that drift when the row gains a column (issue #1136 added `revision`).
+impl From<models::PipelineRow> for Pipeline {
+    fn from(r: models::PipelineRow) -> Self {
+        Pipeline {
+            id: r.id,
+            user_id: r.user_id,
+            name: r.name,
+            version: r.version,
+            toml_content: r.toml_content,
+            rules_count: r.rules_count as usize,
+            forked_from: r.forked_from,
+            visibility: r.visibility,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
 
 /// Single conversion from the storage row to the API template type —
 /// every handler that surfaces `templates` rows shares this mapping
@@ -1548,22 +1637,31 @@ pub async fn get_revision(
     path = "/api/pipelines/{id}/rollback",
     tag = "workflow",
     responses(
-        (status = 200, description = "Success", body = Pipeline),
-        (status = 400, description = "Unparsable revision", body = ApiError),
+        (status = 200, description = "Success (ETag carries the new revision)", body = Pipeline),
+        (status = 400, description = "Unparsable revision / malformed If-Match", body = ApiError),
         (status = 404, description = "Error", body = ApiError),
+        (status = 409, description = "Stale If-Match (PIPELINE_VERSION_CONFLICT)", body = ApiError),
     )
 )]
 /// POST /api/pipelines/{id}/rollback — restore a revision as the current
 /// pipeline (creating a new revision, so nothing is lost). The restored
 /// revision must parse; its version and rules_count are derived from the
 /// revision TOML itself (TOML-is-truth, #907 P2-5).
+///
+/// Rollback is a pipeline write, so it shares the update endpoint's
+/// optimistic-concurrency contract (issue #1136): an optional `If-Match`
+/// guards it with the same `409 PIPELINE_VERSION_CONFLICT` answer and the
+/// response carries the new `ETag`, and the pre-rollback snapshot commits
+/// in the same transaction as the restore.
 pub async fn rollback_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     ApiJson(req): ApiJson<serde_json::Value>,
-) -> ApiResult<Pipeline> {
+) -> PipelineResult {
     let user = resolve(authenticated.as_ref());
     let backend = get_backend()?;
+    let expected_revision = if_match_revision(&headers)?;
 
     let pipeline = backend
         .get_pipeline(&id)
@@ -1623,8 +1721,8 @@ pub async fn rollback_pipeline(
     let rules_count = parsed.rules.len() as i64;
     let version = parsed.workflow.version.clone();
 
-    // Restore = snapshot current + write the old content back.
-    record_revision(&id, &user.id, &pipeline.version, &pipeline.toml_content).await;
+    // Restore = snapshot current + write the old content back, in one
+    // transaction (issue #1136).
     let now = now_iso();
     let updated = models::PipelineRow {
         id: id.clone(),
@@ -1637,24 +1735,34 @@ pub async fn rollback_pipeline(
         visibility: pipeline.visibility.clone(),
         created_at: pipeline.created_at.clone(),
         updated_at: now.clone(),
+        revision: pipeline.revision,
     };
-    backend
-        .save_pipeline(&updated)
+    let snapshot = models::RevisionSnapshot {
+        user_id: &user.id,
+        version: &pipeline.version,
+        toml_content: &pipeline.toml_content,
+    };
+    let outcome = backend
+        .update_pipeline_cas(&updated, expected_revision, Some(&snapshot))
         .await
         .map_err(|e| db_err(format!("DB error rolling back pipeline {id}: {e}")))?;
+    let revision = applied_revision(&id, expected_revision, outcome)?;
 
-    Ok(Json(Pipeline {
-        id,
-        user_id: pipeline.user_id,
-        name: pipeline.name,
-        version,
-        toml_content,
-        rules_count: rules_count as usize,
-        forked_from: pipeline.forked_from,
-        visibility: pipeline.visibility,
-        created_at: pipeline.created_at,
-        updated_at: now,
-    }))
+    Ok(pipeline_response(
+        Pipeline {
+            id,
+            user_id: pipeline.user_id,
+            name: pipeline.name,
+            version,
+            toml_content,
+            rules_count: rules_count as usize,
+            forked_from: pipeline.forked_from,
+            visibility: pipeline.visibility,
+            created_at: pipeline.created_at,
+            updated_at: now,
+        },
+        revision,
+    ))
 }
 
 #[cfg(test)]
