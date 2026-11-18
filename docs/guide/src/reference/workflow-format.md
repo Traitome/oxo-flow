@@ -999,6 +999,14 @@ named group. The `env_group` spec takes precedence over an inline
 `[rules.environment]`; the inline spec is only used when no `env_group` is set
 (or the named group does not exist), followed by `[defaults] environment`.
 
+This precedence is the execution precedence, not just a listing convenience:
+`run`, `dry-run`, cluster submission, and the run monitor's DAG status fold
+the winning spec onto each rule before scheduling, and `env list` / `env check`
+call the same resolver — so a rule declaring both an `env_group` and an inline
+`environment` is reported AND executed with the group's backend. (Before
+issue #1210 the listing honored the group while execution silently used the
+inline spec.)
+
 ### Environment Variables (`envvars`)
 
 Inject rule-specific environment variables directly into the execution context:

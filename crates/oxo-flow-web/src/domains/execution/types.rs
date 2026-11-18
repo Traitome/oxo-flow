@@ -377,15 +377,16 @@ pub struct DagNode {
     pub stdout_tail: Option<String>,
     /// Environment the run wraps the rule in (issue #1149), resolved from
     /// the run's own pipeline snapshot the way the run path resolves it —
-    /// `[defaults] environment` folded onto rules (`apply_defaults`), then
-    /// the rule's inline environment — so the monitor no longer mislabels
-    /// every rule as `system`. An `env_group` reference is not expanded
-    /// (the run path does not consult it). The value is the backend kind
-    /// (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `venv`,
-    /// `modules`, `system`). `None` for a node that no longer maps to a
-    /// snapshot rule (an orphaned instance of a workflow edited since the
-    /// run): the environment is genuinely unknown there, and reporting
-    /// `system` would be a fabrication.
+    /// the shared `apply_defaults` fold, which materializes the documented
+    /// precedence `env_group` → the rule's inline environment →
+    /// `[defaults] environment` (issue #1210) — so the monitor no longer
+    /// mislabels every rule as `system` and cannot claim a wrapping the run
+    /// does not perform. The value is the backend kind (`conda`, `mamba`,
+    /// `pixi`, `docker`, `singularity`, `venv`, `modules`, `system`). `None`
+    /// for a node that no longer maps to a snapshot rule (an orphaned
+    /// instance of a workflow edited since the run): the environment is
+    /// genuinely unknown there, and reporting `system` would be a
+    /// fabrication.
     pub environment: Option<String>,
 }
 

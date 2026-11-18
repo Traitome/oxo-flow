@@ -4,9 +4,9 @@
 //! The monitor's DAG canvas used to hard-code `environment: 'system'` for
 //! every node, so a conda/docker/singularity rule was rendered as a system
 //! rule. The handler now reports each node's environment as the RUN resolves
-//! it — `[defaults] environment` folded onto rules (`apply_defaults`, the
-//! shared run helper), then the rule's inline environment. `env_group` is
-//! not expanded because the run path does not consult it, and a node that no
+//! it — the same `apply_defaults` fold the run/dry-run paths make, which
+//! materializes the documented precedence `env_group` → the rule's inline
+//! environment → `[defaults] environment` (issue #1210). A node that no
 //! longer maps to a snapshot rule reports `null` — never a fabricated
 //! `system`.
 //!
@@ -62,12 +62,11 @@ async fn seed_run(id: &str, snapshot: &str, workdir: &std::path::Path) {
     .expect("seed run");
 }
 
-/// The multi-environment fixture: four rules across the two sources the run
-/// path actually honors — `[defaults] venv` (folded onto rules by
-/// `apply_defaults`, the same call `run`/`dry-run` make) and inline
-/// `docker`/`singularity` specs — plus a downstream rule inheriting the
-/// defaults. `env_group` is intentionally absent: the run path does not
-/// consult it today, so it cannot produce a real per-node environment.
+/// The multi-environment fixture: four rules across the sources the run path
+/// honors — `[defaults] venv` and inline `docker`/`singularity` specs, both
+/// folded onto rules by `apply_defaults` (the same call `run`/`dry-run`
+/// make) — plus a downstream rule inheriting the defaults. `env_group` is
+/// covered by its own test below (folded since issue #1210).
 const MULTI_ENV_TOML: &str = r#"
 [workflow]
 name = "multi-env"
@@ -139,6 +138,50 @@ async fn dag_status_reports_each_rules_real_environment() {
             node["label"]
         );
     }
+}
+
+/// Issue #1210: `env_group` takes precedence over a conflicting inline
+/// environment in the documented order, and the fold is the same
+/// `apply_defaults` the run executes. The canvas must paint the group's
+/// backend — the environment the rule is actually wrapped in — not the
+/// inline loser that `dry-run` used to execute before the fix.
+#[tokio::test]
+async fn dag_status_reports_the_env_group_backend_the_run_executes() {
+    common::ensure_db().await;
+    let tmp = tempfile::tempdir().unwrap();
+
+    let snapshot = r#"
+[workflow]
+name = "env-group"
+version = "1.0"
+
+[env_groups.group_env]
+docker = "biocontainers/bwa:0.7.17"
+
+[[rules]]
+name = "with_group"
+env_group = "group_env"
+environment = { venv = "envs/inline" }
+output = ["a.txt"]
+shell = "true > {output}"
+
+[[rules]]
+name = "inline_only"
+environment = { venv = "envs/inline" }
+output = ["b.txt"]
+shell = "true > {output}"
+"#;
+    seed_run("run-env-group", snapshot, tmp.path()).await;
+
+    let (status, body) = get("/api/runs/run-env-group/dag-status").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    assert_eq!(
+        node_env(&body, "with_group"),
+        Some("docker"),
+        "env_group must win over the conflicting inline venv: {body}"
+    );
+    assert_eq!(node_env(&body, "inline_only"), Some("venv"), "{body}");
 }
 
 /// The other direction: a rule with no environment anywhere really does run

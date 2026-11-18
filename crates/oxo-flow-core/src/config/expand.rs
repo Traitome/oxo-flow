@@ -3381,19 +3381,13 @@ impl WorkflowConfig {
     /// 1. `env_groups[group_name]` if `rule.env_group` is set
     /// 2. `rule.environment` if not empty
     /// 3. `defaults.environment` as fallback
+    ///
+    /// Delegates to `super::effective_rule_environment` — the same
+    /// precedence [`Self::apply_defaults`] folds onto rules for the run
+    /// path (issue #1210), so `env list`/`env check` and execution share one
+    /// semantics instead of two.
     pub fn resolve_environment(&self, rule: &Rule) -> Option<EnvironmentSpec> {
-        // Check env_group first
-        if let Some(ref group_name) = rule.env_group
-            && let Some(env) = self.env_groups.get(group_name)
-        {
-            return Some(env.clone());
-        }
-        // Fall back to rule's environment if not empty
-        if !rule.environment.is_empty() {
-            return Some(rule.environment.clone());
-        }
-        // Fall back to defaults
-        self.defaults.environment.clone()
+        effective_rule_environment(&self.env_groups, self.defaults.environment.as_ref(), rule)
     }
 }
 

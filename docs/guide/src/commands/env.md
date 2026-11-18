@@ -27,7 +27,11 @@ When given a workflow file, lists the environment each rule will actually run
 in. Resolution follows the run's own precedence — `env_group` → the rule's
 `environment` → `[defaults] environment` — so a rule that inherits the
 defaults is reported with the backend the run will bootstrap, not as
-`system`. A rule that resolves to no environment is reported as `system`.
+`system`. `run` and `dry-run` fold that same resolved spec onto every rule
+before scheduling (issue #1210), so the listing and the executed backend
+cannot disagree — including a rule that declares both an `env_group` and a
+conflicting inline `environment`: the group wins on both surfaces. A rule
+that resolves to no environment is reported as `system`.
 
 **Output:**
 

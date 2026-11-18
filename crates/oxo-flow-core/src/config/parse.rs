@@ -986,7 +986,9 @@ impl WorkflowConfig {
         }
     }
 
-    /// Apply global defaults to all rules that don't have explicit overrides.
+    /// Apply global defaults to rules that don't have explicit overrides, and
+    /// materialize each rule's effective environment (the documented
+    /// `env_group` → inline → `[defaults]` precedence, issue #1210).
     pub fn apply_defaults(&mut self) {
         for rule in &mut self.rules {
             // Apply default threads if rule doesn't specify one (either field).
@@ -1003,11 +1005,24 @@ impl WorkflowConfig {
             {
                 rule.memory = Some(mem.clone());
             }
-            // Apply default environment if rule doesn't specify one
-            if rule.environment.is_empty()
-                && let Some(ref env) = self.defaults.environment
+            // Fold the EFFECTIVE environment onto the rule — the documented
+            // precedence `env_group` → the rule's inline spec → `[defaults]
+            // environment` (workflow-format reference, "Named Environment
+            // Groups"). The executor, dry-run preview, cluster planner, and
+            // the web DAG status all read `rule.environment` after this
+            // call, so the precedence has to be materialized here. Before
+            // issue #1210 only `[defaults]` was folded and `env_group` was
+            // ignored on this path, so `env list` (which resolves the full
+            // precedence) reported the group's backend while run/dry-run
+            // executed the conflicting inline one. The helper is the same
+            // one `resolve_environment` delegates to — never retyped.
+            if let Some(env) = effective_rule_environment(
+                &self.env_groups,
+                self.defaults.environment.as_ref(),
+                rule,
+            ) && rule.environment != env
             {
-                rule.environment = env.clone();
+                rule.environment = env;
             }
             // Apply default wall-time limit when the rule's resources don't
             // declare one (catalog sweep 2026-08-29: eager/auto-sra declared

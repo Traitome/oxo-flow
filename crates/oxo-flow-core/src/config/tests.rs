@@ -243,6 +243,84 @@ fn apply_defaults_propagates() {
     assert_eq!(step2.environment.kind(), "docker");
 }
 
+/// Issue #1210: `env_group` is documented as the highest-precedence
+/// environment selector (workflow-format reference, "Named Environment
+/// Groups": `env_group` → inline `[rules.environment]` → `[defaults]
+/// environment`). `apply_defaults` used to fold only the defaults, so the
+/// executor ran a conflicting inline spec while `env list` reported the
+/// group's backend. The fold must materialize the documented precedence on
+/// the path every execution surface reads.
+#[test]
+fn apply_defaults_folds_env_group_over_inline_environment() {
+    let toml_str = r#"
+        [workflow]
+        name = "env-group-precedence"
+
+        [defaults.environment]
+        venv = "envs/default"
+
+        [env_groups.group_env]
+        docker = "biocontainers/bwa:0.7.17"
+
+        [[rules]]
+        name = "with_group"
+        env_group = "group_env"
+        shell = "echo grouped"
+
+        [rules.environment]
+        venv = "envs/inline"
+
+        [[rules]]
+        name = "inline_only"
+        shell = "echo inline"
+
+        [rules.environment]
+        venv = "envs/inline"
+
+        [[rules]]
+        name = "defaulted"
+        shell = "echo defaulted"
+
+        [[rules]]
+        name = "missing_group"
+        env_group = "no_such_group"
+        shell = "echo missing"
+
+        [rules.environment]
+        venv = "envs/inline"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml_str).unwrap();
+    config.apply_defaults();
+
+    let with_group = config.get_rule("with_group").unwrap();
+    assert_eq!(
+        with_group.environment.kind(),
+        "docker",
+        "env_group must override the conflicting inline environment on the run path"
+    );
+    assert_eq!(
+        config.resolve_environment(with_group).unwrap(),
+        with_group.environment,
+        "env list/check (resolve_environment) and the folded run-path value must agree"
+    );
+    // Non-group rules keep the older, still-documented order.
+    assert_eq!(
+        config.get_rule("inline_only").unwrap().environment.kind(),
+        "venv"
+    );
+    assert_eq!(
+        config.get_rule("defaulted").unwrap().environment.kind(),
+        "venv"
+    );
+    // The documented fallback for an undefined group: the inline spec is
+    // used (validate reports E010 separately).
+    assert_eq!(
+        config.get_rule("missing_group").unwrap().environment.kind(),
+        "venv"
+    );
+}
+
 #[test]
 fn apply_defaults_time_limit_flows_into_resources() {
     // defaults.time_limit fills every rule's resources.time_limit when the
