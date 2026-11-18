@@ -56,6 +56,13 @@ pub(crate) fn parse_session_ttl_hours(raw: Option<&str>) -> u64 {
     }
 }
 
+/// Sign-in-specific honesty appended to the REQUIRED `AUDIT_WRITE_FAILED`
+/// suggestion (WEB-15 / #1199). `create_session` already ran when the audit
+/// write is attempted, so the minted token/session may be live even though
+/// the request answers 500; the message must not read as a refused sign-in.
+const LOGIN_AUDIT_SUGGESTION_HINT: &str = "The sign-in step already completed before this write, so a session token may \
+     already have been minted for this account; verify the session state before retrying.";
+
 /// Extract the Bearer token from request headers.
 fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -345,19 +352,21 @@ pub async fn login(
     // it would attribute the row to the `default` pseudo-user (see audit.rs,
     // which skips successful logins for exactly this reason). This handler
     // owns the success row and records the canonical users.id.
-    if let Some(backend) = crate::infra::db::global_backend()
-        && let Err(e) = backend
-            .record_audit_log(
-                &session_user_id,
-                "POST /api/auth/login",
-                "/api/auth/login",
-                "success",
-                Some(&serde_json::json!({ "status": 200 }).to_string()),
-            )
-            .await
-    {
-        tracing::error!("audit insert failed for POST /api/auth/login: {e}");
-    }
+    //
+    // The row is REQUIRED (WEB-15 / #1199): authentication success is
+    // security-relevant, so a lost row fails the response closed with the
+    // shared structured 500. The session was persisted above, so the error's
+    // suggestion carries the sign-in-specific consequence — a token may
+    // already have been minted; the sign-in itself is not refused.
+    crate::audit::audit_required_with_hint(
+        &session_user_id,
+        "POST /api/auth/login",
+        "/api/auth/login",
+        "success",
+        Some(&serde_json::json!({ "status": 200 }).to_string()),
+        Some(LOGIN_AUDIT_SUGGESTION_HINT),
+    )
+    .await?;
 
     Ok(Json(result))
 }
@@ -858,9 +867,7 @@ pub async fn upload_license(
             ),
         ));
     }
-    if !license_data.is_empty()
-        && let Some(backend) = crate::infra::db::global_backend()
-    {
+    if !license_data.is_empty() && crate::infra::db::global_backend().is_some() {
         use std::fmt::Write as _;
 
         use sha2::{Digest, Sha256};
@@ -875,16 +882,17 @@ pub async fn upload_license(
             "{{\"bytes\":{},\"sha256\":\"{hex}\"}}",
             license_data.len(),
         );
-        if let Err(error) = backend
-            .log_action_with_metadata(&user.id, "upload_license", "license", Some(&metadata))
-            .await
-        {
-            tracing::error!(
-                user_id = %user.id,
-                error = %error,
-                "license event could not be written to the audit log"
-            );
-        }
+        // Supplementary metadata only: the middleware already writes the
+        // REQUIRED row for `POST /api/license/upload` (WEB-15 / #1140), so a
+        // lost metadata row must not change the response (WEB-15 / #1199).
+        crate::audit::audit_best_effort(
+            &user.id,
+            "upload_license",
+            "license",
+            "success",
+            Some(&metadata),
+        )
+        .await;
     }
 
     Ok(Json(service::license_status()))

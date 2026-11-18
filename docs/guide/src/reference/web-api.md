@@ -181,16 +181,24 @@ remaining work in the WEB-15 ledger entry. Per-route implication: every
 REQUIRED route listed above can answer this 500 **after** applying its
 change; treat the 500 as "state unknown", not as "nothing happened".
 
-Both classes share one writer (the storage backend's `record_audit_log`).
-The middleware emits a structured `audit` event for every mutation it
-handles, including when the database insert fails, so machine consumers
-still see the attempt. The successful-login path is the exception: the
-login handler returns before the middleware's event emission and owns its
-own best-effort row, so a successful login on broken storage leaves
-**neither a row nor a structured event**. Failed login attempts are
-REQUIRED rows written by the middleware. Migration of the successful-login
-row to `audit_required` is tracked follow-up work in the WEB-15 ledger
-entry.
+Both classes share one writer (the storage backend's `record_audit_log`)
+behind the named `audit_required` / `audit_best_effort` helpers; no handler
+writes the table directly. The middleware emits a structured `audit` event
+for every mutation it handles, including when the database insert fails, so
+machine consumers still see the attempt.
+
+Successful sign-ins are the one handler-owned REQUIRED row (WEB-15 /
+issue #1199): the middleware sees only the pre-auth request and would
+misattribute the row to the `default` pseudo-user, so `POST /api/auth/login`
+records its own canonical `users.id` row. That write is REQUIRED, so a
+successful login on broken storage answers the same
+`500 AUDIT_WRITE_FAILED` instead of the computed 200 — and the ordering
+honesty applies here too: the session is persisted **before** the audit
+write, so the `500` means a session token may already have been minted for
+the account even though the sign-in response failed. Verify the session
+state before retrying. Failed login attempts stay REQUIRED rows written by
+the middleware. The license-upload metadata row stays best-effort: the
+middleware already writes the REQUIRED row for `POST /api/license/upload`.
 
 ### Server-Sent Events
 ```
