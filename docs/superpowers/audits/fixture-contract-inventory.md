@@ -29,13 +29,14 @@ column records that they were suspect at audit time.
 
 | Verdict | Families |
 | :--- | :---: |
-| traceable | 17 |
-| annotated | 2 |
+| traceable | 18 |
+| annotated | 1 |
 | suspect (open) | 1 |
 | **total** | **20** |
 
-Suspect at audit time: 4 families. Three were corrected (evaluation intents
-README counts, interpretation seed `s04`, comparative Snakefile line count);
+Suspect at audit time: 5 families. Four were corrected (evaluation intents
+README counts, interpretation seed `s04`, comparative Snakefile line count,
+and the stale inline AI-explanation assertion in `tests/cli_integration.rs`);
 one is left open and justified (`eval/gold/workflow.csv` `wf-004`, because
 correcting it requires changing the checker's graph surface *and* a human
 re-attestation of the evidence ledger — see §5.1).
@@ -84,7 +85,7 @@ re-attestation of the evidence ledger — see §5.1).
 | :--- | :--- | :--- | :---: | :--- |
 | `tests/fixtures/import/` (18 files: 14 `.err`, 4 `.ok`) | `.ok` fixtures must import and survive `validate`/`lint`/`dry-run`; `.err` fixtures must fail naming the marker on their `# EXPECT-ERROR:` line and must not write output; golden substrings pin translation fidelity (`crates/oxo-flow-cli/tests/import_fixtures.rs`). | Markers name the documented unsupported constructs/properties; the gate ran green: 2 tests pass (all supported fixtures + all unsupported fixtures). Golden substrings reject parser junk (`["A"`, `"])`). | traceable | — |
 | `tests/fixtures/mock-scheduler/` (4 scripts) | The mock reproduces the *contract* of the real scheduler CLI: `sacct` emits allocation + `.batch` rows and populates MaxRSS/TotalCPU only on step rows; `squeue` lists live jobs only (`MOCK_SQUEUE_HIDE_TERMINAL`); `scancel` is authoritative over a late process exit; `sbatch --parsable` returns immediately. | Each claim is stated in the fixture and exercised by `crates/oxo-flow-core/src/backend/cluster.rs` parser tests (`sacct_max_rss_comes_from_the_step_rows`, header-driven layout, state vocabulary) and `tests/cluster_backend.rs` (`exit_code` "0:0", cancelled jobs settle CANCELLED). | traceable | The mock is a mock: results are CI integration evidence, never cluster empirical claims. |
-| Crate-local inline corpora (Rust `#[cfg(test)]` strings, e.g. inline gallery-comment expectations in `crates/oxo-flow-cli/src/commands/info.rs`, SCATTER fixtures in `tests/*.rs`) | Feature contracts at the unit level. | Inline strings are inputs, not expected fixture files; where they duplicate fixture content (gallery-16 config comments) they are deliberate locks — a fixture edit fails the test rather than drifting silently. | annotated | Mirror risk acknowledged: these must be updated in the same change as their source fixture; no automated cross-check exists. |
+| Crate-local inline corpora (Rust `#[cfg(test)]` strings, e.g. inline gallery-comment expectations in `crates/oxo-flow-cli/src/commands/info.rs`, SCATTER fixtures in `tests/*.rs`) | Feature contracts at the unit level. | Inline strings are inputs, not expected fixture files; where they duplicate fixture content (gallery-16 config comments) they are deliberate locks — a fixture edit fails the test rather than drifting silently. **Found stale:** `tests/cli_integration.rs:676` asserted the pre-#1122 prose (`AI provider not configured`), while the AI-09 contract is the structured degraded reason — stable code `AI_NOT_CONFIGURED` plus the `ai setup` suggestion, the shape the sibling `crates/oxo-flow-cli/tests/ai_policy.rs` already asserts. This assertion was failing against the current engine (CI caught it on PR #1214), so it is a stale-semantics fixture but not a *passing* one; the demonstrated passing defect remains `s04` (§4.1). | traceable | **Was suspect; corrected** (asserts `AI degraded [AI_NOT_CONFIGURED]`). Mirror risk acknowledged: inline expectations must be updated in the same change as the behavior they quote; no automated cross-check exists. |
 
 ### 3.6 Schema and generated data
 
@@ -149,6 +150,19 @@ AssertionError: 'all 36 intents x naive-prompt,cli' not found in ...
 
 and passes after correction. This is a documentation-side stale expectation,
 not an engine claim, and is reported as such.
+
+### 4.3 Stale inline assertion caught by CI (`tests/cli_integration.rs`)
+
+`cli_ai_explain_without_provider_degrades_to_skeleton` asserted
+`stderr` contains the pre-#1122 prose `AI provider not configured`. The
+AI-09 contract is the structured degraded reason (`AI degraded
+[AI_NOT_CONFIGURED]` plus the `ai setup` suggestion), which the engine now
+emits and which `crates/oxo-flow-cli/tests/ai_policy.rs` already asserts.
+CI failed on this assertion for PR #1214 (it is a pre-existing failure on
+the branch base, not caused by this PR) and the one-shot flake retry
+re-failed, confirming it is not flaky. Corrected to assert the stable code.
+Unlike `s04`, this stale fixture was failing rather than passing, so the
+"suite passes while the contract is violated" evidence remains §4.1.
 
 ## 5. Suspect / annotated details
 
@@ -222,6 +236,7 @@ false invariant.
 | `oxo-flow validate examples/gallery/*.oxoflow` | 16/16 pass |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo test -p oxo-flow-cli -- --test-threads=1` | exit 0 (19 test binaries, 0 failures; includes the new seed gate) |
+| `cargo test -p oxo-flow --test cli_integration -- --test-threads=1` | 311 passed, 0 failed after the §4.3 correction (the one-shot CI flake retry re-failed the stale assertion, confirming it was not a flake) |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | clean |
 
 ## 7. What this audit does NOT establish
