@@ -50,10 +50,21 @@ pub fn parse_job_id(backend: &ClusterBackend, stdout: &str, stderr: &str) -> Res
             Err(unparseable("Kubernetes", out, stderr.trim()))
         }
         ClusterBackend::AwsBatch => {
-            if !out.is_empty() {
-                return Ok(out.to_string());
+            if out.is_empty() {
+                return Err(unparseable("AWS Batch", out, stderr.trim()));
             }
-            Err(unparseable("AWS Batch", out, stderr.trim()))
+            // `--query jobId --output text` returns the bare id, but a
+            // wrapped/older CLI may ignore the query and print the whole
+            // SubmitJob response. Key on the id it carries instead of
+            // returning the JSON document as a job id (which would also
+            // corrupt array child handles `{id}:{n}`).
+            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(out)
+                && let Some(id) = doc.get("jobId").and_then(|v| v.as_str())
+                && !id.is_empty()
+            {
+                return Ok(id.to_string());
+            }
+            Ok(out.to_string())
         }
         ClusterBackend::GcpBatch => {
             if !out.is_empty() {
@@ -880,6 +891,10 @@ impl super::ExecutorBackend for ClusterExecutor {
         // the script form — a batch/v1 Job for Kubernetes, a submit-job CLI
         // input document for AWS (jobName/jobQueue live inside the payload),
         // and a config file plus an id we mint for GCP.
+        // GCP accepts the job id positionally but prints the submitted Job
+        // resource, not the id; remember what was minted so `submit` can
+        // return the scheduler handle every tracking path keys on.
+        let mut minted_id: Option<String> = None;
         let (program, args): (&str, Vec<String>) = match self.backend {
             ClusterBackend::Slurm => ("sbatch", vec!["--parsable".into(), path_str.clone()]),
             ClusterBackend::Pbs | ClusterBackend::Sge | ClusterBackend::Lsf => (
@@ -899,6 +914,14 @@ impl super::ExecutorBackend for ClusterExecutor {
                     "submit-job".into(),
                     "--cli-input-json".into(),
                     format!("file://{path_str}"),
+                    // The default output is the whole SubmitJob response
+                    // JSON — line breaks and braces in every path that
+                    // keys on the id (job.id, status.json, and the array
+                    // child ids `{id}:{n}`). Ask for the bare id.
+                    "--query".into(),
+                    "jobId".into(),
+                    "--output".into(),
+                    "text".into(),
                 ],
             ),
             ClusterBackend::GcpBatch => {
@@ -920,16 +943,24 @@ impl super::ExecutorBackend for ClusterExecutor {
                     "batch".to_string(),
                     "jobs".to_string(),
                     "submit".to_string(),
-                    job_id,
+                    job_id.clone(),
                 ];
                 args.extend(self.gcloud_location_args());
                 args.push("--config".to_string());
                 args.push(format!("file://{path_str}"));
+                minted_id = Some(job_id);
                 ("gcloud", args)
             }
         };
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = self.run_cmd(program, &arg_refs).await?;
+        if let Some(id) = minted_id {
+            // `gcloud batch jobs submit <id>` prints the submitted Job
+            // resource (name, taskGroups, …) — not the id it accepted
+            // positionally. Returning that resource as a job id broke every
+            // later describe/cancel and the per-element task handles.
+            return Ok(id);
+        }
         parse_job_id(
             &self.backend,
             &String::from_utf8_lossy(&out.stdout),
@@ -1826,6 +1857,24 @@ mod tests {
         assert!(parse_job_id(&ClusterBackend::Slurm, "garbage", "also garbage").is_err());
     }
 
+    /// Ledger RB-06: a SubmitJob response (default AWS CLI output) must
+    /// yield the BARE job id — the whole JSON document is not a job id and
+    /// would corrupt every describe/cancel and array child handle.
+    #[test]
+    fn parse_job_id_aws_extracts_the_json_job_id() {
+        let response = "{\n  \"jobArn\": \"arn:aws:batch:job/abc\",\n  \
+                        \"jobId\": \"abc-123\",\n  \"jobName\": \"oxoflow-x\"\n}";
+        assert_eq!(
+            parse_job_id(&ClusterBackend::AwsBatch, response, "").unwrap(),
+            "abc-123"
+        );
+        // The bare `--query jobId --output text` shape still works.
+        assert_eq!(
+            parse_job_id(&ClusterBackend::AwsBatch, "abc-123\n", "").unwrap(),
+            "abc-123"
+        );
+    }
+
     #[test]
     fn parse_status_line_slurm() {
         assert_eq!(
@@ -2383,6 +2432,65 @@ mod tests {
             .unwrap();
         assert_eq!(statuses.get("arr:0"), Some(&BackendJobStatus::Completed));
         assert_eq!(statuses.get("arr:1"), Some(&BackendJobStatus::Failed));
+    }
+
+    /// Ledger RB-06: `aws batch submit-job` must return the BARE job id —
+    /// it is the handle the driver keys tracking on and the array child
+    /// ids `{id}:{n}` extend. The CLI is asked for exactly that shape.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn aws_batch_submit_returns_the_bare_job_id() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
+        write_scheduler_shim(
+            bin.path(),
+            "aws",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {}\necho 'abc-123'\nexit 0",
+                args_log.display()
+            ),
+        );
+        let spec = runs.path().join("job.json");
+        std::fs::write(&spec, "{}").unwrap();
+        let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let id = exec.submit(&spec).await.unwrap();
+        assert_eq!(id, "abc-123");
+        let argv = std::fs::read_to_string(&args_log).unwrap();
+        assert!(
+            argv.contains("--query\njobId\n--output\ntext"),
+            "the submit must ask for the bare id, not the response JSON: {argv:?}"
+        );
+    }
+
+    /// Ledger RB-06: `gcloud batch jobs submit <id>` prints the submitted
+    /// Job resource, not the id; `submit` must return the minted id it
+    /// passed positionally, or every describe/cancel and per-element task
+    /// handle is keyed on YAML.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn gcp_batch_submit_returns_the_minted_job_id() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "gcloud",
+            "printf 'name: projects/p/locations/l/jobs/whatever\\nstatus:\\n  state: QUEUED\\n'\n\
+             exit 0",
+        );
+        let job_dir = runs.path().join("jobs/trim");
+        std::fs::create_dir_all(&job_dir).unwrap();
+        let spec = job_dir.join("job.json");
+        std::fs::write(&spec, "{}").unwrap();
+        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let id = exec.submit(&spec).await.unwrap();
+        assert!(id.starts_with("oxoflow-trim-"), "minted id expected: {id}");
+        assert!(
+            !id.contains('\n') && !id.contains("status:"),
+            "the job resource must never become the job id: {id}"
+        );
     }
 
     /// Ledger RB-06: an empty / unrecognised `gcloud` state is Unknown,
