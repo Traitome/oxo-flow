@@ -4460,6 +4460,17 @@
 <h3 id="with-environment">With environment<a class="headerlink" href="#with-environment" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>-e<span class="w"> </span><span class="s2">"conda: bwa_env"</span><span class="w"> </span><span class="s2">"bwa mem ref.fa {item}"</span><span class="w"> </span>*.fastq.gz
 </span></code></pre></div>
+<p>The <code>conda:</code> form wraps through the engine's own conda-family command builder
+(see <a href="../../reference/environment-system/#shared-conda-family-lifecycle-create-use-decommission">Environment System</a>):
+each item runs inside the SAME environment an <code>oxo-flow run</code> rule would use —
+<code>&lt;yaml name|stem&gt;-&lt;hash8&gt;</code> for a file-backed spec — with the environment's
+<code>bin/</code> first on <code>PATH</code>, so an environment the engine already created is
+reused rather than looked up under a hand-derived name. A relative spec path
+resolves against <code>--workdir</code> (the same anchor <code>run</code> uses), and a bare
+environment name (<code>-e bwa_env</code>, no <code>kind:</code> prefix) is used verbatim — a
+dotted name such as <code>r-4.4</code> is not truncated. <code>mamba:</code> is accepted and uses
+the same shared builder; <code>pixi:</code>/<code>venv:</code>/<code>modules:</code> are rejected rather than
+silently running the item on the host <code>PATH</code>.</p>
 <h3 id="generate-workflow">Generate workflow<a class="headerlink" href="#generate-workflow" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>--generate-workflow<span class="w"> </span><span class="s2">"bwa mem ref.fa {item}"</span><span class="w"> </span>*.bam<span class="w"> </span>-o<span class="w"> </span>align.oxoflow
 </span></code></pre></div>
@@ -4499,7 +4510,7 @@ way, so redirecting stdout always yields pure JSON:</p>
 <li>Input file format: one item per line, blank lines and <code>#</code> comments ignored</li>
 <li>When no items provided and stdin has data, reads from pipe</li>
 <li><code>{}</code> is rush-compatible shorthand for <code>{item}</code></li>
-<li>Environment spec format: <code>conda: env.yaml</code> or <code>docker: image:tag</code></li>
+<li>Environment spec format: <code>conda: env.yaml</code>, <code>mamba: env.yaml</code>, <code>docker: image:tag</code>, or <code>singularity: image.sif</code> (a bare <code>-e &lt;name&gt;</code> selects a conda environment by name)</li>
 <li>
 <p>In dry-run, the human-readable preview goes to stderr; with
   <code>--json-output</code>/<code>--json</code> the same preview is emitted as JSON on stdout</p>
