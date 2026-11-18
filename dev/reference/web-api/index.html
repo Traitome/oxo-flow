@@ -6511,6 +6511,10 @@ The read-only result-delivery layer:</p>
   inline image bytes; other types return <code>415 NO_PREVIEW</code></li>
 <li>paths are sandboxed to the run's workdir (traversal rejected); sensitive
   filenames (.env, keys, credentials) are never served</li>
+<li>browser downloads use the SPA's authenticated <code>fetch</code> path (<code>Authorization: Bearer</code>
+  header → Blob → object URL); no token is placed in a download URL's query
+  string, and an unauthenticated <code>401</code> redirects the SPA to the login page
+  instead of saving an empty file (WEB-14 / issue #1139)</li>
 </ul>
 <h3 id="instances">Instances<a class="headerlink" href="#instances" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>GET /api/runs/{id}/instances
