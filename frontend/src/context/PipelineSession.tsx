@@ -257,8 +257,10 @@ const SessionCtx = createContext<SessionContextValue | null>(null);
 
 /**
  * Cap on the `/api/auth/me` confirmation that gates the first paint when the
- * browser claims a signed-in identity (#1144 D3). Past it the app renders
- * from the cached identity rather than staying blank on a hung server.
+ * browser claims a signed-in identity (#1144 D3). Past it the app fails
+ * closed with the "Session not confirmed" notice — it never renders from
+ * the unverified cached identity — and a late answer still adopts the
+ * confirmed owner.
  */
 const IDENTITY_CONFIRM_TIMEOUT_MS = 5000;
 
