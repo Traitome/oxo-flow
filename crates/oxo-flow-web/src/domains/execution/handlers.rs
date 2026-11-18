@@ -430,6 +430,34 @@ pub fn set_run_rate_limit_for_tests(limit: u32) {
     super::run_limit::set_limit_for_tests(limit);
 }
 
+/// Atomically admit a queued run row (audit RB-02).
+///
+/// A saved-pipeline run is serialized on its `pipeline_id`: one live run per
+/// saved pipeline, so the pipeline's history is a linear sequence. Ad-hoc
+/// runs (and retry/resume of ad-hoc runs) are serialized on their workdir —
+/// the CLI's checkpoint lives there, and two CLIs on one checkpoint corrupt
+/// it. The helper is shared by create, retry, and resume so all three paths
+/// declare the SAME admission policy instead of each hand-rolling one.
+async fn claim_run_row(
+    backend: &dyn crate::infra::db::StorageBackend,
+    run: &models::RunRow,
+) -> Result<bool, String> {
+    if run.pipeline_id.is_some() {
+        backend.create_run_if_pipeline_idle(run).await
+    } else {
+        backend.create_run_if_workdir_idle(run).await
+    }
+}
+
+/// Remove a run directory created for a row that admission then rejected.
+/// The directory name is the run's freshly generated id, so nothing else can
+/// own it; failures are log-only (a stray empty directory is harmless).
+async fn discard_run_dir(run_dir: &std::path::Path) {
+    if let Err(e) = tokio::fs::remove_dir_all(run_dir).await {
+        tracing::warn!("Could not remove rejected run directory {:?}: {e}", run_dir);
+    }
+}
+
 /// Stage run sources (workflow TOML + `[[include]]` files) into a
 /// per-request temp directory. This runs BEFORE the runs row is inserted
 /// and before the workdir claim is attempted: include-staging failures
@@ -474,15 +502,15 @@ async fn stage_run_sources(
     Ok(workflow_path)
 }
 
-/// Copy the staged sources into the run's real workdir after the
-/// `create_run_if_workdir_idle` claim is won. The workdir may be a saved
-/// pipeline's persistent directory shared across re-runs — writing into
-/// it before the claim let a 409 loser clobber the winner's files
-/// mid-run. Failures here are log-only: the `queued` row already exists,
-/// and a 500 after the insert would strand a row whose CLI spawn never
-/// happens; the CLI fails loudly on missing sources instead. Copies (not
-/// renames) because the per-request temp dir may live on a different
-/// filesystem than the workspace.
+/// Copy the staged sources into the run's own workdir after the admission
+/// claim is won. The ordering is deliberate (claim-then-stage): the
+/// artifact tree must not exist before the row that names it, and a 409
+/// loser must leave no trace (it also removes its own run dir). Failures
+/// here are log-only: the `queued` row already exists, and a 500 after the
+/// insert would strand a row whose CLI spawn never happens; the CLI fails
+/// loudly on missing sources instead. Copies (not renames) because the
+/// per-request temp dir may live on a different filesystem than the
+/// workspace.
 async fn materialize_run_sources(
     run_dir: &std::path::Path,
     workflow_path: &std::path::Path,
@@ -591,10 +619,10 @@ pub async fn create_run(
         .filter(|s| !s.is_empty())
         .map(String::from);
 
-    // Optional saved-pipeline linkage (issue #69): runs targeting a saved
-    // pipeline execute in the pipeline's persistent workdir, so the CLI's
-    // checkpoint (config snapshot, rule fingerprints, input manifests)
-    // survives across re-runs and delivers precise invalidation.
+    // Optional saved-pipeline linkage (issue #69): `pipeline_id` associates
+    // the run with a saved pipeline for permissions, listing, and admission
+    // ordering. It is NOT a workdir (issue #1130 / audit RB-02): each run
+    // still executes in its own `runs/<run_id>/` directory.
     let pipeline_id: Option<String> = req
         .pipeline_id
         .as_deref()
@@ -663,41 +691,44 @@ pub async fn create_run(
             .map(|c| c.workflow.name)
             .unwrap_or_else(|_| "unnamed".to_string());
 
-        // Resolve the working directory the executor will run in.
-        let run_dir = match &pipeline_id {
-            Some(pid) => {
-                // Read permission, not just existence (#519): executing a
-                // private pipeline by id exposes its name/DAG/products
-                // through the run's own status endpoints. Foreign and
-                // unknown ids both answer PIPELINE_NOT_FOUND (no oracle).
-                let row = backend
-                    .get_pipeline(pid)
-                    .await
-                    .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
-                if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
-                    return Err(err(
-                        StatusCode::NOT_FOUND,
-                        "PIPELINE_NOT_FOUND",
-                        format!("Pipeline {pid} not found"),
-                    ));
-                }
-                crate::workspace::setup_pipeline_directory(&user.id, pid)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?
+        // Read permission, not just existence (#519): executing a private
+        // pipeline by id exposes its name/DAG/products through the run's own
+        // status endpoints. Foreign and unknown ids both answer
+        // PIPELINE_NOT_FOUND (no oracle).
+        if let Some(pid) = &pipeline_id {
+            let row = backend
+                .get_pipeline(pid)
+                .await
+                .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
+            if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
+                return Err(err(
+                    StatusCode::NOT_FOUND,
+                    "PIPELINE_NOT_FOUND",
+                    format!("Pipeline {pid} not found"),
+                ));
             }
-            None => crate::workspace::setup_run_directory(&user.id, &resp.run_id)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
-        };
+        }
+
+        // Every run — ad-hoc or from a saved pipeline — executes in its own
+        // `runs/<run_id>/` directory (audit RB-02). A saved-pipeline run used
+        // to share `pipelines/<pipeline_id>/`, so a later run overwrote the
+        // earlier run's workflow, checkpoint, logs, and outputs in place.
+        // The row's `pipeline_snapshot` plus this directory keep the run's
+        // exact inputs and artifacts immutable; `pipeline_id` is now purely
+        // an association (listing, permission, admission) — never a workdir.
+        let run_dir = crate::workspace::setup_run_directory(&user.id, &resp.run_id)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?;
 
         // Save pipeline TOML to the working directory so the executor (CLI
         // subprocess) can read it. `tokio::fs` keeps the small write off
         // the async runtime's blocking threads (#268 item 4, web minor).
         //
-        // The sources are NOT written into run_dir here: a saved pipeline
-        // reuses its persistent workdir, so a request that loses the
-        // concurrent-run race below (409 RUN_NOT_TERMINAL) must not have
-        // already clobbered the winner's on-disk files. Stage into a
-        // per-request temp dir instead; the claim's Ok(true) arm copies
-        // them into the workdir (claim-then-stage).
+        // The sources are staged into a per-request temp dir first and only
+        // copied into the run's workdir after the admission claim below
+        // wins (claim-then-stage). The run workdir is unique per run, so a
+        // rejected request could not clobber a winner's files anyway; the
+        // ordering keeps the artifact tree absent until the row that names
+        // it exists, which is the invariant run-history readers rely on.
         let staging = tempfile::tempdir().map_err(|e| {
             tracing::error!("Failed to create staging directory: {e}");
             err(
@@ -799,18 +830,16 @@ pub async fn create_run(
         // admitted run id is known. A rejected request answers 429 here.
         admit_spawn_budget(backend.as_ref(), &resp.run_id, &user.id, quota_usage).await?;
 
-        // The guarded insert is the atomic workdir claim (same contract as
-        // retry/resume-checkpoint): a saved pipeline reuses its persistent
-        // workdir, so two concurrent "run again" clicks used to produce two
-        // `queued` rows and two CLIs on one checkpoint — and both requests
-        // used to overwrite the shared workdir's files before either claim
-        // landed. The sources now wait in the per-request temp dir above,
-        // so the loser answers 409 with the winner's files untouched. The
-        // loser's staging temp dir is dropped when this handler returns.
-        // An insert failure also stops the spawn here — swallowing it
-        // (the old behavior) launched a ghost run the list endpoints could
-        // never see or cancel.
-        let claim = backend.create_run_if_workdir_idle(&run).await;
+        // Admission is one atomic guarded insert: a saved pipeline admits
+        // one live run at a time (keyed on pipeline_id — two concurrent
+        // "run again" clicks would otherwise produce two `queued` rows and
+        // two CLIs on one checkpoint), while ad-hoc runs are isolated by
+        // their unique workdir. A loser answers 409 without ever touching
+        // an admitted run's files — the sources still wait in the
+        // per-request temp dir above. An insert failure also stops the
+        // spawn here; swallowing it (the old behavior) launched a ghost run
+        // the list endpoints could never see or cancel.
+        let claim = claim_run_row(backend.as_ref(), &run).await;
         match claim {
             Ok(true) => {
                 materialize_run_sources(&run_dir, &workflow_path, &include_paths).await;
@@ -818,17 +847,24 @@ pub async fn create_run(
             Ok(false) => {
                 // The run never starts; give the reservation back now.
                 release_spawn_budget(backend.as_ref(), &run.id).await;
+                discard_run_dir(&run_dir).await;
+                let scope = if run.pipeline_id.is_some() {
+                    "another run of this saved pipeline is already active"
+                } else {
+                    "another run is already active in this workdir"
+                };
                 return Err(err(
                     StatusCode::CONFLICT,
                     "RUN_NOT_TERMINAL",
                     format!(
-                        "another run is already active in this workdir — wait for it to \
-                         finish (or cancel it) before starting pipeline run {}",
+                        "{scope} — wait for it to finish (or cancel it) before starting \
+                         run {}",
                         run.id
                     ),
                 ));
             }
             Err(e) => {
+                discard_run_dir(&run_dir).await;
                 tracing::error!("DB error inserting run {}: {e}", run.id);
                 release_spawn_budget(backend.as_ref(), &run.id).await;
                 return Err(err(
@@ -842,7 +878,7 @@ pub async fn create_run(
         // Stage the acting user's uploaded inputs into the run workspace
         // (issue #276 L1): `POST /api/files` writes to
         // `workspace/users/<u>/inputs/`, but the CLI executes in
-        // `runs/<id>/` (or the pipeline's persistent dir) and could never
+        // `runs/<id>/` and could never
         // see them — every `metadata_file`/data-referencing workflow failed
         // pre-execution for web-only users. Mirroring the whole tree keeps
         // declared relative paths (`data/meta.tsv`) intact. Best-effort:
@@ -1710,8 +1746,10 @@ pub async fn retry_run(
 
     // The terminal-state check above is TOCTOU: two concurrent retries both
     // read the old row as terminal and both spawn into the same workdir.
-    // The guarded insert makes the claim atomic — the loser gets 409.
-    let claim = backend.create_run_if_workdir_idle(&new_run).await;
+    // The guarded insert makes the claim atomic — the loser gets 409. A
+    // saved-pipeline retry takes the pipeline guard (one live run per saved
+    // pipeline); an ad-hoc retry takes the workdir guard.
+    let claim = claim_run_row(backend.as_ref(), &new_run).await;
     match claim {
         Ok(true) => {}
         Ok(false) => {
@@ -1720,8 +1758,13 @@ pub async fn retry_run(
                 StatusCode::CONFLICT,
                 "RUN_NOT_TERMINAL",
                 format!(
-                    "another run is already active in this workdir — wait for it to \
-                     finish (or cancel it) before retrying run {id}"
+                    "another run is already active for this {} — wait for it to \
+                     finish (or cancel it) before retrying run {id}",
+                    if new_run.pipeline_id.is_some() {
+                        "saved pipeline"
+                    } else {
+                        "workdir"
+                    }
                 ),
             ));
         }
@@ -3311,8 +3354,9 @@ pub async fn resume_checkpoint(
     // RB-09 (#1133): atomic durable admission before the claim.
     admit_spawn_budget(backend.as_ref(), &new_run_id, &user.id, quota_usage).await?;
 
-    // Same TOCTOU as retry_run: claim the workdir atomically at insert.
-    let claim = backend.create_run_if_workdir_idle(&new_run).await;
+    // Same TOCTOU as retry_run: claim the admission scope atomically at
+    // insert (pipeline for saved-pipeline runs, workdir otherwise).
+    let claim = claim_run_row(backend.as_ref(), &new_run).await;
     match claim {
         Ok(true) => {}
         Ok(false) => {
@@ -3321,8 +3365,13 @@ pub async fn resume_checkpoint(
                 StatusCode::CONFLICT,
                 "RUN_NOT_TERMINAL",
                 format!(
-                    "another run is already active in this workdir — wait for it to \
-                     finish (or cancel it) before resuming run {id}"
+                    "another run is already active for this {} — wait for it to \
+                     finish (or cancel it) before resuming run {id}",
+                    if new_run.pipeline_id.is_some() {
+                        "saved pipeline"
+                    } else {
+                        "workdir"
+                    }
                 ),
             ));
         }

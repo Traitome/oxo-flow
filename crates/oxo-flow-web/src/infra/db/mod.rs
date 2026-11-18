@@ -26,6 +26,36 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
     None
 }
 
+/// Columns written by every guarded run insert, in bind order.
+///
+/// Kept in one place so the workdir and pipeline admission guards cannot
+/// drift from each other or from the plain insert (audit RB-02).
+pub(crate) const RUN_INSERT_COLUMNS: &str = "id, user_id, pipeline_id, pipeline_snapshot, \
+     workflow_name, status, phase, dry_run, pid, workdir, config_overrides, \
+     artifacts_incomplete, started_at, finished_at, created_at";
+
+/// Run statuses that count as live for admission guards.
+pub(crate) const RUN_LIVE_STATUSES_SQL: &str = "('queued', 'running', 'paused')";
+
+/// Build the guarded run insert shared by the workdir and pipeline claims.
+///
+/// The insert names 15 row values followed by one guard value; the statement
+/// only lands while no live run matches `guard_column`. `placeholder(i)`
+/// yields the dialect's bind marker for the 1-based i-th value (`?` for
+/// SQLite, `$n` for PostgreSQL).
+pub(crate) fn guarded_run_insert_sql(
+    guard_column: &str,
+    placeholder: impl Fn(usize) -> String,
+) -> String {
+    let values: Vec<String> = (1..=15).map(&placeholder).collect();
+    format!(
+        "INSERT INTO runs ({RUN_INSERT_COLUMNS}) SELECT {} WHERE NOT EXISTS \
+         (SELECT 1 FROM runs WHERE {guard_column} = {} AND status IN {RUN_LIVE_STATUSES_SQL})",
+        values.join(", "),
+        placeholder(16)
+    )
+}
+
 /// Test-only: an in-memory backend carrying the tables the OAuth unit tests
 /// share through the process-global storage handle (which is set once per
 /// test process, so every OAuth unit test must use this same schema).
@@ -191,6 +221,11 @@ pub trait StorageBackend: Send + Sync {
 
     async fn create_run(&self, run: &models::RunRow) -> Result<models::RunRow, String>;
     async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String>;
+    /// Insert a queued run only while no live run exists for the same saved
+    /// pipeline. Runs of one saved pipeline are admitted one at a time so a
+    /// pipeline's run history stays a linear sequence; ad-hoc runs are
+    /// isolated by their unique workdir and do not take this guard.
+    async fn create_run_if_pipeline_idle(&self, run: &models::RunRow) -> Result<bool, String>;
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String>;
     async fn get_run(&self, id: &str) -> Result<Option<models::RunRow>, String>;
     async fn list_runs(

@@ -1,9 +1,10 @@
 //! Integration tests for the web server's run path (issue #69).
 //!
-//! Saved-pipeline runs execute in a persistent per-pipeline workdir via the
-//! `oxo-flow` CLI subprocess, so the checkpoint survives across re-runs and
-//! the CLI's config-change impact analysis delivers precise rebuilds:
-//! affected rules re-execute, the rest are reused.
+//! Every run executes in its own immutable `runs/<run_id>/` workdir via the
+//! `oxo-flow` CLI subprocess (issue #1130 / audit RB-02). A fresh create of a
+//! saved pipeline re-executes the whole workflow — checkpoint reuse across
+//! separate runs is gone by design — and a later run never touches an
+//! earlier run's workflow, checkpoint, logs, or outputs.
 
 mod common;
 use common::free_port;
@@ -124,12 +125,12 @@ async fn wait_for_terminal(client: &reqwest::Client, base: &str, run_id: &str) -
     }
 }
 
-/// Issue #69 core scenario: re-running a saved pipeline with a changed
-/// config value rebuilds exactly the rules referencing it (plus downstream);
-/// unaffected rules keep their checkpoint records. The persistent pipeline
-/// workdir makes the whole CLI invalidation machinery apply across web runs.
+/// Issue #69 scenario, updated for immutable run trees (issue #1130): two
+/// sequential runs of one saved pipeline each execute in their own workdir.
+/// A later run re-executes the whole workflow and leaves the earlier run's
+/// workflow and outputs byte-identical.
 #[tokio::test]
-async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
+async fn web_saved_pipeline_reruns_are_isolated_full_executions() {
     let dir = tempfile::tempdir().unwrap();
     let server = TestServer::start(dir.path()).await;
     let client = reqwest::Client::new();
@@ -192,19 +193,9 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .unwrap();
     assert!(logs1.contains("Running: upstream"), "run1 logs: {logs1}");
     assert!(logs1.contains("Running: downstream"), "run1 logs: {logs1}");
-    assert_eq!(
-        std::fs::read_to_string(
-            dir.path()
-                .join("workspace/users/default/pipelines")
-                .join(&pipeline_id)
-                .join("down.txt")
-        )
-        .unwrap(),
-        "A\n"
-    );
 
-    // The run record carries the pipeline workdir (also fixes the logs and
-    // results endpoints, which read the workdir column).
+    // The run record carries this run's own workdir — never the persistent
+    // pipeline directory — and the outputs live there.
     let run1_info: serde_json::Value = client
         .get(format!("{base}/api/runs/{run1_id}"))
         .send()
@@ -213,15 +204,29 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .json()
         .await
         .unwrap();
+    let recorded1 = PathBuf::from(run1_info["workdir"].as_str().expect("run1 workdir"));
+    // The server's workspace defaults to a cwd-relative `workspace/`; the
+    // test process cwd is not the server cwd.
+    let workdir1 = if recorded1.is_absolute() {
+        recorded1
+    } else {
+        dir.path().join(recorded1)
+    };
     assert!(
-        run1_info["workdir"]
-            .as_str()
-            .unwrap_or("")
-            .contains(&format!("pipelines/{pipeline_id}")),
-        "run record must point at the pipeline workdir: {run1_info}"
+        workdir1.ends_with(format!("runs/{run1_id}")),
+        "every run must execute in runs/<run_id>: {run1_info}"
     );
+    assert!(
+        !workdir1.to_string_lossy().contains("/pipelines/"),
+        "run record must not point at a pipeline workdir: {run1_info}"
+    );
+    let down1 = std::fs::read_to_string(workdir1.join("down.txt")).unwrap();
+    let workflow1 = std::fs::read_to_string(workdir1.join("workflow.oxoflow")).unwrap();
+    assert_eq!(down1, "A\n");
+    assert_eq!(workflow1, workflow("A"));
 
-    // Run 2: config changed — only the referencing rule rebuilds.
+    // Run 2: a fresh create re-executes the whole workflow (no cross-run
+    // checkpoint reuse) in its own workdir.
     let run2: serde_json::Value = client
         .post(format!("{base}/api/runs"))
         .json(&serde_json::json!({
@@ -248,30 +253,44 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .await
         .unwrap();
     assert!(
-        logs2.contains("Config change:"),
-        "config-change summary expected: {logs2}"
+        !logs2.contains("already completed"),
+        "a fresh create owns a fresh workdir — nothing may be reused: {logs2}"
     );
     assert!(
-        logs2.contains("already completed"),
-        "unaffected upstream rule must be reused: {logs2}"
+        logs2.contains("Running: upstream") && logs2.contains("Running: downstream"),
+        "both rules must execute in the new run workdir: {logs2}"
     );
-    assert!(
-        !logs2.contains("Running: upstream"),
-        "upstream must NOT re-run: {logs2}"
+
+    let run2_info: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run2_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recorded2 = PathBuf::from(run2_info["workdir"].as_str().expect("run2 workdir"));
+    let workdir2 = if recorded2.is_absolute() {
+        recorded2
+    } else {
+        dir.path().join(recorded2)
+    };
+    assert_ne!(workdir1, workdir2, "each run must get its own workdir");
+    assert_eq!(
+        std::fs::read_to_string(workdir2.join("down.txt")).unwrap(),
+        "B\n"
     );
-    assert!(
-        logs2.contains("Running: downstream"),
-        "affected downstream rule must re-run: {logs2}"
+
+    // Run 1's tree is untouched by run 2.
+    assert_eq!(
+        std::fs::read_to_string(workdir1.join("down.txt")).unwrap(),
+        down1,
+        "a later run overwrote the earlier run's output"
     );
     assert_eq!(
-        std::fs::read_to_string(
-            dir.path()
-                .join("workspace/users/default/pipelines")
-                .join(&pipeline_id)
-                .join("down.txt")
-        )
-        .unwrap(),
-        "B\n"
+        std::fs::read_to_string(workdir1.join("workflow.oxoflow")).unwrap(),
+        workflow1,
+        "a later run overwrote the earlier run's workflow snapshot"
     );
 
     // Results endpoint resolves through the recorded workdir.
@@ -285,7 +304,7 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .unwrap();
     assert!(
         results.as_array().map(|a| a.len()).unwrap_or(0) > 0,
-        "results must list pipeline workdir files: {results}"
+        "results must list the run's own workdir files: {results}"
     );
 }
 

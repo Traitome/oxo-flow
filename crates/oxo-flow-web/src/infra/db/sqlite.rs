@@ -66,21 +66,24 @@ pub struct SqliteBackend {
     pool: SqlitePool,
 }
 
-/// Insert a queued run row only while its workdir has no live run
-/// (`queued`/`running`/`paused`). Returns `false` when a live run holds
-/// the workdir — the insert is rejected, not queued behind it. One
-/// statement, so concurrent retry/resume requests serialize on the
-/// SQLite write lock instead of racing the read-check-then-insert
-/// window that let two CLIs onto one checkpoint.
-pub async fn create_run_if_workdir_idle(
+/// Insert a queued run row only while no live run holds the same value of
+/// `guard_column`. Returns `false` when a live run does — the insert is
+/// rejected, not queued behind it. One statement, so concurrent callers
+/// serialize on the SQLite write lock instead of racing a read-check-then-
+/// insert window. Used for the workdir claim (ad-hoc initial runs, retry,
+/// resume) and the saved-pipeline claim (initial runs; audit RB-02).
+async fn insert_run_guarded(
     pool: &SqlitePool,
     run: &models::RunRow,
+    guard_column: &str,
+    guard_value: Option<&str>,
 ) -> Result<bool, String> {
-    let result = sqlx::query(
-        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) \
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
-         WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = ? AND status IN ('queued', 'running', 'paused'))",
-    )
+    // The only interpolated pieces are this module's constants and the
+    // caller-supplied column NAME (`workdir` / `pipeline_id`, compile-time
+    // literals at every call site); all values stay bound.
+    let result = sqlx::query(sqlx::AssertSqlSafe(
+        crate::infra::db::guarded_run_insert_sql(guard_column, |_| "?".to_string()),
+    ))
     .bind(&run.id)
     .bind(&run.user_id)
     .bind(&run.pipeline_id)
@@ -96,11 +99,39 @@ pub async fn create_run_if_workdir_idle(
     .bind(&run.started_at)
     .bind(&run.finished_at)
     .bind(&run.created_at)
-    .bind(&run.workdir)
+    .bind(guard_value)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Insert a queued run row only while its workdir has no live run
+/// (`queued`/`running`/`paused`). Returns `false` when a live run holds
+/// the workdir — the insert is rejected, not queued behind it. One
+/// statement, so concurrent retry/resume requests serialize on the
+/// SQLite write lock instead of racing the read-check-then-insert
+/// window that let two CLIs onto one checkpoint.
+pub async fn create_run_if_workdir_idle(
+    pool: &SqlitePool,
+    run: &models::RunRow,
+) -> Result<bool, String> {
+    insert_run_guarded(pool, run, "workdir", run.workdir.as_deref()).await
+}
+
+/// Insert a queued run row only while the same saved pipeline has no live
+/// run. Initial runs of one saved pipeline are admitted one at a time
+/// (audit RB-02); each admitted run gets its own immutable workdir, so
+/// this guard is about a linear run history, not file safety.
+pub async fn create_run_if_pipeline_idle(
+    pool: &SqlitePool,
+    run: &models::RunRow,
+) -> Result<bool, String> {
+    let pipeline_id = run
+        .pipeline_id
+        .as_deref()
+        .ok_or_else(|| "pipeline guard requires run.pipeline_id".to_string())?;
+    insert_run_guarded(pool, run, "pipeline_id", Some(pipeline_id)).await
 }
 
 impl SqliteBackend {
@@ -1081,6 +1112,10 @@ impl StorageBackend for SqliteBackend {
 
     async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
         create_run_if_workdir_idle(&self.pool, run).await
+    }
+
+    async fn create_run_if_pipeline_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        create_run_if_pipeline_idle(&self.pool, run).await
     }
 
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
@@ -3287,6 +3322,34 @@ mod workdir_guard_tests {
     use super::*;
     use crate::infra::db::models;
 
+    fn pipeline_row(id: &str, pipeline_id: &str, workdir: &str) -> models::RunRow {
+        models::RunRow {
+            pipeline_id: Some(pipeline_id.into()),
+            ..row(id, "queued", workdir)
+        }
+    }
+
+    /// Runs carry FKs to `users` and `pipelines`; seed both so the guarded
+    /// insert is exercised against a schema-valid row.
+    async fn seed_run_parents(backend: &SqliteBackend, pipeline_id: &str) {
+        let pool = backend.inner_pool();
+        sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, created_at) \
+             VALUES ('default', 'default', 'admin', 'password', '2026-01-01T00:00:00Z')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT OR IGNORE INTO pipelines (id, user_id, name, version, toml_content, created_at, updated_at) \
+             VALUES (?, 'default', 'guarded', '1.0.0', '[workflow]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(pipeline_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     fn row(id: &str, status: &str, workdir: &str) -> models::RunRow {
         models::RunRow {
             id: id.into(),
@@ -3348,6 +3411,90 @@ mod workdir_guard_tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// Audit RB-02: one live run per saved pipeline, even though each run's
+    /// workdir is unique (the workdir guard would admit both).
+    #[tokio::test]
+    async fn pipeline_guard_rejects_a_second_live_run_of_the_same_pipeline() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        let pool = backend.inner_pool();
+        seed_run_parents(&backend, "pipe-a").await;
+        seed_run_parents(&backend, "pipe-b").await;
+
+        assert!(
+            backend
+                .create_run_if_pipeline_idle(&pipeline_row("p1", "pipe-a", "/run-1"))
+                .await
+                .unwrap()
+        );
+        // Different workdir, same pipeline: still rejected.
+        assert!(
+            !backend
+                .create_run_if_pipeline_idle(&pipeline_row("p2", "pipe-a", "/run-2"))
+                .await
+                .unwrap()
+        );
+        // Independent pipelines are unaffected.
+        assert!(
+            backend
+                .create_run_if_pipeline_idle(&pipeline_row("p3", "pipe-b", "/run-2"))
+                .await
+                .unwrap()
+        );
+        // Terminal runs release the pipeline.
+        sqlx::query("UPDATE runs SET status = 'failed'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(
+            backend
+                .create_run_if_pipeline_idle(&pipeline_row("p4", "pipe-a", "/run-3"))
+                .await
+                .unwrap()
+        );
+    }
+
+    /// The guarded insert is a single statement: two concurrent creates for
+    /// one pipeline produce exactly one admitted row.
+    #[tokio::test]
+    async fn pipeline_guard_is_atomic_under_concurrent_inserts() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        seed_run_parents(&backend, "pipe-c").await;
+
+        let first = pipeline_row("c1", "pipe-c", "/c-1");
+        let second = pipeline_row("c2", "pipe-c", "/c-2");
+        let (a, b) = tokio::join!(
+            backend.create_run_if_pipeline_idle(&first),
+            backend.create_run_if_pipeline_idle(&second)
+        );
+        let admitted = [a.unwrap(), b.unwrap()];
+        assert_eq!(
+            admitted.iter().filter(|admitted| **admitted).count(),
+            1,
+            "exactly one concurrent create may be admitted: {admitted:?}"
+        );
+    }
+
+    /// A pipeline guard without a pipeline id fails loudly instead of
+    /// degrading into an unguarded insert.
+    #[tokio::test]
+    async fn pipeline_guard_requires_a_pipeline_id() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("in-memory backend");
+        backend.init().await.expect("schema init");
+        let err = backend
+            .create_run_if_pipeline_idle(&row("no-pipe", "queued", "/wd"))
+            .await
+            .expect_err("missing pipeline id must be rejected");
+        assert!(err.contains("pipeline_id"), "{err}");
     }
 }
 

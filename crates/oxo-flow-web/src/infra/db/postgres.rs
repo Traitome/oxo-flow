@@ -76,6 +76,42 @@ impl PostgresBackend {
         chrono::Utc::now().to_rfc3339()
     }
 
+    /// Insert a queued run row only while no live run holds the same value of
+    /// `guard_column` — the PostgreSQL twin of the SQLite guarded insert
+    /// (audit RB-02). Returns `false` when the guard rejects the insert.
+    async fn insert_run_guarded(
+        &self,
+        run: &models::RunRow,
+        guard_column: &str,
+        guard_value: Option<&str>,
+    ) -> Result<bool, String> {
+        // Only internal constants and the compile-time guard column name
+        // are interpolated; every value is bound.
+        let result = sqlx::query(sqlx::AssertSqlSafe(
+            crate::infra::db::guarded_run_insert_sql(guard_column, |i| format!("${i}")),
+        ))
+        .bind(&run.id)
+        .bind(&run.user_id)
+        .bind(&run.pipeline_id)
+        .bind(&run.pipeline_snapshot)
+        .bind(&run.workflow_name)
+        .bind(&run.status)
+        .bind(&run.phase)
+        .bind(run.dry_run)
+        .bind(run.pid)
+        .bind(&run.workdir)
+        .bind(&run.config_overrides)
+        .bind(&run.artifacts_incomplete)
+        .bind(&run.started_at)
+        .bind(&run.finished_at)
+        .bind(&run.created_at)
+        .bind(guard_value)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Insert one `pipeline_revisions` row on `conn` and prune that
     /// pipeline's history to the newest 50 — the PostgreSQL twin of
     /// `SqliteBackend::insert_revision_row` (issue #1136), shared by the
@@ -881,31 +917,17 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn create_run_if_workdir_idle(&self, run: &models::RunRow) -> Result<bool, String> {
-        let result = sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at) \
-             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15 \
-             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE workdir = $16 AND status IN ('queued', 'running', 'paused'))",
-        )
-        .bind(&run.id)
-        .bind(&run.user_id)
-        .bind(&run.pipeline_id)
-        .bind(&run.pipeline_snapshot)
-        .bind(&run.workflow_name)
-        .bind(&run.status)
-        .bind(&run.phase)
-        .bind(run.dry_run)
-        .bind(run.pid)
-        .bind(&run.workdir)
-        .bind(&run.config_overrides)
-        .bind(&run.artifacts_incomplete)
-        .bind(&run.started_at)
-        .bind(&run.finished_at)
-        .bind(&run.created_at)
-        .bind(&run.workdir)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(result.rows_affected() == 1)
+        self.insert_run_guarded(run, "workdir", run.workdir.as_deref())
+            .await
+    }
+
+    async fn create_run_if_pipeline_idle(&self, run: &models::RunRow) -> Result<bool, String> {
+        let pipeline_id = run
+            .pipeline_id
+            .as_deref()
+            .ok_or_else(|| "pipeline guard requires run.pipeline_id".to_string())?;
+        self.insert_run_guarded(run, "pipeline_id", Some(pipeline_id))
+            .await
     }
 
     async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {

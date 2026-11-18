@@ -163,11 +163,25 @@ Server process environment:
   logged at startup (from which the source is inferable) and a major/minor
   mismatch between the server and the spawned CLI is warned.
 - `OXO_FLOW_WORKSPACE` — root directory for all user-scoped server data
-  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`,
-  `users/<u>/pipelines/<pipeline_id>/`). Defaults to a relative
-  `workspace/` under the process cwd; container deployments should point
-  it at a persistent volume. Path components are traversal-validated
-  before use.
+  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`; a legacy
+  `users/<u>/pipelines/<pipeline_id>/` tree from pre-#1130 releases is no
+  longer written). Defaults to a relative `workspace/` under the process
+  cwd; container deployments should point it at a persistent volume. Path
+  components are traversal-validated before use.
+
+### Run workdir lifecycle
+
+Every run owns `users/<u>/runs/<run_id>/` for its whole life. The workflow
+snapshot, staged `include_files`, uploaded inputs, `.oxo-flow/checkpoint.json`,
+logs, and outputs are written there and nowhere else; the directory name is
+the run id, so no other run can address it. A saved pipeline's `pipeline_id`
+is an association (permissions, listing, admission ordering), never a
+workdir. This is what makes a run's recorded checksums and run history
+immutable (issue #1130 / audit RB-02). Admission is a single guarded
+`INSERT ... SELECT ... WHERE NOT EXISTS` keyed on `pipeline_id` for saved
+pipelines and on `workdir` for ad-hoc runs, so concurrent creates serialize
+on the database instead of racing on disk; `retry` and `resume-checkpoint`
+are the only paths that deliberately continue a predecessor's workdir.
 
 ---
 

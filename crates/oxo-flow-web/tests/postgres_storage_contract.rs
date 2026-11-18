@@ -267,6 +267,20 @@ async fn storage_backend_contract_round_trips_on_postgres() {
             .await
             .expect("claim run workdir")
     );
+    // Audit RB-02 parity: the saved-pipeline guard rejects a second live run
+    // of the same pipeline even from a different (unique) workdir.
+    let competing = models::RunRow {
+        id: Uuid::new_v4().to_string(),
+        workdir: Some(format!("/tmp/oxo-pg-contract-other-{suffix}")),
+        ..run.clone()
+    };
+    assert!(
+        !backend
+            .create_run_if_pipeline_idle(&competing)
+            .await
+            .expect("pipeline guard query")
+    );
+    assert!(backend.get_run(&competing.id).await.unwrap().is_none());
     assert!(
         backend
             .mark_run_running(&run.id, &timestamp)

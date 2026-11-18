@@ -149,9 +149,10 @@ Once the server is running, the following REST endpoints are available. The full
 
 `POST /api/runs` builds the run from the `toml_content` you send; the other
 fields are optional: `max_jobs` (default 4, becomes `-j`), `dry_run`,
-`keep_going` (`-k`), `pipeline_id` (associate the run with a saved pipeline
-and reuse its persistent workdir), and `cluster_id` (execute on a configured
-SSH cluster). `GET /api/runs` is paginated by **cursor** — the `created_at`
+`keep_going` (`-k`), `pipeline_id` (associate the run with a saved
+pipeline — every run still gets its own immutable `runs/<run_id>/`
+workdir, and a saved pipeline admits one live run at a time), and
+`cluster_id` (execute on a configured SSH cluster). `GET /api/runs` is paginated by **cursor** — the `created_at`
 of the previous page's last row — and returns `{ items, next_cursor, total }`,
 not numbered pages. See the [Web API reference](../reference/web-api.md#create-run).
 
