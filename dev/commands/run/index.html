@@ -3122,6 +3122,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rule-execution-environment-issue-1108" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule execution environment (issue #1108)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5106,6 +5117,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rule-execution-environment-issue-1108" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule execution environment (issue #1108)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6770,11 +6792,62 @@ for the full field table and edge cases.</p>
   cleaned by their rules; outputs declared by rules are always accounted
   for by the ladder.</li>
 </ul>
+<h3 id="rule-execution-environment-issue-1108">Rule execution environment (issue #1108)<a class="headerlink" href="#rule-execution-environment-issue-1108" title="Permanent link">#</a></h3>
+<p>Rule shells, <code>pre_exec</code> hooks, rule-level <code>on_success</code>/<code>on_failure</code> hooks,
+and workflow-level <code>on_complete</code>/<code>on_error</code> hooks run under a <strong>cleared
+environment</strong>: the child starts from an empty environment plus a fixed
+allowlist, never the engine's ambient environment. The allowlist is the
+rule's own declared <code>envvars</code> (applied last, so they win), <code>PATH</code>, <code>HOME</code>,
+<code>LANG</code>, every <code>LC_*</code> variable, and the <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> triple from
+<code>[engine] tmp_dir</code> / <code>OXO_FLOW_TMPDIR</code>. This prevents a rule that declares
+no environment from reading the engine's API keys and cloud credentials
+out of its own process environment.</p>
+<p>A workflow that genuinely needs an ambient variable opts it back in per
+invocation:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="nv">OXO_FLOW_ENV_PASSTHROUGH</span><span class="o">=</span>SLURM_JOB_ID,USER<span class="w"> </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow
+</span></code></pre></div>
+<p>The value is a comma-separated name list (whitespace around each name is
+trimmed; empty entries ignored); only the names listed are re-admitted —
+everything else stays hidden. It is an environment variable rather than an
+<code>[engine]</code> key because the need is host/invocation-specific (a variable
+present on one cluster but not another), mirroring <code>OXO_FLOW_TMPDIR</code>.</p>
+<p>Engine tooling commands (conda/pixi/venv environment setup, teardown, and
+<code>env_verify</code>) spawn through a different code path and keep the ambient
+environment, so tool discovery and proxy settings still work.</p>
+<h4 id="hpc-cluster-submissions">HPC cluster submissions<a class="headerlink" href="#hpc-cluster-submissions" title="Permanent link">#</a></h4>
+<p>The same allowlist is applied to the job scripts <code>oxo-flow cluster submit</code>
+generates for SLURM, PBS/Torque, SGE, and LSF (issue #1108, RB-15). A
+scheduler forwards the submitting shell's environment to every job by
+default — SLURM's <code>--export=ALL</code>, PBS/SGE <code>-V</code>, LSF <code>-env</code> — which would
+hand the credentials on the submit host to every rule running on the node.
+The generated script therefore wraps both the rule command and the array
+dispatch line in an explicit <code>env -i</code> prefix that admits only the
+allowlisted names and the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, so
+the isolated environment a rule sees is the same on the cluster as it is
+locally. Declared per-rule <code>envvars</code> are re-exported by the command itself
+and are unaffected.</p>
+<p>This is done in the script body rather than through a submit flag because
+SLURM rejects <code>--export=NONE</code> combined with an explicit list, and the other
+schedulers spell the equivalent differently (<code>-V</code>/<code>-v</code>/<code>-env</code>); one
+body-level mechanism covers all four HPC backends with a single shared
+implementation. Two caveats to note:</p>
+<ul>
+<li>A configured <code>[engine]</code> shell prelude rides inside the wrapped command
+  (the same path the local executor uses), so it executes <em>inside</em> the
+  isolated <code>sh -c</code> and sees the same allowlisted environment as the rule
+  body.</li>
+<li>Container (docker, singularity) and cloud (Kubernetes, AWS Batch, GCP
+  Batch) backends do <strong>not</strong> yet route through this shared allowlist. They
+  are clean only because they do not forward the ambient environment at
+  all — a future change that adds env forwarding to any of them must
+  re-admit the declared variables through this same policy rather than
+  passing the ambient environment through.</li>
+</ul>
 <h3 id="protected-data-trees-protected_data_trees">Protected data trees (<code>protected_data_trees</code>)<a class="headerlink" href="#protected-data-trees-protected_data_trees" title="Permanent link">#</a></h3>
 <p>Vendor-delivered inputs (a sequencer drop, a reference bundle) must not
 change silently while a pipeline is running against them. Declaring</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="k">[engine]</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a><span class="k">[engine]</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
 </span></code></pre></div>
 <p>makes the engine treat those workdir-relative trees as protected:</p>
 <ul>
@@ -6788,8 +6861,8 @@ change silently while a pipeline is running against them. Declaring</p>
   labeled <code>[symlink]</code>).</li>
 <li><strong><code>run</code> refuses to execute</strong> on drift:</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>Error: protected data tree drift detected (1 file(s) changed since baseline):
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>  raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>Error: protected data tree drift detected (1 file(s) changed since baseline):
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a>  raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
 </span></code></pre></div>
 <p>Restore the files, or pass <code>--allow-protected-drift</code> to run anyway (the
   drift is still printed; the baseline is NOT updated — a later clean run

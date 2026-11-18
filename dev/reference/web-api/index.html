@@ -5982,6 +5982,11 @@ Returns <code>{"authenticated": true, "username": "admin", "role": "admin"}</cod
 Revokes the presented session server-side — the token stops
 authenticating immediately instead of living out its configured TTL. The
 client should drop its local copy (<code>logged_out: true</code> on success).
+Revocation is <strong>fail-closed</strong> (issue #1135): if the session row cannot be
+deleted the endpoint answers <code>500 DB_ERROR</code> rather than <code>logged_out: true</code>,
+so a client is never told a still-live token is dead. A token that was
+already absent (e.g. a repeated logout) is the benign case and still
+succeeds.
 Deleting a user (<code>DELETE /api/users/{id}</code>) cascades: the deleted user's
 sessions and API keys are removed with the account.</p>
 <h3 id="license-status">License Status<a class="headerlink" href="#license-status" title="Permanent link">#</a></h3>

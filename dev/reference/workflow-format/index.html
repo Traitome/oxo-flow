@@ -11432,6 +11432,35 @@ that needs the outputs regenerates them first (lazy cascade-up). See
   absolute, <code>~</code> and <code>..</code> are not expanded, and a relative value anchors to
   the process working directory — unlike the config value, which anchors
   to the workflow file's directory.</li>
+<li><strong>Rule shells run under a cleared environment (issue #1108, RB-15).</strong>
+  Every rule shell, <code>pre_exec</code> hook, rule-level <code>on_success</code>/<code>on_failure</code>
+  hook, and workflow-level <code>on_complete</code>/<code>on_error</code> hook starts from an
+  empty environment plus a fixed allowlist — it never inherits the
+  engine's ambient environment. The allowlist is <code>PATH</code>, <code>HOME</code>, <code>LANG</code>,
+  every <code>LC_*</code> variable, the rule's own declared <code>envvars</code> (applied last,
+  so they win), and the <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> triple from <code>tmp_dir</code>. This
+  closes the credential-leak channel where a rule with no declared
+  environment could read the engine's API keys and cloud tokens straight
+  out of its process environment. Workflows that legitimately need an
+  ambient variable opt it back in per invocation with
+  <code>OXO_FLOW_ENV_PASSTHROUGH</code> (comma-separated names, e.g.
+  <code>OXO_FLOW_ENV_PASSTHROUGH=SLURM_JOB_ID,USER</code>); it is a host/invocation
+  concern rather than a portable workflow property, so it is deliberately
+  an environment variable and not a <code>[engine]</code> key. Names not listed
+  stay hidden. Engine tooling commands (conda/pixi/venv env setup,
+  teardown, and <code>env_verify</code>) spawn through a different path and keep the
+  ambient environment.</li>
+<li><strong>HPC job scripts apply the same allowlist (issue #1108, RB-15).</strong>
+  <code>oxo-flow cluster submit</code> wraps the rule command — and the array
+  dispatch line — in an explicit <code>env -i</code> prefix admitting only the
+  allowlisted names and the operator's <code>OXO_FLOW_ENV_PASSTHROUGH</code> list, so
+  SLURM/PBS/SGE/LSF jobs do not inherit the submitting shell's environment
+  through the schedulers' export-by-default behavior (<code>--export=ALL</code>,
+  <code>-V</code>, <code>-env</code>). See
+  <a href="../../commands/run/#hpc-cluster-submissions">the run command reference</a>.
+  Container and cloud backends (docker, singularity, Kubernetes, AWS
+  Batch, GCP Batch) do <strong>not</strong> yet route through the shared policy — they
+  are clean only because they forward no ambient environment.</li>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from
