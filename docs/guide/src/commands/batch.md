@@ -82,6 +82,18 @@ ls *.bam | oxo-flow batch "samtools flagstat {item}"
 oxo-flow batch -e "conda: bwa_env" "bwa mem ref.fa {item}" *.fastq.gz
 ```
 
+The `conda:` form wraps through the engine's own conda-family command builder
+(see [Environment System](../reference/environment-system.md#shared-conda-family-lifecycle-create-use-decommission)):
+each item runs inside the SAME environment an `oxo-flow run` rule would use —
+`<yaml name|stem>-<hash8>` for a file-backed spec — with the environment's
+`bin/` first on `PATH`, so an environment the engine already created is
+reused rather than looked up under a hand-derived name. A relative spec path
+resolves against `--workdir` (the same anchor `run` uses), and a bare
+environment name (`-e bwa_env`, no `kind:` prefix) is used verbatim — a
+dotted name such as `r-4.4` is not truncated. `mamba:` is accepted and uses
+the same shared builder; `pixi:`/`venv:`/`modules:` are rejected rather than
+silently running the item on the host `PATH`.
+
 ### Generate workflow
 
 ```bash
@@ -138,7 +150,7 @@ The `results` entries share the executed-mode shape — `exit_code` and
 - Input file format: one item per line, blank lines and `#` comments ignored
 - When no items provided and stdin has data, reads from pipe
 - `{}` is rush-compatible shorthand for `{item}`
-- Environment spec format: `conda: env.yaml` or `docker: image:tag`
+- Environment spec format: `conda: env.yaml`, `mamba: env.yaml`, `docker: image:tag`, or `singularity: image.sif` (a bare `-e <name>` selects a conda environment by name)
 - In dry-run, the human-readable preview goes to stderr; with
   `--json-output`/`--json` the same preview is emitted as JSON on stdout
 
