@@ -4348,9 +4348,33 @@ be reachable over HTTP (stdio servers are not supported).</p>
   for an effectful tool).</li>
 <li><strong>Every MCP tool invocation is refused unless a human approves that
   specific call</strong> — the AI prompts on the terminal (<code>Allow execution?
-  [y/N]</code>); non-interactive sessions (CI, <code>--json</code>, redirected stdin)
-  always refuse.</li>
+  [y/N]</code>); non-interactive sessions (CI, redirected stdin, the web
+  server surfaces) always refuse.</li>
 </ul>
+<p>Outbound network egress from a built-in tool is gated the same way
+(#1123, audit AI-05). A model-initiated <code>fetch_url</code> is read-only in the
+local sense — it mutates nothing — but it ships data off the machine, so
+it is a <strong>data-release decision</strong> and never inherits the read-only
+auto-approval:</p>
+<ul>
+<li>In an interactive session the AI prompts for that specific call
+  (<code>Allow execution? [y/N]</code>), showing the destination URL.</li>
+<li>In a non-interactive session (CI, redirected stdin, the web
+  chat/translate loop) the call is refused, and the model receives an
+  error naming the destination origin — never the URL's path or query,
+  and never any file content.</li>
+<li>An operator can pre-authorize automatic release to specific origins
+  with <code>OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS</code> — comma-separated exact
+  <code>scheme://host[:port]</code> origins (default ports omitted, paths ignored,
+  no wildcards or suffix matches; unparseable entries are warned about
+  and ignored). This knob governs <em>data release</em>, not reachability: the
+  SSRF screen and <code>OXO_FLOW_AI_FETCH_ALLOW</code> still apply independently.
+  Unset or empty means no origin is pre-authorized.</li>
+</ul>
+<p>The read half of the chain is unchanged: a scoped <code>read_file</code> still
+auto-executes for project files, but a model cannot ship what it read to
+an arbitrary endpoint without an explicit human decision (or an
+operator-listed origin).</p>
 <p>The endpoint itself is SSRF-screened at connect time: internal
 address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges,
 CGNAT 100.64/10, benchmarking 198.18/15, NAT64 <code>64:ff9b::/96</code>, 6to4
@@ -4365,11 +4389,12 @@ closing the DNS-rebinding window between screening and connecting
 hops are re-screened the same way — a hop that lands in internal space is
 refused, and an approved hop connects to its own vetted address.</p>
 <p>These controls narrow the attack surface but are not a complete trust
-boundary. A generic <code>OXO_FLOW_MCP_TOKEN</code> is sent to every activated MCP
-endpoint unless a per-server token overrides it, and automatically approved
-project reads combined with outbound fetches can create a data-exfiltration
-path. Activate only reviewed skills and MCP servers, prefer per-server tokens,
-and treat this subsystem as prototype-grade until the audit gates close.</p>
+boundary. The generic <code>OXO_FLOW_MCP_TOKEN</code> is released only to origins the
+operator explicitly approves (see below), and model-initiated outbound
+fetches require an explicit data-release decision (see above), so an
+auto-approved project read cannot be shipped out without one. Activate
+only reviewed skills and MCP servers and treat this subsystem as
+prototype-grade until the remaining audit gates close.</p>
 <h3 id="protocol-version-and-authentication">Protocol Version and Authentication<a class="headerlink" href="#protocol-version-and-authentication" title="Permanent link">#</a></h3>
 <p>On connect the client proposes the newest MCP protocol version it speaks
 (<code>2025-06-18</code>) at <code>initialize</code> and uses whatever version the server
@@ -4385,21 +4410,35 @@ sessions fails the call instead of looping.</p>
 environment — never from a skill manifest, which is attacker-influenced
 text:</p>
 <ul>
-<li><code>OXO_FLOW_MCP_TOKEN</code> — generic token sent to every MCP server unless a
-  per-server override is present</li>
+<li><code>OXO_FLOW_MCP_TOKEN</code> — shared token. It is sent <strong>only</strong> to origins
+  listed in <code>OXO_FLOW_MCP_TRUSTED_ORIGINS</code>; to any other endpoint it is
+  withheld entirely.</li>
 <li><code>OXO_FLOW_MCP_TOKEN_&lt;SERVER&gt;</code> — per-server token (server name
   uppercased, non-alphanumeric characters folded to <code>_</code>; e.g. server
-  <code>fs-gdrive</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE</code>)</li>
+  <code>fs-gdrive</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE</code>). Setting this variable is
+  itself the operator's decision for that endpoint, so it applies without
+  a trust-list entry.</li>
+<li><code>OXO_FLOW_MCP_TRUSTED_ORIGINS</code> — comma-separated exact origins approved
+  to receive the generic token (e.g.
+  <code>https://mcp.example.com,http://127.0.0.1:9000</code>). Entries are
+  <code>scheme://host[:port]</code>; the <code>mcp://</code> manifest spelling is also accepted
+  (it denotes the plain-HTTP endpoint <code>mcp://</code> URLs resolve to, i.e.
+  <code>mcp://fs-gdrive:9000</code> = <code>http://fs-gdrive:9000</code>). Paths are ignored,
+  there are no wildcards or suffix matches, and an entry that cannot be
+  parsed as an origin is ignored with a warning. Unset or empty means no
+  origin is approved, so the generic token is never released.</li>
 </ul>
-<p>The per-server variable wins when both are set. Do not use the generic token
-with a skill catalog that can select an operator-unreviewed endpoint. The
-<code>&lt;SERVER&gt;</code> name is
+<p>The per-server variable wins when both are set. The <code>&lt;SERVER&gt;</code> name is
 folded from the endpoint URL's host, port and path (everything after the
 scheme — <code>mcp://fs-gdrive:9000/v1</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1</code>),
 so two servers sharing a host on different paths get distinct variables.
-Tokens are attached as <code>Authorization: Bearer …</code> on every request to the
-endpoint's origin and are never logged; a redirect to a different origin
-(checked per hop) carries no <code>Authorization</code>, session or protocol headers.</p>
+Note that the identity is scheme-agnostic: <code>https://host:9000</code> and
+<code>http://host:9000</code> fold to the same <code>&lt;SERVER&gt;</code> name, so a per-server token
+is reachable over both schemes on that host — prefer <code>https://</code> endpoints.</p>
+<p>Tokens are attached as <code>Authorization: Bearer …</code> on every request to the
+endpoint's origin and are never logged (not even a prefix); a redirect to a
+different origin (checked per hop) carries no <code>Authorization</code>, session or
+protocol headers.</p>
 <p>Because the token rides <code>Authorization</code> on every request, prefer
 <code>https://</code> endpoints when a token is configured — a plain-<code>http://</code>
 endpoint sends the credential unencrypted on the wire.</p>

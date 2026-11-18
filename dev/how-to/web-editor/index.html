@@ -1401,6 +1401,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-assistant-proposals-require-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI assistant: proposals require acceptance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adding-a-rule-from-the-tool-palette" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1471,6 +1482,17 @@
     <span class="md-ellipsis">
       
         Look &amp; feel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-storage-and-account-switching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser storage and account switching
       
     </span>
   </a>
@@ -4128,6 +4150,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-assistant-proposals-require-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI assistant: proposals require acceptance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adding-a-rule-from-the-tool-palette" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4198,6 +4231,17 @@
     <span class="md-ellipsis">
       
         Look &amp; feel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-storage-and-account-switching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser storage and account switching
       
     </span>
   </a>
@@ -4312,6 +4356,28 @@ is preserved as a new revision first.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="ai-assistant-proposals-require-acceptance">AI assistant: proposals require acceptance<a class="headerlink" href="#ai-assistant-proposals-require-acceptance" title="Permanent link">#</a></h2>
+<p>The <strong>Assistant</strong> tab drafts workflows with the configured AI provider. Its
+output is never written into the editor directly: each generated pipeline is
+staged as a <strong>proposal</strong> with a line diff against the current editor content
+(insertions green, deletions red). The editor keeps its exact content —
+including unsaved hand edits — until <strong>Apply to editor</strong> is clicked;
+<strong>Discard</strong> leaves it byte-identical (audit UX-05, issue #1147).</p>
+<ul>
+<li>A proposal that arrives while another is pending is queued, not swapped in:
+  the panel keeps showing the pending proposal and reports <code>Proposal 1 of N</code>;
+  <strong>Review next proposal</strong> switches between them explicitly.</li>
+<li><strong>Apply to editor</strong> consumes only the accepted proposal. Any other queued
+  proposals survive with their stable ordinals (<code>Proposal 2 of 2</code>) and remain
+  reviewable; <strong>Discard</strong> likewise removes only the proposal on screen.</li>
+<li>Navigating away from the editor never applies a pending proposal; proposals
+  are per-editor-session state and are discarded when the editor unmounts.</li>
+<li>The diff is recomputed against the live editor content, so if you keep
+  editing while a proposal is pending, <strong>Apply</strong> states exactly what changes.</li>
+<li>An accepted proposal replaces the editor content as one edit; the usual
+  debounced validation and (for a saved pipeline) <strong>Save</strong> flow applies
+  afterwards — acceptance does not save or run anything.</li>
+</ul>
 <h2 id="adding-a-rule-from-the-tool-palette">Adding a rule from the tool palette<a class="headerlink" href="#adding-a-rule-from-the-tool-palette" title="Permanent link">#</a></h2>
 <ol>
 <li>Open the <strong>Tools</strong> tab and search (e.g. <code>fastp</code>).</li>
@@ -4404,6 +4470,46 @@ edit or another <strong>Save</strong>) restores the run affordances.</p>
 <p>Dark mode (follows the OS or the header 🌙 toggle), Chinese interface
 chrome (header 中文 toggle), and bilingual glossary tooltips on core
 terms (pipeline, rule, wildcard, checkpoint, dry-run, depends_on).</p>
+<h2 id="browser-storage-and-account-switching">Browser storage and account switching<a class="headerlink" href="#browser-storage-and-account-switching" title="Permanent link">#</a></h2>
+<p>The editor keeps unsaved work in the browser so a reload or a crash does
+not lose it. That state is <strong>scoped to the account that created it</strong>:</p>
+<ul>
+<li><strong>What is scoped</strong>: the draft workflow TOML, the AI chat transcripts, and
+  the canvas node positions. Each is stored under the username the server
+  reports for the current session (<code>POST /api/auth/login</code> and
+  <code>GET /api/auth/me</code>), in a bucket like <code>oxo_session::user:&lt;username&gt;</code>; a
+  browser with nobody signed in uses a separate <code>guest</code> bucket.</li>
+<li><strong>Signing out clears all of it</strong> — every account's bucket, not just the
+  current one, plus the cached identity and the session token. A second
+  account that signs in on the same browser starts from its own (empty)
+  bucket and never sees the previous account's draft, chat, or canvas.</li>
+<li><strong>A rejected or expired session keeps your draft</strong>: the token and the
+  cached identity are dropped, but the bucket is only removed by an
+  explicit sign-out, so signing back in as the same user restores the
+  unsaved draft.</li>
+<li><strong>The cached identity is confirmed before anything renders</strong>: when the
+  browser holds a session token (or claims an identity), the app asks
+  <code>GET /api/auth/me</code> before the first paint and restores <strong>only</strong> the bucket
+  the server names. A stale or forged cached identity is corrected without
+  ever rendering the wrong account's draft.</li>
+<li><strong>If the server cannot confirm the account, the app fails closed</strong>: when
+  the identity check fails (unreachable) or does not answer within a few
+  seconds, no draft is shown at all — the cached identity is never used as a
+  fallback. Instead you get a <strong>Session not confirmed</strong> notice with
+  <strong>Retry</strong> and <strong>Sign in again</strong>. A late confirmation is adopted as soon as
+  it arrives, so a slow server resolves to your own draft without a reload.
+  Signing in again drops the token and the cached identity but keeps every
+  saved draft, which returns with the same account.</li>
+<li><strong>Other tabs follow</strong>: signing out (or in) in one tab re-initializes the
+  same browser's other open tabs, and the sign-out wipe is authoritative —
+  a background tab cannot re-save the signed-out account's state.</li>
+<li><strong>What is not scoped</strong>: per-device preferences — theme, language, sidebar
+  collapse, guided/canvas editor mode, and the onboarding banner. They
+  describe the device, not the account.</li>
+</ul>
+<p>Drafts saved by versions before this scoping existed were browser-wide and
+cannot be attributed to an account, so they are discarded on first load.
+Exports and saved pipelines are unaffected (they live on the server).</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../reference/dag-edit-api/">DAG Edit API</a> — the command API behind the canvas</li>
