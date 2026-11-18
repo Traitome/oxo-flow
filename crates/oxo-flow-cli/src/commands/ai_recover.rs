@@ -189,7 +189,7 @@ pub async fn diagnose_failure(
     eprintln!("{}", "  Diagnosing...".bold().cyan());
 
     use oxo_flow_ai::types::Message;
-    let messages = vec![Message::system(&system), Message::user(&user)];
+    let mut messages = vec![Message::system(&system), Message::user(&user)];
     let response = match provider.chat_with_tools(&messages, &[]).await {
         Ok(response) => response,
         Err(e) => {
@@ -208,13 +208,54 @@ pub async fn diagnose_failure(
     );
 
     // Parse the AI response
-    let root_cause = extract_section(&response_text, "Root Cause");
-    let fix_action = extract_section(&response_text, "Fix");
-    let safe = parse_safe_to_auto_apply(&response_text);
+    let mut root_cause = extract_section(&response_text, "Root Cause");
+    let mut fix_action = extract_section(&response_text, "Fix");
+    let mut safe = parse_safe_to_auto_apply(&response_text);
 
     // Extract modified TOML — only a complete replacement that survives
     // validation against the current workflow is accepted (issue #1110).
-    let modified_toml = extract_toml_block(&response_text, &toml_content);
+    let mut modified_toml = extract_toml_block(&response_text, &toml_content);
+
+    // Format-compliance round (issue #1164 campaign finding): the live GLM
+    // campaign measured 3/3 infra diagnoses CORRECT with `safe: yes` — but
+    // no ```toml fence — so the mechanically applicable repair was lost
+    // before the authorization layer ever ran and every case recorded
+    // applied=false for the same reason. One corrective round on the SAME
+    // conversation, mirroring the ai_explain malformed-JSON retry: a strict
+    // re-ask for the complete corrected workflow. Safety can only be
+    // lowered by the round, never raised: a reply that states any verdict
+    // replaces the first-round one; a silent reply keeps it.
+    if modified_toml.is_none() && safe {
+        eprintln!(
+            "  {} proposal carried no ```toml fence — one corrective round: \
+             requesting the complete corrected workflow",
+            "⚠".yellow()
+        );
+        let corrective = "Your diagnosis is accepted, but your reply contained \
+no corrected workflow inside a ```toml fence, so no fix can be applied. Reply \
+AGAIN: same verdict, then the COMPLETE corrected workflow — the entire file, \
+unchanged parts included — inside a single ```toml fence. No prose after the \
+fence.";
+        messages.push(Message::user(corrective));
+        match provider.chat_with_tools(&messages, &[]).await {
+            Ok(retry) => {
+                session.record_usage(&retry.usage);
+                let retry_text = retry.content.unwrap_or_default();
+                root_cause = root_cause.or_else(|| extract_section(&retry_text, "Root Cause"));
+                fix_action = fix_action.or_else(|| extract_section(&retry_text, "Fix"));
+                if retry_text
+                    .to_ascii_lowercase()
+                    .contains("safe to auto-apply")
+                {
+                    safe = parse_safe_to_auto_apply(&retry_text);
+                }
+                modified_toml = extract_toml_block(&retry_text, &toml_content);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "corrective fence round failed; keeping the first-round diagnosis");
+            }
+        }
+    }
 
     // Capture the session id before `complete` consumes the tracker, so the
     // caller can link the before-fix workflow archive to this session.
