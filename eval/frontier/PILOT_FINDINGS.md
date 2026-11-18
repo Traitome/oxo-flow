@@ -320,3 +320,41 @@ Results land in the JSON plus per-case raw logs under
 `eval/frontier/results/fault_repair_logs/<fault_id>/`; the measured table
 goes HERE once the live run completes — this section stays a placeholder
 until then.
+
+## Verified-repair campaign — MEASURED (GLM via school proxy, 2026-11-18)
+
+Binary: `target/release/oxo-flow` @ main after #1185/#1186 (v0.32.0 + the
+verified-repair loop). Two rounds:
+
+**Round 1 — engine loop, no fence corrective:** detection 7/10,
+executability 10/10, repair applied **0/10**, verified rerun **0/10**.
+Every applied=false carried the same measured WHY: all three repairable
+infra faults produced CORRECT diagnoses flagged `Safe to auto-apply: yes`,
+but the replies narrated the fix in prose without emitting the corrected
+workflow inside a ```toml fence — `modified_toml` stayed empty and the
+authorization layer never ran. Raw logs per case pin this
+(`fault_repair_logs/infra_*/fault_run.txt`).
+
+**Round 2 — with the corrective fence round (#1187):** repair applied
+**3/10**, verified rerun **3/10** — 3/3 of the repairable class closes the
+full loop (diagnosis → safe verdict → patch written → engine validation →
+bounded verification rerun → `REPAIR_RERUN_SUCCEEDED` → exit 0 →
+checkpoint `repair_record`). Evidence per case: narration tokens + the
+checkpoint record + raw logs (`infra_oom_failure` excerpt: `⚠ proposal
+carried no fence` → `REPAIR_APPLIED session_id=…` → `REPAIR_RERUN_SUCCEEDED
+…` → `✓ repair verified — rerun succeeded`).
+
+**The seven non-repairable cases are honestly blocked upstream, not
+failures of the loop** (per-case WHY in the JSON):
+
+- 4 BioTypes faults abort at the type-admission gate BEFORE any rule
+  executes, so the rule-failure recovery path is never reached
+  (`admission_abort`). Extending repair to the admission gate is future
+  work, tracked where the loop itself is.
+- 3 SCI preflight findings are advisory by design (warn, never abort):
+  the seeded workflow runs successfully, so no runtime fault exists to
+  repair.
+
+Cost: one diagnosis round + at most one corrective round per case
+(10 cases, `--ai-max-retries 1`). Summary JSONs: campaign round 1/2
+exported alongside the raw logs.
