@@ -283,3 +283,85 @@ fn batch_shell_honours_env_passthrough() {
         "OXO_FLOW_ENV_PASSTHROUGH must re-admit a named variable to the batch shell"
     );
 }
+
+// ─── #1233 review finding: batch container items keep daemon vars ───────
+//
+// `run_batch_command` cannot see the `-e` spec, so the caller derives
+// `container_daemon` from the spec prefix. A `docker:`/`singularity:` item
+// renders a `docker run` / `singularity exec` wrapper invoked from THIS
+// shell, so the daemon variables must be re-admitted (issue #1173). A
+// non-container item must NOT see them.
+
+fn write_fake_docker(dir: &Path) -> PathBuf {
+    let bin_dir = dir.join("fakebin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let path = bin_dir.join("docker");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nprintf '%s' \"$DOCKER_HOST\" > docker_env_observed.txt\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+    bin_dir
+}
+
+#[test]
+fn batch_container_item_admits_daemon_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_dir = write_fake_docker(dir.path());
+
+    let mut cmd = StdCommand::new(workspace_bin("oxo-flow"));
+    base_env(&mut cmd, dir.path());
+    cmd.env(
+        "PATH",
+        format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    )
+    .env("DOCKER_HOST", "tcp://batch-sentinel.example:2376");
+    let status = cmd
+        .args(["batch", "-e", "docker:fake/image:latest", "true", "x"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "batch must succeed");
+
+    let observed =
+        std::fs::read_to_string(dir.path().join("docker_env_observed.txt")).unwrap_or_default();
+    assert_eq!(
+        observed, "tcp://batch-sentinel.example:2376",
+        "a docker batch item must admit DOCKER_HOST (issue #1233 review finding)"
+    );
+}
+
+#[test]
+fn batch_non_container_item_drops_daemon_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = StdCommand::new(workspace_bin("oxo-flow"));
+    base_env(&mut cmd, dir.path());
+    cmd.env("DOCKER_HOST", "tcp://batch-sentinel.example:2376");
+    let status = cmd
+        .args([
+            "batch",
+            "printf '%s' \"$DOCKER_HOST\" > daemon_observed.txt",
+            "x",
+        ])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "batch must succeed");
+
+    let observed = std::fs::read_to_string(dir.path().join("daemon_observed.txt")).unwrap();
+    assert_eq!(
+        observed, "",
+        "a non-container batch shell must not observe DOCKER_HOST (bare allowlist)"
+    );
+}

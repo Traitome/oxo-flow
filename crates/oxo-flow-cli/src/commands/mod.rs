@@ -330,6 +330,19 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str, workdir: &std::path::Path) 
     }
 }
 
+/// Whether a `batch` environment spec selects a local container runtime
+/// (`docker:`/`singularity:`) that the engine invokes as a host binary —
+/// the same admission test the rule path uses
+/// (`EnvironmentSpec::is_container_runtime`, issue #1173/#1233). The spec is
+/// the raw `-e` string, so this reads its `kind:` prefix; the branches that
+/// render the wrapper live in `wrap_batch_command`, next to this predicate,
+/// so the two never drift.
+pub fn batch_env_is_container(env_spec: &str) -> bool {
+    env_spec
+        .split_once(':')
+        .is_some_and(|(type_, _)| matches!(type_.trim(), "docker" | "singularity"))
+}
+
 /// Run a single batch command synchronously.
 ///
 /// RB-15 (#1233): batch shells are a shell spawn site just like a rule
@@ -338,7 +351,15 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str, workdir: &std::path::Path) 
 /// environment (including AI tokens the engine hides from rules). The
 /// `[engine] tmp_dir`-derived scratch vars are re-admitted when a batch
 /// invocation resolved a TMPDIR (see `OXO_FLOW_TMPDIR`).
-pub fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
+///
+/// `container_daemon` must be `true` for a `docker:`/`singularity:` item
+/// (`run_batch_command` cannot see the `-e` spec, so the caller passes
+/// `batch_env_is_container(...)`): the rendered wrapper runs `docker run` /
+/// `singularity exec` from THIS shell, so the daemon variables
+/// (`DOCKER_HOST`, `DOCKER_TLS_VERIFY`, …) must be re-admitted exactly as
+/// the rule path does (issue #1173). A non-container item keeps the bare
+/// allowlist.
+pub fn run_batch_command(cmd: &str, workdir: &Path, container_daemon: bool) -> Result<i32> {
     use std::process::Command;
 
     let mut command = Command::new("sh");
@@ -346,7 +367,7 @@ pub fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
 
     let mut envs = std::collections::HashMap::new();
     oxo_flow_core::executor::insert_tmpdir_vars(&mut envs, batch_tmp_dir().as_deref());
-    oxo_flow_core::executor::apply_rule_env_allowlist(&mut command, &envs, false);
+    oxo_flow_core::executor::apply_rule_env_allowlist(&mut command, &envs, container_daemon);
 
     let output = command
         .output()
