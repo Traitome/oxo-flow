@@ -97,12 +97,19 @@ async fn crashed_upload_temp_is_hidden_and_not_staged() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 2. Simulate the crash: the temp a killed process leaves beside the
-    //    destination, stamped with a PID that will never come back.
+    //    destination, stamped with a PID that will never come back — the
+    //    engine-marker shape (`<base>.oxoupload-<seq>-<pid>.tmp`) that
+    //    `staged_upload_path` writes. A bare numeric stamp like
+    //    `sample.bam.1.999999.tmp` is a REAL user file now (collision
+    //    finding from the independent review) and must stay visible.
     let inputs = std::path::Path::new(&ws).join("users/default/inputs");
-    let orphan = inputs.join("sample.bam.1.999999.tmp");
+    let user_versioned = inputs.join("sample.bam.1.999999.tmp");
+    std::fs::write(&user_versioned, b"looks like a versioned temp").unwrap();
+    let orphan = inputs.join("sample.bam.oxoupload-1-999999.tmp");
     std::fs::write(&orphan, b"half a file").unwrap();
 
-    // 3. Listing must not advertise the orphan...
+    // 3. Listing must not advertise the orphan... but must still list the
+    //    versioned real file the old shape would have swallowed.
     let resp = app.clone().oneshot(list_request()).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let listed = response_json(resp).await;
@@ -117,19 +124,29 @@ async fn crashed_upload_temp_is_hidden_and_not_staged() {
         "the real upload is still listed (got: {names:?})"
     );
     assert!(
-        !names.iter().any(|n| n.ends_with(".tmp")),
+        names.contains(&"sample.bam.1.999999.tmp"),
+        "a versioned real file must NOT be swallowed by the temp pattern \
+         (got: {names:?})"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("oxoupload-")),
         "no staged temp may appear in the listing (got: {names:?})"
     );
     assert!(!orphan.exists(), "the orphan is swept from disk");
+    assert!(
+        user_versioned.exists(),
+        "a real file matching the old numeric shape is never deleted"
+    );
 
     // ...and neither is it mirrored into a run directory.
     let run_dir = std::path::Path::new(&ws).join("users/default/runs/r1");
     std::fs::create_dir_all(&run_dir).unwrap();
     let copied = oxo_flow_web::workspace::stage_user_inputs("default", &run_dir).unwrap();
-    assert_eq!(copied, 1, "only the real upload is staged");
+    assert_eq!(copied, 2, "the real upload + the versioned file are staged");
     assert!(run_dir.join("keep.bin").is_file());
+    assert!(run_dir.join("sample.bam.1.999999.tmp").is_file());
     assert!(
-        !run_dir.join("sample.bam.1.999999.tmp").exists(),
+        !run_dir.join("sample.bam.oxoupload-1-999999.tmp").exists(),
         "the staged temp must not reach a run directory"
     );
 
