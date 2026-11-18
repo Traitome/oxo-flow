@@ -1564,12 +1564,19 @@ Declared resources are enforced, not only counted:
   not an advisory overage. Runs that declare no memory have no claim to
   enforce.
 - **Other platforms**: Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` changes with
-  `EINVAL`; there the ceiling remains advisory (the quota counters still
-  apply). See the follow-up tracking issue for portable and remote
-  enforcement.
-- **Remote (cluster) runs**: the local process-tree rlimit does not travel
-  to the cluster host; quota admission still counts them, but the ceiling
-  itself is not yet enforced remotely.
+  `EINVAL`; there the local ceiling remains advisory (the quota counters
+  still apply). See the follow-up tracking issue for portable enforcement.
+- **Remote (cluster) runs**: the local process-tree rlimit cannot travel to
+  the cluster host, so the remote wrapper instead forwards the declared
+  ceilings as engine flags — `--max-memory <MB>` and `--max-threads <n>`,
+  emitted only when the workflow declares them (a `0`/unset ceiling
+  auto-detects remotely, exactly like a local run with nothing declared).
+  On the cluster host those drive the engine's scheduler `ResourcePool` and
+  `check_budget_feasibility` gate, so a rule requiring more than the declared
+  total hard-fails before it is scheduled. The mechanism differs from a local
+  Linux run (rlimit vs. scheduler budget) but both cap the same declared
+  total; the remote path additionally applies a thread ceiling, which the
+  local web path does not (the engine auto-detects there).
 
 ## Cluster Connections & Remote Execution
 

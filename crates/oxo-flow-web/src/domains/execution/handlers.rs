@@ -906,6 +906,14 @@ pub async fn create_run(
                     // Issue #1093 follow-up: the failure policy rides the
                     // remote wrapper command exactly like a local run.
                     keep_going: req.keep_going.unwrap_or(false),
+                    // Issue #1221: forward the declared ceilings the web
+                    // admitted the run against so the cluster engine's
+                    // scheduler pool + budget gate enforce the same totals.
+                    // The local process-tree RLIMIT_DATA cannot travel to
+                    // the cluster host, so these flags are the remote
+                    // equivalent of that enforcement.
+                    max_memory_mb: quota_usage.1,
+                    max_threads: quota_usage.0,
                 },
             );
             return Ok(Json(resp));

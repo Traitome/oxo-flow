@@ -539,18 +539,53 @@ pub struct RunStaging {
     /// Continue past a failed required rule (`--keep-going`). Create-only:
     /// retry never stages a remote run, so there is no replay path here.
     pub keep_going: bool,
+    /// Declared memory ceiling in MB (issue #1221), from the workflow's
+    /// `quota_usage_for` sum. `0` = unset → the remote run auto-detects, so
+    /// no `--max-memory` flag is forwarded. Nonzero forwards the flag so the
+    /// engine's scheduler pool + budget-feasibility gate on the cluster host
+    /// see the same ceiling the web admitted the run against — the local
+    /// process-tree `RLIMIT_DATA` cannot travel to the cluster, so this flag
+    /// is the remote equivalent of that enforcement.
+    pub max_memory_mb: u64,
+    /// Declared thread ceiling (issue #1221), from the workflow's
+    /// `quota_usage_for` sum. `0` = unset → no `--max-threads` flag is
+    /// forwarded (the engine auto-detects). Mirrors `max_memory_mb`.
+    pub max_threads: u32,
 }
 
 /// Build the remote `oxo-flow run …` command line embedded in the wrapper
 /// script. Pure and unit-tested so the remote flag set can never drift from
-/// the local executor's (`RunFlags` -> `build_cli_args`): a missing flag
-/// would silently change cluster-run semantics relative to a local run.
+/// the local run's: a missing flag would silently change cluster-run
+/// semantics relative to a local run.
+///
+/// Enforcement map (issue #1221), so the drift-free promise states what is
+/// actually true rather than an aspiration:
+///
+/// - **Memory.** A local Linux web-spawned run is OS-capped by a
+///   process-tree `RLIMIT_DATA` (executor.rs `apply_memory_rlimit`) — that
+///   rlimit is a local-process construct and cannot be installed on the
+///   cluster host. The remote path therefore forwards `--max-memory <MB>`
+///   when the staged ceiling is nonzero, which drives the engine's scheduler
+///   ResourcePool + `check_budget_feasibility` on the cluster host. Both
+///   paths cap the same declared total; they differ in mechanism (rlimit vs.
+///   scheduler budget), not in intent.
+/// - **Threads.** The local web path forwards no thread cap (the engine
+///   auto-detects; `RunFlags` has no thread field). `--max-threads <n>` is
+///   the engine's portable thread ceiling, so the remote path forwards it
+///   when nonzero — strictly more enforcement than the local web path today,
+///   never less.
+///
+/// `0` means "unset" for both (matching the CLI defaults), so no flag is
+/// emitted and the remote run auto-detects — identical to a local run with
+/// no ceiling declared.
 fn build_remote_run_cmd(
     max_jobs: Option<usize>,
     keep_going: bool,
     allow_protected_drift: bool,
     provenance: bool,
     config_overrides: &[String],
+    max_memory_mb: u64,
+    max_threads: u32,
 ) -> String {
     let mut run_cmd = format!(
         "oxo-flow run workflow.oxoflow --workdir .{jobs}",
@@ -578,6 +613,16 @@ fn build_remote_run_cmd(
     if provenance {
         run_cmd.push_str(" --provenance");
     }
+    // Issue #1221: forward the declared ceilings so the cluster engine's
+    // scheduler pool + budget-feasibility gate size against the same totals
+    // the web admitted the run against. Both are numeric CLI flags (no shell
+    // metacharacters), so no quoting is needed; `0` = unset → omitted.
+    if max_memory_mb > 0 {
+        run_cmd.push_str(&format!(" --max-memory {max_memory_mb}"));
+    }
+    if max_threads > 0 {
+        run_cmd.push_str(&format!(" --max-threads {max_threads}"));
+    }
     for kv in config_overrides {
         run_cmd.push_str(" --arg=");
         run_cmd.push_str(&shell_quote(kv));
@@ -601,6 +646,8 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
             allow_protected_drift,
             provenance,
             keep_going,
+            max_memory_mb,
+            max_threads,
         } = staged;
 
         // All bookkeeping below uses the storage backend, which resolves to
@@ -671,6 +718,8 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
             allow_protected_drift,
             provenance,
             &config_overrides,
+            max_memory_mb,
+            max_threads,
         );
         match remote_exec(&cluster, &launch_script(&remote_dir, &wrapper, &run_cmd)).await {
             Ok(out) if out.code == 0 => {
@@ -906,8 +955,8 @@ mod tests {
     #[test]
     fn remote_run_cmd_carries_keep_going_only_when_enabled() {
         // Arrange / Act
-        let abort = build_remote_run_cmd(Some(4), false, false, false, &[]);
-        let keep = build_remote_run_cmd(Some(4), true, false, false, &[]);
+        let abort = build_remote_run_cmd(Some(4), false, false, false, &[], 0, 0);
+        let keep = build_remote_run_cmd(Some(4), true, false, false, &[], 0, 0);
 
         // Assert
         assert!(!abort.contains("--keep-going"), "got: {abort}");
@@ -923,7 +972,15 @@ mod tests {
     #[test]
     fn remote_run_cmd_carries_every_boolean_execution_flag() {
         // Arrange / Act — the full staged set arrives in one command.
-        let cmd = build_remote_run_cmd(None, true, true, true, &["k=v".into(), "b=c d".into()]);
+        let cmd = build_remote_run_cmd(
+            None,
+            true,
+            true,
+            true,
+            &["k=v".into(), "b=c d".into()],
+            0,
+            0,
+        );
 
         // Assert — flags and single-quoted overrides, no `-j` when unset.
         assert!(!cmd.contains(" -j "), "got: {cmd}");
@@ -933,6 +990,36 @@ mod tests {
         assert!(cmd.contains(" --arg='k=v'"), "got: {cmd}");
         assert!(cmd.contains(" --arg='b=c d'"), "got: {cmd}");
         assert!(cmd.ends_with(" > execution.log 2>&1"), "got: {cmd}");
+    }
+
+    /// Issue #1221: the remote wrapper must forward the declared ceilings
+    /// exactly when they are nonzero, and neither flag when they are zero.
+    /// The negative case is the one that guards the drift-free property:
+    /// `0` means "unset → auto-detect", so emitting the flag would pin a
+    /// remote run to a ceiling the web never admitted it against.
+    #[test]
+    fn remote_run_cmd_forwards_declared_ceilings_only_when_nonzero() {
+        // Arrange / Act
+        let with_ceilings = build_remote_run_cmd(None, false, false, false, &[], 4096, 16);
+        let without = build_remote_run_cmd(None, false, false, false, &[], 0, 0);
+
+        // Assert — nonzero ceilings become numeric flags.
+        assert!(
+            with_ceilings.contains(" --max-memory 4096"),
+            "got: {with_ceilings}"
+        );
+        assert!(
+            with_ceilings.contains(" --max-threads 16"),
+            "got: {with_ceilings}"
+        );
+        assert!(
+            with_ceilings.ends_with(" > execution.log 2>&1"),
+            "got: {with_ceilings}"
+        );
+
+        // Assert — zero means unset: neither flag is emitted.
+        assert!(!without.contains("--max-memory"), "got: {without}");
+        assert!(!without.contains("--max-threads"), "got: {without}");
     }
 
     #[test]
