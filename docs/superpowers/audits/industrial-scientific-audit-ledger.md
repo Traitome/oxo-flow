@@ -104,7 +104,8 @@ Required exit evidence:
 owns a unique `runs/<run_id>/` workdir (retry/resume are documented lineage
 continuations, see the limits below), and saved-pipeline admission is a
 guarded insert backed by partial unique indexes on both storage backends
-(issue #1130, implementation commits `7bded48d` + `9e15a609`).
+(issue #1130, implementation commits `7bded48d`, `9e15a609` (review
+fixes), and `4402f076` (PostgreSQL migration lock)).
 
 Runs created from a saved pipeline shared the persistent pipeline directory
 as their `workdir`, so a later run overwrote an earlier run's workflow,
