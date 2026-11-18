@@ -430,6 +430,15 @@ paths, and `when` conditions:
 > Local `docker`/`singularity` runs forward the same variables by name
 > (`docker run -e NAME`, and `APPTAINERENV_NAME`/`SINGULARITYENV_NAME` in the
 > child environment), so the value never enters the container argv either.
+> A sensitive value that is itself an absolute host path keeps its automatic
+> read-only bind mount (issue #1177): the mount is expanded from the routed
+> variable by the host shell
+> (`-v "$OXO_FLOW_SENSITIVE_<n>":"$OXO_FLOW_SENSITIVE_<n>":ro`), so the
+> wrapper string and the rule shell's argv carry only the reference. The
+> docker client itself necessarily receives the expanded path as the mount
+> source — a bind mount cannot be expressed without the runtime seeing the
+> path — and a value embedded inside a longer path is skipped (with a
+> warning) instead of re-materializing the value literally.
 > Without the operator-side secret the reference expands empty and the rule
 > fails — loudly, instead of leaking the value into the artifact. HPC
 > job-script bodies (SLURM/PBS/SGE/LSF) are **not** covered yet; that half of
