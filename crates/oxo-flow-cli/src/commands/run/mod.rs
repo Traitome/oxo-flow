@@ -319,11 +319,21 @@ async fn run_command_inner(
     // Surface the lock error's suggestion (issue #158): without it a user
     // hitting a busy workdir learns WHAT is wrong but not that the lock
     // auto-releases when the other process exits.
-    let _workdir_lock =
-        WorkdirLock::acquire(&workdir_effective).map_err(|e| match e.suggestion() {
-            Some(s) => anyhow::anyhow!("{e}\n  hint: {s}"),
-            None => anyhow::anyhow!("{e}"),
-        })?;
+    //
+    // Review-B1 exception (issue #1164): a verification rerun spawned by the
+    // repair loop carries OXO_FLOW_REPAIR_RERUN=1 while its parent holds
+    // this lock and is blocked awaiting the child — skipping acquisition is
+    // the only way the child can run (see repair::workdir_lock_required).
+    let _workdir_lock = if crate::commands::run::repair::workdir_lock_required() {
+        Some(
+            WorkdirLock::acquire(&workdir_effective).map_err(|e| match e.suggestion() {
+                Some(s) => anyhow::anyhow!("{e}\n  hint: {s}"),
+                None => anyhow::anyhow!("{e}"),
+            })?,
+        )
+    } else {
+        None
+    };
     // Arm the run-status file immediately after the lock: from here on a
     // preflight failure (protected-tree drift, bad environment spec, …) is
     // recorded as this run's failure, so `wait` never mistakes a previous
@@ -355,6 +365,10 @@ async fn run_command_inner(
             .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // ── Parse and merge CLI config overrides (the shared phase, overrides.rs) ─────
+    // Captured before the move: the repair loop forwards the raw override
+    // tokens into its verification rerun so the child re-derives the same
+    // config (issue #1164 review-R3).
+    let rerun_config_args = cli_args.clone();
     apply_cli_override_phase(&mut config, &workflow, cli_args, "run")?;
 
     // ── Filter to a sample subset (--samples @path / first:N / names / ready) ────
@@ -1404,8 +1418,19 @@ async fn run_command_inner(
         )?;
     }
 
+    // Parent context the repair loop forwards into its verification rerun
+    // (issue #1164 review-R3): the effective workdir, the raw override
+    // tokens, and the run-shaping flags the child must re-derive.
+    let rerun_ctx = crate::commands::run::repair::RerunContext {
+        workdir: Some((*workdir_actual).clone()),
+        config_args: rerun_config_args,
+        provenance,
+        jobs: (jobs != 1).then_some(jobs),
+        keep_going,
+    };
     run_scheduler_loop(SchedulerLoopContext {
         jobs,
+        rerun_ctx: &rerun_ctx,
         order: &mut order,
         config: &mut config,
         dag: &mut dag,

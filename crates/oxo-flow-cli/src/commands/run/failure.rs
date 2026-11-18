@@ -39,6 +39,9 @@ pub(crate) struct AbortContext<'a> {
     /// start another one.
     pub no_ai_recover: bool,
     pub ai_max_retries: Option<u32>,
+    /// Parent run context forwarded into the verification rerun (issue
+    /// #1164 review-R3).
+    pub rerun_ctx: &'a crate::commands::run::repair::RerunContext,
 }
 
 /// Abort in-flight execution on failure (when not in keep_going mode):
@@ -402,8 +405,12 @@ pub(crate) async fn handle_run_failure_abort(
                                         &diag.session_id,
                                     )
                                     .await;
-                                    let rerun =
-                                        verification_rerun(ctx.workflow, ctx.checkpoint_path).await;
+                                    let rerun = verification_rerun(
+                                        ctx.workflow,
+                                        ctx.checkpoint_path,
+                                        ctx.rerun_ctx,
+                                    )
+                                    .await;
                                     narrate_repair_line(
                                         &rerun_narration(&rerun),
                                         Some(ctx.run_log),

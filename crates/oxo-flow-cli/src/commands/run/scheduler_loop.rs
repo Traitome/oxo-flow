@@ -46,6 +46,10 @@ pub(crate) struct SchedulerLoopContext<'a> {
     pub samples_filter: &'a [String],
     pub workflow: &'a Path,
     pub json_summary: &'a mut RunJsonSummary,
+    /// Parent context forwarded into the repair loop's verification rerun
+    /// (issue #1164 review-R3): workdir, config overrides, provenance,
+    /// concurrency, keep-going — so the child re-derives the same run.
+    pub rerun_ctx: &'a crate::commands::run::repair::RerunContext,
 }
 
 /// Record a post-completion processing failure (checkpoint re-entry,
@@ -181,6 +185,7 @@ fn mark_pre_completed(
 pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow::Result<()> {
     let SchedulerLoopContext {
         jobs,
+        rerun_ctx,
         order,
         config,
         dag,
@@ -1286,6 +1291,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                     ai_recover,
                     no_ai_recover,
                     ai_max_retries,
+                    rerun_ctx,
                 },
             )
             .await;
