@@ -28,6 +28,7 @@ use crate::commands::quality::{format_command, lint_command, touch_command, vali
 use crate::commands::run::{
     RunRequest, debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
+use crate::commands::runs_gc::runs_command;
 use crate::commands::verify_data::verify_data_command;
 use crate::commands::web::ServeMode;
 use anyhow::Result;
@@ -72,7 +73,7 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// info, knowledge, schema, verify-data, license, provenance verify, ai,
-    /// and the cluster status/cancel/logs monitors;
+    /// runs gc, and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -691,6 +692,17 @@ pub enum Commands {
         #[command(subcommand)]
         action: EnvAction,
     },
+    /// Manage per-run workspace trees created by web runs (issue #1228).
+    ///
+    /// Web create-run materializes an immutable tree per run under
+    /// `workspace/users/<user_id>/runs/<run_id>/` (workflow snapshot,
+    /// staged inputs/includes, checkpoint, logs, outputs). Nothing
+    /// reclaims those trees when a run finishes. `runs gc` sweeps the
+    /// stale ones behind explicit safety guards.
+    Runs {
+        #[command(subcommand)]
+        action: RunsAction,
+    },
     /// Reformat a .oxoflow file into canonical TOML form (in place by default).
     Format {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
@@ -1100,6 +1112,36 @@ pub enum EnvAction {
     },
 }
 
+/// Default age gate for `runs gc`, mirroring `env gc`'s 90-day default
+/// (issue #1228). Named so `--help` prints `[default: 90]` and the value
+/// has one source of truth.
+const RUNS_GC_DEFAULT_MIN_AGE_DAYS: u64 = 90;
+
+#[derive(Subcommand, Debug)]
+pub enum RunsAction {
+    /// Reclaim stale per-run workspace trees under the web workspace
+    /// (issue #1228).
+    ///
+    /// A web run's tree is `workspace/users/<user_id>/runs/<run_id>/`.
+    /// This sweeps trees whose run is terminal
+    /// (completed/failed/cancelled) and older than the age gate, behind
+    /// safety guards: a live run is never touched, a tree still used as
+    /// the lineage target of a later retry/resume is never touched, and a
+    /// tree carrying a declared protected output is never touched.
+    Gc {
+        /// Only reclaim trees whose run finished at least this many days
+        /// ago (default: 90).
+        #[arg(long, value_name = "DAYS", default_value_t = RUNS_GC_DEFAULT_MIN_AGE_DAYS)]
+        older_than: u64,
+        /// Restrict the sweep to one user (by username).
+        #[arg(long, value_name = "USER")]
+        user: Option<String>,
+        /// Show what would be reclaimed without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Show a workflow's declared configuration values.
@@ -1307,6 +1349,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Ai { .. } => true,
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
         Commands::VerifyData { .. } => true,
+        Commands::Runs { .. } => true,
         // The monitoring half of the family emits JSON documents; `submit`
         // still generates scripts and has no document to emit.
         Commands::Cluster { action } => matches!(
@@ -1463,7 +1506,7 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, info, knowledge, schema, license, ai, \
-             provenance verify, verify-data)."
+             provenance verify, verify-data, runs gc)."
         );
     }
     // A background run never executes the workflow in the foreground
@@ -1995,6 +2038,7 @@ async fn main() -> Result<()> {
             workdir,
         } => clean_command(workflow, dry_run, force, orphans, workdir)?,
         Commands::Env { action } => env_command(action).await?,
+        Commands::Runs { action } => runs_command(action, cli.json).await?,
         Commands::Format {
             workflow,
             output,

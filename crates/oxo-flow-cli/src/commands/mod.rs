@@ -417,6 +417,7 @@ pub mod quality;
 pub mod run;
 pub mod run_cluster;
 pub mod run_preview;
+pub mod runs_gc;
 pub mod samples;
 pub mod verify_data;
 pub mod wait;
