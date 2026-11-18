@@ -4169,7 +4169,11 @@ When given a workflow file, lists the environment each rule will actually run
 in. Resolution follows the run's own precedence — <code>env_group</code> → the rule's
 <code>environment</code> → <code>[defaults] environment</code> — so a rule that inherits the
 defaults is reported with the backend the run will bootstrap, not as
-<code>system</code>. A rule that resolves to no environment is reported as <code>system</code>.</p>
+<code>system</code>. <code>run</code> and <code>dry-run</code> fold that same resolved spec onto every rule
+before scheduling (issue #1210), so the listing and the executed backend
+cannot disagree — including a rule that declares both an <code>env_group</code> and a
+conflicting inline <code>environment</code>: the group wins on both surfaces. A rule
+that resolves to no environment is reported as <code>system</code>.</p>
 <p><strong>Output:</strong></p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow v0.32.0 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>https://github.com/Traitome/oxo-flow

@@ -8503,6 +8503,13 @@ named groups once in <code>[env_groups]</code> and reference them via <code>env_
 named group. The <code>env_group</code> spec takes precedence over an inline
 <code>[rules.environment]</code>; the inline spec is only used when no <code>env_group</code> is set
 (or the named group does not exist), followed by <code>[defaults] environment</code>.</p>
+<p>This precedence is the execution precedence, not just a listing convenience:
+<code>run</code>, <code>dry-run</code>, cluster submission, and the run monitor's DAG status fold
+the winning spec onto each rule before scheduling, and <code>env list</code> / <code>env check</code>
+call the same resolver — so a rule declaring both an <code>env_group</code> and an inline
+<code>environment</code> is reported AND executed with the group's backend. (Before
+issue #1210 the listing honored the group while execution silently used the
+inline spec.)</p>
 <h3 id="environment-variables-envvars">Environment Variables (<code>envvars</code>)<a class="headerlink" href="#environment-variables-envvars" title="Permanent link">#</a></h3>
 <p>Inject rule-specific environment variables directly into the execution context:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">[[rules]]</span>
