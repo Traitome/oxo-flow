@@ -4473,14 +4473,14 @@ entry's durability is explicit per action (WEB-15 / issue #1140):</p>
 <p>The audit row is written after the handler, not in the same transaction, so
 a REQUIRED-audit <code>500</code> means the action <strong>may already have been applied</strong> —
 verify the affected resource before retrying, since a blind retry can
-duplicate the effect. For every mutation the middleware handles, the
-structured event stream emits an <code>audit</code> event even when the database insert
-fails. The successful-login path is the exception: the login handler owns
-that best-effort row and emits no structured event, so a successful login on
-broken storage leaves neither a row nor an event (failed logins are
-REQUIRED middleware rows). Do not treat a missing entry as proof that no
-action occurred; check the structured event stream as well. The trail spans
-all users and is admin-only outside personal mode.</p>
+duplicate the effect. Successful sign-ins are a handler-owned REQUIRED row
+(the middleware only sees the pre-auth request and would misattribute it);
+the session is persisted before the audit write, so a login <code>500</code> means a
+session token may already have been minted. For every mutation the
+middleware handles, the structured event stream emits an <code>audit</code> event even
+when the database insert fails. Do not treat a missing entry as proof that
+no action occurred; check the structured event stream as well. The trail
+spans all users and is admin-only outside personal mode.</p>
 <p><strong>Workspace isolation</strong>:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>workspace/
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>└── users/

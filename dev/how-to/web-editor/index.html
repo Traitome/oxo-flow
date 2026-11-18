@@ -1348,6 +1348,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Guided vs Canvas modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#guided-mode-refuses-documents-it-cannot-represent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guided mode refuses documents it cannot represent
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4058,6 +4075,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Guided vs Canvas modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#guided-mode-refuses-documents-it-cannot-represent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guided mode refuses documents it cannot represent
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4225,6 +4259,26 @@ source of truth):</p>
 <p>The choice persists across sessions. Validation errors now carry line
 numbers; clicking a <code>line N</code> chip scrolls the TOML editor to the failing
 line.</p>
+<h3 id="guided-mode-refuses-documents-it-cannot-represent">Guided mode refuses documents it cannot represent<a class="headerlink" href="#guided-mode-refuses-documents-it-cannot-represent" title="Permanent link">#</a></h3>
+<p>Guided mode models the <code>[workflow]</code> name/version and, per rule, <code>name</code>,
+<code>shell</code>, <code>input</code>, <code>output</code>, <code>threads</code>, <code>memory</code>, and <code>environment</code> only.
+It would silently drop or rewrite anything else — <code>[[values]]</code>, <code>[engine]</code>,
+<code>[config]</code>, <code>when</code> gates, <code>depends_on</code>, hooks/retries, <code>script</code> bodies,
+resources other than threads/memory, <code>[rules.*]</code> sub-tables, and map or
+directory forms of <code>input</code>/<code>output</code> (issue #1143, audit UX-01).</p>
+<p>When the loaded workflow contains any of those, Guided mode replaces the
+form with a refusal that names every construct found, and its <strong>Save</strong>
+refuses without writing anything. Use <strong>Switch to TOML editor</strong> (or the
+<strong>Canvas + TOML</strong> mode button) to edit and save the full document — the
+TOML editor path is unchanged and never strips advanced semantics.
+<code>[workflow]</code> keys such as <code>description</code> are preserved and do not trigger
+the refusal.</p>
+<p>Table-header spelling is normalized to TOML semantics: <code>[[rules]]</code>,
+<code>[[ rules ]]</code>, <code>[rules."resources"]</code>, dotted keys, inner whitespace, and
+CRLF documents are read identically, and header-looking lines inside
+multi-line strings stay string content. A line that starts like a table
+header but cannot be parsed fails closed (the guided form refuses the
+document) instead of being silently absorbed into the previous section.</p>
 <h2 id="canvas-edits-preserve-your-comments">Canvas edits preserve your comments<a class="headerlink" href="#canvas-edits-preserve-your-comments" title="Permanent link">#</a></h2>
 <p>Canvas, palette, and inspector edits are position-aware: the backend
 patches the workflow TOML in place (via <code>toml_edit</code>), so hand-written
@@ -4337,6 +4391,15 @@ produces the execution plan without running anything; <strong>Run</strong> start
 pipeline and opens the monitor. Both honor the engine's checkpoint semantics:
 re-runs reuse completed rules unless inputs, config, or rule definitions
 changed.</p>
+<p>The verdict is fail-closed (audit UX-03, issue #1145). When the validation
+request itself fails — a network error or a server 5xx — the editor does not
+keep the previous "Valid" result: the badge switches to <strong>Not validated</strong>,
+<strong>Save</strong> refuses to report a save whose content was never validated, and
+<strong>Dry-Run</strong>/<strong>Run</strong> stay disabled until a validation request actually
+succeeds. A validation that returns findings behaves as before: the badge
+shows the error count, the error list opens, and the save is refused with
+that count. Recovery is automatic — the next successful validation (a new
+edit or another <strong>Save</strong>) restores the run affordances.</p>
 <h2 id="look-feel">Look &amp; feel<a class="headerlink" href="#look-feel" title="Permanent link">#</a></h2>
 <p>Dark mode (follows the OS or the header 🌙 toggle), Chinese interface
 chrome (header 中文 toggle), and bilingual glossary tooltips on core

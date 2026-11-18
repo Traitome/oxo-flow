@@ -3609,6 +3609,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#failure-panel-actions-in-the-web-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure-panel actions in the web monitor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#extending-the-pattern-library" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4178,6 +4189,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#failure-panel-actions-in-the-web-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure-panel actions in the web monitor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#extending-the-pattern-library" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4545,6 +4567,34 @@ their declared limit:</p>
   (e.g. LSF) or a missing accounting row. Legacy checkpoints degrade to
   an empty list.</li>
 </ul>
+<h2 id="failure-panel-actions-in-the-web-monitor">Failure-panel actions in the web monitor<a class="headerlink" href="#failure-panel-actions-in-the-web-monitor" title="Permanent link">#</a></h2>
+<p>A failed node may carry <code>auto_fixable: true</code> and a <code>fix_action</code>
+(<code>description</code>, optional <code>config_change</code>, optional <code>command</code>). <strong>The
+<code>fix_action</code> is advisory</strong> — the diagnostics engine never reads the live
+configuration, so <code>config_change.path</code> / <code>old_value</code> / <code>new_value</code> describe
+the <em>intent</em> of the change with placeholder values (typically
+<code>"current"</code> → <code>"increase"</code>), and today no producer sets <code>command</code>. No
+server endpoint applies it: <code>POST /api/runs/{id}/retry</code> accepts only
+<code>skip_succeeded</code> and <code>from_rule</code>.</p>
+<p>Consequently the monitor's diagnostics tab renders the suggestion as
+<strong>"Suggested fix (apply manually)"</strong> (path and any command shown for
+copying) and labels its action <strong>"Retry unchanged"</strong>: clicking it re-runs
+the same workflow without mutating anything, so a rerun of an unmodified
+pipeline fails the same way. Apply the change yourself first — edit the
+workflow/config and create a new run, or use the CLI's verified repair
+loop (<code>oxo-flow run --ai-recover</code>, which gates <code>apply_fix</code> on validation
+and writes the workflow atomically). The monitor never claims a repair was
+applied when none was. The AI monitor's alert cards get the same action
+label ("Retry unchanged") for the same reason — their <code>suggestion</code> is
+likewise prose, not an applicable mutation — but they render no
+"Suggested fix (apply manually)" caption.</p>
+<p>Regression coverage: <code>frontend/e2e/monitor-apply-retry.spec.ts</code>
+(<code>advisory fix is displayed and Retry unchanged sends only the retry
+request</code>, <code>no repair payload: no suggestion block, Retry unchanged still
+sends no repair request</code>, <code>alert card action is relabelled Retry unchanged
+without the manual-fix caption</code>) asserts the displayed payload is shown as
+advisory, the alert card carries only the action relabel (no manual-fix
+caption), and the retry POST is the only mutation sent.</p>
 <h2 id="extending-the-pattern-library">Extending the Pattern Library<a class="headerlink" href="#extending-the-pattern-library" title="Permanent link">#</a></h2>
 <p>Add new patterns in <code>crates/oxo-flow-core/src/diagnostics.rs</code> (inside
 <code>DiagnosticsEngine::new()</code>):</p>

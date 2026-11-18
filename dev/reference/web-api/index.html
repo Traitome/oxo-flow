@@ -6024,16 +6024,23 @@ run). Writing the audit row in the mutation's transaction is tracked as
 remaining work in the WEB-15 ledger entry. Per-route implication: every
 REQUIRED route listed above can answer this 500 <strong>after</strong> applying its
 change; treat the 500 as "state unknown", not as "nothing happened".</p>
-<p>Both classes share one writer (the storage backend's <code>record_audit_log</code>).
-The middleware emits a structured <code>audit</code> event for every mutation it
-handles, including when the database insert fails, so machine consumers
-still see the attempt. The successful-login path is the exception: the
-login handler returns before the middleware's event emission and owns its
-own best-effort row, so a successful login on broken storage leaves
-<strong>neither a row nor a structured event</strong>. Failed login attempts are
-REQUIRED rows written by the middleware. Migration of the successful-login
-row to <code>audit_required</code> is tracked follow-up work in the WEB-15 ledger
-entry.</p>
+<p>Both classes share one writer (the storage backend's <code>record_audit_log</code>)
+behind the named <code>audit_required</code> / <code>audit_best_effort</code> helpers; no handler
+writes the table directly. The middleware emits a structured <code>audit</code> event
+for every mutation it handles, including when the database insert fails, so
+machine consumers still see the attempt.</p>
+<p>Successful sign-ins are the one handler-owned REQUIRED row (WEB-15 /
+issue #1199): the middleware sees only the pre-auth request and would
+misattribute the row to the <code>default</code> pseudo-user, so <code>POST /api/auth/login</code>
+records its own canonical <code>users.id</code> row. That write is REQUIRED, so a
+successful login on broken storage answers the same
+<code>500 AUDIT_WRITE_FAILED</code> instead of the computed 200 — and the ordering
+honesty applies here too: the session is persisted <strong>before</strong> the audit
+write, so the <code>500</code> means a session token may already have been minted for
+the account even though the sign-in response failed. Verify the session
+state before retrying. Failed login attempts stay REQUIRED rows written by
+the middleware. The license-upload metadata row stays best-effort: the
+middleware already writes the REQUIRED row for <code>POST /api/license/upload</code>.</p>
 <h3 id="server-sent-events">Server-Sent Events<a class="headerlink" href="#server-sent-events" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/events
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Accept: text/event-stream
@@ -6545,6 +6552,11 @@ Chart data built from real sources: <code>files</code> maps the run's file tree 
 The retry spawns a real run, so it pays the same runs-per-minute
 limiter and the quota pre-flight as run creation — a retry that exceeds
 the budget answers <code>429 RUN_RATE_LIMITED</code> / <code>QUOTA_EXCEEDED</code>.
+The endpoint accepts <strong>no repair payload</strong>: the diagnostics <code>fix_action</code>
+shown by the monitor is advisory (placeholder values, nothing applies it),
+so the web UI labels its action "Retry unchanged" rather than claiming a
+fix was applied. See
+<a href="../diagnostics-engine/#failure-panel-actions-in-the-web-monitor">Diagnostics Engine → Failure-panel actions in the web monitor</a>.
 Like every <code>ApiResult</code> error, the 429 carries no <code>Retry-After</code> header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error <code>message</code> instead (<code>retry in {wait_secs}s</code>).
