@@ -1187,6 +1187,20 @@ impl StorageBackend for PostgresBackend {
         Ok(res.rows_affected() > 0)
     }
 
+    async fn delete_run(&self, id: &str) -> Result<(), String> {
+        // RB-03 (#1131): see the SQLite impl. `run_nodes` cascades through its
+        // `REFERENCES runs(id) ON DELETE CASCADE` FK.
+        let res = sqlx::query("DELETE FROM runs WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if res.rows_affected() == 0 {
+            return Err(format!("run {id} not found"));
+        }
+        Ok(())
+    }
+
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
         let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT pid FROM runs WHERE id = $1")
             .bind(id)

@@ -1369,6 +1369,22 @@ impl StorageBackend for SqliteBackend {
         Ok(res.rows_affected() > 0)
     }
 
+    async fn delete_run(&self, id: &str) -> Result<(), String> {
+        // RB-03 (#1131): a create-run whose pre-spawn staging fails after the
+        // row was inserted compensates by deleting the row, so a run that
+        // never started cannot linger as a ghost `queued` row. `run_nodes`
+        // cascades (FK ON DELETE CASCADE) under the pool's `foreign_keys=ON`.
+        let res = sqlx::query("DELETE FROM runs WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if res.rows_affected() == 0 {
+            return Err(format!("run {id} not found"));
+        }
+        Ok(())
+    }
+
     async fn get_run_pid(&self, id: &str) -> Result<Option<i64>, String> {
         let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT pid FROM runs WHERE id = ?")
             .bind(id)
