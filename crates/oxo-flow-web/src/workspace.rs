@@ -259,10 +259,10 @@ fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> bool {
     }
 }
 
-// Saved pipelines no longer own a shared on-disk workdir: every run is
-// isolated under `users/<u>/runs/<run_id>/` (audit RB-02), so the old
-// `pipelines/<pipeline_id>/` helpers were removed. `pipeline_id` is a DB
-// association only.
+// Saved pipelines no longer own a shared on-disk workdir: every create-run
+// is isolated under `users/<u>/runs/<run_id>/` (audit RB-02; retry/resume
+// continue a predecessor lineage), so the old `pipelines/<pipeline_id>/`
+// helpers were removed. `pipeline_id` is a DB association only.
 
 #[cfg(test)]
 mod tests {
