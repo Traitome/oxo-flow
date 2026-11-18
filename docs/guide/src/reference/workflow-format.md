@@ -883,6 +883,29 @@ registry token, a site variable) requires a rule-level `envvars` entry or
 the operator-level `OXO_FLOW_ENV_PASSTHROUGH` list. No `podman` backend is
 wired, so `PODMAN_*` is not admitted.
 
+**Cloud job environment (issue #1171):** cloud rules (Kubernetes, AWS
+Batch, GCP Batch) do not run as shell commands of the submitting process.
+The engine writes only the rendered rule command into the manifest/spec
+(the Kubernetes Job `args`, the AWS Batch `containerOverrides.command`, or
+the GCP Batch runnable), so the job's environment is:
+
+- the container image's own `ENV` (or the VM image's environment for a
+  GCP Batch script runnable), plus
+- the rule's declared `envvars`, which travel inside the command as
+  `export K='V'` lines, plus
+- the `OXO_FLOW_SENSITIVE_<n>` references for `sensitive = true` config
+  values (resolved from the backend's own secret channel).
+
+The submit host's ambient environment is never forwarded: a generated
+body carries no `env`/`environment` channel for ambient state (only the
+sensitive-value references above create one), and the submit-side CLI
+(`kubectl`, `aws`, `gcloud`) runs in the operator's own process
+environment, which is likewise never written into the job. Regression
+tests pin the boundary per backend
+(`kubernetes_job_body_carries_no_submit_host_environment`,
+`aws_batch_job_body_carries_no_submit_host_environment`,
+`gcp_batch_job_body_carries_no_submit_host_environment`).
+
 **Stale pixi.lock fallback:** a rule declared with
 `environment = { pixi = "envs/pixi.toml" }` installs from the committed
 `pixi.lock` beside that manifest. When the pinned package builds have
@@ -3652,9 +3675,11 @@ Notes:
   through the schedulers' export-by-default behavior (`--export=ALL`,
   `-V`, `-env`). See
   [the run command reference](../commands/run.md#hpc-cluster-submissions).
-  Container and cloud backends (docker, singularity, Kubernetes, AWS
-  Batch, GCP Batch) do **not** yet route through the shared policy — they
-  are clean only because they forward no ambient environment.
+  Local `docker`/`singularity` dispatch runs *inside* that same cleared
+  rule shell (covered by the same allowlist, widened only by the narrow
+  daemon-variable list above). Cloud dispatch (Kubernetes, AWS Batch, GCP
+  Batch) never forwards the submit host's environment at all — see
+  [Environment specification](#environment-specification).
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution:
   the recorded instance combos from

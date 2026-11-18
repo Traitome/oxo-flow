@@ -217,6 +217,19 @@ mod tests {
         assert!(text.contains("BATCH_TASK_INDEX"));
     }
 
+    /// Issue #1171: a submit-host ambient credential must never reach a GCP
+    /// Batch job body. The job config is built from the rule and the rendered
+    /// command only; the task's environment is the VM/container image plus
+    /// `taskSpec.environment`, which this generator leaves to the operator.
+    /// The probe runs in a child process that carries sentinel credentials
+    /// (the crate forbids `std::env::set_var`), so a future change that
+    /// forwards the submit host's environment or inlines its values fails
+    /// here.
+    #[test]
+    fn gcp_batch_job_body_carries_no_submit_host_environment() {
+        crate::backend::assert_cloud_body_ignores_submit_host_env("gcp-batch");
+    }
+
     /// Sentinel regression (ledger RB-12): after the plan routes a
     /// `sensitive = true` value out of the command, no GCP Batch body carries
     /// the literal — only the `OXO_FLOW_SENSITIVE_<n>` reference, which the

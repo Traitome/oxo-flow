@@ -221,6 +221,18 @@ mod tests {
         assert_eq!(gpu["value"], "1");
     }
 
+    /// Issue #1171: a submit-host ambient credential must never reach an AWS
+    /// Batch job body. The SubmitJob payload is built from the rule and the
+    /// rendered command only; the container's environment is the job
+    /// definition's plus image `ENV`, never the submit host's. The probe runs
+    /// in a child process that carries sentinel credentials (the crate
+    /// forbids `std::env::set_var`), so a future change that forwards the
+    /// submit host's environment or inlines its values fails here.
+    #[test]
+    fn aws_batch_job_body_carries_no_submit_host_environment() {
+        crate::backend::assert_cloud_body_ignores_submit_host_env("aws-batch");
+    }
+
     /// Sentinel regression (ledger RB-12): once the cluster plan routes the
     /// sensitive literal out of `shell_cmd`, no AWS Batch job body carries it —
     /// only the `OXO_FLOW_SENSITIVE_<n>` reference the job-definition secret
