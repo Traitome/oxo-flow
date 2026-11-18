@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Summarize read counts per sample"
 
 [[rules]]
+name = "stage_reads"
+output = ["data/reads/sample_R1.fastq.gz"]
+shell = "mkdir -p data/reads && printf '@r1\nACGT\n+\nIIII\n' | gzip -c > {output[0]}"
+
+[[rules]]
 name = "summarize"
 input = ["data/reads/sample_R1.fastq.gz"]
 output = ["out/summary.txt"]
-shell = "zcat {input[0]} | wc -l > {output[0]}"
+shell = "mkdir -p out && gzip -cd {input[0]} data/reads/sample_R2.fastq.gz | wc -l > {output[0]}"

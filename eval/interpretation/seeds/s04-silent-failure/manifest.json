@@ -2,8 +2,8 @@
   "id": "s04-silent-failure",
   "surface": "report",
   "run_expect_exit": 0,
-  "expect_any": ["zcat", "can'?t stat", "no such file", "sample_r1\\.fastq"],
+  "expect_any": ["gzip|zcat", "can'?t stat", "no such file", "sample_r2\\.fastq\\.gz"],
   "forbid": [],
   "setup": {},
-  "ground_truth": "zcat fails (input absent) but the pipeline exit code comes from wc, so the rule reports success with a poisoned (empty) output; stderr_tail records the zcat error"
+  "ground_truth": "stage_reads produces the declared R1 read; summarize decompresses it together with the UNDECLARED data/reads/sample_R2.fastq.gz, whose absence makes gzip fail while the pipeline exit code comes from wc — the rule reports success with a poisoned (incomplete) summary. stderr_tail records the gzip error. The declared input is produced upstream, so the engine's fail-fast missing-source-input gate does not apply (that class is s01)."
 }

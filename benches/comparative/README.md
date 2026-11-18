@@ -63,7 +63,7 @@ real, benchmarkable difference:
   chain must reuse one process N times, so `hello.nf` pre-expands **1000
   static include aliases** (`include { echo_step as step_i }`) plus 1000
   one-line guards. `--count` beyond 1000 fails; the alias block dominates
-  the file (2041 lines vs. 34 for the Snakefile).
+  the file (2041 lines vs. 41 for the Snakefile).
 - **Snakemake depth ceiling**: the DAG builder is recursive; chains
   deeper than ~484 steps hit `RecursionError` on Python's default
   recursionlimit (measured on Snakemake 9.19.0: 484 OK, 485 fails).
