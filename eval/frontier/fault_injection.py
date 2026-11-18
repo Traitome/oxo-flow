@@ -940,10 +940,15 @@ def assess_repair_stages(
     """
     events = sorted(set(REPAIR_NARRATION_RE.findall(run_output)))
 
+    record = find_repair_record(checkpoint) if checkpoint else None
+    engine_self_rerun = (
+        any(ev.startswith("REPAIR_RERUN_") for ev in events)
+        or bool(record and record.get("rerun_attempted") is not None)
+    )
+
     applied_evidence: List[str] = []
     if "REPAIR_APPLIED" in events:
         applied_evidence.append("narration:REPAIR_APPLIED")
-    record = find_repair_record(checkpoint) if checkpoint else None
     if record and record.get("applied") is True:
         applied_evidence.append("checkpoint:repair_record.applied")
     if not applied_evidence:
@@ -952,15 +957,30 @@ def assess_repair_stages(
             applied_evidence.append("narration:fix-applied-legacy")
     repair_applied = bool(applied_evidence)
 
+    # A fault counts as manifested when the seeded run failed OR when the
+    # repair machinery engaged: the #1164 engine self-reruns after a verified
+    # patch and exits 0 on success, so exit-0 no longer implies "no fault".
+    fault_manifested = (
+        run_exit_code not in (0, None)
+        or repair_applied
+        or bool(record and record.get("rerun_attempted") is True)
+    )
+
     verified_evidence: List[str] = []
+    if "REPAIR_RERUN_SUCCEEDED" in events:
+        verified_evidence.append("narration:REPAIR_RERUN_SUCCEEDED")
     if "REPAIR_VERIFIED" in events:
         verified_evidence.append("narration:REPAIR_VERIFIED")
+    if record and record.get("rerun_succeeded") is True:
+        verified_evidence.append("checkpoint:repair_record.rerun_succeeded")
     if record and record.get("verified") is True:
         verified_evidence.append("checkpoint:repair_record.verified")
-    if repair_applied and not verified_evidence and workflow_sha_after != workflow_sha_before:
-        # Fallback: the engine accepted and wrote the patch; a patch that
-        # still parses as workflow TOML counts as verified through the
-        # engine's own validation gate (apply_fix validates before writing).
+    if repair_applied and not verified_evidence and not engine_self_rerun and workflow_sha_after != workflow_sha_before:
+        # Legacy-binary fallback: the engine accepted and wrote the patch but
+        # has no self-rerun (pre-#1164). A patch that still parses as workflow
+        # TOML counts as verified through the engine's own validation gate —
+        # under the self-rerunning engine this fallback is intentionally
+        # unavailable: parses-valid says nothing about the rerun outcome.
         try:
             tomllib.loads(workflow_after_text)
             verified_evidence.append("fallback:patched-toml-parses")
@@ -969,12 +989,23 @@ def assess_repair_stages(
     repair_verified = bool(verified_evidence)
 
     engine_patched = workflow_sha_after != workflow_sha_before
-    fault_manifested = run_exit_code not in (0, None)
-    rerun_attempted = fault_manifested
-    rerun_succeeded = rerun_attempted and rerun_exit_code == 0
+    rerun_attempted = fault_manifested and (
+        engine_self_rerun
+        or run_exit_code not in (0, None)
+    )
+    rerun_succeeded = rerun_attempted and (
+        "REPAIR_RERUN_SUCCEEDED" in events
+        or bool(record and record.get("rerun_succeeded") is True)
+        or (
+            # Legacy mode: the harness's own rerun of the patched workflow.
+            not engine_self_rerun
+            and rerun_exit_code == 0
+        )
+    )
 
     # WHY for the first failing stage (application → verification → rerun).
     repair_why: Optional[str] = None
+    rerun_failed_line = _first_line_with(("REPAIR_RERUN_FAILED",), run_output)
     if not fault_manifested:
         if case.runtime_class == "advisory_warning":
             repair_why = (
@@ -1009,11 +1040,13 @@ def assess_repair_stages(
                     "recovery ran but no applicable patch: no REPAIR_APPLIED "
                     "narration and no checkpoint repair_record"
                 )
+    elif rerun_failed_line:
+        repair_why = rerun_failed_line
     elif not repair_verified:
         repair_why = (
-            "patch written but not verified: no REPAIR_VERIFIED narration, "
-            "no checkpoint repair_record.verified, and the patched workflow "
-            "did not parse cleanly"
+            "patch written but not verified: no REPAIR_RERUN_SUCCEEDED "
+            "narration, no checkpoint repair_record.rerun_succeeded, and no "
+            "legacy patched-TOML fallback applies"
         )
     elif not rerun_succeeded:
         tail = _first_line_with(("Error:", "exit code", "✗"), rerun_output) or ""

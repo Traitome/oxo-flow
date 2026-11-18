@@ -317,6 +317,72 @@ class RepairStageTests(unittest.TestCase):
         self.assertIn("checkpoint:repair_record.applied", result["applied_evidence"])
         self.assertTrue(result["repair_verified"])
 
+    def test_engine_self_rerun_success_contract(self):
+        # The #1164 engine self-reruns after a verified patch and exits 0:
+        # fault manifestation, verification, and rerun success must all
+        # classify from the engine narration alone.
+        result = self._assess(
+            run_output=(
+                "  REPAIR_APPLIED session_id=20261118-000000-recover-ab12\n"
+                "  REPAIR_RERUN_SUCCEEDED verification rerun completed\n"
+            ),
+            run_exit_code=0,
+            checkpoint={"repair_record": {
+                "applied": True,
+                "session_id": "20261118-000000-recover-ab12",
+                "rerun_attempted": True,
+                "rerun_succeeded": True,
+                "detail": "verification rerun completed",
+            }},
+            rerun_exit_code=None,
+        )
+        self.assertTrue(result["repair_applied"])
+        self.assertTrue(result["fault_manifested"])
+        self.assertTrue(result["repair_verified"])
+        self.assertIn("narration:REPAIR_RERUN_SUCCEEDED", result["verified_evidence"])
+        self.assertIn(
+            "checkpoint:repair_record.rerun_succeeded", result["verified_evidence"]
+        )
+        self.assertTrue(result["rerun_attempted"])
+        self.assertTrue(result["rerun_succeeded"])
+        self.assertIsNone(result["repair_stage_why"])
+
+    def test_engine_rerun_failure_reports_the_narrated_why(self):
+        result = self._assess(
+            run_output=(
+                "  REPAIR_APPLIED session_id=x\n"
+                "  REPAIR_RERUN_FAILED verification rerun exited 2\n"
+            ),
+            run_exit_code=2,
+            rerun_exit_code=None,
+        )
+        self.assertTrue(result["repair_applied"])
+        self.assertFalse(result["repair_verified"])
+        self.assertFalse(result["rerun_succeeded"])
+        self.assertIn("REPAIR_RERUN_FAILED", result["repair_stage_why"])
+
+    def test_self_rerun_engine_disables_the_toml_parses_fallback(self):
+        # Under the self-rerunning engine (proven by repair_record with
+        # rerun_attempted), parses-valid says nothing about the rerun
+        # outcome — the legacy fallback must stay off.
+        result = self._assess(
+            run_output="  REPAIR_APPLIED session_id=x\n",
+            run_exit_code=0,
+            checkpoint={"repair_record": {
+                "applied": True,
+                "rerun_attempted": True,
+                "rerun_succeeded": False,
+            }},
+            workflow_sha_after="b",
+            workflow_after_text="[workflow]\nname = 'x'\n",
+            rerun_exit_code=None,
+        )
+        self.assertTrue(result["repair_applied"])
+        self.assertFalse(result["repair_verified"])
+        self.assertNotIn(
+            "fallback:patched-toml-parses", result["verified_evidence"]
+        )
+
     def test_legacy_fix_applied_narration_falls_back(self):
         result = self._assess(
             run_output="  ✓ Fix applied to workflow_ai.oxoflow\n",
