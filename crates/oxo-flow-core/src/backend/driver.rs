@@ -249,27 +249,68 @@ impl BackendDriver {
         ready
     }
 
-    /// Cancel every job in `jobs` (`(job_id, rule_name, array_base)` triples),
-    /// ignoring per-job errors — best effort on error paths. Array elements
-    /// cancel by their BASE id: qdel/bkill do not understand `{base}_{index}`
-    /// (issue #136 H4).
-    pub async fn cancel_inflight(&self, jobs: &[(String, String, Option<String>)]) -> Result<()> {
-        let mut targets: Vec<&str> = Vec::new();
+    /// The scheduler ids a cancellation would target: an element cancels via
+    /// its array BASE id (qdel/bkill do not understand `{base}_{index}` —
+    /// issue #136 H4), and each target appears once.
+    fn cancel_targets(jobs: &[(String, String, Option<String>)]) -> Vec<String> {
+        let mut targets: Vec<String> = Vec::new();
         for (id, _rule, base) in jobs {
-            let target = base.as_deref().unwrap_or(id);
+            let target = base.clone().unwrap_or_else(|| id.clone());
             if !targets.contains(&target) {
                 targets.push(target);
             }
         }
-        for id in targets {
-            let _ = self.backend.cancel(id).await;
+        targets
+    }
+
+    /// Cancel every job in `jobs` (`(job_id, rule_name, array_base)` triples),
+    /// attempting every target even when an earlier one fails. Returns an
+    /// error naming exactly the jobs the scheduler did NOT confirm cancelled:
+    /// those may still be running, and a caller must never report them as
+    /// cancelled (issue #1156, ledger CL-01).
+    pub async fn cancel_inflight(&self, jobs: &[(String, String, Option<String>)]) -> Result<()> {
+        // (id, scheduler-reported error) — the first error rides in the
+        // returned message so the operator sees WHY the cancel failed, not
+        // only which job is unresolved.
+        let mut unresolved: Vec<(String, String)> = Vec::new();
+        for id in Self::cancel_targets(jobs) {
+            if let Err(error) = self.backend.cancel(&id).await {
+                tracing::warn!(
+                    job = %id,
+                    error = %error,
+                    "scheduler cancel failed — the job may still be running"
+                );
+                unresolved.push((id, error.to_string()));
+            }
         }
-        Ok(())
+        if unresolved.is_empty() {
+            Ok(())
+        } else {
+            let named = unresolved
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(OxoFlowError::Config {
+                message: format!(
+                    "failed to cancel {} scheduler job(s) — they may still be running: {} (scheduler error: {})",
+                    unresolved.len(),
+                    named,
+                    unresolved[0].1
+                ),
+            })
+        }
     }
 
     /// Cancel every accepted job before returning a terminal driver error.
     /// Errors after submission must never leave billable scheduler jobs
     /// running after `run` has already returned to its caller.
+    ///
+    /// The returned error names the accepted scheduler job ids and their
+    /// cancel outcome: confirmed cancellations say so, and a failed cleanup
+    /// is appended as "may still be running: <ids>" instead of being
+    /// silently swallowed (issue #1156, ledger CL-01). The original failure
+    /// text is always preserved.
     async fn fail_with_cancel<T>(
         &self,
         inflight: &HashMap<String, InFlight>,
@@ -279,10 +320,20 @@ impl BackendDriver {
             .iter()
             .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
             .collect();
-        if let Err(cancel_error) = self.cancel_inflight(&jobs).await {
-            tracing::warn!(error = %cancel_error, "failed to cancel in-flight jobs after driver error");
+        let targets = Self::cancel_targets(&jobs);
+        if targets.is_empty() {
+            return Err(error);
         }
-        Err(error)
+        match self.cancel_inflight(&jobs).await {
+            Ok(()) => Err(append_error_context(
+                error,
+                &format!(
+                    "accepted scheduler job(s) cancelled: {}",
+                    targets.join(", ")
+                ),
+            )),
+            Err(cancel_error) => Err(append_error_context(error, &cancel_error.to_string())),
+        }
     }
 
     /// Execute exactly `to_run` on `plan`, returning one [`JobRecord`] per
@@ -995,8 +1046,17 @@ impl BackendDriver {
                 // consistent with each other instead of drifting apart by
                 // however long the writes took.
                 let observed_at = Utc::now();
+                // Pre-remove EVERY settled id before any bookkeeping write.
+                // Removing one at a time left same-round siblings in
+                // `inflight`; a write failure then made `fail_with_cancel`
+                // try to cancel jobs the scheduler had just reported
+                // terminal, and a scheduler that rejects cancelling a
+                // finished job would produce a false "may still be running"
+                // message (review of #1188, D1).
+                for (job_id, _, _) in &settled {
+                    inflight.remove(job_id);
+                }
                 for (job_id, f, status) in settled {
-                    inflight.remove(&job_id);
                     let acct = accounting.get(&job_id).copied();
                     // The driver only ever sees submit-to-settle. When the
                     // store reports how long the job RAN, the start time is
@@ -1145,7 +1205,19 @@ impl BackendDriver {
                                         cancelling = siblings.len(),
                                         "required rule failed — cancelling remaining in-flight jobs"
                                     );
-                                    self.cancel_inflight(&siblings).await?;
+                                    // The run already fails on the required
+                                    // rule's record; a cleanup failure is
+                                    // reported loudly here but must not
+                                    // replace that verdict or drop the
+                                    // records gathered so far (issue #1156).
+                                    if let Err(cancel_error) = self.cancel_inflight(&siblings).await
+                                    {
+                                        tracing::error!(
+                                            rule = %f.rule,
+                                            error = %cancel_error,
+                                            "required rule failed and some in-flight jobs could not be cancelled"
+                                        );
+                                    }
                                 }
                             } else if plan.rules[&f.rule].rule.required {
                                 tracing::warn!(
@@ -1261,9 +1333,15 @@ impl BackendDriver {
                     .iter()
                     .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
                     .collect();
-                self.cancel_inflight(&jobs).await?;
-                return Err(OxoFlowError::Config {
+                let timeout = OxoFlowError::Config {
                     message: "poll timeout exceeded".into(),
+                };
+                return Err(match self.cancel_inflight(&jobs).await {
+                    Ok(()) => timeout,
+                    // Never drop the unresolved job ids from the terminal
+                    // error: the run is ending, and jobs the scheduler did
+                    // not confirm cancelled may still be running (#1156).
+                    Err(cancel_error) => append_error_context(timeout, &cancel_error.to_string()),
                 });
             }
             // Interrupt requested (Ctrl-C / SIGTERM / SIGHUP): cancel every
@@ -1279,7 +1357,12 @@ impl BackendDriver {
                     .iter()
                     .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
                     .collect();
-                self.cancel_inflight(&jobs).await?;
+                // Keep going even when a cancel is not confirmed: the
+                // interrupted records are the only truthful account of what
+                // the signal stopped and must never be dropped. The outcome
+                // rides in the terminal message instead — an unconfirmed
+                // cancel is never reported as "cancelled" (issue #1156).
+                let cancel_outcome = self.cancel_inflight(&jobs).await;
                 let mut interrupted: Vec<JobRecord> = Vec::new();
                 for (job_id, f) in inflight.iter() {
                     let reason = format!("interrupted by {signal_name}");
@@ -1332,8 +1415,12 @@ impl BackendDriver {
                     cancelled = interrupted.len(),
                     "interrupt received — cancelling in-flight jobs"
                 );
+                let message = match cancel_outcome {
+                    Ok(()) => format!("interrupted by {signal_name}; in-flight jobs cancelled"),
+                    Err(cancel_error) => format!("interrupted by {signal_name}; {cancel_error}"),
+                };
                 return Err(OxoFlowError::Cancelled {
-                    message: format!("interrupted by {signal_name}; in-flight jobs cancelled"),
+                    message,
                     records: interrupted,
                     signal_name: signal_name.to_string(),
                     exit_code,
@@ -1342,6 +1429,22 @@ impl BackendDriver {
             tokio::time::sleep(self.config.poll_interval).await;
         }
         Ok(records)
+    }
+}
+
+/// Append `context` to an error's message, preserving the original failure
+/// text so the cause stays first and greppable (e.g. the exact run-dir file
+/// that could not be written). Used to attach the scheduler cancel outcome
+/// to a terminal driver error — a failed cleanup must never be reported as
+/// a successful cancellation (issue #1156, ledger CL-01).
+fn append_error_context(error: OxoFlowError, context: &str) -> OxoFlowError {
+    match error {
+        OxoFlowError::Config { message } => OxoFlowError::Config {
+            message: format!("{message}; {context}"),
+        },
+        other => OxoFlowError::Config {
+            message: format!("{other}; {context}"),
+        },
     }
 }
 
@@ -2770,6 +2873,16 @@ shell = "echo asm > out/{assembler}.txt"
             format!("{err}").contains("index.json"),
             "the error must name the index.json write: {err}"
         );
+        // Issue #1156 / CL-01: the accepted array base id must ride in the
+        // terminal error together with its (confirmed) cancellation.
+        assert!(
+            format!("{err}").contains("job-1"),
+            "the error must name the accepted array base id: {err}"
+        );
+        assert!(
+            format!("{err}").contains("cancelled"),
+            "the error must report the accepted array as cancelled: {err}"
+        );
         let state = backend.state();
         let state = state.lock().unwrap();
         assert_eq!(
@@ -2819,6 +2932,17 @@ shell = "echo asm > out/{assembler}.txt"
             assert!(
                 err.to_string().contains(artifact),
                 "error must name failed artifact {artifact}: {err}"
+            );
+            // Issue #1156 / CL-01: the terminal error must name the accepted
+            // scheduler job and its cancel outcome — never just the local
+            // file, which leaves the user with no scheduler handle to check.
+            assert!(
+                err.to_string().contains("job-1"),
+                "error must name the accepted scheduler job id: {err}"
+            );
+            assert!(
+                err.to_string().contains("cancelled"),
+                "error must report the accepted job as cancelled: {err}"
             );
             let state = backend.state();
             let state = state.lock().unwrap();
@@ -2932,6 +3056,251 @@ shell = "echo asm > out/{assembler}.txt"
         assert_eq!(state.cancelled, vec!["job-1"]);
     }
 
+    // ─── issue #1156 / ledger CL-01: post-submit orphan windows ─────────────
+
+    /// The array path has its own registration window: accepted elements are
+    /// registered first, then the chunk `job.id`, `index.json`, and each
+    /// element's `job.id`/`status.json` are written. A failure in that
+    /// window must cancel the accepted array by its BASE id and name it in
+    /// the terminal error.
+    #[test]
+    fn array_element_status_write_failure_cancels_accepted_array() {
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        // A directory in place of sib_01's status.json fails that write
+        // AFTER the chunk job.id and index.json writes succeeded.
+        std::fs::create_dir_all(fx.run_dir.path().join("jobs/sib_01/status.json")).unwrap();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: false,
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("status.json"),
+            "must name the failed write: {text}"
+        );
+        assert!(
+            text.contains("job-1"),
+            "must name the accepted array base id: {text}"
+        );
+        assert!(
+            text.contains("cancelled"),
+            "must report the accepted array as cancelled: {text}"
+        );
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(state.submit_count, 1);
+        assert_eq!(
+            state.cancelled,
+            vec!["job-1"],
+            "array elements cancel through their base id, once"
+        );
+    }
+
+    /// When the cleanup itself fails, the run must fail loudly with the
+    /// unresolved scheduler job id — the error may never claim a cancellation
+    /// that did not happen (issue #1156 / CL-01).
+    #[test]
+    fn cancel_failure_after_post_submit_write_error_reports_unresolved_job() {
+        let fx = setup();
+        let mut plan = chain_plan(fx.workdir.path(), &[("only", "echo ok", "out.txt")]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        // Fail the job.id write AFTER sbatch accepted the job.
+        std::fs::create_dir_all(fx.run_dir.path().join("jobs/only/job.id")).unwrap();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Completed));
+        backend.fail_cancelling();
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: false,
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("job.id"),
+            "must name the failed write: {text}"
+        );
+        assert!(
+            text.contains("job-1"),
+            "must name the unresolved scheduler job: {text}"
+        );
+        assert!(
+            text.contains("may still be running"),
+            "a failed cancel must say the job may still be running: {text}"
+        );
+        assert!(
+            text.contains("injected cancel failure"),
+            "the scheduler's cancel error must not be swallowed: {text}"
+        );
+        assert!(
+            !text.contains("accepted scheduler job(s) cancelled"),
+            "a failed cancel must never be reported as a cancellation: {text}"
+        );
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.cancelled,
+            vec!["job-1"],
+            "the cancel attempt against the accepted id must be recorded"
+        );
+    }
+
+    /// The array registration window's failed-cleanup counterpart: the
+    /// unresolved BASE id must be named and the run must not claim
+    /// cancellation.
+    #[test]
+    fn cancel_failure_after_array_index_write_reports_unresolved_base() {
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        std::fs::create_dir(fx.run_dir.path().join("index.json")).unwrap();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Completed));
+        backend.fail_cancelling();
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: false,
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("index.json"),
+            "must name the failed write: {text}"
+        );
+        assert!(
+            text.contains("job-1"),
+            "must name the unresolved array base: {text}"
+        );
+        assert!(
+            text.contains("may still be running"),
+            "a failed cancel must say the array may still be running: {text}"
+        );
+        assert!(
+            text.contains("injected cancel failure"),
+            "the scheduler's cancel error must not be swallowed: {text}"
+        );
+        assert!(
+            !text.contains("accepted scheduler job(s) cancelled"),
+            "a failed cancel must never be reported as a cancellation: {text}"
+        );
+        let state = backend.state();
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.cancelled,
+            vec!["job-1"],
+            "the cancel attempt targets the accepted base id"
+        );
+    }
+
+    /// `cancel_inflight` is best-effort across the whole set and reports
+    /// exactly the unresolved scheduler ids — array elements once, by base.
+    #[test]
+    fn cancel_inflight_reports_unresolved_jobs_only() {
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Running));
+        backend.fail_cancelling();
+        let d = BackendDriver::new(backend.clone(), DriverConfig::default());
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.cancel_inflight(&[
+                ("job-1".to_string(), "solo".to_string(), None),
+                (
+                    "arr_1".to_string(),
+                    "sib_01".to_string(),
+                    Some("arr".into()),
+                ),
+                (
+                    "arr_2".to_string(),
+                    "sib_02".to_string(),
+                    Some("arr".into()),
+                ),
+            ]))
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("may still be running"),
+            "the error must say the unresolved jobs may still run: {text}"
+        );
+        assert!(text.contains("job-1"), "must list the plain job id: {text}");
+        assert!(text.contains("arr"), "must list the array base id: {text}");
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert_eq!(
+            st.cancelled,
+            vec!["job-1", "arr"],
+            "every target is attempted, once, even after an earlier failure"
+        );
+    }
+
     // ─── issue #136 H-items ────────────────────────────────────────────────
 
     /// Minimal in-test backend: submit returns synthetic ids, poll returns a
@@ -2950,6 +3319,8 @@ shell = "echo asm > out/{assembler}.txt"
         /// Element count of every array submission, in submit order.
         array_sizes: Vec<usize>,
         poll_error: bool,
+        /// Every `cancel` call errors (the attempt is still recorded).
+        cancel_error: bool,
     }
     impl MockBackend {
         fn new(direct: bool, verdict: BackendJobStatus) -> Self {
@@ -2966,6 +3337,11 @@ shell = "echo asm > out/{assembler}.txt"
         }
         fn fail_polling(&self) {
             self.inner.lock().unwrap().poll_error = true;
+        }
+        /// Make the scheduler reject every cancellation, modelling a cancel
+        /// that cannot be confirmed.
+        fn fail_cancelling(&self) {
+            self.inner.lock().unwrap().cancel_error = true;
         }
     }
     #[async_trait::async_trait]
@@ -3005,11 +3381,13 @@ shell = "echo asm > out/{assembler}.txt"
                 .collect())
         }
         async fn cancel(&self, job_id: &str) -> Result<()> {
-            self.inner
-                .lock()
-                .unwrap()
-                .cancelled
-                .push(job_id.to_string());
+            let mut st = self.inner.lock().unwrap();
+            st.cancelled.push(job_id.to_string());
+            if st.cancel_error {
+                return Err(OxoFlowError::Config {
+                    message: format!("injected cancel failure for {job_id}"),
+                });
+            }
             Ok(())
         }
         async fn logs(&self, _job_id: &str) -> Result<String> {

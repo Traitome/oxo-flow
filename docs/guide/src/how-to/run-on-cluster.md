@@ -399,6 +399,26 @@ On clusters, the scheduler enforces resources based on the generated directives.
     standalone command that takes a checkpoint path) or `run
     --resume-failed` re-queues what failed.
 
+!!! note "Submission failure semantics"
+    A job the scheduler has accepted is never dropped silently. Once
+    `sbatch`/`qsub`/`bsub`-style submission returns a job id, the driver
+    registers the job in memory and then writes its local records
+    (`jobs/<rule>/job.id`, `status.json`, and `index.json` for arrays). If
+    any of those writes fails — full disk, permissions, a directory in
+    place of a file — the driver cancels every accepted scheduler job and
+    fails the run with the scheduler id(s) named in the error. When the
+    cancel itself cannot be confirmed, the error says so explicitly
+    (`failed to cancel N scheduler job(s) — they may still be running:
+    <ids>`) and never reports those jobs as cancelled; cancel them
+    manually before re-running. Array submissions follow the same rule:
+    elements are registered before the bookkeeping writes, and a failed
+    registration cancels the whole array through its base id.
+
+    One window is outside the engine's reach: if the scheduler accepts a
+    job but prints no parseable id, there is no handle to cancel. The run
+    fails with the scheduler's own output quoted in the error so the job
+    can be located and stopped by hand.
+
 !!! note "Aborted in-flight siblings are incomplete, not failed"
     When a run aborts, rules still in flight are killed and recorded as
     **incomplete** (neither completed nor failed) — `resume` re-runs them
