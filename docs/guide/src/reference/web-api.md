@@ -167,12 +167,30 @@ route contract:
   template writes, quota and event-ticket requests). A failed write is
   logged as a warning and the request answers normally.
 
-Both classes share one writer (the storage backend's `record_audit_log`),
-and the structured `audit` event stream emits a record for every mutation
-even when the database insert fails. One known gap is documented rather
-than hidden: the successful-login row written by the login handler
-(`domains/auth/`) is still best-effort — failed login attempts are required
-rows written by the middleware.
+**The audit row is not written in the same transaction as the mutation.**
+The handler runs first; the audit insert is attempted afterwards. A
+REQUIRED-audit failure therefore does **not** roll the action back — the
+pipeline may already be deleted, the run retry may already have spawned,
+the key revocation may already be applied, the account may already exist.
+The `500 AUDIT_WRITE_FAILED` body says the action "may already have been
+applied" and its `suggestion` tells the caller to verify the affected
+resource (list/inspect it) before retrying, because a blind retry can
+duplicate the effect (e.g. a second forked/deleted resource or a second
+run). Writing the audit row in the mutation's transaction is tracked as
+remaining work in the WEB-15 ledger entry. Per-route implication: every
+REQUIRED route listed above can answer this 500 **after** applying its
+change; treat the 500 as "state unknown", not as "nothing happened".
+
+Both classes share one writer (the storage backend's `record_audit_log`).
+The middleware emits a structured `audit` event for every mutation it
+handles, including when the database insert fails, so machine consumers
+still see the attempt. The successful-login path is the exception: the
+login handler returns before the middleware's event emission and owns its
+own best-effort row, so a successful login on broken storage leaves
+**neither a row nor a structured event**. Failed login attempts are
+REQUIRED rows written by the middleware. Migration of the handler-owned
+rows to the shared helpers is pending on the reserved `domains/auth/`
+file (open PR #1141).
 
 ### Server-Sent Events
 ```
@@ -1091,9 +1109,12 @@ Outside personal mode, provider metadata is admin-only:
   full (it is their own configuration). When no per-user row exists, the
   endpoint mirrors the SHARED runtime; that mirrored `api_url` and `model`
   are redacted for non-admins the same way.
-- `GET /api/ai/config/server` stays admin-only (403 `ACCESS_DENIED`
-  otherwise), and `POST /api/ai/config`, `PUT /api/ai/config/server`, and
-  `PUT /api/ai/config/user` stay admin-gated writes.
+- `GET /api/ai/config/server` and `PUT /api/ai/config/server` stay
+  admin-only (403 `ACCESS_DENIED` otherwise), as does the runtime-only
+  `POST /api/ai/config`. `PUT /api/ai/config/user` is **not** admin-gated:
+  it writes only the acting user's own row (outside personal mode a
+  non-admin's save is persisted but not applied to the shared runtime —
+  `applied_to_runtime: false`).
 - API keys and key prefixes are never returned by any of these endpoints.
 
 Personal mode is loopback single-user (no roles), so its local callers keep

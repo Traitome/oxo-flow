@@ -226,6 +226,62 @@ async fn provider_metadata_is_role_gated() {
     );
     assert_eq!(body["user_config"]["model"], MODEL, "{body}");
 
+    // Own-row branch: a non-admin's SAVED row is their own data and is
+    // returned in full — the redaction above applies only to the mirrored
+    // SHARED runtime. PUT is allowed for the acting user (not admin-gated);
+    // outside personal mode a non-admin save persists but is not applied to
+    // the shared runtime.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/ai/config/user")
+                .header("authorization", "Bearer web15-user-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "provider": "deepseek",
+                        "api_url": "https://user-own.example.invalid/v1",
+                        "model": "user-own-model",
+                        "api_key": "sk-user-own",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a non-admin may save their own user-tier config"
+    );
+    let saved: Value = json_body(resp.into_body()).await;
+    assert_eq!(
+        saved["applied_to_runtime"], false,
+        "a non-admin save must not reconfigure the shared runtime: {saved}"
+    );
+
+    let (status, body) = get(&app, "/api/ai/config/user", user).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["user_config"]["provider"], "deepseek",
+        "the caller's own saved row is visible: {body}"
+    );
+    assert_eq!(
+        body["user_config"]["api_url"], "https://user-own.example.invalid/v1",
+        "the caller's own endpoint is their own data: {body}"
+    );
+    assert_eq!(
+        body["user_config"]["model"], "user-own-model",
+        "the caller's own model id is their own data: {body}"
+    );
+    assert_eq!(
+        body["user_config"]["api_key_set"], true,
+        "the key is reported as set, never echoed: {body}"
+    );
+
     // ── GET /api/ai/config/server (existing admin-only gate) ──────────────
     for (token, role) in [(user, "user"), (viewer, "viewer")] {
         let (status, body) = get(&app, "/api/ai/config/server", token).await;

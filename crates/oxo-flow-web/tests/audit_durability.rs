@@ -110,19 +110,33 @@ async fn required_audit_failures_fail_closed_and_best_effort_do_not() {
         "a lost REQUIRED audit row must fail the request closed: {body}"
     );
     assert_eq!(body["code"], "AUDIT_WRITE_FAILED", "{body}");
+    let message = body["message"].as_str().unwrap_or_default();
     assert!(
-        body["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("DELETE /api/pipelines/web15-missing")),
-        "the error names the refused action: {body}"
+        message.contains("DELETE /api/pipelines/web15-missing"),
+        "the error names the affected action: {body}"
+    );
+    // D1: the mutation already ran — the message must not claim it was
+    // refused/rolled back, and must not invite a blind retry.
+    assert!(
+        message.contains("may already have been applied"),
+        "the fail-closed error must admit the action may have committed: {body}"
+    );
+    assert!(
+        !message.contains("refused"),
+        "the mutation is not refused — it is unacknowledged: {body}"
+    );
+    let suggestion = body["suggestion"].as_str().unwrap_or_default();
+    assert!(
+        suggestion.contains("Verify the current state"),
+        "the caller is told to inspect state before retrying: {body}"
+    );
+    assert!(
+        suggestion.contains("duplicate"),
+        "the caller is warned that a retry can duplicate the effect: {body}"
     );
     assert!(
         body["detail"].is_string(),
         "the storage error is carried as detail: {body}"
-    );
-    assert!(
-        body["suggestion"].is_string(),
-        "the structured error carries remediation: {body}"
     );
 
     // BEST-EFFORT: an informational mutation still answers normally — the
@@ -140,4 +154,35 @@ async fn required_audit_failures_fail_closed_and_best_effort_do_not() {
         "a lost BEST-EFFORT audit row must not change the response: {body}"
     );
     assert_eq!(body["code"], "PARSE_ERROR", "{body}");
+
+    // 5xx PRESERVATION BOUNDARY: a REQUIRED route whose handler already
+    // answered 5xx keeps that answer. This is what lets the documented
+    // `503 RUNS_REQUIRE_STORAGE_BACKEND` boundary survive a no-backend
+    // deployment instead of being overwritten by AUDIT_WRITE_FAILED. The
+    // synthetic route is classified REQUIRED (`/api/runs/{id}/cancel`) and
+    // the audit table is still dropped above, so the write inside the
+    // middleware genuinely fails.
+    let synthetic = axum::Router::new()
+        .route(
+            "/api/runs/synthetic/cancel",
+            axum::routing::post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+        )
+        .layer(axum::middleware::from_fn(
+            oxo_flow_web::audit::audit_middleware,
+        ));
+    let resp = synthetic
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs/synthetic/cancel")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an already-5xx response must be preserved when the REQUIRED audit write fails"
+    );
 }

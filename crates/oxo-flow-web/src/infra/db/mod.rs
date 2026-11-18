@@ -322,10 +322,12 @@ pub trait StorageBackend: Send + Sync {
     /// Do not call this directly from request handlers: use
     /// `crate::audit::{audit_required, audit_best_effort}` so a failed write
     /// fails the request closed (required) or warns (best-effort) per the
-    /// classification in `crate::audit::audit_durability_for`. The only
-    /// direct handler call site left is the successful-login row in
-    /// `domains/auth/handlers.rs` (best-effort; that file is reserved for an
-    /// in-flight PR and must migrate when it lands).
+    /// classification in `crate::audit::audit_durability_for`. Two direct
+    /// handler call sites remain, both in `domains/auth/handlers.rs`
+    /// (best-effort; that file is reserved for an in-flight PR and must
+    /// migrate when it lands): the successful-login row and the
+    /// license-upload metadata row. The middleware's REQUIRED
+    /// `POST /api/license/upload` row already covers that action.
     async fn record_audit_log(
         &self,
         user_id: &str,

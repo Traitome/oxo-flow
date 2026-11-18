@@ -20,9 +20,12 @@
 //! [`StorageBackend::record_audit_log`](crate::infra::db::StorageBackend::record_audit_log).
 //! Handlers must use [`audit_required`] or [`audit_best_effort`] rather than
 //! calling the storage method directly, so the class is visible at the call
-//! site. One call site remains outside this module: the successful-login row
-//! in `domains/auth/handlers.rs` (that file is reserved for an in-flight PR);
-//! it stays best-effort until it can migrate here.
+//! site. Two direct call sites remain outside this module, both in
+//! `domains/auth/handlers.rs` (that file is reserved for an in-flight PR):
+//! the successful-login row and the license-upload metadata row. The
+//! middleware still writes a REQUIRED row for `POST /api/license/upload`;
+//! the handler's own metadata row stays best-effort until that file can
+//! migrate here.
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -304,18 +307,25 @@ pub async fn audit_best_effort(
 
 /// The structured `500 AUDIT_WRITE_FAILED` body returned when a REQUIRED
 /// audit row cannot be persisted.
+///
+/// The middleware writes the row AFTER the handler has run, and it is not in
+/// the same transaction as the mutation — so the action may already have
+/// committed. The message must not claim the request was "refused", and the
+/// suggestion must warn that a blind retry can duplicate the effect.
 pub fn audit_failure_error(action: &str, error: &str) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError {
             code: "AUDIT_WRITE_FAILED".into(),
             message: format!(
-                "The audit record for '{action}' could not be written; the request was refused"
+                "The audit record for '{action}' could not be written; the action may already \
+                 have been applied"
             ),
             detail: Some(error.to_string()),
             suggestion: Some(
-                "Check that the database is writable and the audit_logs table exists, then retry \
-                 the request."
+                "Verify the current state (list or inspect the affected resource) before \
+                 retrying — retrying may duplicate the effect. Then check that the database is \
+                 writable and the audit_logs table exists."
                     .into(),
             ),
         }),
@@ -391,11 +401,14 @@ mod tests {
         assert!(login_success_is_handler_recorded("/api/auth/login", 204));
         assert!(!login_success_is_handler_recorded("/api/auth/login", 401));
         assert!(!login_success_is_handler_recorded("/api/auth/login", 429));
+        assert!(!login_success_is_handler_recorded("/api/runs", 200));
     }
 
     /// WEB-15 / issue #1140: the durability class is a property of the
     /// route, and every security-relevant category named by the audit is
-    /// REQUIRED. This matrix is the contract the middleware applies.
+    /// REQUIRED. The table below is deliberately HARDCODED — a contract
+    /// pin, not a derivation from the route registrations in `server.rs`
+    /// (a route added there must be added here).
     #[test]
     fn audit_durability_matrix_covers_security_relevant_routes() {
         use AuditDurability::{BestEffort, Required};
@@ -457,14 +470,38 @@ mod tests {
     }
 
     /// The fail-closed body is the crate's structured error contract, not a
-    /// bare 500.
+    /// bare 500 — and it must be honest about ordering: the audit row is
+    /// written after the handler, not in its transaction, so the action may
+    /// already have committed. It must say so and must not claim refusal or
+    /// invite a blind retry.
     #[test]
     fn required_audit_failure_is_a_structured_500() {
         let (status, Json(error)) = audit_failure_error("POST /api/runs", "disk I/O error");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, "AUDIT_WRITE_FAILED");
         assert!(error.message.contains("POST /api/runs"));
+        assert!(
+            error.message.contains("may already have been applied"),
+            "the message must not imply the mutation was rolled back: {}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("refused"),
+            "the request was not refused — the handler already ran: {}",
+            error.message
+        );
         assert_eq!(error.detail.as_deref(), Some("disk I/O error"));
-        assert!(error.suggestion.is_some(), "remediation is documented");
+        let suggestion = error
+            .suggestion
+            .as_deref()
+            .expect("remediation is documented");
+        assert!(
+            suggestion.contains("Verify the current state"),
+            "the suggestion must direct the caller to inspect state first: {suggestion}"
+        );
+        assert!(
+            suggestion.contains("duplicate"),
+            "the suggestion must warn that retrying can duplicate effects: {suggestion}"
+        );
     }
 }
