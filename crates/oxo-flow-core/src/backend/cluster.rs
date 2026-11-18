@@ -2348,9 +2348,12 @@ mod tests {
     }
 
     /// Ledger RB-06: Kubernetes omits zero-valued counters, so they print
-    /// as EMPTY cells in the pipe template. They must read as zero — the
-    /// old space-delimited probe shifted `spec.completions` into the
-    /// `succeeded` slot and fabricated success for a just-created Job.
+    /// as EMPTY fields. The fixture feeds the OLD space-delimited shape the
+    /// pre-fix parser read — `succeeded` absent, `spec.completions` = 3 —
+    /// so the old `split_whitespace()` column walk shifted `spec.completions`
+    /// into the `succeeded` slot and fabricated success for a just-created
+    /// Job. Fail-first: pre-fix this reads Completed; post-fix the pipe
+    /// parser sees fewer than three cells and keeps the Job in flight.
     #[tokio::test]
     #[cfg(unix)]
     async fn kubernetes_unset_counters_do_not_shift_columns() {
@@ -2358,15 +2361,20 @@ mod tests {
         write_scheduler_shim(
             bin.path(),
             "kubectl",
-            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '||3'; fi\nexit 0",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo ' 3'; fi\nexit 0",
         );
         let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
             .with_scheduler_dir(bin.path().to_path_buf());
         let statuses = exec.poll(&["single-job".to_string()]).await.unwrap();
-        assert_eq!(
+        assert_ne!(
             statuses.get("single-job"),
-            Some(&BackendJobStatus::Running),
-            "a 0-succeeded / 3-completion Job is running, not completed: {statuses:?}"
+            Some(&BackendJobStatus::Completed),
+            "an absent succeeded counter must not shift spec.completions into it \
+             and fabricate success: {statuses:?}"
+        );
+        assert!(
+            !statuses.contains_key("single-job"),
+            "with no pipe cells the answer is not a status — the Job stays in flight: {statuses:?}"
         );
     }
 

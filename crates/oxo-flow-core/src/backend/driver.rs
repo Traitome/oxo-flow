@@ -1061,12 +1061,15 @@ impl BackendDriver {
                     // carry an aggregate verdict, not an independently
                     // observed one: this adapter's poll invocations see only
                     // the array base id (issue #136 H4, live-verified). The
-                    // record therefore carries no base-level accounting
-                    // numbers (they are not the element's numbers) and names
-                    // its provenance in `skip_reason` below, so a checkpoint
-                    // never presents the aggregate as a per-element
-                    // measurement (issue #1132 / ledger RB-06). Cloud
-                    // backends poll elements directly and never set this.
+                    // record therefore drops the aggregate's process-level
+                    // numbers (exit code, memory, CPU — they are not the
+                    // element's numbers) and names its provenance in
+                    // `skip_reason` below, so a checkpoint never presents
+                    // the aggregate as a per-element measurement (issue
+                    // #1132 / ledger RB-06). The aggregate DURATION is kept:
+                    // it describes the shared array allocation, which is
+                    // how long this element ran. Cloud backends poll
+                    // elements directly and never set this.
                     let base_only_array = (!direct && f.array_base.is_some()).then(|| {
                         format!(
                             "array base {} verdict {}: per-element outcome unavailable from {}",
@@ -1075,11 +1078,35 @@ impl BackendDriver {
                             self.backend.name()
                         )
                     });
-                    let acct = if base_only_array.is_some() {
-                        None
-                    } else {
-                        accounting.get(&job_id).copied()
-                    };
+                    // On a base-only backend the accounting record read for
+                    // an ARRAY ELEMENT is the whole array's aggregate. Its
+                    // DURATION genuinely describes this element — an array
+                    // runs its elements as one scheduler allocation, so the
+                    // aggregate `Elapsed` IS how long each element spent
+                    // running — but its exit code / memory / CPU belong to
+                    // whichever element the scheduler happened to report, so
+                    // they are dropped and `skip_reason` names the
+                    // provenance. Keeping the duration while withholding
+                    // every per-process number is exactly what the non-array
+                    // path does: `started_at` (hence
+                    // `benchmarks.wall_time_secs` and `queue_wait_secs`)
+                    // comes from the store's run duration instead of
+                    // submit-to-settle, so wall time stops absorbing queue
+                    // wait (issue #1132 F2). With no duration the record is
+                    // `None` and submit-to-settle stays the fallback.
+                    let acct = accounting.get(&job_id).copied().map(|a| {
+                        if base_only_array.is_some() {
+                            TerminalRecord {
+                                status: a.status,
+                                exit_code: None,
+                                elapsed_secs: a.elapsed_secs,
+                                max_rss_mb: None,
+                                cpu_seconds: None,
+                            }
+                        } else {
+                            a
+                        }
+                    });
                     // The driver only ever sees submit-to-settle. When the
                     // store reports how long the job RAN, the start time is
                     // recomputed from it so `benchmarks.wall_time_secs`
@@ -3354,6 +3381,11 @@ shell = "echo asm > out/{assembler}.txt"
         verdicts: HashMap<String, BackendJobStatus>,
         /// Element count of every array submission, in submit order.
         array_sizes: Vec<usize>,
+        /// Per-id accounting records `terminal_status` answers with. An id
+        /// absent here yields `None`, exactly like a real store that never
+        /// saw the job (accounting stores report the ARRAY BASE, so a test
+        /// keyed by base models PBS/LSF/SGE).
+        accounting: HashMap<String, TerminalRecord>,
         poll_error: bool,
         /// Every `cancel` call errors (the attempt is still recorded).
         cancel_error: bool,
@@ -3382,6 +3414,17 @@ shell = "echo asm > out/{assembler}.txt"
         }
         fn fail_polling(&self) {
             self.inner.lock().unwrap().poll_error = true;
+        }
+        /// Pin the accounting record `terminal_status` answers for one id.
+        /// The driver consults this store for the ARRAY BASE on every
+        /// backend that does not poll elements directly.
+        fn with_accounting(self, id: &str, rec: TerminalRecord) -> Self {
+            self.inner
+                .lock()
+                .unwrap()
+                .accounting
+                .insert(id.to_string(), rec);
+            self
         }
         /// Make the scheduler reject every cancellation, modelling a cancel
         /// that cannot be confirmed.
@@ -3445,6 +3488,9 @@ shell = "echo asm > out/{assembler}.txt"
         }
         async fn logs(&self, _job_id: &str) -> Result<String> {
             Ok(String::new())
+        }
+        async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
+            self.inner.lock().unwrap().accounting.get(job_id).copied()
         }
         fn polls_elements_directly(&self) -> bool {
             self.direct
@@ -3560,7 +3606,23 @@ shell = "echo asm > out/{assembler}.txt"
         let fx = setup();
         let plan = sibling_plan(fx.workdir.path(), 2);
         let to_run: HashSet<String> = plan.order.iter().cloned().collect();
-        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Completed));
+        // The accounting store knows the ARRAY BASE (PBS/LSF/SGE record the
+        // array as one allocation). Its exit/memory/CPU belong to whichever
+        // element the scheduler reported, but `elapsed_secs` IS how long each
+        // element ran — the fixture pins all four so the test proves the
+        // duration survives while the per-process numbers are withheld
+        // (issue #1132 F2).
+        let base_acct = TerminalRecord {
+            status: BackendJobStatus::Completed,
+            exit_code: Some(0),
+            elapsed_secs: Some(7),
+            max_rss_mb: Some(512),
+            cpu_seconds: Some(70),
+        };
+        let backend = Arc::new(
+            MockBackend::new(false, BackendJobStatus::Completed)
+                .with_accounting("job-1", base_acct),
+        );
         let d = BackendDriver::new(
             backend.clone(),
             DriverConfig {
@@ -3602,6 +3664,27 @@ shell = "echo asm > out/{assembler}.txt"
             assert!(
                 reason.contains("array base job-1") && reason.contains("per-element outcome"),
                 "the record must name the aggregate verdict's provenance: {rec:?}"
+            );
+            // The aggregate's process-level numbers are not this element's,
+            // so they stay withheld (RB-06) ...
+            assert_eq!(
+                rec.max_rss_mb, None,
+                "the aggregate's memory must not be presented as the element's: {rec:?}"
+            );
+            assert_eq!(
+                rec.cpu_seconds, None,
+                "the aggregate's CPU must not be presented as the element's: {rec:?}"
+            );
+            // ... but its DURATION is the shared array allocation's, which
+            // IS how long this element ran. Before the F2 fix the base-only
+            // path discarded the whole record, so `started_at` fell back to
+            // `submitted_at` and the recorded window absorbed queue wait.
+            let started = rec.started_at.expect("started_at is always set");
+            let finished = rec.finished_at.expect("finished_at is always set");
+            let ran = (finished - started).num_seconds();
+            assert_eq!(
+                ran, 7,
+                "wall time must come from the store's run duration, not submit-to-settle: {rec:?}"
             );
         }
         let st = backend.state();
