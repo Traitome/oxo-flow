@@ -1599,6 +1599,17 @@ Engine tooling commands (conda/pixi/venv environment setup, teardown, and
 `env_verify`) spawn through a different code path and keep the ambient
 environment, so tool discovery and proxy settings still work.
 
+Two CLI-side shell spawns run through this same allowlist policy (issue
+#1233, RB-15), so they cannot read the operator's ambient secrets either:
+
+- The **reference build shell** (`[[references]]` `build`, including its
+  `bash`-first / `sh`-fallback) — a reference whose `environment` is a
+  `docker`/`singularity` kind gets the container-daemon admission below,
+  exactly like a container rule.
+- The **`oxo-flow batch` sugar shell** (`sh -c <template>`) — it has no
+  `[engine]` section, so its scratch routing comes from `OXO_FLOW_TMPDIR`
+  alone.
+
 #### Local container rules (docker/singularity)
 
 A container rule runs `docker run` / `apptainer exec` from inside that

@@ -1340,6 +1340,7 @@ async fn run_command_inner(
         &env_cache_dir,
         &mut json_summary,
         skip_ref_build,
+        tmp_dir_resolved.as_deref(),
     )
     .await?;
 
