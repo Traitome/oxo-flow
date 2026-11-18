@@ -53,7 +53,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
  │ Multi-backend LLMs    │   │ Static DAG Engine     │   │ Axum REST API (100+)  │
  │ Embedded Bio-KBs      │◄─►│ Wildcard Expansion    │◄─►│ SSE Realtime Bus      │
  │ Agent Orchestrator    │   │ Checkpoint/Provenance │   │ SQLite / PostgreSQL   │
- │ Scientist Team Loop   │   │ 8 Environment Backends│   │ Diagnostics (31)     │
+ │ Scientist Team Loop   │   │ 8 Environment Backends│   │ Diagnostics (31)      │
  └───────────────────────┘   └───────────┬───────────┘   └───────────────────────┘
                                          │
                                          ▼
@@ -129,7 +129,7 @@ The trade-off is stated honestly: dynamic DSLs remain unmatched for free-form pr
 Four design bets anchor the research program. Each is labeled by maturity: what ships today, and what evidence is still missing (details and exit criteria in the [Vision](docs/guide/src/vision.md) page and [ROADMAP Phase 12](ROADMAP.md#phase-12-research-program-toward-industrial-and-publication-grade-workflow-science)):
 
 1. **BioTypes — biological semantics on DAG edges.** Files crossing DAG edges carry contracts (format, sort order, reference build, index, read groups). Shipped: `[types.*]` declarations checked statically by `validate`/preflight; `TYPE-001`–`TYPE-009` diagnostics (`TYPE-008`/`TYPE-009` advisory) carry remediation hints and synthesize ready-to-run coercion commands where the fix is mechanical (e.g. `samtools sort` for a sort-order mismatch). Outstanding: broad truth-set validation.
-2. **Autonomous self-healing runtime.** Shipped: 31 domain diagnostic patterns, 51 curated `SCI-*` scientific preflight rules (VQSR cohort size, Mutect2 tumor-only pitfalls, …), `--ai-recover` safety-gated repair proposals, and a seeded-failure interpretation benchmark (`report --ai`, `eval/interpretation/`, three providers: GLM, DeepSeek, Qwen). Outstanding: applied-repair verified by successful reruns — in the current fault-injection simulation that loop closes 0/10 times without a human, and the roadmap says so.
+2. **Autonomous self-healing runtime.** Shipped: 31 domain diagnostic patterns, 51 curated `SCI-*` scientific preflight rules (VQSR cohort size, Mutect2 tumor-only pitfalls, …), `--ai-recover` safety-gated repair proposals, and a seeded-failure interpretation benchmark (`report --ai`, `eval/interpretation/`, three providers: GLM, DeepSeek, Qwen). Outstanding: applied-repair verified by successful reruns at scale — in the seeded fault-injection campaign the verified-repair loop currently closes 3/10 cases end-to-end (all 3 repairable infra faults; the other 7 are blocked upstream of the loop — measured evidence in `eval/frontier/PILOT_FINDINGS.md`), and the roadmap tracks the path to broader coverage.
 3. **Universal ecosystem transpiler.** Shipped: `oxo-flow import` for a deterministic Nextflow DSL2 / Snakemake subset — anything outside the documented subset is a hard error that names the construct, never a silent mistranslation (see [`import`](docs/guide/src/commands/import.md) and [LIMITATIONS.md](LIMITATIONS.md)). Coverage is still prototype-grade; outstanding: corpus-wide semantic-equivalence testing.
 4. **Cryptographic provenance.** Shipped: `--provenance` SHA-256 output checksums on both the local and cluster run paths, config fingerprints, environment identities, and `protected_data_trees` drift audits, auditable via `oxo-flow provenance verify --json` and the web API. Outstanding: cross-architecture reproduction measurement.
 
@@ -335,7 +335,7 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX with checksum attached to every GitHub release):
 
-> **Note** — the extension is published to both marketplaces: [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) (searched by default by VSCodium, Cursor, Windsurf and most forks) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) (stock VS Code, live since v0.32.0). Install from either, or grab the release VSIX offline:
+> **Note** — the extension is published to both marketplaces: [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) (searched by default by VSCodium, Cursor, Windsurf and most forks) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) (stock VS Code, live since v0.31.0). Install from either, or grab the release VSIX offline:
 
 ```bash
 codium --install-extension traitome.oxo-flow              # Open VSX (forks)

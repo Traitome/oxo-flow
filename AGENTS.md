@@ -153,7 +153,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_USER_PASSWORD` | Team/HPC | — | Standard-user sign-in password |
 | `OXO_FLOW_VIEWER_PASSWORD` | Team/HPC | — | Read-only sign-in password |
 | `OXO_FLOW_DEV_MODE` | No | unset | `"1"` accepts `password == username` logins for any user (local development only). In team/hpc modes the server refuses to start on a non-loopback bind with it set; personal mode already force-binds loopback (it warns and ignores the requested non-loopback host), so it never starts network-exposed with dev mode either |
-| `OXO_FLOW_DISABLE_RATE_LIMIT` | No | unset | `"1"` disables the login/API rate limiter (tests only) |
+| `OXO_FLOW_DISABLE_RATE_LIMIT` | No | unset | `"1"` disables every rate limiter — the login/API limiter and the dedicated run-creation limiter (#213): "off means off" on both paths (tests only) |
 | `OXO_FLOW_OAUTH_REDIRECT_URI` | No | `http://localhost:3000/api/auth/oauth/callback` | Redirect URI registered with the OAuth provider (ORCID); set when running behind a proxy or non-default port. Its origin is always on the OAuth redirect allowlist (issue #1141), and the issued `state` is bound to the exact URI |
 | `OXO_FLOW_PULL_MAX_BYTES` | No | `1073741824` (1 GiB) | Upper bound for `pull`/bundle downloads (buffered before checksum verify); raise for larger bundles |
 | `OXO_FLOW_OUTPUT_TAIL_BYTES` | No | `65536` (64 KiB) | Per-rule stdout/stderr tail persisted in checkpoint.json (`stdout_tail`/`stderr_tail`); the in-RAM capture window widens to match when set above its 1 MiB floor. Invalid/zero values fall back to the default with a warning |
@@ -185,6 +185,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_ENV_LOCK_TIMEOUT_SECS` | No | `7200` (2 h) | Max wait for the per-environment creation lock (flock under `~/.oxo-flow/locks/`, one per env — different envs never block each other); concurrent runs building the same env queue instead of racing, and expiry fails fast with a diagnostic instead of hanging. OS releases the lock if the holder dies |
 | `OXO_S3_FORCE_PATH_STYLE` | No | unset | `"1"`/`"true"` forces path-style S3 addressing (`https://endpoint/bucket/key` instead of virtual-host style) for S3-compatible servers (MinIO, LocalStack); pair with `AWS_ENDPOINT_URL`. See the cloud-storage reference |
 | `OXO_FLOW_CLUSTER_BACKEND` | No | `slurm` | Default backend for `oxo-flow cluster submit` when `-b/--backend` is absent: `slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, or `gcp-batch`. See the cluster command reference |
+| `OXO_FLOW_SECRET_REFS` | No | — | Operator-side secret-reference map for cloud dispatch (issue #1120, RB-12): `NAME=REFERENCE` pairs separated by `;`/`,`/newline (e.g. `OXO_FLOW_SENSITIVE_0=projects/p/secrets/token/versions/latest`), injected as GCP Batch `taskSpec.environment.secretVariables` entries for every routed `OXO_FLOW_SENSITIVE_<n>`; malformed entries are warned and skipped, never guessed. AWS Batch's `SubmitJob` has no secrets field (map the names on the job definition instead — the map is ignored there); Kubernetes uses the `oxoflow-secrets` Secret. See the workflow-format `[config]` section and run-on-cluster.md |
 
 ### AI Provider Examples
 

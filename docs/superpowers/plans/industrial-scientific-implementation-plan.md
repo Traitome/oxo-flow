@@ -30,7 +30,7 @@ This is a long-running, staged program. Existing code is not completion evidence
 | Kubernetes and cloud batch | Prototype | Current adapters shell out to CLIs; no live lifecycle campaign |
 | Range I/O and storage tiers | Implemented but unproven | Streaming correctness, pressure behavior, and measured footprint |
 | NUMA affinity | Prototype | Named-hardware validation and measured performance |
-| AI diagnosis and repair | Prototype | 7/10 proposals, 0/10 applied, 0/10 verified, 0/10 successful reruns in the current CLI simulation |
+| AI diagnosis and repair | Prototype | Seeded fault-injection campaign (Round 2, corrective fence #1187): 7/10 proposals, 3/10 applied, 3/10 verified, 3/10 successful reruns — all 3 repairable cases; the other 7 are blocked upstream of the loop (`eval/frontier/PILOT_FINDINGS.md`) |
 | Metro-DAG and editor UX | Prototype | Semantic round-trip, diff acceptance, accessibility, mobile, and scale evidence |
 | Statistical, hardware, and cohort studies | Simulation or smoke test only | Matched measured campaigns with raw run-level provenance |
 | Human-factors study | Simulation only | Ethics approval, recruitment, and real data |
@@ -504,7 +504,7 @@ pub struct BioTypeSpec {
 provenance-tracked bounded repair. No repair is described as verified until the exact patch
 applies, the complete workflow validates, and a rerun produces checked outputs.
 
-Current CLI simulation baseline: 8/10 detections, 7/10 attributed diagnoses, 7/10 repair proposals, 0/10 applied repairs, 0/10 verified repairs, and 0/10 successful reruns. Proposal quality and repair efficacy must be reported separately.
+Current CLI simulation baseline (seeded fault-injection campaign, Round 2 with the corrective fence #1187): 7/10 detections, 7/10 attributed diagnoses, 7/10 repair proposals, 3/10 applied repairs, 3/10 verified repairs, and 3/10 successful reruns — the 3/3 repairable infra-fault class closes the full loop; the 7 non-repairable cases are blocked upstream, not by the loop. Proposal quality and repair efficacy must be reported separately.
 
 **Files**:
 
@@ -584,7 +584,7 @@ is disclosed in PR-01/PR-06 and is not confirmatory — a held-out re-run is
 required. No other campaign has collected confirmatory data. Commit
 binding: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54`
 (v1.0.1 amendment-1 commit); verify with
-`shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`).
+`shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`.
 
 ### Task 4.1: Multi-Omics Ablation & Fault-Injection Benchmark (`eval/frontier/`)
 

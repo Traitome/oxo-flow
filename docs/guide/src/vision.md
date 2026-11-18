@@ -50,7 +50,7 @@ Each innovation states the claim, what ships today, and what evidence is still r
 
 **Claim.** Long genomic computations fail for four stacked reasons — system resources, data defects, algorithm parameters, biology-level surprises. A workflow engine should diagnose across those layers and apply *bounded* remediation, not just pattern-match stderr.
 
-**Shipped today.** 31 domain diagnostic patterns with stable codes; curated scientific preflight (`SCI-*`: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in `dry-run`; `--ai-recover` diagnosis with safety-gated repair proposals; a separate seeded-failure harness (`eval/interpretation/`) that scores `report --ai` interpretation across three providers. — *Diagnosis implemented; interpretation is measured; repair application and rerun verification remain the open frontier (ROADMAP Stage 12.3 records repair at 0/10 verified — stated plainly, not hidden).*
+**Shipped today.** 31 domain diagnostic patterns with stable codes; curated scientific preflight (`SCI-*`: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in `dry-run`; `--ai-recover` diagnosis with safety-gated repair proposals; a separate seeded-failure harness (`eval/interpretation/`) that scores `report --ai` interpretation across three providers. — *Diagnosis implemented; interpretation is measured; repair now runs a verified-repair loop (`REPAIR_RERUN_SUCCEEDED` on the run path), and ROADMAP Stage 12.3 records the measured campaign at 3/10 applied and 3/10 verified — all 3 repairable seeded cases — stated plainly, not hidden.*
 
 **Exit evidence.** Probabilistic fault-attribution model beyond deterministic patterns; applied-repair verified by successful reruns on a seeded fault-injection benchmark; pre-registered analysis.
 
@@ -96,7 +96,7 @@ The honesty charter, so the above can be trusted:
 - No peer-reviewed claim is made; a bioRxiv preprint is cited on this page, but there is no journal acceptance, independent replication, or journal-ready artifact package (ROADMAP Stage 12.4: *Planned / blocked*).
 - Type contracts detect declared state mismatches; they do not prove biological correctness.
 - Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.
-- Repair proposals are experimental until independently verified by a successful rerun — today that loop closes 0/10 times without a human.
+- Repair proposals are experimental until independently verified by a successful rerun — in the seeded fault-injection campaign that loop currently closes 3/10 cases end-to-end (all 3 repairable infra faults; the other 7 are blocked upstream of the loop — measured evidence in `eval/frontier/PILOT_FINDINGS.md`).
 - PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1).
 
 ## Citing

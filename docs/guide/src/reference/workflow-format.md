@@ -233,7 +233,7 @@ author = "Your Name"
 | `author` | String | No | — | Author name or email |
 | `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
 | `genome_build` | String | No | — | Genome reference build identifier (e.g., `"GRCh38"`, `"hg38"`) |
-| `min_version` | String | No | — | Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; `"0.21"` equals `"0.32.0"`) |
+| `min_version` | String | No | — | Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; a two-component `"0.21"` is compared as `"0.21.0"`) |
 | `format_version` | String | No | — | Format specification version for compatibility |
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
 | `sample_groups_file` | String | No | — | External TSV/CSV/JSON file defining sample groups |
@@ -420,12 +420,16 @@ paths, and `when` conditions:
 > - **AWS Batch** — the SubmitJob payload has no secrets field; map each
 >   `OXO_FLOW_SENSITIVE_<n>` name on the job definition's
 >   `containerProperties.secrets` (or `environment`).
-> - **GCP Batch** — set `taskSpec.environment.secretVariables` at submission,
->   pointing each name at
->   `projects/<PROJECT>/secrets/<SECRET>/versions/<VERSION>` and granting the
->   Batch service account `roles/secretmanager.secretAccessor`. The engine
->   does not know the project, so it does not invent a path; a hand-kept
->   submission wrapper is the place to add it.
+> - **GCP Batch** — the engine already emits
+>   `taskSpec.environment.secretVariables` entries for every routed
+>   `OXO_FLOW_SENSITIVE_<n>` name; what it cannot invent is the Secret
+>   Manager path, because the project is yours. Provide it with
+>   `OXO_FLOW_SECRET_REFS`, a `NAME=REFERENCE` map (`;`, `,`, or newline
+>   separated; malformed entries are warned and skipped, never guessed),
+>   e.g.
+>   `OXO_FLOW_SECRET_REFS='OXO_FLOW_SENSITIVE_0=projects/my-project/secrets/token/versions/latest'`.
+>   Grant the Batch service account `roles/secretmanager.secretAccessor`
+>   on the referenced secrets.
 >
 > Local `docker`/`singularity` runs forward the same variables by name
 > (`docker run -e NAME`, and `APPTAINERENV_NAME`/`SINGULARITYENV_NAME` in the
@@ -3785,10 +3789,14 @@ Notes:
 - **HPC job scripts apply the same allowlist (issue #1108, RB-15).**
   `oxo-flow cluster submit` wraps the rule command — and the array
   dispatch line — in an explicit `env -i` prefix admitting only the
-  allowlisted names and the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, so
+  allowlisted names, the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, and —
+  for a rule running through a local container runtime, exactly as the
+  local spawn path does (issue #1173) — the exact container-daemon names
+  in `CONTAINER_DAEMON_ENV_VARS`, so
   SLURM/PBS/SGE/LSF jobs do not inherit the submitting shell's environment
   through the schedulers' export-by-default behavior (`--export=ALL`,
-  `-V`, `-env`). See
+  `-V`, `-env`). The command runs under `bash -c` (the script's own
+  shebang), matching the local executor's bash-first shell choice. See
   [the run command reference](../commands/run.md#hpc-cluster-submissions).
   Local `docker`/`singularity` dispatch runs *inside* that same cleared
   rule shell (covered by the same allowlist, widened only by the narrow
