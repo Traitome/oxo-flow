@@ -160,12 +160,19 @@ export interface WorkflowCanvasProps {
   scopeKey: string;
   /** Called when the user asks to edit a rule (double-click). */
   onEditRule?: (name: string) => void;
-  /** Called when the user connects two nodes (editable canvas). */
-  onConnectRules?: (from: string, to: string) => void;
+  /**
+   * Called when the user connects two nodes (editable canvas). The promise
+   * outcome, when reported, drives the Metro view's settlement announcement
+   * (`null`/`false` = rejected or superseded).
+   */
+  onConnectRules?: (from: string, to: string) => void | Promise<unknown>;
   /** Called when the user deletes selected edge(s) (editable canvas). */
   onDisconnectRules?: (edges: Array<{ from: string; to: string }>) => void;
-  /** Called when the user deletes the selected node(s). */
-  onRemoveRules?: (names: string[]) => void;
+  /**
+   * Called when the user deletes the selected node(s). The promise outcome,
+   * when reported, drives the Metro view's settlement announcement.
+   */
+  onRemoveRules?: (names: string[]) => void | Promise<unknown>;
   /** Per-node status strings for the read-only monitor view. */
   statusById?: Record<string, string>;
   /** 'editor' shows the auto-layout button; 'monitor' hides it. */
@@ -443,6 +450,7 @@ export default function WorkflowCanvas({
           editable={editable}
           onEditRule={onEditRule}
           onConnectRules={onConnectRules}
+          onRemoveRules={onRemoveRules}
           statuses={statusById}
         />
         <div

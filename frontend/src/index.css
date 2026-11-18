@@ -448,11 +448,16 @@ select.search-input{padding-right:1.75rem}
 }
 .rf-handle { width: 8px !important; height: 8px !important; background: var(--color-primary) !important; border: 2px solid var(--color-bg) !important; }
 
-.rf-layout-btn,
-.rf-metro-btn {
-  position: absolute;
-  top: 10px; right: 10px;
-  z-index: 5;
+/* These two classes are shared: the view-toggle buttons sit in the
+   `.rf-metro-view-toggle` flex row (the ROW is the absolutely positioned
+   element), while the metro toolbar's granularity buttons (also
+   `.rf-metro-btn`) sit in the toolbar's flex row. An old unscoped rule
+   made every one of them `position:absolute; top:10px; right:10px`, which
+   stacked all three granularity buttons — and, in the standard view, put
+   Metro View under Auto layout — so only the top element was ever
+   clickable (UX-06, issue #1148). */
+.rf-metro-view-toggle .rf-layout-btn,
+.rf-metro-view-toggle .rf-metro-btn {
   display: inline-flex; align-items: center; gap: 5px;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
