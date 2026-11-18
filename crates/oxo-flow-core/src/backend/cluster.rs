@@ -262,6 +262,14 @@ fn gcp_element_index(element_id: &str) -> Option<(&str, u32)> {
     Some((base, index.parse().ok()?))
 }
 
+/// AWS Batch `DescribeJobs` accepts at most 100 job ids per call — a longer
+/// `--jobs` list is rejected outright as a validation error, not answered
+/// partially. The driver can legitimately exceed that cap: `max_submitted`
+/// has no 100 ceiling and every array element carries its own child id, so
+/// a poll of 101+ in-flight elements must split the list and merge the
+/// per-call answers (review of #1222, ledger RB-06).
+pub const AWS_DESCRIBE_JOBS_MAX_IDS: usize = 100;
+
 /// The scheduler invocations that report `job_ids`, in the form each
 /// scheduler actually accepts: `(program, arguments)`, one entry per call.
 ///
@@ -330,22 +338,29 @@ pub fn status_invocations(
             // `--jobs` is a LIST parameter: each id must be its own argv
             // entry (a single space-joined argument becomes one invalid
             // id). Array elements are real child job ids (`{parent}:{n}`),
-            // so this path answers per element too.
-            let mut args = vec![
-                "batch".to_string(),
-                "describe-jobs".to_string(),
-                "--jobs".to_string(),
-            ];
-            args.extend(job_ids.iter().cloned());
-            // The driver poller reads the same `id|STATE` rows — one
-            // query shape, one parser.
-            args.extend([
-                "--query".to_string(),
-                "jobs[].join(|,[jobId,status])".to_string(),
-                "--output".to_string(),
-                "text".to_string(),
-            ]);
-            vec![("aws", args)]
+            // so this path answers per element too — and the 100-id
+            // DescribeJobs cap applies per call, so long id lists become
+            // one invocation per chunk.
+            job_ids
+                .chunks(AWS_DESCRIBE_JOBS_MAX_IDS)
+                .map(|group| {
+                    let mut args = vec![
+                        "batch".to_string(),
+                        "describe-jobs".to_string(),
+                        "--jobs".to_string(),
+                    ];
+                    args.extend(group.iter().cloned());
+                    // The driver poller reads the same `id|STATE` rows —
+                    // one query shape, one parser.
+                    args.extend([
+                        "--query".to_string(),
+                        "jobs[].join(|,[jobId,status])".to_string(),
+                        "--output".to_string(),
+                        "text".to_string(),
+                    ]);
+                    ("aws", args)
+                })
+                .collect()
         }
         ClusterBackend::GcpBatch => job_ids
             .iter()
@@ -1180,47 +1195,52 @@ impl super::ExecutorBackend for ClusterExecutor {
                 Ok(statuses)
             }
             ClusterBackend::AwsBatch => {
-                // One batched describe for all ids (describe-jobs accepts a
-                // list); the join(|,…) query renders the same `id|STATE`
-                // rows the shared parser reads, replacing the former
-                // per-job serial describe calls.
+                // Batched describe per chunk (describe-jobs caps `--jobs` at
+                // [`AWS_DESCRIBE_JOBS_MAX_IDS`] ids per call); the
+                // join(|,…) query renders the same `id|STATE` rows the
+                // shared parser reads, replacing the former per-job serial
+                // describe calls.
                 if job_ids.is_empty() {
                     return Ok(HashMap::new());
                 }
-                // `--jobs` takes a list: each id is its own argv entry (a
-                // single space-joined argument would be one invalid id).
-                // Element ids are real AWS Batch child job ids
-                // (`{parent}:{arrayIndex}`), so one describe answers per
-                // element — no base-verdict expansion (ledger RB-06).
-                let mut args: Vec<String> =
-                    vec!["batch".into(), "describe-jobs".into(), "--jobs".into()];
-                args.extend(job_ids.iter().cloned());
-                args.push("--query".into());
-                args.push(r"jobs[].join(|,[jobId,status])".into());
-                args.push("--output".into());
-                args.push("text".into());
-                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let out = match self.run_cmd("aws", &arg_refs).await {
-                    Ok(out) => out,
-                    Err(err) => {
-                        // Same contract as the PBS/LSF listing: a transient
-                        // CLI failure is scheduler noise, not a driver
-                        // failure — report nothing and let the accounting
-                        // probe settle the ids.
-                        tracing::warn!(
-                            "aws batch describe-jobs failed, treating ids as absent: {err}"
-                        );
-                        return Ok(HashMap::new());
-                    }
-                };
                 let mut statuses = HashMap::new();
-                for line in String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                {
-                    if let Some((id, st)) = parse_status_line(&self.backend, line) {
-                        statuses.insert(id, st);
+                for group in job_ids.chunks(AWS_DESCRIBE_JOBS_MAX_IDS) {
+                    // `--jobs` takes a list: each id is its own argv entry
+                    // (a single space-joined argument would be one invalid
+                    // id). Element ids are real AWS Batch child job ids
+                    // (`{parent}:{arrayIndex}`), so one describe answers
+                    // per element — no base-verdict expansion (ledger
+                    // RB-06).
+                    let mut args: Vec<String> =
+                        vec!["batch".into(), "describe-jobs".into(), "--jobs".into()];
+                    args.extend(group.iter().cloned());
+                    args.push("--query".into());
+                    args.push(r"jobs[].join(|,[jobId,status])".into());
+                    args.push("--output".into());
+                    args.push("text".into());
+                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    let out = match self.run_cmd("aws", &arg_refs).await {
+                        Ok(out) => out,
+                        Err(err) => {
+                            // Same contract as the PBS/LSF listing: a
+                            // transient CLI failure is scheduler noise, not
+                            // a driver failure — report nothing for THIS
+                            // chunk and let the accounting probe settle its
+                            // ids; the other chunks still answer.
+                            tracing::warn!(
+                                "aws batch describe-jobs failed, treating ids as absent: {err}"
+                            );
+                            continue;
+                        }
+                    };
+                    for line in String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                    {
+                        if let Some((id, st)) = parse_status_line(&self.backend, line) {
+                            statuses.insert(id, st);
+                        }
                     }
                 }
                 Ok(statuses)
@@ -2409,6 +2429,123 @@ mod tests {
             &["arr:0".to_string(), "arr:1".to_string()],
             "each job id is its own argv entry: {argv:?}"
         );
+    }
+
+    /// The `--jobs` groups of one `aws` argv log, in call order. Shared by
+    /// the wire tests that pin the DescribeJobs chunking contract.
+    #[cfg(unix)]
+    fn aws_jobs_groups(argv: &[String]) -> Vec<Vec<String>> {
+        let mut groups = Vec::new();
+        let mut i = 0;
+        while i < argv.len() {
+            if argv[i] == "--jobs" {
+                let mut group = Vec::new();
+                i += 1;
+                while i < argv.len() && argv[i] != "--query" {
+                    group.push(argv[i].clone());
+                    i += 1;
+                }
+                groups.push(group);
+            } else {
+                i += 1;
+            }
+        }
+        groups
+    }
+
+    /// Review of #1222 (ledger RB-06): `DescribeJobs` rejects a `--jobs`
+    /// list over 100 ids outright, and the driver can legitimately hold
+    /// 101+ elements in flight (`max_submitted` has no 100 ceiling and
+    /// every element is its own child id). The poller must split the list
+    /// into ≤100-id calls and merge the answers — one oversized call would
+    /// fail, warn "treating ids as absent", and (AWS having no accounting
+    /// store) leave every element to blind-settle as Failed despite
+    /// AWS-side success.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn aws_batch_poll_chunks_past_the_describe_jobs_100_id_cap() {
+        const IDS: usize = 150; // two calls: 100 + 50
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
+        // Answer every id the call asked for, so merged results must cover
+        // all 150 ids.
+        write_scheduler_shim(
+            bin.path(),
+            "aws",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {args_log}\n\
+                 mode=0\n\
+                 for a in \"$@\"; do\n\
+                 if [ \"$a\" = \"--jobs\" ]; then mode=1; continue; fi\n\
+                 if [ \"$a\" = \"--query\" ]; then mode=0; continue; fi\n\
+                 if [ \"$mode\" = 1 ]; then echo \"$a|SUCCEEDED\"; fi\n\
+                 done\n\
+                 exit 0",
+                args_log = args_log.display()
+            ),
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let ids: Vec<String> = (0..IDS).map(|i| format!("elem:{i}")).collect();
+        let statuses = exec.poll(&ids).await.unwrap();
+        assert_eq!(
+            statuses.len(),
+            IDS,
+            "every id must resolve across the merged chunk answers"
+        );
+        for id in &ids {
+            assert_eq!(
+                statuses.get(id),
+                Some(&BackendJobStatus::Completed),
+                "{id} must settle on its own row despite the chunking"
+            );
+        }
+        let argv: Vec<String> = std::fs::read_to_string(&args_log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let groups = aws_jobs_groups(&argv);
+        assert_eq!(
+            groups.len(),
+            2,
+            "150 ids must split into two describe calls: {groups:?}"
+        );
+        assert_eq!(groups[0].len(), AWS_DESCRIBE_JOBS_MAX_IDS);
+        assert_eq!(groups[1].len(), IDS - AWS_DESCRIBE_JOBS_MAX_IDS);
+        for group in &groups {
+            assert!(
+                group.len() <= AWS_DESCRIBE_JOBS_MAX_IDS,
+                "no describe call may exceed the 100-id cap: {}",
+                group.len()
+            );
+        }
+    }
+
+    /// The standalone `cluster status` command builds its invocations from
+    /// the same id list — the chunking contract must hold there too.
+    #[test]
+    fn aws_status_invocations_chunk_past_the_describe_jobs_cap() {
+        let ids: Vec<String> = (0..AWS_DESCRIBE_JOBS_MAX_IDS + 1)
+            .map(|i| format!("elem:{i}"))
+            .collect();
+        let invocations = status_invocations(&ClusterBackend::AwsBatch, &ids);
+        assert_eq!(
+            invocations.len(),
+            2,
+            "101 ids must produce two describe calls: {}",
+            invocations.len()
+        );
+        let (program, first) = &invocations[0];
+        assert_eq!(*program, "aws");
+        let groups: Vec<Vec<String>> = aws_jobs_groups(first);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), AWS_DESCRIBE_JOBS_MAX_IDS);
+        let (_, second) = &invocations[1];
+        let groups: Vec<Vec<String>> = aws_jobs_groups(second);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 1, "the remainder id rides its own call");
     }
 
     /// Ledger RB-06: GCP Batch array elements resolve through the job's
