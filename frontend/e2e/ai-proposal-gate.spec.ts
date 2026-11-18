@@ -211,6 +211,90 @@ test.describe('AI proposal acceptance gate (UX-05)', () => {
     await expect(page.locator('.cm-content')).not.toContainText('ai_align_v1');
   });
 
+  test('Apply keeps the remaining queue and the next proposal is still reviewable', async ({ page }) => {
+    await mockAi(page, [pipelineReadySSE(V1_TOML), pipelineReadySSE(V2_TOML)]);
+    await page.goto('/editor');
+    await expect(page.locator('.cm-content')).toContainText('fastqc');
+
+    await openAssistant(page);
+    await sendChat(page, 'Build an alignment pipeline');
+    const proposal = page.getByTestId('ai-proposal');
+    await expect(proposal).toBeVisible({ timeout: 15_000 });
+    await sendChat(page, 'Try a different aligner');
+    await expect(page.getByTestId('ai-proposal-count')).toContainText('1 of 2', { timeout: 15_000 });
+
+    await page.getByTestId('ai-proposal-accept').click();
+    // Apply consumes ONLY the accepted proposal. The queued one survives with
+    // its stable ordinal and its own diff — it used to disappear silently.
+    await expect.poll(() => editorText(page)).toBe(V1_TOML);
+    await expect(proposal).toBeVisible();
+    await expect(page.getByTestId('ai-proposal-count')).toContainText('2 of 2');
+    await expect(page.getByTestId('ai-proposal-diff')).toContainText('ai_align_v2');
+    expect(await editorText(page)).toBe(V1_TOML);
+
+    // The surviving proposal can then be applied.
+    await page.getByTestId('ai-proposal-accept').click();
+    await expect.poll(() => editorText(page)).toBe(V2_TOML);
+    await expect(proposal).toHaveCount(0);
+  });
+
+  test('Discard in a queued pair removes only the active proposal', async ({ page }) => {
+    await mockAi(page, [pipelineReadySSE(V1_TOML), pipelineReadySSE(V2_TOML)]);
+    await page.goto('/editor');
+    await expect(page.locator('.cm-content')).toContainText('fastqc');
+    const before = await editorText(page);
+
+    await openAssistant(page);
+    await sendChat(page, 'Build an alignment pipeline');
+    await expect(page.getByTestId('ai-proposal')).toBeVisible({ timeout: 15_000 });
+    await sendChat(page, 'Try a different aligner');
+    await expect(page.getByTestId('ai-proposal-count')).toContainText('1 of 2', { timeout: 15_000 });
+
+    await page.getByTestId('ai-proposal-discard').click();
+    // Only the discarded proposal leaves the queue; the editor never changed.
+    await expect(page.getByTestId('ai-proposal')).toBeVisible();
+    await expect(page.getByTestId('ai-proposal-count')).toContainText('2 of 2');
+    await expect(page.getByTestId('ai-proposal-diff')).toContainText('ai_align_v2');
+    expect(await editorText(page)).toBe(before);
+
+    await page.getByTestId('ai-proposal-discard').click();
+    await expect(page.getByTestId('ai-proposal')).toHaveCount(0);
+    expect(await editorText(page)).toBe(before);
+  });
+
+  test('a slow format response cannot overwrite an accepted proposal', async ({ page }) => {
+    await mockAi(page, [pipelineReadySSE(V1_TOML)]);
+    // The format response is delayed and would clobber the editor with stale
+    // formatted text if it were not guarded by the edit ticket.
+    await page.route('**/api/pipelines/format', async (route) => {
+      const body = route.request().postDataJSON() as { toml_content?: string };
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ formatted: `# STALE_FORMAT_MARKER\n${body.toml_content ?? ''}` }),
+      });
+    });
+    await page.goto('/editor');
+    await expect(page.locator('.cm-content')).toContainText('fastqc');
+
+    await openAssistant(page);
+    await sendChat(page, 'Build an alignment pipeline');
+    await expect(page.getByTestId('ai-proposal')).toBeVisible({ timeout: 15_000 });
+
+    // Format is dispatched first; Apply lands while its response is in flight.
+    const formatResponse = page.waitForResponse('**/api/pipelines/format');
+    await page.locator('button[title="Format"]').click();
+    await page.getByTestId('ai-proposal-accept').click();
+    await expect.poll(() => editorText(page)).toBe(V1_TOML);
+
+    // The stale formatted text arrives afterwards and is discarded.
+    await formatResponse;
+    await page.waitForTimeout(300);
+    expect(await editorText(page)).toBe(V1_TOML);
+    await expect(page.locator('.cm-content')).not.toContainText('STALE_FORMAT_MARKER');
+  });
+
   test('navigating away does not auto-accept a pending proposal', async ({ page }) => {
     await mockAi(page, [pipelineReadySSE(V1_TOML)]);
     await page.goto('/editor');
