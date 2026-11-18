@@ -2475,6 +2475,112 @@ mod tests {
         assert_eq!(VenvBackend.cache_key(".venv"), "venv:.venv");
     }
 
+    /// WF-05 evidence (issue #1155): conda and mamba are one command builder,
+    /// not two copies. The shared `conda_family_*` helpers generate the whole
+    /// lifecycle (create/verify/wrap/teardown); the backends contribute only
+    /// the binary token (plus the documented conda-only
+    /// `--no-capture-output` on the wrap). If a future change re-inlines a
+    /// mamba branch, one of these assertions fails.
+    #[test]
+    fn conda_and_mamba_share_one_lifecycle_command_builder() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("tools.yaml");
+        std::fs::write(&yaml, "name: tools\ndependencies:\n  - python=3.11\n").unwrap();
+        let spec = yaml.to_str().unwrap();
+
+        let conda = CondaBackend;
+        // The binary token is the only per-backend input; pin the fast-solver
+        // binary so the test does not depend on what is installed.
+        let mamba = MambaBackend {
+            binary: "mamba".to_string(),
+        };
+        // The builder emits the binary token at every command position
+        // (including the `|| <binary> env update` fallback), so normalizing
+        // the mamba side to the conda token must reproduce the conda command
+        // byte-for-byte. The fixture path/spec contains neither word.
+        let as_conda = |cmd: &str| cmd.replace("mamba", "conda");
+
+        // create / verify / teardown: byte-identical once the binary token
+        // is normalized.
+        assert_eq!(
+            as_conda(&mamba.setup_command(spec).unwrap()),
+            conda.setup_command(spec).unwrap(),
+            "conda and mamba setup must be one builder (WF-05)"
+        );
+        assert_eq!(
+            as_conda(&mamba.verify_command(spec).unwrap().unwrap()),
+            conda.verify_command(spec).unwrap().unwrap(),
+            "conda and mamba verify must be one builder (WF-05)"
+        );
+        assert_eq!(
+            as_conda(&mamba.teardown_command(spec).unwrap().unwrap()),
+            conda.teardown_command(spec).unwrap().unwrap(),
+            "conda and mamba teardown must be one builder (WF-05)"
+        );
+
+        // wrap: only the documented conda-only flag differs (conda >= 4.13;
+        // mamba/micromamba reject it).
+        let workdir = std::path::Path::new(".");
+        let conda_wrap = conda.wrap_command("echo hi", spec, None, workdir).unwrap();
+        let mamba_wrap = as_conda(&mamba.wrap_command("echo hi", spec, None, workdir).unwrap());
+        assert!(
+            conda_wrap.starts_with("conda run --no-capture-output "),
+            "{conda_wrap}"
+        );
+        assert_eq!(
+            conda_wrap.replacen("run --no-capture-output ", "run ", 1),
+            mamba_wrap,
+            "conda and mamba wrap must be one builder modulo the conda-only flag (WF-05)"
+        );
+
+        // Project-local prefixes take the same shared `-p` path.
+        let prefix = "/tmp/prefix with space";
+        let conda_prefix = conda.setup_command_with_opts(spec, Some(prefix)).unwrap();
+        assert_eq!(
+            conda_prefix,
+            as_conda(&mamba.setup_command_with_opts(spec, Some(prefix)).unwrap())
+        );
+        assert!(
+            conda_prefix.contains("-p '/tmp/prefix with space'"),
+            "the shared target must quote the prefix: {conda_prefix}"
+        );
+
+        // The resolver is the single dispatch point used by the executor:
+        // it must emit exactly the backend's commands, not a third copy.
+        let resolver = EnvironmentResolver::new();
+        let conda_spec = EnvironmentSpec {
+            conda: Some(spec.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolver.setup_command(&conda_spec).unwrap(),
+            conda.setup_command(spec).unwrap()
+        );
+        assert_eq!(
+            resolver.verify_command(&conda_spec).unwrap(),
+            conda.verify_command(spec).unwrap()
+        );
+        let mamba_spec = EnvironmentSpec {
+            mamba: Some(spec.to_string()),
+            ..Default::default()
+        };
+        // The mamba backend auto-detects its binary on the host
+        // (mamba -> micromamba -> conda), so mirror the resolver's own
+        // resolution — the assertion is about dispatch, not which solver
+        // this machine ships.
+        let resolved = MambaBackend {
+            binary: resolver.mamba.resolved_binary().to_string(),
+        };
+        assert_eq!(
+            resolver.setup_command(&mamba_spec).unwrap(),
+            resolved.setup_command(spec).unwrap()
+        );
+        assert_eq!(
+            resolver.teardown_command(&mamba_spec).unwrap(),
+            resolved.teardown_command(spec).unwrap()
+        );
+    }
+
     #[test]
     fn conda_yaml_dependencies_empty_detects_empty_and_missing_lists() {
         let dir = tempfile::tempdir().unwrap();

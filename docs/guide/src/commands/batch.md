@@ -82,6 +82,13 @@ ls *.bam | oxo-flow batch "samtools flagstat {item}"
 oxo-flow batch -e "conda: bwa_env" "bwa mem ref.fa {item}" *.fastq.gz
 ```
 
+The `conda:` form wraps through the engine's own conda-family command builder
+(see [Environment System](../reference/environment-system.md#shared-conda-family-lifecycle-create-use-decommission)):
+each item runs inside the SAME environment an `oxo-flow run` rule would use —
+`<yaml name|stem>-<hash8>` for a file-backed spec — with the environment's
+`bin/` first on `PATH`, so an environment the engine already created is
+reused rather than looked up under a hand-derived name.
+
 ### Generate workflow
 
 ```bash

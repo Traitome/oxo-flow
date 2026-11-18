@@ -167,7 +167,7 @@ pub async fn batch_command(
 
         // Wrap with environment if specified
         let final_cmd = if let Some(env) = &env_clone {
-            wrap_batch_command(&cmd, env)
+            wrap_batch_command(&cmd, env)?
         } else {
             cmd.clone()
         };

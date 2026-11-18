@@ -256,24 +256,21 @@ pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
 }
 
 /// Wrap command with environment activation.
-pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
+///
+/// The conda arms reuse the engine's shared conda-family builder
+/// (`CondaBackend::wrap_command_with_opts`, issue #1155 / ledger WF-05):
+/// `batch -e "conda: <spec>"` must target the SAME environment `oxo-flow run`
+/// creates — `<yaml name|stem>-<hash8>` for file-backed specs — and run the
+/// whole item inside that env's shell. The previous hand-derived
+/// `conda run --no-banner -n <file stem>` copy targeted an env the engine
+/// never creates and let shell operators escape the environment.
+pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> Result<String> {
     // Parse environment spec: "conda: env.yaml" or "docker: image"
     if let Some((type_, spec)) = env_spec.split_once(':') {
         match type_.trim() {
-            "conda" => {
-                let env_name = std::path::Path::new(spec.trim())
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(spec.trim());
-                // Quote the env name like the docker/singularity branches
-                // quote their tokens: a spec path with a space must not
-                // split `-n my env` into two words.
-                format!(
-                    "conda run --no-banner -n {} {}",
-                    shell_quote_word(env_name),
-                    cmd
-                )
-            }
+            "conda" => oxo_flow_core::environment::CondaBackend
+                .wrap_command_with_opts(cmd, spec.trim(), None)
+                .context("failed to build the conda environment wrapper for batch"),
             "docker" | "singularity" => {
                 // Each whitespace-separated token of the spec is passed as one
                 // quoted argument so characters like `;` or `$(` in the TOML
@@ -287,20 +284,19 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
                 // script; escape quotes so commands containing `'` (e.g. awk
                 // programs) survive and cannot terminate the quoting early.
                 let quoted_cmd = shell_quote_word(cmd);
-                match type_.trim() {
+                Ok(match type_.trim() {
                     "docker" => format!("docker run --rm {spec_args} sh -c {quoted_cmd}"),
                     _ => format!("singularity exec {spec_args} sh -c {quoted_cmd}"),
-                }
+                })
             }
-            _ => cmd.to_string(),
+            _ => Ok(cmd.to_string()),
         }
     } else {
-        // Assume conda environment name
-        format!(
-            "conda run --no-banner -n {} {}",
-            shell_quote_word(env_spec.trim()),
-            cmd
-        )
+        // Assume conda environment name — same shared builder, so a plain
+        // name resolves exactly like an engine-declared environment.
+        oxo_flow_core::environment::CondaBackend
+            .wrap_command_with_opts(cmd, env_spec.trim(), None)
+            .context("failed to build the conda environment wrapper for batch")
     }
 }
 
@@ -359,7 +355,8 @@ mod tests {
 
     #[test]
     fn docker_wrapper_escapes_single_quotes() {
-        let wrapped = wrap_batch_command("awk '{print $1}'", "docker: biocontainers/samtools");
+        let wrapped =
+            wrap_batch_command("awk '{print $1}'", "docker: biocontainers/samtools").unwrap();
         assert!(wrapped.starts_with("docker run --rm 'biocontainers/samtools' sh -c "));
         // The command must survive as one quoted argument.
         assert!(wrapped.ends_with(r#"'awk '\''{print $1}'\'''"#));
@@ -368,7 +365,8 @@ mod tests {
 
     #[test]
     fn singularity_wrapper_escapes_injection() {
-        let wrapped = wrap_batch_command("echo ok'; rm -rf /tmp/x", "singularity: image.sif");
+        let wrapped =
+            wrap_batch_command("echo ok'; rm -rf /tmp/x", "singularity: image.sif").unwrap();
         // Exact wrapping: the injected quote is escaped (`'\''`) and the
         // trailing `; rm ...` stays inside the still-open quote, so the inner
         // `sh -c` receives it as part of the container's command string rather
@@ -381,18 +379,47 @@ mod tests {
 
     #[test]
     fn docker_spec_tokens_are_individually_quoted() {
-        let wrapped = wrap_batch_command("true", "docker: -v /a:/b --gpus all");
+        let wrapped = wrap_batch_command("true", "docker: -v /a:/b --gpus all").unwrap();
         // Every token quoted separately keeps multi-arg semantics while
         // neutralizing metacharacters inside tokens.
         assert!(wrapped.contains("'-v' '/a:/b' '--gpus' 'all'"));
     }
 
+    /// Issue #1155 (WF-05): `batch -e "conda: ..."` must be the engine's
+    /// shared conda-family wrap, not a hand-derived copy. Before this fix
+    /// the batch arm built `conda run --no-banner -n <file stem>`, targeting
+    /// an env `oxo-flow run` never creates for a file-backed spec and letting
+    /// shell operators escape the environment.
     #[test]
-    fn conda_wrapper_quotes_env_name() {
-        let wrapped = wrap_batch_command("python x.py", "conda: envs/tools.yaml");
-        assert_eq!(wrapped, "conda run --no-banner -n 'tools' python x.py");
-        // A spec path with a space must not split the -n argument.
-        let spaced = wrap_batch_command("python x.py", "conda: my env.yaml");
-        assert_eq!(spaced, "conda run --no-banner -n 'my env' python x.py");
+    fn conda_wrapper_reuses_the_engine_conda_family_command() {
+        let engine = |cmd: &str, spec: &str| {
+            oxo_flow_core::environment::CondaBackend
+                .wrap_command_with_opts(cmd, spec, None)
+                .unwrap()
+        };
+
+        // File-backed spec: ONE derived name (`<yaml name>-<hash8>`) — the
+        // exact env the engine creates — and the item runs inside its shell.
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("tools.yaml");
+        std::fs::write(&yaml, "name: tools\ndependencies:\n  - python=3.11\n").unwrap();
+        let spec = yaml.to_str().unwrap();
+        let wrapped = wrap_batch_command("python x.py", &format!("conda: {spec}")).unwrap();
+        assert_eq!(wrapped, engine("python x.py", spec));
+        assert!(wrapped.contains("-n tools-"), "{wrapped}");
+        assert!(
+            wrapped.contains("bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; python x.py'"),
+            "the whole item must run inside the env shell: {wrapped}"
+        );
+
+        // File-less spec: the plain validated name (no hash suffix), again
+        // through the shared builder.
+        let named = wrap_batch_command("python x.py", "conda: bwa_env").unwrap();
+        assert_eq!(named, engine("python x.py", "bwa_env"));
+        assert!(named.contains("-n bwa_env "), "{named}");
+
+        // The no-colon legacy spelling takes the same shared path.
+        let legacy = wrap_batch_command("true", "bwa_env").unwrap();
+        assert_eq!(legacy, engine("true", "bwa_env"));
     }
 }
