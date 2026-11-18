@@ -65,7 +65,7 @@ is preserved as a new revision first.
 | Pane | What it does |
 |------|--------------|
 | **Tools / Assistant rail** (left) | Search the embedded Bioconda database (6,100+ tools) and add real tools as rules; or ask the AI assistant to draft a workflow |
-| **Pipeline DAG** (center) | The node canvas: drag, connect, delete, double-click (or `Enter`/`Space`) to edit |
+| **Pipeline DAG** (center) | The node canvas: drag, connect, delete, double-click to edit (Metro Rule granularity adds a keyboard path — see [Metro view](#metro-view-and-grouped-granularities)) |
 | **Workflow TOML** (right) | The canonical `.oxoflow` text — always in sync with the canvas |
 
 ## AI assistant: proposals require acceptance
@@ -118,20 +118,25 @@ Double-click a node to open the inspector:
 
 Fields the inspector doesn't cover stay editable in the TOML pane.
 
-Every canvas action is also available from the keyboard (audit UX-06,
-issue #1148). Nodes are focus stops in rule-declaration order: `Tab` moves to
-the next node and `Shift+Tab` to the previous one. `Enter` or `Space` on a
-focused node opens the inspector, and `Escape` closes the inspector and
-returns focus to that node.
+The standard DAG view is the mouse-first editing canvas: double-click a node
+to open the inspector, drag between handles to connect, and select elements
+then press `Delete`/`Backspace` to remove them. A complete keyboard edit
+surface exists in the **Metro view at Rule granularity** — focus order,
+activation, connect, delete, and Escape behavior are documented under
+[Metro view and grouped granularities](#metro-view-and-grouped-granularities)
+(audit UX-06, issue #1148).
 
 ## Connecting rules
 
 Drag from a node's right handle to another node's left handle. This adds an
-explicit `depends_on` edge. The keyboard equivalent is:
+explicit `depends_on` edge. In the **Metro view at Rule granularity** the
+keyboard equivalent is:
 
-1. Focus the source node and press `c` — the editor announces "Connecting
+1. Focus the source station and press `c` — the editor announces "Connecting
    from <rule>" and outlines the source station.
-2. `Tab` to the target node and press `Enter` to write the connection.
+2. `Tab`/`Shift+Tab` to the target station and press `Enter` to write the
+   connection. The live region reports the settled outcome after the edit
+   round-trip ("Connected …" or "… was not applied").
 3. Alternatively press `Escape` to cancel without writing anything.
 
 Two connections are always rejected, before anything is written:
@@ -160,29 +165,50 @@ be resolved against each other leave the ordering ambiguous — use
 Select one or more nodes and press `Delete` (or `Backspace`) to remove rules;
 with an edge selected instead, the same keys disconnect it (file-inferred
 edges are managed through the `input`/`output` paths, not by disconnect).
-In the Metro view, focus a single station and press `Delete`/`Backspace` to
-remove exactly that rule. Removing a rule whose outputs other rules consume
-will surface validation errors on those rules — fix their inputs, and the
-workflow is valid again.
+In the Metro view at **Rule** granularity, focus a single station and press
+`Delete`/`Backspace` to remove exactly that rule (grouped Process/Module
+stations ignore those keys — see [Metro view](#metro-view-and-grouped-granularities)).
+Removing a rule whose outputs other rules consume will surface validation
+errors on those rules — fix their inputs, and the workflow is valid again.
 
 ## Metro view and grouped granularities
 
 **Metro View** (bottom-right of the canvas) draws the DAG as a transit map,
 with a `Rule` / `Process` / `Module` granularity switch:
 
-- **Rule** — one station per rule. This is a full editing surface: the same
-  keyboard and mouse edit/connect/delete actions as the standard DAG view.
+- **Rule** — one station per rule. This is the Metro editing surface: the
+  keyboard actions below plus the mouse path (double-click to edit, drag
+  handles to connect).
 - **Process** — stations aggregate rules by environment backend (for example
   one `system` station containing every system rule).
 - **Module** — stations aggregate rules by inferred bioinformatics modality
   (genomics, transcriptomics, epigenomics, metagenomics, infrastructure).
+
+### Keyboard editing (Metro view, Rule granularity)
+
+In the Metro view at **Rule** granularity, stations are the canvas's focus
+stops, in rule-declaration order (`Tab` moves to the next station,
+`Shift+Tab` to the previous one; edges are not focus stops there):
+
+- `Enter` or `Space` — open the inspector for the focused rule.
+- `Escape` — cancel a pending connection, or close the inspector and return
+  focus to the station it came from.
+- `c` — start a connection from the focused station (see
+  [Connecting rules](#connecting-rules)).
+- `Delete` / `Backspace` — remove the focused rule. The live region reports
+  the settled outcome ("Removed rule …" or "… was not removed") after the
+  edit round-trip.
+
+These shortcuts (including the connect flow) are Metro Rule-granularity
+features; the standard DAG view keeps its mouse-first editing path.
 
 **Process and Module are read-only** (audit UX-06, issue #1148). Their
 station ids are aggregation keys, not rule names, so a group operation cannot
 be proven to preserve execution semantics — and a rule literally named like a
 group key (for example `system`) would be silently edited instead of the
 group. Grouped stations are therefore not buttons, carry a `read-only` badge,
-render no connect handles, and announce why when activated from the keyboard.
+keep their transit edges but expose only non-connectable handles, ignore
+`Delete`/`Backspace`, and announce why when activated from the keyboard.
 The toolbar shows the same note. Switch back to **Rule** granularity to edit
 or connect. Grouping only changes the visualization — it never rewrites the
 workflow document.

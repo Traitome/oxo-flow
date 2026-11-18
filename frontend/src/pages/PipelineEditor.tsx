@@ -490,7 +490,11 @@ export default function PipelineEditor() {
     }
   };
 
-  const handleConnect = (from: string, to: string) => runEdit('connect', { from, to });
+  // Resolve to whether the edit actually applied (`runEdit` returns null for
+  // a rejected or superseded edit) so the Metro keyboard flow can announce
+  // the settled outcome instead of guessing success.
+  const handleConnect = async (from: string, to: string): Promise<boolean> =>
+    (await runEdit('connect', { from, to })) !== null;
   // Same chaining rule as handleRemove: every edit posts the whole TOML, so
   // parallel disconnects would race and only the last one would survive.
   const handleDisconnect = async (edges: Array<{ from: string; to: string }>) => {
@@ -505,13 +509,14 @@ export default function PipelineEditor() {
   // parallel raced: every request carried the same original content and only
   // the last removal survived. Chain them, threading each response's TOML
   // into the next request.
-  const handleRemove = async (names: string[]) => {
+  const handleRemove = async (names: string[]): Promise<boolean> => {
     let current = toml;
     for (const name of names) {
       const next = await runEdit('remove_rule', { name }, current);
-      if (next === null) return; // superseded or failed — stop the chain
+      if (next === null) return false; // superseded or failed — stop the chain
       current = next;
     }
+    return true;
   };
 
   const handleAddTool = (tool: KnowledgeTool) => {

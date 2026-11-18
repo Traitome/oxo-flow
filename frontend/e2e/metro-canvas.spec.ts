@@ -167,6 +167,24 @@ test.describe('Metro canvas keyboard access and grouped read-only (UX-06, #1148)
     await expect(page.locator('.cm-content')).toContainText('depends_on = ["fastqc"]');
     await expect(page.locator('.rf-metro-announcer')).toContainText('Connected fastqc to align');
 
+    // A cycle-forming connection is rejected by the backend. The live region
+    // must report the settled failure ("not applied"), never a premature
+    // "Connected" announced before the round-trip resolves.
+    await expect(async () => {
+      if ((await align.getAttribute('data-connect-source')) !== 'true') {
+        await align.focus();
+        await page.keyboard.press('c');
+      }
+      await expect(align).toHaveAttribute('data-connect-source', 'true', { timeout: 2_000 });
+    }).toPass({ timeout: 10_000 });
+    await page.keyboard.press('Shift+Tab'); // align -> fastqc (declaration order)
+    await expectFocusedStation(page, 'fastqc');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.rf-metro-announcer')).toContainText(
+      'Connection from align to fastqc was not applied',
+    );
+    await expect(page.locator('.cm-content')).not.toContainText('depends_on = ["align"]');
+
     // Escape cancels a started connection without touching the document.
     const beforeCancel = await tomlText(page);
     await expect(async () => {
@@ -216,10 +234,17 @@ test.describe('Metro canvas keyboard access and grouped read-only (UX-06, #1148)
       expect(await groupedStations.count()).toBeLessThan(3);
 
       // Read-only state is advertised, not silently inert: the toolbar note,
-      // a per-station badge, and no connect handles at all (the mouse-only
-      // drag path is gone in grouped views).
+      // a per-station badge, and non-connectable handles.
       await expect(page.getByTestId('metro-grouped-note')).toBeVisible();
-      await expect(page.locator('.rf-metro-canvas-container .react-flow__handle')).toHaveCount(0);
+
+      // Transit edges MUST still render. React Flow positions an edge from
+      // its endpoints' handle bounds: removing the handles dropped every
+      // grouped edge (review finding). The handles are therefore mounted but
+      // `isConnectable={false}` — edges keep their geometry while a drag can
+      // never start a connection.
+      await expect(page.locator('.rf-metro-canvas-container .react-flow__edge')).not.toHaveCount(0);
+      expect(await page.locator('.rf-metro-canvas-container .react-flow__handle').count()).toBeGreaterThan(0);
+      await expect(page.locator('.rf-metro-canvas-container .react-flow__handle.connectable')).toHaveCount(0);
       const flags = await groupedStations.evaluateAll((nodes) =>
         nodes.map((n) => ({
           grouped: n.getAttribute('data-grouped'),
@@ -256,6 +281,17 @@ test.describe('Metro canvas keyboard access and grouped read-only (UX-06, #1148)
       await page.keyboard.press('Delete');
       await page.keyboard.press('Backspace');
       await expect(page.locator('#rule-inspector-title')).toHaveCount(0);
+
+      // A *selected* grouped station must survive the delete keys too.
+      // React Flow's document-level deleteKeyCode ('Backspace') otherwise
+      // removed the glyph from the canvas (the TOML was never touched by
+      // that path, so the read-only promise held for the document but not
+      // for the view).
+      const stationCountBeforeDelete = await groupedStations.count();
+      await first.click();
+      await page.keyboard.press('Backspace');
+      await page.keyboard.press('Delete');
+      await expect(groupedStations).toHaveCount(stationCountBeforeDelete);
       expect(await tomlText(page), `grouped ${granularity} view must not edit the document`).toBe(before);
     }
 

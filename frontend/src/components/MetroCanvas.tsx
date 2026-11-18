@@ -84,6 +84,20 @@ interface MetroInteraction {
 
 const MetroInteractionContext = createContext<MetroInteraction | null>(null);
 
+/**
+ * Await an edit callback's settled outcome. `null`/`false` is the editor's
+ * rejected-or-superseded signal; `undefined` (a fire-and-forget consumer)
+ * cannot be disproven and counts as applied. A thrown error is a failure.
+ */
+async function settledApplied(run: () => unknown): Promise<boolean> {
+  try {
+    const outcome = await run();
+    return outcome !== null && outcome !== false;
+  } catch {
+    return false;
+  }
+}
+
 function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>) {
   const d = data as MetroStationData;
   const { t } = useI18n();
@@ -124,13 +138,20 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
     if (!interaction) return;
     // Grouped / read-only stations stay focusable (so keyboard users can
     // inspect the aggregation) but only announce why they cannot be edited.
+    // stopPropagation is REQUIRED, not cosmetic: React Flow listens for its
+    // default deleteKeyCode ('Backspace') on the document, so a merely
+    // preventDefault'ed Backspace still reached the global handler and
+    // removed the (locally selected) station glyph from the canvas.
     if (!interactive) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
+        e.stopPropagation();
         interaction.onReadOnlyNotice();
       } else if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'c' || e.key === 'C') {
-        // Inert, but swallowed so Backspace cannot navigate the browser back.
+        // Inert, but swallowed so neither React Flow's global delete handler
+        // nor the browser's back navigation can act on it.
         e.preventDefault();
+        e.stopPropagation();
       }
       return;
     }
@@ -185,16 +206,29 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
         title={d.label}
         {...a11yProps}
       >
-        {!grouped && (
-          <Handle type="target" position={Position.Left} className="rf-handle" style={{ background: colors.primary }} />
-        )}
+        {/* Handles must stay mounted in grouped views: React Flow derives an
+            edge's on-screen geometry from its endpoints' handle bounds, so a
+            handle-less station silently drops every transit edge. They are
+            non-connectable instead, and the canvas sets nodesConnectable
+            false — edges render, connections remain impossible. */}
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="rf-handle"
+          isConnectable={grouped ? false : undefined}
+          style={{ background: colors.primary }}
+        />
         <div className="rf-metro-compact-glyph" style={{ background: colors.primary }} />
         <div className="rf-metro-compact-label" style={{ color: 'var(--color-text)' }}>
           {d.label}
         </div>
-        {!grouped && (
-          <Handle type="source" position={Position.Right} className="rf-handle" style={{ background: colors.primary }} />
-        )}
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="rf-handle"
+          isConnectable={grouped ? false : undefined}
+          style={{ background: colors.primary }}
+        />
       </div>
     );
   }
@@ -209,9 +243,13 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
       }}
       {...a11yProps}
     >
-      {!grouped && (
-        <Handle type="target" position={Position.Left} className="rf-handle" style={{ background: colors.primary }} />
-      )}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="rf-handle"
+        isConnectable={grouped ? false : undefined}
+        style={{ background: colors.primary }}
+      />
       <div className="rf-metro-header">
         <span className="rf-metro-dot" style={{ backgroundColor: colors.primary }} />
         <span className="rf-metro-title">{d.label}</span>
@@ -234,9 +272,13 @@ function MetroStationNode({ data, selected }: NodeProps<Node<MetroStationData>>)
         {d.status && <span className={`rf-rule-status status-${d.status}`}>{d.status}</span>}
       </div>
       {d.shell && <div className="rf-metro-shell">{d.shell}</div>}
-      {!grouped && (
-        <Handle type="source" position={Position.Right} className="rf-handle" style={{ background: colors.primary }} />
-      )}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="rf-handle"
+        isConnectable={grouped ? false : undefined}
+        style={{ background: colors.primary }}
+      />
     </div>
   );
 }
@@ -249,9 +291,15 @@ export interface MetroCanvasProps {
   dag: DagJson | null;
   editable?: boolean;
   onEditRule?: (name: string) => void;
-  onConnectRules?: (from: string, to: string) => void;
+  /**
+   * Async outcome, if the consumer reports one: `null`/`false` means the
+   * edit was rejected or superseded. `undefined` (a fire-and-forget
+   * consumer) is treated as applied — the announcement must never claim a
+   * result the caller cannot confirm.
+   */
+  onConnectRules?: (from: string, to: string) => void | Promise<unknown>;
   /** Keyboard Delete/Backspace on a focused station (Rule granularity only). */
-  onRemoveRules?: (names: string[]) => void;
+  onRemoveRules?: (names: string[]) => void | Promise<unknown>;
   statuses?: Record<string, string>;
   selectedRule?: string | null;
   onSelectRule?: (name: string | null) => void;
@@ -317,9 +365,21 @@ export function MetroCanvas({
           return;
         }
         if (!canConnect) return;
-        onConnectRules?.(connectSource, rule);
-        announce(t('canvas.connectDone').replace('{{from}}', connectSource).replace('{{to}}', rule));
+        const from = connectSource;
         setConnectSource(null);
+        // Announce the outcome AFTER the edit resolves: the connect is an
+        // async server round-trip that can reject a cycle or a missing rule,
+        // and a premature "Connected" tells a screen reader the opposite of
+        // what happened.
+        announce(t('canvas.connectPending').replace('{{from}}', from).replace('{{to}}', rule));
+        void (async () => {
+          const applied = await settledApplied(() => onConnectRules?.(from, rule));
+          announce(
+            (applied ? t('canvas.connectDone') : t('canvas.connectFailed'))
+              .replace('{{from}}', from)
+              .replace('{{to}}', rule),
+          );
+        })();
         return;
       }
       onEditRule?.(rule);
@@ -345,8 +405,13 @@ export function MetroCanvas({
     (rule: string) => {
       if (!canRemove) return;
       if (connectSource === rule) setConnectSource(null);
-      onRemoveRules?.([rule]);
-      announce(t('canvas.ruleRemoved').replace('{{name}}', rule));
+      // Same rule as connect: report the resolved outcome, never a guess.
+      void (async () => {
+        const applied = await settledApplied(() => onRemoveRules?.([rule]));
+        announce(
+          (applied ? t('canvas.ruleRemoved') : t('canvas.removeFailed')).replace('{{name}}', rule),
+        );
+      })();
     },
     [canRemove, connectSource, onRemoveRules, setConnectSource, announce, t],
   );
@@ -638,6 +703,10 @@ export function MetroCanvas({
           // edit/connect/remove handlers); React Flow's per-node wrapper would
           // otherwise add a second, inert tab stop per station.
           nodesFocusable={false}
+          // Edges have no actions in the metro view; leaving them focusable
+          // inserts inert tab stops between stations and breaks the
+          // station-by-station focus order.
+          edgesFocusable={false}
           nodesConnectable={canConnect}
           fitView
           minZoom={0.2}
