@@ -852,11 +852,15 @@ precedence and is unchanged by this CLI-scoped fix.
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Partial (2026-11-18) — rule/HPC/cloud shells isolated behind the shared
+allowlist (#1108/#1173/#1171/#1176); the environment-setup channel is an accepted risk (#1174)
 
 The rule shell adds declared environment variables but does not clear or allowlist the inherited
 environment. A shared or imported workflow can read provider keys, cloud credentials, database
-URLs, MCP tokens, and proxy credentials without declaring them.
+URLs, MCP tokens, and proxy credentials without declaring them. *Status: fixed for every
+workflow-authored shell — local rule/pre_exec/hook shells, HPC scheduler scripts, and cloud
+dispatch bodies; the one remaining ambient channel is environment SETUP, an accepted risk
+below.*
 
 Evidence:
 
@@ -974,7 +978,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
 | AI-01 | P0 | A model-approved partial TOML block can replace the whole workflow. | Fixed (#1117) | `--ai-recover` now rejects a patch that shrinks the original's rules/includes/references (checked through `WorkflowConfig::parse`) and writes accepted fixes atomically. See RB-11. |
-| AI-02 | P1 | Rule shells inherit ambient credentials. | Planned / blocked | RB-15. |
+| AI-02 | P1 | Rule shells inherit ambient credentials. | Partial (2026-11-18) | Workflow-authored shells are isolated behind the shared allowlist on the local, HPC, and cloud paths (#1108/#1173/#1171/#1176); the environment-setup channel is an accepted risk (#1174). See RB-15. |
 | AI-03 | P1 | Workflow-scoped AI provider and model settings are resolved but ignored. | Fixed (#1122) for the CLI task surfaces | The CLI resolves the full chain before building the provider and applies the resolved provider/model (`create_provider_from_config_chain`) for `template --ai`, `env create --ai`, `ai explain`, and the `validate`/`lint`/`dry-run`/`debug`/`report`/`run`-recovery analyses; a saved config's endpoint/model/key never cross into a different provider. Scope note: the status commands (`oxo-flow ai`, `ai test`) take no workflow and report environment + saved config only; the web/desktop provider registry keeps its own precedence and is not covered. E2E precedence tests in `crates/oxo-flow-cli/tests/ai_policy.rs`. See RB-14. |
 | AI-04 | P1 | A generic MCP token is sent to any activated public skill endpoint. | Fixed (#1123) | The generic `OXO_FLOW_MCP_TOKEN` is released only to exact origins listed in `OXO_FLOW_MCP_TRUSTED_ORIGINS` (unset/empty = never released; unparseable entries warned and ignored); per-server tokens are destination-scoped by construction. Tests cover unapproved, lookalike, and approved origins (wire-level for the first and the approved case) plus per-server precedence; the SSRF screen is unchanged. See RB-13. |
 | AI-05 | P1 | Auto-approved project reads plus outbound fetch form an exfiltration chain. | Fixed (#1123) | Outbound egress is classified per invocation (`Tool::egress_target`; `fetch_url` = destination origin, MCP = opaque) and no longer inherits the read-only auto-approval: the call needs an explicit human approval, or its exact origin must be listed in `OXO_FLOW_AI_FETCH_TRUSTED_ORIGINS`; non-interactive sessions refuse. Refusals name the origin only. Tests: `egress_data_release_policy`, `read_then_fetch_cannot_reach_the_network_without_approval`, `egress_refusal_names_only_the_origin_and_never_the_payload`. See RB-13. |

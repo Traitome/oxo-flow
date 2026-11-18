@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactNode } from 'react';
 import type { DagJson } from '../api/types';
 import { api, apiUrl } from '../api/client';
+import { useI18n } from './I18n';
 import {
   AUTH_CHANGED_EVENT,
   AUTH_TOKEN_KEY,
@@ -272,6 +273,7 @@ const IDENTITY_CONFIRM_TIMEOUT_MS = 5000;
 type IdentityStatus = 'confirming' | 'ready' | 'unconfirmed';
 
 export function PipelineSessionProvider({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   // #1144: the bucket is chosen from `oxo_identity` — the cached username
   // written by Login.tsx alongside the token and cleared by logout / a
   // rejected session. A browser that holds a token, or claims an identity,
@@ -564,16 +566,16 @@ export function PipelineSessionProvider({ children }: { children: ReactNode }) {
           textAlign: 'center',
         }}
       >
-        <h1 style={{ fontSize: '1.25rem', marginBottom: '0.75rem' }}>Session not confirmed</h1>
+        <h1 style={{ fontSize: '1.25rem', marginBottom: '0.75rem' }}>{t('identity.unconfirmedTitle')}</h1>
         <p style={{ marginBottom: '0.5rem' }}>
-          We could not confirm who is signed in, so no drafts are shown.
+          {t('identity.unconfirmedBody')}
         </p>
         <p style={{ marginBottom: '1rem', opacity: 0.8 }}>
-          Your saved work is kept — it returns as soon as the server confirms your account.
+          {t('identity.unconfirmedKept')}
         </p>
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-          <button type="button" onClick={retryConfirmation}>Retry</button>
-          <button type="button" onClick={signInAgain}>Sign in again</button>
+          <button type="button" onClick={retryConfirmation}>{t('identity.retry')}</button>
+          <button type="button" onClick={signInAgain}>{t('identity.signInAgain')}</button>
         </div>
       </div>
     );

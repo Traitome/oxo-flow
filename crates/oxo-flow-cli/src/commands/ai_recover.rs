@@ -453,6 +453,34 @@ fn validate_fix(original: &str, modified: &str) -> std::result::Result<(), Strin
         ));
     }
 
+    // Top-level sections (review of the v0.32.0 cycle): the structural
+    // checks above cover rules/config, but a fragment that drops
+    // `[engine]` (disk-pressure guard, tmp_dir), `[webhook]`, `[cluster]`,
+    // `[[envs]]`, or `[ai]` would pass both gates and be written as a full
+    // replacement. Comparing the RAW documents' top-level keys keeps this
+    // guard generic — a future section needs no edit here. An original
+    // that does not parse raw (the explicit-accept branch above) skips
+    // the check rather than gaining a false refusal.
+    if let (Ok(original_table), Ok(modified_table)) = (
+        toml::from_str::<toml::Table>(original),
+        toml::from_str::<toml::Table>(modified),
+    ) {
+        let missing_sections: Vec<&String> = original_table
+            .keys()
+            .filter(|key| !modified_table.contains_key(key.as_str()))
+            .collect();
+        if !missing_sections.is_empty() {
+            reasons.push(format!(
+                "the fix removes section(s): {}",
+                missing_sections
+                    .iter()
+                    .map(|key| key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+
     if reasons.is_empty() {
         Ok(())
     } else {
@@ -503,6 +531,23 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
     // fsync the parent so the rename is durable — a crash mid-write can
     // never leave a truncated workflow.
     write_atomic(&workflow_backup_path(workflow_path), &original)?;
+
+    // TOCTOU guard (mirrors `template --ai`'s pre-write re-check): the
+    // workflow may have changed between the read at entry and this rename —
+    // a manual edit does not respect the engine's workdir lock. Re-reading
+    // and re-validating against the CURRENT bytes keeps the shape gate
+    // honest about the file that is actually replaced; a mid-flight edit is
+    // refused and the file keeps whatever the user wrote.
+    let current = std::fs::read_to_string(workflow_path)
+        .with_context(|| format!("failed to re-read workflow {}", workflow_path.display()))?;
+    if current != original
+        && let Err(reason) = validate_fix(&current, modified_toml)
+    {
+        anyhow::bail!(
+            "refusing to apply AI fix to {}: the file changed since diagnosis ({reason})",
+            workflow_path.display()
+        );
+    }
 
     // Write the fix atomically.
     write_atomic(workflow_path, modified_toml)?;
@@ -671,6 +716,7 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::apply_fix;
+    use super::validate_fix;
     use super::{AutoFixDecision, resolve_auto_fix_mode};
     use super::{auto_fix_decision, extract_section, extract_toml_block, parse_safe_to_auto_apply};
     use oxo_flow_ai::config::AutoFixMode;
@@ -804,6 +850,38 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
 
     // A full workflow the model may legitimately return unchanged.
     const ORIGINAL: &str = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nthreads = 4\nshell = \"echo align\"\n";
+
+    /// A fix that keeps every rule and config key but drops a top-level
+    /// section (`[engine]`, `[webhook]`, `[[envs]]`, `[ai]`, …) must be
+    /// refused like any other partial document (review of the v0.32.0
+    /// cycle): the shape gate compares the RAW documents' top-level keys,
+    /// so the guard covers sections the structural checks never named.
+    #[test]
+    fn validate_fix_refuses_a_dropped_top_level_section() {
+        let original = "[workflow]\nname = \"t\"\n\n[engine]\nmin_free_disk = \"10G\"\n\n[webhook]\nurl = \"https://hooks.example\"\n\n[[rules]]\nname = \"align\"\nshell = \"echo align\"\n";
+
+        // Keeping the section passes.
+        let kept = "[workflow]\nname = \"t\"\n\n[engine]\nmin_free_disk = \"10G\"\n\n[webhook]\nurl = \"https://hooks.example\"\n\n[[rules]]\nname = \"align\"\nthreads = 2\nshell = \"echo align\"\n";
+        validate_fix(original, kept).expect("a fix that keeps every section must be accepted");
+
+        // Dropping `[engine]` (the thread fix is otherwise complete) is
+        // refused with a section-specific reason.
+        let no_engine = "[workflow]\nname = \"t\"\n\n[webhook]\nurl = \"https://hooks.example\"\n\n[[rules]]\nname = \"align\"\nthreads = 2\nshell = \"echo align\"\n";
+        let err = validate_fix(original, no_engine).expect_err("engine drop must be refused");
+        assert!(
+            err.contains("section(s)") && err.contains("engine"),
+            "the refusal must name the dropped section: {err}"
+        );
+
+        // Dropping two sections names both.
+        let rules_only = "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"align\"\nthreads = 2\nshell = \"echo align\"\n";
+        let err = validate_fix(original, rules_only)
+            .expect_err("multiple dropped sections must be refused");
+        assert!(
+            err.contains("engine") && err.contains("webhook"),
+            "the refusal must name every dropped section: {err}"
+        );
+    }
 
     /// A complete document is always a candidate; a fragment that drops the
     /// original's rules is rejected (issue #1110, audit ledger RB-11).

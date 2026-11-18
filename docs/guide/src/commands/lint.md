@@ -92,7 +92,7 @@ that already carry any `when` gate.
 differently-named wildcards over the same template (`variants/{smp}.vcf`
 vs `variants/{sample}.vcf`) and identical literal paths. The engine does
 not refuse to run: both rules execute and the second to finish silently
-overwrites the first (verified live in v0.32.0 with a run reporting
+overwrites the first (verified live with a run reporting
 success while both colliding rules executed), so downstream rules consume
 the wrong file. The repair is distinct output directories per writer —
 or a `when` gate when the two rules are mutually exclusive alternatives

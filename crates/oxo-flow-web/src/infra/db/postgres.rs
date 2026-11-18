@@ -946,11 +946,22 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn delete_pipeline(&self, id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM pipelines WHERE id = $1")
+        // The revision snapshots (up to 50 per pipeline) have no FK on
+        // pipeline_id, so the pipeline delete alone would orphan them —
+        // read paths 404 while the rows accumulate forever. One transaction
+        // removes both, or neither.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM pipeline_revisions WHERE pipeline_id = $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM pipelines WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -2249,32 +2260,44 @@ impl StorageBackend for PostgresBackend {
             tx.commit().await.map_err(|e| e.to_string())?;
             return Ok((true, usage));
         }
-        // ONE statement checks every limit against the row it updates: the
-        // condition and the increment cannot be split by a concurrent
-        // admission (RB-09).
+        // ONE statement checks every limit on BOTH paths: the DO UPDATE
+        // WHERE guards the increment against the user's existing row, and
+        // the INSERT…SELECT WHERE guards the first-ever row (a plain
+        // VALUES insert would admit an over-limit first run — the exact
+        // drift quota::evaluate rejects). The condition and the increment
+        // cannot be split by a concurrent admission (RB-09).
         let admitted = sqlx::query(
             "INSERT INTO quota_usage \
              (user_id, active_runs, used_threads, used_memory_mb, runs_today, window_started_at) \
-             VALUES ($1, 1, $2, $3, 1, $4) \
+             SELECT $1, 1, $2, $3, 1, $4 \
+             WHERE 1 <= $5 \
+               AND $2 <= $6 \
+               AND $3 <= $7 \
+               AND 1 <= $8 \
              ON CONFLICT (user_id) DO UPDATE SET \
                  active_runs = quota_usage.active_runs + 1, \
                  used_threads = quota_usage.used_threads + EXCLUDED.used_threads, \
                  used_memory_mb = quota_usage.used_memory_mb + EXCLUDED.used_memory_mb, \
-                 runs_today = CASE WHEN quota_usage.window_started_at <= $5 THEN 1 \
+                 runs_today = CASE WHEN quota_usage.window_started_at <= $9 THEN 1 \
                                    ELSE quota_usage.runs_today + 1 END, \
-                 window_started_at = CASE WHEN quota_usage.window_started_at <= $5 \
+                 window_started_at = CASE WHEN quota_usage.window_started_at <= $9 \
                                           THEN EXCLUDED.window_started_at \
                                           ELSE quota_usage.window_started_at END \
-             WHERE quota_usage.active_runs + 1 <= $6 \
-               AND quota_usage.used_threads + EXCLUDED.used_threads <= $7 \
-               AND quota_usage.used_memory_mb + EXCLUDED.used_memory_mb <= $8 \
-               AND (CASE WHEN quota_usage.window_started_at <= $5 THEN 1 \
-                         ELSE quota_usage.runs_today + 1 END) <= $9",
+             WHERE quota_usage.active_runs + 1 <= $10 \
+               AND quota_usage.used_threads + EXCLUDED.used_threads <= $11 \
+               AND quota_usage.used_memory_mb + EXCLUDED.used_memory_mb <= $12 \
+               AND (CASE WHEN quota_usage.window_started_at <= $9 THEN 1 \
+                         ELSE quota_usage.runs_today + 1 END) <= $13",
         )
         .bind(user_id)
         .bind(i64::from(threads))
         .bind(memory_mb as i64)
         .bind(now_ms)
+        // Fresh-row guards: the inserted row's usage is (0,0,0) plus this run.
+        .bind(i64::from(limits.max_concurrent_runs))
+        .bind(i64::from(limits.max_total_threads))
+        .bind(limits.max_total_memory_mb as i64)
+        .bind(i64::from(limits.max_runs_per_day))
         .bind(cutoff)
         .bind(i64::from(limits.max_concurrent_runs))
         .bind(i64::from(limits.max_total_threads))

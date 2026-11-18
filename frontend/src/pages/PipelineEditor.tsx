@@ -789,23 +789,29 @@ export default function PipelineEditor() {
       setActiveProposalId((current) => current ?? existing.id);
       return;
     }
-    const hadPending = proposals.length > 0;
-    setProposals((prev) => [
-      ...prev,
-      {
-        id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        toml: proposed,
-        // Ordinal within the current queue batch; an emptied queue restarts
-        // at 1 so a fresh proposal is still "Proposal 1".
-        seq: prev.reduce((max, p) => Math.max(max, p.seq), 0) + 1,
-        validation: data.validation,
-        pipelineId: data.pipeline_id,
-        receivedAt: Date.now(),
-      },
-    ]);
+    setProposals((prev) => {
+      // Batch-safe dedupe: two `pipeline_ready` payloads delivered in one
+      // React batch both see this updater, so the duplicate is filtered
+      // against the accumulated state — the closure check above alone
+      // would queue it twice.
+      if (prev.some((p) => p.toml === proposed)) return prev;
+      return [
+        ...prev,
+        {
+          id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          toml: proposed,
+          // Ordinal within the current queue batch; an emptied queue restarts
+          // at 1 so a fresh proposal is still "Proposal 1".
+          seq: prev.reduce((max, p) => Math.max(max, p.seq), 0) + 1,
+          validation: data.validation,
+          pipelineId: data.pipeline_id,
+          receivedAt: Date.now(),
+        },
+      ];
+    });
     // Leave the displayed proposal alone; a new arrival only queues.
     session.setRunResult({
-      message: hadPending ? t('editor.aiProposal.stagedMore') : t('editor.aiProposal.staged'),
+      message: proposals.length > 0 ? t('editor.aiProposal.stagedMore') : t('editor.aiProposal.staged'),
       type: 'info',
     });
   };

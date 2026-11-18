@@ -24,6 +24,15 @@ pub(crate) const REPAIR_RERUN_ENV: &str = "OXO_FLOW_REPAIR_RERUN";
 /// not a freshly re-derived one. Every field is conditional — a knob the
 /// child would resolve identically on its own is not forwarded, keeping the
 /// spawned argv minimal.
+///
+/// Plan-shaping flags (review of the v0.32.0 cycle) are forwarded too: the
+/// child is a fresh `run` that replans from the workflow file, so a parent
+/// invocation restricted with `--samples` / `--target` / `--from-rule` /
+/// `--module` / `--profile` would otherwise verify against the WHOLE DAG —
+/// executing hours of rules the user never requested and blaming the AI fix
+/// for unrelated failures. Execution-semantics flags (`--timeout`,
+/// `--retry`, `--max-threads`, `--max-memory`) ride along so the
+/// verification runs under the parent's limits.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RerunContext {
     /// The parent's effective workdir when it differs from the child's
@@ -46,6 +55,26 @@ pub(crate) struct RerunContext {
     /// Forward `--keep-going` when the parent tolerated failures, so a
     /// non-required failure in the rerun does not abort it early.
     pub keep_going: bool,
+    /// The parent's `--samples` entries (plan-shaping: they select the
+    /// fan-out domain).
+    pub samples: Vec<String>,
+    /// The parent's `--target` rules (plan-shaping: they select the
+    /// execution closure).
+    pub targets: Vec<String>,
+    /// The parent's `--module` selections.
+    pub modules: Vec<String>,
+    /// The parent's `--from-rule` (downstream-closure selection).
+    pub from_rule: Option<String>,
+    /// The parent's `--profile` (fills config keys before planning).
+    pub profile: Option<String>,
+    /// The parent's per-job `--timeout` when non-default.
+    pub timeout: Option<String>,
+    /// The parent's `--retry` count when non-default.
+    pub retry: Option<u32>,
+    /// The parent's `--max-threads` cap when non-default.
+    pub max_threads: Option<u32>,
+    /// The parent's `--max-memory` cap when non-default.
+    pub max_memory: Option<u64>,
 }
 
 /// Outcome of one verification-rerun decision (issue #1164).
@@ -122,6 +151,42 @@ pub(crate) fn build_rerun_args(
     }
     if extra.keep_going {
         args.push("--keep-going".to_string());
+    }
+    for sample in &extra.samples {
+        args.push("--samples".to_string());
+        args.push(sample.clone());
+    }
+    for target in &extra.targets {
+        args.push("--target".to_string());
+        args.push(target.clone());
+    }
+    for module in &extra.modules {
+        args.push("--module".to_string());
+        args.push(module.clone());
+    }
+    if let Some(rule) = &extra.from_rule {
+        args.push("--from-rule".to_string());
+        args.push(rule.clone());
+    }
+    if let Some(profile) = &extra.profile {
+        args.push("--profile".to_string());
+        args.push(profile.clone());
+    }
+    if let Some(timeout) = &extra.timeout {
+        args.push("--timeout".to_string());
+        args.push(timeout.clone());
+    }
+    if let Some(retry) = extra.retry {
+        args.push("--retry".to_string());
+        args.push(retry.to_string());
+    }
+    if let Some(threads) = extra.max_threads {
+        args.push("--max-threads".to_string());
+        args.push(threads.to_string());
+    }
+    if let Some(memory) = extra.max_memory {
+        args.push("--max-memory".to_string());
+        args.push(memory.to_string());
     }
     args.extend(extra.config_args.iter().cloned());
     args
@@ -349,7 +414,11 @@ mod tests {
 
     /// The rerun argv contract (review R3): fixed flags first, forwarded
     /// parent context conditionally, override tokens LAST (the overrides
-    /// positional is trailing_var_arg — nothing may follow them).
+    /// positional is trailing_var_arg — nothing may follow them). The
+    /// plan-shaping flags (`--samples`/`--target`/`--module`/`--from-rule`/
+    /// `--profile`) and the execution-semantics caps ride along so the
+    /// verification rerun replans the SAME plan the parent ran — a
+    /// restricted parent must never "verify" by executing the whole DAG.
     #[test]
     fn rerun_argv_pins_forwarded_parent_context() {
         let ctx = RerunContext {
@@ -358,6 +427,15 @@ mod tests {
             provenance: true,
             jobs: Some(8),
             keep_going: true,
+            samples: vec!["first:10".into(), "tumor_1".into()],
+            targets: vec!["align".into()],
+            modules: vec!["qc".into()],
+            from_rule: Some("trim".into()),
+            profile: Some("small".into()),
+            timeout: Some("3600".into()),
+            retry: Some(2),
+            max_threads: Some(16),
+            max_memory: Some(32768),
         };
         let args = build_rerun_args(
             Path::new("/w/wf.oxoflow"),
@@ -379,6 +457,26 @@ mod tests {
                 "--jobs",
                 "8",
                 "--keep-going",
+                "--samples",
+                "first:10",
+                "--samples",
+                "tumor_1",
+                "--target",
+                "align",
+                "--module",
+                "qc",
+                "--from-rule",
+                "trim",
+                "--profile",
+                "small",
+                "--timeout",
+                "3600",
+                "--retry",
+                "2",
+                "--max-threads",
+                "16",
+                "--max-memory",
+                "32768",
                 "threads=8",
                 "--api-token",
                 "secret",

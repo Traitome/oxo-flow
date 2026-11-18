@@ -463,26 +463,32 @@ pub(crate) async fn handle_run_failure_abort(
                                         // from a clean pass.
                                         ctx.json_summary.emit(
                                             "completed",
-                                            // Final-state counters: every rule
-                                            // the parent ran (or failed)
-                                            // completed during the verified
-                                            // rerun, so nothing is failed or
-                                            // blocked anymore.
+                                            // Final-state counters, read from
+                                            // the CHILD's checkpoint — the
+                                            // parent's atomics describe the
+                                            // pre-repair state. The child
+                                            // cleared `failed_rules` at start
+                                            // (`--resume-failed`) and exited 0
+                                            // (zero REQUIRED failures), so
+                                            // `completed_rules` is the true
+                                            // final completed set — including
+                                            // rules the parent had blocked or
+                                            // failed — and whatever sits in
+                                            // `failed_rules` now is exactly the
+                                            // child's tolerated non-required
+                                            // failures. `skipped` stays the
+                                            // parent's: the rerun re-gates
+                                            // when-conditions, not the parent's
+                                            // skip verdicts, and nothing
+                                            // remains blocked once the child
+                                            // replanned and exited 0.
                                             &RunCounts {
-                                                succeeded: ctx
-                                                    .success_count
-                                                    .load(std::sync::atomic::Ordering::Relaxed)
-                                                    + ctx
-                                                        .fail_count
-                                                        .load(std::sync::atomic::Ordering::Relaxed)
-                                                    + ctx
-                                                        .non_required_fail_count
-                                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                                succeeded: final_ck.completed_rules.len(),
                                                 skipped: ctx
                                                     .skipped_count
                                                     .load(std::sync::atomic::Ordering::Relaxed),
                                                 failed: 0,
-                                                non_required_failed: 0,
+                                                non_required_failed: final_ck.failed_rules.len(),
                                                 blocked: 0,
                                             },
                                             rule_resource_rows(&final_ck),

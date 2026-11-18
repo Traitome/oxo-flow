@@ -126,6 +126,17 @@ pub async fn oauth_test_backend() -> std::sync::Arc<dyn StorageBackend> {
     .execute(&pool)
     .await
     .expect("users schema");
+    // The OAuth callback records a REQUIRED sign-in audit row (WEB-15), so
+    // the shared test schema must carry the audit table the production
+    // bootstrap always creates.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
+         action TEXT NOT NULL, target TEXT NOT NULL, result TEXT NOT NULL DEFAULT 'success', \
+         metadata TEXT, timestamp TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("audit_logs schema");
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
          created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",

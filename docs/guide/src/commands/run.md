@@ -1632,10 +1632,12 @@ default — SLURM's `--export=ALL`, PBS/SGE `-V`, LSF `-env` — which would
 hand the credentials on the submit host to every rule running on the node.
 The generated script therefore wraps both the rule command and the array
 dispatch line in an explicit `env -i` prefix that admits only the
-allowlisted names and the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, so
-the isolated environment a rule sees is the same on the cluster as it is
-locally. Declared per-rule `envvars` are re-exported by the command itself
-and are unaffected.
+allowlisted names, the operator's `OXO_FLOW_ENV_PASSTHROUGH` list, and —
+for a rule running through a local container runtime — the exact
+container-daemon names in `CONTAINER_DAEMON_ENV_VARS` (the same admission
+the local executor makes, issue #1173), so the isolated environment a rule
+sees is the same on the cluster as it is locally. Declared per-rule
+`envvars` are re-exported by the command itself and are unaffected.
 
 This is done in the script body rather than through a submit flag because
 SLURM rejects `--export=NONE` combined with an explicit list, and the other
@@ -1645,7 +1647,7 @@ implementation. Two caveats to note:
 
 - A configured `[engine]` shell prelude rides inside the wrapped command
   (the same path the local executor uses), so it executes *inside* the
-  isolated `sh -c` and sees the same allowlisted environment as the rule
+  isolated `bash -c` and sees the same allowlisted environment as the rule
   body.
 - Remote dispatch paths (Kubernetes, AWS Batch, GCP Batch) do not forward
   the submit host's environment into a job at all: a cloud job's environment
@@ -1735,7 +1737,7 @@ the config surface.
 verify loop. AI can also activate implicitly: a workflow with
 `[ai] enabled = true` runs recovery on failure without the flag. The write
 authorization comes from `[ai] auto_fix` (see
-[workflow-format](../reference/workflow-format.md#ai--ai-companion-settings));
+[workflow-format](../reference/workflow-format.md#ai-ai-companion-settings));
 in every mode the model's own safety verdict and full workflow validation
 gate the write, and an unauthorized or refused fix never touches the file.
 

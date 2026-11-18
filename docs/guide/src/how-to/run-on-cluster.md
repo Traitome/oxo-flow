@@ -465,9 +465,12 @@ On clusters, the scheduler enforces resources based on the generated directives.
     value through the backend's own secret channel — a Kubernetes Secret
     named `oxoflow-secrets` (one key per variable name), the AWS Batch job
     definition's `containerProperties.secrets`, or GCP Batch
-    `taskSpec.environment.secretVariables` — or the reference expands empty
-    and the rule fails. Details:
-    [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables).
+    `taskSpec.environment.secretVariables` (the engine emits those entries
+    for you; point each name at its Secret Manager path with
+    `OXO_FLOW_SECRET_REFS`, a `NAME=REFERENCE` map — see
+    [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables)) —
+    or the reference expands empty
+    and the rule fails.
     HPC scheduler scripts (SLURM/PBS/SGE/LSF) route the same way: the driver
     writes a private `0o600` env file beside the run holding only the
     references each rule uses, and the generated script sources it inside the
@@ -496,9 +499,11 @@ auth, `BatchMode`).
 !!! warning "Result pulls are validated before a run can finalize"
     The pulled result stream is parsed by oxo-flow's own archive reader,
     not the host `tar`. A member whose path is absolute or contains `..`,
-    a symlink or hard link whose target is absolute or contains any `..` (extraction targets are created empty or from regular files only, so no pre-existing symlink can be traversed)
+    a symlink or hard link whose target is absolute or contains any `..`
     component (even one that would "cancel out" lexically — it can escape
-    through a symlinked path segment), or a member type other than
+    through a symlinked path segment; extraction targets are created empty
+    or from regular files only, so no pre-existing symlink can be
+    traversed), or a member type other than
     file/directory/link rejects the whole extraction and fails the run
     with the offending member named — nothing is written outside the
     local workdir. After extraction every member is re-checked on disk.

@@ -330,6 +330,7 @@ jobs:
             desktop:
               - 'crates/oxo-flow-desktop/**'
               - 'scripts/desktop-smoke.sh'
+              - 'Makefile'
             docker:
               - 'Dockerfile'
               - 'Dockerfile.release'

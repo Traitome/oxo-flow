@@ -318,9 +318,13 @@ fn cli_legacy_command_hint_survives_global_flags() {
 // ─── ai explain degraded mode (issue #142 M10) ────────────────────────
 
 /// A dead provider endpoint must degrade to the deterministic skeleton
-/// and exit 0, not hard-fail: `OPENAI_BASE_URL` pointing at a dead local
-/// port makes the provider call fail, and the explain output must still
-/// carry the verified grounding (--json, no prose fields).
+/// and exit 0, not hard-fail: an explicit `OXO_FLOW_AI_PROVIDER=openai`
+/// with a dummy credential and `OPENAI_BASE_URL` pointing at a dead local
+/// port makes the provider call fail (connection refused, not
+/// "unconfigured"), and the explain output must still carry the verified
+/// grounding (--json, no prose fields). `oxo_flow_cmd()` redirects the
+/// saved-config tier, so a developer's working `ai_config.json` cannot
+/// answer the call instead.
 #[test]
 fn cli_ai_explain_degrades_when_provider_unreachable() {
     let dir = tempfile::tempdir().unwrap();
@@ -334,6 +338,7 @@ fn cli_ai_explain_degrades_when_provider_unreachable() {
     let output = oxo_flow_cmd()
         .args(["ai", "explain", wf.to_str().unwrap(), "--json"])
         .env("OXO_FLOW_AI_PROVIDER", "openai")
+        .env("OPENAI_API_KEY", "dummy-key-for-unreachable-endpoint")
         .env("OPENAI_BASE_URL", "http://127.0.0.1:1")
         .current_dir(dir.path())
         .output()

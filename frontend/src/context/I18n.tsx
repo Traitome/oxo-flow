@@ -771,6 +771,11 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'editor.dryRunHint': 'Preview the execution plan without running anything',
     'editor.runHint': 'Switch to Canvas mode and run this pipeline',
     'editor.tomlCrashed': 'The TOML editor crashed and was reset. Switch modes or reload to recover — your edits above are preserved in the pipeline state.',
+    'identity.unconfirmedTitle': 'Session not confirmed',
+    'identity.unconfirmedBody': 'We could not confirm who is signed in, so no drafts are shown.',
+    'identity.unconfirmedKept': 'Your saved work is kept — it returns as soon as the server confirms your account.',
+    'identity.retry': 'Retry',
+    'identity.signInAgain': 'Sign in again',
   },
   zh: {
     'nav.dashboard': '仪表盘',
@@ -1527,6 +1532,11 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'editor.dryRunHint': '预览执行计划，不真正运行',
     'editor.runHint': '切换到画布模式并运行该流程',
     'editor.tomlCrashed': 'TOML 编辑器已崩溃并重置。请切换模式或重新加载以恢复 — 你上方的编辑内容已保留在流程状态中。',
+    'identity.unconfirmedTitle': '会话未确认',
+    'identity.unconfirmedBody': '无法确认当前登录身份，因此不显示任何草稿。',
+    'identity.unconfirmedKept': '已保存的内容会保留 — 服务器确认你的账户后会立即恢复。',
+    'identity.retry': '重试',
+    'identity.signInAgain': '重新登录',
   },
 };
 

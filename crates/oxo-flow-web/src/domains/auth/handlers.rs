@@ -896,6 +896,21 @@ async fn oauth_callback_inner(
             )
         })?;
 
+    // Same handler-owned REQUIRED row as the password login (WEB-15 /
+    // #1199): the middleware only sees this pre-auth request, so its
+    // success row would be attributed to the `default` pseudo-user
+    // (audit.rs skips this path for exactly that reason). This handler
+    // knows the identity the session was minted for.
+    crate::audit::audit_required_with_hint(
+        &oauth_user_id,
+        "POST /api/auth/oauth/callback",
+        "/api/auth/oauth/callback",
+        "success",
+        Some(&serde_json::json!({ "status": 200 }).to_string()),
+        Some(LOGIN_AUDIT_SUGGESTION_HINT),
+    )
+    .await?;
+
     Ok(Json(result))
 }
 
@@ -1432,5 +1447,21 @@ mod tests {
             .expect("session lookup")
             .expect("the callback persisted a session row");
         assert_eq!(session.user_id, "oauth:stub:0000-0000-0000-0000");
+
+        // The REQUIRED success row is handler-owned (WEB-15) and names the
+        // identity that signed in — not the middleware's `default`
+        // pseudo-user, which only sees the pre-auth request.
+        let logs = backend
+            .list_recent_audit_logs(50)
+            .await
+            .expect("audit trail");
+        let row = logs
+            .iter()
+            .find(|row| row.action == "POST /api/auth/oauth/callback" && row.result == "success")
+            .expect("the callback must record its REQUIRED success row");
+        assert_eq!(
+            row.user_id, "oauth:stub:0000-0000-0000-0000",
+            "the OAuth sign-in audit row must carry the real actor"
+        );
     }
 }

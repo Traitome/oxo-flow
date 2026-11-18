@@ -218,10 +218,19 @@ PY
 # Prose that references the project version: README, the release Dockerfile's
 # usage example, and every docs page (each command page carries the version
 # banner in its sample output).
+#
+# BUMP_SKIP lists docs that must never be version-rewritten: pages carrying
+# captured third-party transcripts whose version strings merely happen to
+# equal a release version. The 16S/QIIME2 gallery quotes a scikit-learn
+# artifact-mismatch error — the v0.32.0 bump rewrote that captured message
+# into a claim about a version scikit-learn never shipped.
 text_files() {
+  local skip="$ROOT/docs/guide/src/gallery/16s-qiime2.md"
   if [ -f "$ROOT/README.md" ]; then printf '%s\n' "$ROOT/README.md"; fi
   if [ -f "$ROOT/Dockerfile.release" ]; then printf '%s\n' "$ROOT/Dockerfile.release"; fi
-  find "$ROOT/docs/guide/src" -name '*.md' 2>/dev/null | LC_ALL=C sort
+  find "$ROOT/docs/guide/src" -name '*.md' 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+    [ "$f" = "$skip" ] || printf '%s\n' "$f"
+  done
 }
 
 patch_text_refs() {

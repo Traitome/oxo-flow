@@ -920,11 +920,20 @@ pub async fn create_run(
         // Remote execution: the local workdir is the staging area; the
         // remote host runs the CLI and its results are pulled back.
         if let Some(cid) = cluster_id.as_deref() {
-            let cluster_row: Option<models::ClusterRow> = backend
-                .get_cluster(cid)
-                .await
-                .map_err(|e| db_err(format!("DB error loading cluster {cid}: {e}")))?
-                .filter(|c| c.enabled);
+            let cluster_row: Option<models::ClusterRow> = match backend.get_cluster(cid).await {
+                Ok(row) => row.filter(|c| c.enabled),
+                Err(e) => {
+                    // Same ghost-claim hazard as the CLUSTER_NOT_FOUND path
+                    // below: the run row exists but nothing will execute,
+                    // so the reservation is released before the 500.
+                    tracing::error!(
+                        "DB error loading cluster {cid} for run {}: {e}",
+                        resp.run_id
+                    );
+                    release_spawn_budget(backend.as_ref(), &resp.run_id).await;
+                    return Err(db_err(format!("DB error loading cluster {cid}: {e}")));
+                }
+            };
             let Some(cluster_row) = cluster_row else {
                 // The run row exists but nothing will execute: release the
                 // reservation before the 404 leaves a ghost claim behind.
