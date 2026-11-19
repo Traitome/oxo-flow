@@ -398,6 +398,52 @@ conda/mamba (they are not store-managed).
 
 ---
 
+## Sensitive-value recoverability contract
+
+Rules that route a sensitive value (a `{config.<key>}` whose value is in the
+run's sensitive set — see the `[config]` sensitive-key mechanism) never put the
+value into any artifact a scheduler, a co-tenant, or a later process can read
+back. The engine materializes the value once, into a `0o600` env file named
+`secrets.env` inside the rule's private job directory, and the job shell sources
+it inside an `env -i` wrapper. Everything else carries only the **reference**
+name (`OXO_FLOW_SENSITIVE_0`).
+
+Guaranteed value-free (issue #1258; each is asserted by a test over the whole
+run tree, reading every file as bytes):
+
+- the scheduler-visible job script and its per-array command files — the value
+  is replaced by `${OXO_FLOW_SENSITIVE_0}`, the env-file path, and the `env -i`
+  wrapper;
+- the mock-scheduler state directory (the scheduler's own copy of the script);
+- `status.json`, `events.jsonl`, and every other run-directory artifact;
+- the container-wrapper command (docker/singularity): the reference is
+  forwarded **by name** (`-e OXO_FLOW_SENSITIVE_0`, plus the
+  `APPTAINERENV_`/`SINGULARITYENV_` aliases for singularity), never by value;
+- cloud dispatch bodies (k8s/aws/gcp): the job sees only the routed
+  `OXO_FLOW_SENSITIVE_<n>` reference, mapped to a secret store on the operator
+  side (`OXO_FLOW_SECRET_REFS`).
+
+The env file itself is removed as soon as the driver observes the job terminal,
+and a startup/exit backstop sweeps any env file left behind by a killed
+predecessor — so a **restart** (resume) never leaves a recoverable value, and a
+**cancellation** (interrupt) sweeps on the way out. Both paths are covered by
+tests over the whole run tree.
+
+**Docker bind-mount caveat (#1177).** A literal Docker bind mount whose *source
+path* contains the value cannot be expressed without the container runtime
+seeing that path — the runtime must be handed the expanded source to mount it.
+That is a deliberate, documented limitation of literal bind mounts, not a leak
+in the routing mechanism; the reference-based route (env file + `env -i`) is the
+supported path for sensitive values. Prefer passing sensitive data through the
+routed reference, not through a bind-mount source path.
+
+The live end-to-end campaign across real schedulers and cloud backends is
+tracked separately (CL-05 / issue #1158); the renderer and run-tree guarantees
+above are unit- and integration-verified in
+`crates/oxo-flow-core/src/backend/`.
+
+---
+
 ## See Also
 
 - [Environment Management tutorial](../tutorials/environment-management.md) — getting started
