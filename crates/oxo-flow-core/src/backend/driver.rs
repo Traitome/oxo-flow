@@ -4575,6 +4575,51 @@ shell = "echo asm > out/{assembler}.txt"
 
     // ─── issue #1120 / RB-12: HPC secret injection via a private env file ──
 
+    /// Recursively walk `dir` and return the first file whose raw bytes
+    /// contain `marker` (issue #1258). Reads every file as BYTES so binary
+    /// artifacts — checkpoints, scheduler wire files, archives — are covered
+    /// too, not only the text scripts a hand-written `!contains` check would
+    /// reach. Symlinks are not followed; the walk is iterative so a deep tree
+    /// cannot overflow the stack.
+    fn find_marker_in_tree(dir: &Path, marker: &str) -> Option<PathBuf> {
+        let needle = marker.as_bytes();
+        if needle.is_empty() {
+            return None;
+        }
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(path) = stack.pop() {
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&path) {
+                    for entry in entries.flatten() {
+                        stack.push(entry.path());
+                    }
+                }
+            } else if meta.is_file()
+                && let Ok(bytes) = std::fs::read(&path)
+                && bytes.windows(needle.len()).any(|w| w == needle)
+            {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Assert `marker` is recoverable from nowhere under `dir`, naming the
+    /// offending path when it is. The single scanner the RB-12 recoverability
+    /// tests (issue #1258) funnel through — a walk of the WHOLE run directory
+    /// catches artifacts a per-file assertion would miss.
+    fn assert_marker_absent(dir: &Path, marker: &str, what: &str) {
+        if let Some(hit) = find_marker_in_tree(dir, marker) {
+            panic!(
+                "{what}: marker `{marker}` is recoverable from {}",
+                hit.display()
+            );
+        }
+    }
+
     /// A single-rule HPC plan whose command embeds a `sensitive = true`
     /// value, routed before the wrapper (the production ordering).
     fn secret_plan(workdir: &Path, sentinel: &str, shell: &str, output: &str) -> ScheduledPlan {
@@ -4899,6 +4944,204 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
         assert!(
             !sched.contains(sentinel),
             "sentinel leaked into the scheduler's array script copy: {sched}"
+        );
+    }
+
+    /// Artifact inspection (ledger RB-12, issue #1258): after a normal HPC
+    /// run, the sentinel is recoverable from NOWHERE in the run directory or
+    /// the scheduler's own state directory — checked by recursively reading
+    /// every file as bytes, so a stray copy in any artifact (job script,
+    /// status, events, checkpoint, scheduler wire file) fails the test with
+    /// the offending path named. This is the exit-evidence bullet RB-12 was
+    /// still missing: "artifact inspection ... prove no secret is recoverable",
+    /// not a per-file `!contains` on the files the author happened to think of.
+    #[test]
+    fn inspected_run_tree_holds_no_recoverable_secret() {
+        let sentinel = "SENTINEL_INSPECTED_VALUE_N5W";
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = secret_plan(
+            fx.workdir.path(),
+            sentinel,
+            "mkdir -p out && printf '%s' '{config.api_token}' > out/token.txt",
+            "out/token.txt",
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[sentinel.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Success);
+
+        // The route is still real: the value reached the command.
+        let token = std::fs::read_to_string(fx.workdir.path().join("out/token.txt")).unwrap();
+        assert_eq!(token, sentinel);
+
+        // Whole-tree inspection, not a chosen-file list.
+        assert_marker_absent(fx.run_dir.path(), sentinel, "run directory after success");
+        assert_marker_absent(fx._state.path(), sentinel, "mock scheduler state");
+
+        // The container-wrapper and cloud-adapter renderers are covered by
+        // this same value-absence contract in `crate::backend::mod.rs`
+        // (`build_with_sensitive_routes_before_the_container_wrapper` and the
+        // cloud-body tests): the wrapper forwards the reference by NAME only.
+        // The one deliberate exception is a literal docker bind-mount whose
+        // SOURCE PATH contains the value (issue #1177) — a bind mount cannot
+        // be expressed without the runtime seeing the path; that is the
+        // documented docker-only caveat, not a regression. Those are unit
+        // renderer tests; the live end-to-end campaign is CL-05 / #1158.
+    }
+
+    /// Restart path (ledger RB-12, issue #1258): a run directory left behind
+    /// by a killed driver holds a populated env file AND a checkpoint; the
+    /// next driver sweeps the stale secret before any submission, and the
+    /// whole tree is value-free afterwards.
+    #[test]
+    fn restarted_run_tree_sweeps_seeded_secret_and_checkpoint() {
+        let stale_secret = "SENTINEL_STALE_VALUE_R8Q";
+        let fresh_secret = "SENTINEL_FRESH_VALUE_T2K";
+        let fx = setup();
+
+        // Simulate the crashed predecessor: a populated env file (the ONLY
+        // artifact the route ever puts the value into) plus the checkpoint it
+        // left behind, under the same run directory the new driver reuses.
+        // The checkpoint is seeded with ordinary state — the real checkpoint
+        // never carries the routed value, and this test must not manufacture a
+        // leak the engine cannot produce.
+        let stale_dir = fx.run_dir.path().join("jobs/leak_probe");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        std::fs::write(
+            stale_dir.join(crate::backend::SENSITIVE_ENV_FILE_NAME),
+            format!("export OXO_FLOW_SENSITIVE_0='{stale_secret}'\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            fx.run_dir.path().join("checkpoint.json"),
+            "{\"rules\":{\"leak_probe\":{\"status\":\"Running\"}}}\n",
+        )
+        .unwrap();
+
+        // The restart re-runs the rule with a fresh sentinel; the driver's
+        // startup sweep must remove the predecessor's env file first.
+        let (d, _) = driver(&fx);
+        let mut plan = secret_plan(
+            fx.workdir.path(),
+            fresh_secret,
+            "mkdir -p out && printf '%s' '{config.api_token}' > out/token.txt",
+            "out/token.txt",
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[fresh_secret.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Success);
+
+        // Neither the predecessor's stale value nor the new value survives
+        // anywhere in the reused tree (the checkpoint file the test seeded is
+        // on the run's sweep path too).
+        assert_marker_absent(fx.run_dir.path(), stale_secret, "restarted run tree");
+        assert_marker_absent(fx.run_dir.path(), fresh_secret, "restarted run tree");
+        assert!(
+            !stale_dir
+                .join(crate::backend::SENSITIVE_ENV_FILE_NAME)
+                .exists(),
+            "the predecessor's env file must be swept before resubmission"
+        );
+    }
+
+    /// Cancellation path, whole-tree form (ledger RB-12, issue #1258):
+    /// interrupt a live job and prove the value is recoverable from nowhere
+    /// — not only the script and env file the narrower cancel test checks.
+    #[test]
+    fn cancelled_run_tree_holds_no_recoverable_secret() {
+        let sentinel = "SENTINEL_CANCEL_TREE_VALUE_B4M";
+        let fx = setup();
+        let mut plan = secret_plan(
+            fx.workdir.path(),
+            sentinel,
+            "mkdir -p out && test -n '{config.api_token}' && touch out/started && sleep 30",
+            "out/started",
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None::<CancelSignal>);
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(fixtures_dir())
+                .with_env("MOCK_SCHEDULER_DIR", &fx._state.path().to_string_lossy()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: Some(cancel_rx),
+                keep_going: false,
+            },
+        );
+        let signaller = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            cancel_tx
+                .send(Some(CancelSignal {
+                    signal_name: "SIGINT",
+                    signum: 2,
+                }))
+                .unwrap();
+        });
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[sentinel.to_string()],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap_err();
+        signaller.join().unwrap();
+        assert!(
+            matches!(err, OxoFlowError::Cancelled { .. }),
+            "expected an interrupt, got: {err}"
+        );
+
+        assert_marker_absent(fx.run_dir.path(), sentinel, "cancelled run tree");
+        assert_marker_absent(
+            fx._state.path(),
+            sentinel,
+            "mock scheduler state after cancel",
         );
     }
 }
