@@ -7,7 +7,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bot, FileCode2, PlayCircle, Sparkles, Database, ShieldCheck, CheckCircle2, Cpu, FileSpreadsheet } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template, RuntimeMetrics } from '../api/types';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
@@ -41,7 +41,7 @@ export default function Dashboard() {
 
   const loadDashboard = useCallback(() => {
     const fail = (what: string) => (err: unknown) => {
-      setLoadError(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+      setLoadError(describeApiError(err, what));
     };
     // A successful health probe clears the banner asynchronously (sync
     // setState inside the effect trips the cascading-render rule).

@@ -6,11 +6,24 @@
 //! `crate::server::build_router` is present in the generated spec.
 //!
 //! Adding a new API route REQUIRES:
-//!   1. a `#[utoipa::path(...)]` annotation on the handler, and
-//!   2. an entry in [`ALL_ROUTES`] below (the test fails otherwise).
+//!   1. a `#[utoipa::path(...)]` annotation on the handler,
+//!   2. an entry in the `paths(...)` list of `src/openapi.rs` (the spec only
+//!      documents annotated handlers that are listed there), and
+//!   3. an entry in [`ALL_ROUTES`] below (the test fails otherwise).
+//!
+//! `ALL_ROUTES` itself is mechanically verified against the router source:
+//! [`router_api_paths_from_source`] extracts every `path` literal passed to
+//! `.route(...)` in `src/server.rs`, so a route registered without a listing
+//! (or a stale listing for a removed route) fails even when both sides would
+//! otherwise drift consistently. axum does not expose route enumeration, so
+//! the source scan is the mechanical truth. Dynamic (`&format!(...)`) mount
+//! points are the documented exception: [`router_api_paths_from_source`]
+//! collects them separately and the gate pins the exact expected set.
 
 /// Every API path registered in `crate::server::build_router`, in the
-/// router's own order. Each entry must exist in the generated spec.
+/// router's own order. Each entry must exist in the generated spec, and the
+/// set must match the `.route(...)` literals in `src/server.rs` exactly
+/// (mechanically verified — see [`router_api_paths_from_source`]).
 const ALL_ROUTES: &[&str] = &[
     // workflow
     "/api/pipelines/parse",
@@ -66,6 +79,7 @@ const ALL_ROUTES: &[&str] = &[
     "/api/templates/{id}",
     // auth
     "/api/auth/login",
+    "/api/auth/logout",
     "/api/auth/me",
     "/api/users",
     "/api/users/{id}",
@@ -119,6 +133,105 @@ const ALL_ROUTES: &[&str] = &[
     // hpc
     "/api/hpc",
 ];
+
+/// Dynamic mount points registered with a computed path (`&format!(...)`).
+/// These cannot be extracted as literals; the gate pins the exact expected
+/// set so a new dynamic registration must be acknowledged here (and its
+/// concrete paths hand-listed in [`ALL_ROUTES`]).
+const DYNAMIC_MOUNT_POINTS: &[&str] = &["&format!(\"{base}/\")"];
+
+/// Extract every path passed to `.route(...)` in `src/server.rs` by scanning
+/// the source text. Returns `(literal paths, dynamic path expressions)` —
+/// the former filtered to API routes by the caller, the latter pinned by
+/// [`DYNAMIC_MOUNT_POINTS`].
+fn router_route_path_literals() -> (Vec<String>, Vec<String>) {
+    let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/server.rs"));
+    let mut literals = Vec::new();
+    let mut dynamic = Vec::new();
+
+    for (idx, _) in src.match_indices(".route(") {
+        let rest = &src[idx + ".route(".len()..];
+        let rest = rest.trim_start();
+        if let Some(quoted) = rest.strip_prefix('"') {
+            // String literal path: read to the closing quote (paths never
+            // contain escapes; `{id}` params are plain braces).
+            let end = quoted.find('"').expect("route path literal is terminated");
+            literals.push(quoted[..end].to_string());
+        } else {
+            // Dynamic expression: capture up to the argument-separating
+            // comma at paren depth 0 for the pinned-set assertion.
+            let mut depth = 0usize;
+            let end = rest
+                .char_indices()
+                .find(|(_, c)| match c {
+                    '(' | '[' => {
+                        depth += 1;
+                        false
+                    }
+                    ')' | ']' => {
+                        depth = depth.saturating_sub(1);
+                        false
+                    }
+                    ',' if depth == 0 => true,
+                    _ => false,
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(rest.len());
+            dynamic.push(rest[..end].trim().to_string());
+        }
+    }
+    (literals, dynamic)
+}
+
+/// The gate's foundation: the mechanically extracted `.route(...)` literals
+/// must equal [`ALL_ROUTES`] exactly (both directions), and dynamic mounts
+/// must be the documented set. This is what makes "the hand list drifted
+/// consistently on both sides" impossible to hide behind.
+#[test]
+fn all_routes_matches_the_router_source() {
+    let (literals, dynamic) = router_route_path_literals();
+
+    let mut dynamic_sorted = dynamic.clone();
+    dynamic_sorted.sort();
+    let mut expected_dynamic: Vec<&str> = DYNAMIC_MOUNT_POINTS.to_vec();
+    expected_dynamic.sort_unstable();
+    assert_eq!(
+        dynamic_sorted, expected_dynamic,
+        "dynamic route mount points changed — update DYNAMIC_MOUNT_POINTS (and hand-list \
+         any new API paths in ALL_ROUTES)"
+    );
+
+    // API routes = literals under /api (static SPA assets are outside this
+    // gate's scope by design).
+    let mut source_api: Vec<String> = literals
+        .into_iter()
+        .filter(|p| p.starts_with("/api"))
+        .collect();
+    source_api.sort();
+    source_api.dedup();
+
+    let mut listed: Vec<&str> = ALL_ROUTES.to_vec();
+    listed.sort_unstable();
+
+    let missing: Vec<&str> = source_api
+        .iter()
+        .filter(|p| !listed.contains(&p.as_str()))
+        .map(String::as_str)
+        .collect();
+    let stale: Vec<&str> = listed
+        .iter()
+        .filter(|p| !source_api.iter().any(|s| s == *p))
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "ALL_ROUTES does not match src/server.rs route registrations.\n\
+         registered but unlisted (add to ALL_ROUTES):\n  {}\n\
+         listed but not registered (remove from ALL_ROUTES):\n  {}",
+        missing.join("\n  "),
+        stale.join("\n  ")
+    );
+}
 
 /// The spec is mode-aware: `/api/hpc` is mounted only in hpc mode, so only
 /// that mode may advertise it (a generated client would otherwise call a

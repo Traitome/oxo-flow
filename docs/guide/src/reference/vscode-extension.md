@@ -66,7 +66,7 @@ covers:
 
 - top-level tables and their properties (`[workflow]`, `[ai]`,
   `[wildcard_constraints]`, `[cluster]`, …)
-- all 53 `[[rules]]` properties, with hover documentation for each
+- every `[[rules]]` property, with hover documentation for each
 - enum values where the schema constrains them (rule `checksum`, cluster
   `backend`, config `type`, …)
 - `depends_on` / `extends` complete **rule names defined in the current
@@ -191,8 +191,8 @@ title bar.
 | Open Settings | jumps to `oxo-flow.executablePath` in VS Code settings |
 | Report Issue / Suggest Improvement | opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached) |
 
-The core pipeline commands (Run, Run At Target…, Dry Run, Validate, Lint,
-Format Document, View DAG) surface in the command palette only while an
+The core pipeline commands (Run Rule Targets…, Run At Target…, Dry Run,
+Validate, Lint, Format Document, Show DAG Graph) surface in the command palette only while an
 `.oxoflow` editor is active, so the palette stays quiet in other files; the
 remaining commands (Resume, Generate with AI, Clean, Status, AI Status,
 Export Schema, Open Docs/Settings, Report Issue, command picker) are always

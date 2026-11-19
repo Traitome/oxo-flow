@@ -3,7 +3,7 @@ import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
   ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
-  RunItem, RunList, Diagnostics, RetryPlan, RunResponse,
+  RunList, RunDetail, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiConfigEffective, AiExplainResponse,
   Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
   ReferenceStatus, AuditLogResponse,
@@ -279,7 +279,7 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return get<RunList>(`/api/runs${suffix}`);
   },
-  getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
+  getRun: (id: string) => get<RunDetail>(`/api/runs/${id}`),
   getDagStatus: (id: string, signal?: AbortSignal) => get<DagStatus>(`/api/runs/${id}/dag-status`, signal),
   getDiagnostics: (id: string, signal?: AbortSignal) => get<Diagnostics>(`/api/runs/${id}/diagnostics`, signal),
   getRunLogs: (id: string, signal?: AbortSignal) => getText(`/api/runs/${id}/logs`, signal),
@@ -356,7 +356,9 @@ export const api = {
  * short-lived single-use ticket replaces the session token that used to
  * travel as ?token= and leak into proxy logs.
  */
-export async function fetchEventTicket(): Promise<string> {
+// Internal: the SSE handshake is the only consumer — the ticket must
+// never be persisted or logged, so it is not part of the public client API.
+async function fetchEventTicket(): Promise<string> {
   const { ticket } = await post<{ ticket: string; expires_in_secs: number }>('/api/events/ticket', {});
   return ticket;
 }

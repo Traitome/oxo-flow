@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { KnowledgeTool } from '../api/types';
 import { useI18n } from '../context/I18n';
 
@@ -40,7 +40,7 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
         setTotal(res.total);
       } catch (e: unknown) {
         if (seq !== searchSeq.current) return;
-        setError(e instanceof Error ? e.message : t('toolPalette.error'));
+        setError(describeApiError(e, t('toolPalette.error')));
         setTools([]);
         setTotal(null);
       } finally {

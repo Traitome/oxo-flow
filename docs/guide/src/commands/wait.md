@@ -17,6 +17,8 @@ oxo-flow wait [--workdir DIR] [--checkpoint PATH] [--timeout SECS] [--interval S
 |---|---|---|
 | `--workdir` | current directory | Run directory to watch. A run holds `.oxo-flow/lock`; the background pid file is `.oxo-flow/background.pid`; the run outcome is `<checkpoint>.status` (beside the checkpoint) |
 | `--checkpoint` | `<workdir>/.oxo-flow/checkpoint.json` | Checkpoint inspected for the final verdict. Use it with [`run --checkpoint`](run.md#variant-checkpoints-checkpoint). When `--workdir` is omitted, the run directory recorded in the checkpoint supplies the lock/pid/status location; before the checkpoint exists `wait` polls for it (never the caller's cwd), and a recorded `failed` status is reported immediately even when no checkpoint was ever written. Pass `--workdir` for an immediate wait |
+| `--timeout` | `0` | Maximum seconds to wait before giving up (`0` = no timeout) |
+| `--interval` | `5` | Poll interval in seconds between checkpoint inspections |
 
 ## Exit status
 

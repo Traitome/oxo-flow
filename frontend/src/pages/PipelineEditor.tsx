@@ -347,7 +347,7 @@ export default function PipelineEditor() {
           });
         })
         .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : t('editor.load.notFound');
+          const msg = describeApiError(err, t('editor.load.notFound'));
           session.setRunResult({ message: t('editor.load.failed').replace('{{error}}', msg), type: 'error' });
         });
       return () => {
@@ -367,7 +367,7 @@ export default function PipelineEditor() {
         });
       })
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : t('editor.template.notFound');
+        const msg = describeApiError(err, t('editor.template.notFound'));
         session.setRunResult({ message: t('editor.template.failed').replace('{{error}}', msg), type: 'error' });
       });
     return () => {
@@ -405,7 +405,7 @@ export default function PipelineEditor() {
       setValidation(val);
     } catch (err: unknown) {
       if (seq !== editSeq.current) return; // a newer edit owns the outcome
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       markValidationUnavailable(msg);
     }
   }, [t, markValidationUnavailable]);
@@ -735,7 +735,7 @@ export default function PipelineEditor() {
         type: 'success',
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('editor.saveFailed');
+      const msg = describeApiError(err, t('editor.saveFailed'));
       session.setRunResult({ message: t('editor.saveError').replace('{{message}}', msg), type: 'error' });
     }
   };

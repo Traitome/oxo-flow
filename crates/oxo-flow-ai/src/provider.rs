@@ -1550,10 +1550,17 @@ impl OllamaBackend {
             model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
             api_url: {
                 let url = api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string());
-                if !url.contains("/chat") {
-                    format!("{}/chat", url.trim_end_matches('/'))
-                } else {
+                // The Ollama chat route is `/api/chat`. Keep any URL that
+                // already carries a chat path (`/api/chat`, a deliberate
+                // OpenAI-compatible `/v1/chat/completions`, or a custom
+                // `/chat` route); a bare host (or an `/api` root) gets the
+                // canonical daemon route appended.
+                if url.contains("/chat") {
                     url
+                } else {
+                    let base = url.trim_end_matches('/');
+                    let base = base.strip_suffix("/api").unwrap_or(base);
+                    format!("{base}/api/chat")
                 }
             },
             temperature: None,
@@ -1875,6 +1882,15 @@ fn create_provider_in(
     model: Option<String>,
     env: &EnvSnapshot,
 ) -> AiProvider {
+    // "Empty means unset" — the factory is its single owner. Persisted
+    // tiers (DB rows, saved files) store blank Settings form fields
+    // verbatim; a `Some("")` URL would build a relative endpoint
+    // (`/v1/messages`) that fails on every call while status still
+    // reports the provider configured. The saved-file tier used to
+    // re-apply this normalization by hand; the factory now covers all
+    // callers, including the web DB restore.
+    let api_url = api_url.filter(|v| !v.trim().is_empty());
+    let model = model.filter(|v| !v.trim().is_empty());
     let url = api_url.or_else(|| env.oxo_flow_api_url.clone());
     let mdl = model.or_else(|| env.oxo_flow_model.clone());
 
@@ -2227,17 +2243,14 @@ fn resolve_provider(
                 kind_str
             );
         } else {
-            let url = if api_url.is_empty() {
-                None
-            } else {
-                Some(api_url.to_string())
-            };
-            let mdl = if model.is_empty() {
-                None
-            } else {
-                Some(model.to_string())
-            };
-            let provider = create_provider(kind, Some(api_key.to_string()), url, mdl);
+            // Empty url/model fields normalize inside the factory itself
+            // ("empty means unset"); no per-tier hand-copy here.
+            let provider = create_provider(
+                kind,
+                Some(api_key.to_string()),
+                Some(api_url.to_string()),
+                Some(model.to_string()),
+            );
             tracing::info!("AI provider from saved config: {}", provider.name());
             return provider;
         }
@@ -2534,8 +2547,31 @@ pub fn resolved_ai_config_path() -> Option<std::path::PathBuf> {
 
 pub fn load_ai_config() -> Option<(String, String, String, String)> {
     let path = resolved_ai_config_path()?;
-    let json: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    // A file that exists but cannot be read or parsed must say so: a
+    // truncated JSON (the exact failure mode `write_json_atomic` guards
+    // against on the write side) or a typo'd provider name otherwise makes
+    // the whole saved-config tier vanish silently and resolution falls
+    // through to detection/Noop with no signal.
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!(
+                "AI config file {} exists but cannot be read ({error}); ignoring it",
+                path.display()
+            );
+            return None;
+        }
+    };
+    let json: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::warn!(
+                "AI config file {} is not valid JSON ({error}); ignoring it — re-run 'oxo-flow ai setup' to rewrite it",
+                path.display()
+            );
+            return None;
+        }
+    };
     Some((
         json["provider"].as_str().unwrap_or("").to_string(),
         json["api_key"].as_str().unwrap_or("").to_string(),
@@ -3596,7 +3632,7 @@ mod tests {
         let provider = resolve_provider("", None, &ollama);
         assert_eq!(provider.name(), "ollama");
         let url = provider.api_url().expect("ollama url");
-        assert!(url.ends_with("/chat"), "got {url}");
+        assert!(url.ends_with("/api/chat"), "got {url}");
 
         // No OLLAMA_HOST → no phantom localhost daemon.
         assert!(matches!(
@@ -3615,11 +3651,12 @@ mod tests {
             ollama_host: Some("http://10.1.2.3:11434".into()),
             ..EnvSnapshot::default()
         };
-        // OllamaBackend::new normalizes a bare host to {host}/chat (its
+        // OllamaBackend::new normalizes a bare host to {host}/api/chat (its
         // chat endpoint); the key property is the HOST, not the path.
         let provider = resolve_provider("ollama", None, &env);
         let url = provider.api_url().expect("ollama always has a url");
         assert!(url.starts_with("http://10.1.2.3:11434"), "got: {url}");
+        assert!(url.ends_with("/api/chat"), "got: {url}");
         // Detection tier gets the same treatment.
         let detected = detect_provider_from_env(&env).expect("detected");
         let url = detected.api_url().expect("url");
@@ -3633,6 +3670,39 @@ mod tests {
                 .expect("url")
                 .starts_with("http://localhost:11434")
         );
+    }
+
+    #[test]
+    fn ollama_url_normalization_matrix() {
+        let cases: &[(&str, &str)] = &[
+            // Bare host → canonical daemon route (was `/chat`, a 404 on real
+            // daemons — the default constant always carried `/api/chat`).
+            ("http://10.1.2.3:11434", "http://10.1.2.3:11434/api/chat"),
+            ("http://10.1.2.3:11434/", "http://10.1.2.3:11434/api/chat"),
+            // An `/api` root means the API root, not a subpath namespace.
+            (
+                "http://10.1.2.3:11434/api",
+                "http://10.1.2.3:11434/api/chat",
+            ),
+            // Subpath deployments keep their namespace.
+            (
+                "http://10.1.2.3:11434/ollama",
+                "http://10.1.2.3:11434/ollama/api/chat",
+            ),
+            // Explicit chat endpoints pass through untouched.
+            (
+                "http://10.1.2.3:11434/api/chat",
+                "http://10.1.2.3:11434/api/chat",
+            ),
+            (
+                "http://10.1.2.3:11434/v1/chat/completions",
+                "http://10.1.2.3:11434/v1/chat/completions",
+            ),
+        ];
+        for (input, expected) in cases {
+            let backend = OllamaBackend::new(None, Some((*input).to_string()));
+            assert_eq!(backend.api_url, *expected, "input {input}");
+        }
     }
 
     #[test]
@@ -3708,6 +3778,33 @@ mod tests {
             resolve_provider("", Some(saved), &EnvSnapshot::default()),
             AiProvider::Noop
         ));
+    }
+
+    #[test]
+    fn saved_config_blank_url_and_model_stay_unset() {
+        // Persisted tiers (DB rows, saved files) can carry blank url/model
+        // fields verbatim. "Empty means unset" must hold at the factory:
+        // a `Some("")` used to build a relative endpoint
+        // (`/v1/chat/completions`) that failed on every call while status
+        // still reported the provider configured.
+        let saved = ("deepseek", "sk-test", "", "");
+        let provider = resolve_provider("", Some(saved), &EnvSnapshot::default());
+        assert_eq!(provider.name(), "deepseek");
+        let url = provider.api_url().expect("deepseek always has a url");
+        assert_eq!(
+            url, DEEPSEEK_API_URL,
+            "blank url falls to the provider default"
+        );
+
+        // Same contract on the claude tier, with an explicit-but-blank
+        // override shape (a whitespace-only field is blank too).
+        let saved = ("claude", "sk-test", "  ", "");
+        let provider = resolve_provider("", Some(saved), &EnvSnapshot::default());
+        let url = provider.api_url().expect("claude always has a url");
+        assert_eq!(
+            url, CLAUDE_API_URL,
+            "blank url falls to the provider default"
+        );
     }
 
     #[test]

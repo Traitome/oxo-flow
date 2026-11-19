@@ -109,6 +109,7 @@ impl Modify for SecurityAddon {
         crate::domains::execution::files::list_uploaded_files,
         // auth
         crate::domains::auth::handlers::login,
+        crate::domains::auth::handlers::logout,
         crate::domains::auth::handlers::auth_me,
         crate::domains::auth::handlers::list_users,
         crate::domains::auth::handlers::create_user,

@@ -206,7 +206,7 @@ flowchart TB
 
 | Module | Responsibility |
 |---|---|
-| `scheduler.rs` | Ready-set computation (priority descending, name ascending), ResourcePool accounting |
+| `scheduler.rs` | Ready-set computation with the `dispatch_order` tie-break (name ascending by default), ResourcePool accounting — effective priority + aging is applied by the CLI run loop |
 | `executor/process.rs` | Job execution: one process group per run (`pgid`), timeout, cancellation |
 | `executor/checkpoint.rs` | `CheckpointState`: per-rule status, wildcard domains, timings — the resume truth |
 | `executor/staging.rs`, `content_cache.rs` | Input staging; content-addressed caching of completed work |

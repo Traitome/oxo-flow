@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
     after_help = "Get started:\n  \
         oxo-flow init my-pipeline && cd my-pipeline   # scaffold an example project\n  \
         oxo-flow run my-pipeline.oxoflow               # execute it\n  \
-        oxo-flow template \"RNA-seq with STAR\" -o pipeline.oxoflow   # generate a workflow (add --ai for LLM authoring)\n\n\
+        oxo-flow template \"RNA-seq with STAR\" --ai -o pipeline.oxoflow   # generate a workflow with LLM authoring\n\n\
         Docs: https://traitome.github.io/oxo-flow/"
 )]
 pub struct Cli {
@@ -175,7 +175,7 @@ pub enum Commands {
         cache_dir: Option<PathBuf>,
         #[arg(long, help = "Track output file checksums for later verification")]
         provenance: bool,
-        #[arg(long, help = "Execute from a published .tar.zst bundle")]
+        #[arg(long, help = "Execute from a published .tar.zst/.tar.gz bundle")]
         bundle: Option<PathBuf>,
         #[arg(
             long = "yes",
@@ -248,9 +248,9 @@ pub enum Commands {
             help = "Detach execution into a background process (see long help)"
         )]
         background: bool,
-        /// Proceed despite protected-tree drift (issue #935): `\[engine]`
-        /// protected_data_trees baselines differ from the current tree.
-        /// Without this flag `run` refuses to execute.
+        /// Proceed despite protected-tree drift (issue #935): the engine
+        /// section's protected_data_trees baseline differs from the current
+        /// tree. Without this flag `run` refuses to execute.
         #[arg(long)]
         allow_protected_drift: bool,
         /// Strict environment mode (issue #1011): a stale pixi.lock install
@@ -762,7 +762,7 @@ pub enum Commands {
         #[arg(
             short = 'f',
             long,
-            help = "Output format: html, json, md, pdf, pdf-command (default: html, or inferred from the -o extension)"
+            help = "Output format: html, json, md, pdf, pdf-command (default: html, else the first [report].format entry, else inferred from the -o extension)"
         )]
         format: Option<String>,
         #[arg(short = 'o', long, help = "Output file path ('-' for stdout)")]
@@ -888,7 +888,12 @@ pub enum Commands {
     Export {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "docker", help = "Output format")]
+        #[arg(
+            short = 'f',
+            long,
+            default_value = "docker",
+            help = "Output format: docker, singularity, compose, toml"
+        )]
         format: String,
         #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
@@ -1506,7 +1511,8 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, info, knowledge, schema, license, ai, \
-             provenance verify, verify-data, runs gc)."
+             provenance verify, verify-data, runs gc, cluster \
+             status/cancel/logs)."
         );
     }
     // A background run never executes the workflow in the foreground

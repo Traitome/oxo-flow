@@ -225,7 +225,20 @@ impl AiConfig {
     /// Create a config parsed from the global config file (`~/.oxo-flow/ai_config.json`).
     pub fn from_global_file() -> Option<Self> {
         let (provider_str, api_key, api_url, model) = crate::provider::load_ai_config()?;
-        let provider: ProviderKind = provider_str.parse().ok()?;
+        let provider: ProviderKind = match provider_str.parse() {
+            Ok(provider) => provider,
+            // An empty or typo'd name must not silently drop the whole
+            // saved tier — say what was ignored and why.
+            Err(_) => {
+                tracing::warn!(
+                    "AI config file names provider '{}' which is not a known provider \
+                     (expected claude, openai, deepseek, or ollama); ignoring the saved \
+                     config — re-run 'oxo-flow ai setup' to fix it",
+                    provider_str
+                );
+                return None;
+            }
+        };
         Some(Self {
             enabled: true,
             provider,
