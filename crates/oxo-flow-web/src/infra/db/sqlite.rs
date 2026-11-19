@@ -96,6 +96,7 @@ async fn insert_run_guarded(
     .bind(&run.workdir)
     .bind(&run.config_overrides)
     .bind(&run.artifacts_incomplete)
+    .bind(&run.cluster_id)
     .bind(&run.started_at)
     .bind(&run.finished_at)
     .bind(&run.created_at)
@@ -356,6 +357,7 @@ impl SqliteBackend {
                 workdir TEXT,
                 config_overrides TEXT,
                 artifacts_incomplete TEXT,
+                cluster_id TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -367,8 +369,8 @@ impl SqliteBackend {
         .map_err(|e| e.to_string())?;
         sqlx::query(
             r#"INSERT INTO runs_migrated
-                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, started_at, finished_at, created_at)
-                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, NULL, started_at, finished_at, created_at
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, cluster_id, started_at, finished_at, created_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, NULL, NULL, started_at, finished_at, created_at
                 FROM runs"#,
         )
         .execute(&mut *conn)
@@ -444,6 +446,7 @@ impl StorageBackend for SqliteBackend {
                 workdir TEXT,
                 config_overrides TEXT,
                 artifacts_incomplete TEXT,
+                cluster_id TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -688,6 +691,12 @@ impl StorageBackend for SqliteBackend {
         // Historical rows default to NULL (artifacts assumed complete).
         self.add_column_if_missing("runs", "artifacts_incomplete")
             .await;
+
+        // Migration: routing fact for a remote run (issue #1257 / audit
+        // RB-05). Persisted at dispatch so cancellation survives a server
+        // restart (the in-memory remote registry does not). Local/historical
+        // rows default to NULL.
+        self.add_column_if_missing("runs", "cluster_id").await;
 
         // Migration (issue #1136): optimistic-concurrency token on pipelines.
         // Historical rows start at revision 1; every later write increments
@@ -1171,6 +1180,7 @@ impl StorageBackend for SqliteBackend {
             workdir: run.workdir.clone(),
             config_overrides: run.config_overrides.clone(),
             artifacts_incomplete: run.artifacts_incomplete.clone(),
+            cluster_id: run.cluster_id.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -1195,6 +1205,7 @@ impl StorageBackend for SqliteBackend {
         .bind(&row.workdir)
         .bind(&row.config_overrides)
         .bind(&row.artifacts_incomplete)
+        .bind(&row.cluster_id)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
@@ -3007,6 +3018,7 @@ mod tests {
             workdir: Some("/tmp/workdir".to_string()),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),
@@ -3239,6 +3251,7 @@ mod tests {
             workdir: None,
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -3285,6 +3298,7 @@ mod tests {
             workdir: None,
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -3334,6 +3348,7 @@ mod tests {
             workdir: None,
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -3413,6 +3428,7 @@ mod tests {
                 workdir: None,
                 config_overrides: None,
                 artifacts_incomplete: None,
+                cluster_id: None,
                 started_at: None,
                 finished_at: None,
                 created_at: String::new(),
@@ -3516,6 +3532,7 @@ mod tests {
             workdir: Some("/tmp/test".into()),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some("timestamp-start".into()),
             finished_at: None,
             created_at: "timestamp-created-1".into(),
@@ -3618,6 +3635,7 @@ mod workdir_guard_tests {
             workdir: Some(workdir.into()),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: None,
             finished_at: None,
             created_at: chrono::Utc::now().to_rfc3339(),

@@ -82,6 +82,7 @@ fn sample_run(user_id: &str, workdir: &str) -> models::RunRow {
         workdir: Some(workdir.to_string()),
         config_overrides: None,
         artifacts_incomplete: None,
+        cluster_id: None,
         started_at: None,
         finished_at: None,
         created_at: now(),

@@ -253,6 +253,7 @@ async fn insert_run(status: &str) -> String {
             ),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some(started.clone()),
             finished_at: Some(finished),
             created_at: started,

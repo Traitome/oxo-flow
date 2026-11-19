@@ -33,14 +33,14 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
 /// the other (audit RB-02).
 pub(crate) const RUN_INSERT_COLUMNS: &str = "id, user_id, pipeline_id, pipeline_snapshot, \
      workflow_name, status, phase, dry_run, pid, workdir, config_overrides, \
-     artifacts_incomplete, started_at, finished_at, created_at";
+     artifacts_incomplete, cluster_id, started_at, finished_at, created_at";
 
 /// Run statuses that count as live for admission guards.
 pub(crate) const RUN_LIVE_STATUSES_SQL: &str = "('queued', 'running', 'paused')";
 
 /// Build the unguarded run insert used by `create_run`.
 pub(crate) fn plain_run_insert_sql(placeholder: impl Fn(usize) -> String) -> String {
-    let values: Vec<String> = (1..=15).map(&placeholder).collect();
+    let values: Vec<String> = (1..=16).map(&placeholder).collect();
     format!(
         "INSERT INTO runs ({RUN_INSERT_COLUMNS}) VALUES ({})",
         values.join(", ")
@@ -49,7 +49,7 @@ pub(crate) fn plain_run_insert_sql(placeholder: impl Fn(usize) -> String) -> Str
 
 /// Build the guarded run insert shared by the workdir and pipeline claims.
 ///
-/// The insert names 15 row values followed by one guard value; the statement
+/// The insert names 16 row values followed by one guard value; the statement
 /// only lands while no live run matches `guard_column`. `placeholder(i)`
 /// yields the dialect's bind marker for the 1-based i-th value (`?` for
 /// SQLite, `$n` for PostgreSQL).
@@ -69,13 +69,13 @@ pub(crate) fn guarded_run_insert_sql(
     guard_column: &str,
     placeholder: impl Fn(usize) -> String,
 ) -> String {
-    let values: Vec<String> = (1..=15).map(&placeholder).collect();
+    let values: Vec<String> = (1..=16).map(&placeholder).collect();
     format!(
         "INSERT INTO runs ({RUN_INSERT_COLUMNS}) SELECT {} WHERE NOT EXISTS \
          (SELECT 1 FROM runs WHERE {guard_column} = {} AND status IN {RUN_LIVE_STATUSES_SQL}) \
          ON CONFLICT DO NOTHING",
         values.join(", "),
-        placeholder(16)
+        placeholder(17)
     )
 }
 

@@ -102,6 +102,7 @@ impl PostgresBackend {
         .bind(&run.workdir)
         .bind(&run.config_overrides)
         .bind(&run.artifacts_incomplete)
+        .bind(&run.cluster_id)
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
@@ -232,6 +233,7 @@ impl StorageBackend for PostgresBackend {
                 workdir TEXT,
                 config_overrides TEXT,
                 artifacts_incomplete TEXT,
+                cluster_id TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL
@@ -443,6 +445,15 @@ impl StorageBackend for PostgresBackend {
             .execute(&mut *tx)
             .await
             .map_err(|e| format!("PG migration artifacts_incomplete: {e}"))?;
+
+        // Routing fact for a remote run (issue #1257 / audit RB-05), parity
+        // with the SQLite column: persisted at dispatch so cancellation can
+        // resolve the cluster from the row instead of the in-memory remote
+        // registry. Historical rows default to NULL (local/unknown).
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS cluster_id TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration cluster_id: {e}"))?;
 
         // Optimistic-concurrency token on pipelines (issue #1136), with the
         // same semantics as the SQLite column: historical rows start at 1.
@@ -986,6 +997,7 @@ impl StorageBackend for PostgresBackend {
             workdir: run.workdir.clone(),
             config_overrides: run.config_overrides.clone(),
             artifacts_incomplete: run.artifacts_incomplete.clone(),
+            cluster_id: run.cluster_id.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -1010,6 +1022,7 @@ impl StorageBackend for PostgresBackend {
         .bind(&row.workdir)
         .bind(&row.config_overrides)
         .bind(&row.artifacts_incomplete)
+        .bind(&row.cluster_id)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
@@ -2574,6 +2587,7 @@ mod tests {
             workdir: Some(format!("/tmp/smoke-run-{}", Uuid::new_v4().simple())),
             config_overrides: Some(r#"["threads=4"]"#.to_string()),
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),

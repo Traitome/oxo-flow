@@ -772,9 +772,11 @@ Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_ca
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, artifacts_incomplete, started_at, finished_at, created_at }` — the identity other run endpoints key off. `workflow_name` and `duration_secs` are the same values list items carry (`duration_secs` is the elapsed time between `started_at` and `finished_at`, `null` until the run finishes). (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
+The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot, duration_secs, status, phase, dry_run, workdir, artifacts_incomplete, cluster_id, started_at, finished_at, created_at }` — the identity other run endpoints key off. `workflow_name` and `duration_secs` are the same values list items carry (`duration_secs` is the elapsed time between `started_at` and `finished_at`, `null` until the run finishes). (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses — legacy rows created before the column existed read as `false`.
 
 `artifacts_incomplete` (also on list items) is non-null only when a cluster run's result pull failed: the remote execution finished but its outputs could not be transferred back, so the local workdir — the source for the run's logs, preview and report — is missing or stale. It carries the pull error text (including the remote exit code). Such a run is **never** reported as `completed`: it is failed through the same non-success path a non-zero remote exit uses, so `status` reads `failed` with `phase` `failed` and the reason is both logged and persisted here for the UI (issue #1112 / audit RB-05).
+
+`cluster_id` (also on list items) records the cluster a run was routed to, persisted at dispatch. It is `null` for local runs and for runs that carry no cluster routing fact (retry/resume re-execute locally). It is the durable source of truth for cancellation (see Cancel below): it survives a server restart, which the in-memory routing registry does not (issue #1257 / audit RB-05).
 
 ### Run Preview
 ```
@@ -940,7 +942,21 @@ start.
 ```
 POST /api/runs/{id}/cancel
 ```
-Cancels a running/pending run.
+Cancels a running/pending run. The response is
+`{run_id, status, cancelled_at, unresolved_jobs}`.
+
+A **remote** run is cancelled against the cluster recorded on its persisted
+`runs.cluster_id` column, so cancellation survives a server restart — the
+in-memory routing registry is consulted only as a fast path, not as the
+source of truth (issue #1257 / audit RB-05). Because a routed job can outlive
+the wrapper that launched it, the endpoint no longer reports a best-effort
+signal as an unqualified success: every job the cancel path signalled but
+could not **confirm** dead appears in `unresolved_jobs`, an array of
+`{run_id, cluster_id, reason}` (empty when every target was confirmed gone).
+This covers a remote process that survived `SIGTERM`/`SIGKILL`, a cluster
+whose configuration was deleted out from under the run, and a DB error
+resolving the cluster. Treat a non-empty `unresolved_jobs` as "the kill was
+attempted but not verified" and follow up on the named job.
 
 ### Pause / Resume
 ```

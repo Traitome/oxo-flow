@@ -1253,6 +1253,7 @@ mod run_list_item_tests {
             workdir: None,
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: Some("2026-01-01T00:00:00Z".into()),
             finished_at: Some("2026-01-01T00:01:10Z".into()),
             created_at: "2026-01-01T00:00:00Z".into(),
