@@ -6400,7 +6400,14 @@ backend-agnostic: if no storage backend is initialized at all, these
 endpoints return
 <code>503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}</code>.
 Team/HPC execution also lacks an OS-level tenant boundary and must not be
-exposed to untrusted workflow authors.</p>
+exposed to untrusted workflow authors. Issue #1129 (RB-01a) hardens the web
+spawn path — the child environment is allowlisted, so server secrets
+(<code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider/MCP credentials) no longer
+reach a tenant-authored rule shell, and operator-wide <code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code>
+ceilings join the existing <code>RLIMIT_DATA</code> on Linux. There is still NO
+filesystem namespace, uid boundary, or per-run container: a malicious workflow
+that guesses another tenant's absolute path can still read (and write) it.
+Treat the boundary as partial, not complete.</p>
 </blockquote>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>POST /api/runs
 </span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>Content-Type: application/json
@@ -7396,6 +7403,36 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
   allocation, so the rule dies and the run fails — observable rejection,
   not an advisory overage. Runs that declare no memory have no claim to
   enforce.</li>
+<li>
+<p><strong>Operator-wide CPU / process ceilings (web spawn path, Linux)</strong>: on top of
+  the declared-memory ceiling the web spawn path can install two
+  operator-wide <code>pre_exec</code> limits on the spawned CLI (and therefore its whole
+  process tree), configured through the server environment rather than the
+  workflow:</p>
+</li>
+<li>
+<p><code>OXO_FLOW_WEB_RLIMIT_CPU_SECS</code> — <code>RLIMIT_CPU</code>, in CPU-seconds.</p>
+</li>
+<li><code>OXO_FLOW_WEB_RLIMIT_NPROC</code> — <code>RLIMIT_NPROC</code>, a per-real-uid process cap.</li>
+</ul>
+<p>Both default to unset, and <code>0</code> (or any unparseable value) means "do not
+  install" — nothing changes unless the operator opts in, so a typo can never
+  silently disable the ceiling. A process past <code>RLIMIT_CPU</code> is sent <code>SIGXCPU</code>
+  (then <code>SIGKILL</code>), so a runaway rule fails observably instead of pinning a
+  server core. <code>RLIMIT_NPROC</code> counts every process owned by the server's real
+  uid, not just this run's tree — set it well above the server's steady-state
+  process count (it is a fork-bomb backstop, not a per-run quota). Both are
+  Linux-only; off Linux the install is a no-op.</p>
+<ul>
+<li><strong>Child environment allowlist (web spawn path)</strong>: the spawned CLI no longer
+  inherits the server's environment. The web spawn path reuses the engine's own
+  rule-shell policy (<code>apply_rule_env_allowlist</code>), so the child sees only
+  <code>PATH</code>/<code>HOME</code>/<code>LANG</code>/<code>LC_*</code>, the engine's non-secret configuration knobs
+  (e.g. <code>OXO_FLOW_TMPDIR</code>, <code>OXO_FLOW_MODULE_CACHE</code>, <code>OXO_FLOW_STRICT_PLACEHOLDERS</code>,
+  <code>OXO_FLOW_BIN</code>), and the explicitly declared passthrough names — never
+  <code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider keys, or MCP tokens. This is
+  the same policy the local executor already applied to rule shells, so the web
+  path is no longer the weaker surface.</li>
 <li><strong>Other platforms</strong>: Darwin rejects <code>RLIMIT_DATA</code>/<code>RLIMIT_AS</code> changes with
   <code>EINVAL</code>; there the local ceiling remains advisory (the quota counters
   still apply). See the follow-up tracking issue for portable enforcement.</li>
