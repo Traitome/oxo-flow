@@ -1,0 +1,26 @@
+# T2 — hand-authored adversarial probe modelled on the Nextflow RNA-seq
+# format edges (tests/fixtures/import/nextflow/rnaseq.ok.nf, which uses
+# STAR/trimmomatic/subread — NOT bwa-mem2/MarkDuplicates): bwa-mem2 emits
+# SAM (unsorted by default); the downstream MarkDuplicates-style consumer
+# requires a coordinate-sorted BAM.
+#
+# EXPECTED (recorded before running, argued from the tool contract):
+#   reject — TYPE-001 (SAM is not BAM) and TYPE-002 (unsorted is not coordinate).
+
+[workflow]
+name = "t02"
+
+[[rules]]
+name = "align"
+output = ["stage.bam"]
+shell = "bwa-mem2 mem ref.fa reads.fq > stage.bam"
+[rules.types]
+outputs = { default = "SAM" }
+
+[[rules]]
+name = "markdup"
+input = ["stage.bam"]
+output = ["final.bam"]
+shell = "picard MarkDuplicates -I stage.bam -O final.bam"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

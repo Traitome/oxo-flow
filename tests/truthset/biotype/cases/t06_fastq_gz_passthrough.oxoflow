@@ -1,0 +1,26 @@
+# T6 — transplant of the Nextflow TRIM edge (tests/fixtures/import/nextflow/
+# rnaseq.ok.nf): trimmomatic reads gzipped FASTQ and emits gzipped FASTQ.
+# Both sides are FASTQ[compression=gzip]; format and compression unchanged.
+#
+# EXPECTED (recorded before running):
+#   accept — no TYPE diagnostic; format+compression satisfied.
+
+[workflow]
+name = "t06"
+
+[[rules]]
+name = "trim"
+input = ["raw_R1.fastq.gz"]
+output = ["trimmed_R1.fastq.gz"]
+shell = "trimmomatic SE -threads 4 raw_R1.fastq.gz trimmed_R1.fastq.gz"
+[rules.types]
+inputs = { default = "FASTQ[compression=gzip]" }
+outputs = { default = "FASTQ[compression=gzip]" }
+
+[[rules]]
+name = "quant"
+input = ["trimmed_R1.fastq.gz"]
+output = ["quant.tsv"]
+shell = "salmon quant -r trimmed_R1.fastq.gz -o quant"
+[rules.types]
+inputs = { default = "FASTQ[compression=gzip]" }

@@ -1,0 +1,24 @@
+# A13 — attribute contract boundary (TYPE-007). Somatic VCF fed to a
+# germline-joint-genotyping consumer (GATK GenomicsDBImport / joint calling
+# expects germline calls). `variant_type=somatic` is not `germline`.
+#
+# EXPECTED (argued from the variant-calling contract, NOT the code):
+#   reject — TYPE-007 (attribute variant_type mismatch).
+
+[workflow]
+name = "a13"
+
+[[rules]]
+name = "mutect2"
+output = ["somatic.vcf.gz"]
+shell = "gatk Mutect2 -O somatic.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[variant_type=somatic]" }
+
+[[rules]]
+name = "joint_germline"
+input = ["somatic.vcf.gz"]
+output = ["joint.vcf.gz"]
+shell = "gatk GenomicsDBImport --variant somatic.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[variant_type=germline]" }

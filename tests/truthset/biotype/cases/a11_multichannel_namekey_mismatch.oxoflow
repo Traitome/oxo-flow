@@ -1,0 +1,31 @@
+# A11 — ADVERSARIAL, second independent false-accept instance (same root
+# cause as A08, different surface). A multi-output producer types its two
+# channels by NAME (aligned, calls); the consumer reads the literal
+# "a.bam" path but declares its single input under a THIRD key (reads)
+# requiring a coordinate-sorted BAM. Producer channel name (aligned) and
+# consumer channel name (reads) differ, and with two producer outputs the
+# single/single path-shared fallback (which needs exactly one channel each
+# side) does not apply, so no pair is formed.
+#
+# EXPECTED (argued from contract semantics, NOT the code):
+#   reject — TYPE-002: the requirement (coordinate) is stated and checkable
+#   against the producer's typed BAM (unsorted). A typed edge that yields NO
+#   diagnostic is a silent skip, i.e. a false-accept.
+
+[workflow]
+name = "a11"
+
+[[rules]]
+name = "make"
+output = ["a.bam", "b.vcf"]
+shell = "echo"
+[rules.types]
+outputs = { aligned = "BAM", calls = "VCF" }
+
+[[rules]]
+name = "use"
+input = ["a.bam"]
+output = ["result.txt"]
+shell = "echo"
+[rules.types]
+inputs = { reads = "BAM[sort_order=coordinate]" }

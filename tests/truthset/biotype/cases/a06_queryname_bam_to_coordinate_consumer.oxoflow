@@ -1,0 +1,24 @@
+# A06 — sort-order boundary: name-sorted BAM fed to a coordinate-requiring
+# consumer. `samtools sort -n` produces a queryname-sorted BAM; a
+# coordinate-indexed consumer (e.g. an indexed pileup walker) cannot use it.
+#
+# EXPECTED (argued from the SAM/BAM spec + tool contracts, NOT the code):
+#   reject — TYPE-002 (queryname does not satisfy coordinate).
+
+[workflow]
+name = "a06"
+
+[[rules]]
+name = "sort_name"
+output = ["name.bam"]
+shell = "samtools sort -n -o name.bam in.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=queryname]" }
+
+[[rules]]
+name = "pileup"
+input = ["name.bam"]
+output = ["out.txt"]
+shell = "samtools mpileup -f ref.fa name.bam > out.txt"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

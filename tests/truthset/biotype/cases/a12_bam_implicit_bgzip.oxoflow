@@ -1,0 +1,30 @@
+# A12 — false-reject probe (format-invariant compression). BAM is BY
+# SPECIFICATION a BGZF-compressed stream — every conformant BAM is BGZF.
+# A producer declares plain `BAM`; a consumer declares
+# `BAM[compression=bgzip]`. The consumer's compression requirement is
+# satisfied by the format's own invariant even though the producer did not
+# repeat it.
+#
+# EXPECTED (argued from the SAM/BAM specification, NOT the code):
+#   accept — requiring bgzip on a BAM is redundant-but-true; a plain BAM
+#   already IS bgzip. If the checker rejects with TYPE-006 that is an
+#   over-strict false-reject (the requirement cannot ever be violated by a
+#   valid BAM).
+
+[workflow]
+name = "a12"
+
+[[rules]]
+name = "align"
+output = ["a.bam"]
+shell = "samtools sort -o a.bam in.sam"
+[rules.types]
+outputs = { default = "BAM" }
+
+[[rules]]
+name = "index"
+input = ["a.bam"]
+output = ["out.txt"]
+shell = "samtools index a.bam"
+[rules.types]
+inputs = { default = "BAM[compression=bgzip]" }

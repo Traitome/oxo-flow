@@ -1,0 +1,31 @@
+# A07 — read-group boundary (TYPE-005): a BAM aligned without `-R` read
+# groups (no @RG header) fed to a consumer that requires valid @RG tags
+# (e.g. GATK BaseRecalibrator / MarkDuplicates, which need SM + PL).
+#
+# EXPECTED (argued from the GATK requirement, NOT the code):
+#   reject — TYPE-005 (producer declares no read-group contract).
+
+[workflow]
+name = "a07"
+
+[types.rg_required]
+format = "bam"
+
+[types.rg_required.read_groups]
+required = true
+fields = ["ID", "SM", "PL"]
+
+[[rules]]
+name = "align_bare"
+output = ["bare.bam"]
+shell = "bwa mem ref.fa reads.fq > bare.sam && samtools view -b -o bare.bam bare.sam"
+[rules.types]
+outputs = { default = "BAM" }
+
+[[rules]]
+name = "bqsr"
+input = ["bare.bam"]
+output = ["recal.table"]
+shell = "gatk BaseRecalibrator -I bare.bam -R ref.fa -O recal.table"
+[rules.types]
+inputs = { default = "rg_required" }

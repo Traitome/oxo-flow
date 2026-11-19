@@ -1,0 +1,27 @@
+# A09 — CONTROL for A08 (minimal pair). Identical producer to A08; the ONLY
+# change is that the consumer names its input channel by the shared raw path
+# "a.bam" instead of `default`. With both sides keyed by the path the
+# channel-match clause `out_ch == in_ch` fires and the type check runs.
+#
+# EXPECTED (argued from contract semantics, NOT the code):
+#   reject — TYPE-002 (same violated requirement as A08). This control proves
+#   the type logic is correct; A08's silent accept is therefore caused purely
+#   by the multi-channel-producer + `default`-consumer channel resolution.
+
+[workflow]
+name = "a09"
+
+[[rules]]
+name = "make"
+output = ["a.bam", "b.vcf"]
+shell = "echo"
+[rules.types]
+outputs = { "a.bam" = "BAM", "b.vcf" = "VCF" }
+
+[[rules]]
+name = "use"
+input = ["a.bam"]
+output = ["result.txt"]
+shell = "echo"
+[rules.types]
+inputs = { "a.bam" = "BAM[sort_order=coordinate]" }
