@@ -147,7 +147,10 @@ positive assertions genuinely gate on rule firing — an incorrect or absent fix
   `analyze_scientific_constraints` with `std::time::Instant`, and prints the elapsed wall time.
 - **Measured:** ≈ **12–17 ms** across repeated runs (12.414625 ms, 13.228667 ms, 13.224 ms,
   16.957875 ms; debug build, un-optimized). 0 warnings on the synthetic workflow, as expected (it
-  is well-formed).
+  is well-formed). Latency is load-dependent — an independent re-run on equivalent hardware
+  observed ~27 ms under ambient load; the load-bearing bound is the harness assertion
+  (`elapsed < 5 s`), which every observation clears by >180×. Treat the per-run milliseconds as
+  indicative, not a tight range.
 - **Host identity:** `shixiangwangdeiMac.local` (Apple silicon, macOS Darwin 25.6.0).
 - **Commit:** `2d355f6b84032a13b74ef7865e3f81460275a86f`.
 - **Asserted bound:** `elapsed.as_secs() < 5` — a generous, non-flaky ceiling ≥ 350× the measured
