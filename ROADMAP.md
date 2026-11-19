@@ -531,7 +531,7 @@ Maturity labels used below:
 
 | Capability | Maturity | Remaining exit evidence |
 | :--- | :--- | :--- |
-| Nextflow/Snakemake import | Prototype | Representative corpus coverage, semantic equivalence tests, unsupported-construct reporting, and round-trip review |
+| Nextflow/Snakemake import | Prototype | Representative corpus coverage and round-trip review; **declared-artifact equivalence measured** over all 18 `tests/fixtures/import/**` fixtures (matched 4 / drifted 0 / importer-rejected 14 / not-attempted 0; `docs/superpowers/audits/import-equivalence-2026-11-19.md`, harness `scripts/import-equivalence.sh`) with unsupported-construct reporting verified to name documented out-of-subset constructs. Remaining exit evidence: per-workflow **execution** equivalence on identical hosts/containers/resources (not measured), and a corpus drawn from real-world (non-fixture) workflows |
 | Causal fault diagnosis | Prototype | Seeded fault-injection campaign: 7/10 detected, 7/10 attributed, 7/10 proposed |
 | Repair application and successful rerun | Prototype | Seeded campaign (v0.32.0 verified-repair loop, Round 2 with the corrective fence #1187): 3/10 applied, 3/10 verified, 3/10 rerun successfully — all 3 repairable cases; the 7 non-repairable cases are blocked upstream (`eval/frontier/PILOT_FINDINGS.md`). Remaining exit evidence: broader coverage beyond the 3-case repairable class on the seeded benchmark |
 | CLI/Web/VS Code remediation continuity | Prototype | The exact approved patch must be applied, verified, and audited; currently UI actions and validation state can diverge |
