@@ -512,7 +512,7 @@ Maturity labels used below:
 | :--- | :--- | :--- |
 | Unified run-ledger storage abstraction | Implemented but unproven | Live PostgreSQL parity, concurrency, crash recovery, and horizontal-instance tests |
 | Kubernetes and cloud batch executors | Prototype | They currently shell out through `kubectl`, `aws`, and `gcloud`; live submit/run/cancel/retrieve campaigns are required |
-| Range I/O and object-storage staging | Implemented but unproven | End-to-end streaming, interruption, backpressure, and scratch-footprint measurements |
+| Range I/O and object-storage staging | Implemented and verified | Measured 2026-11-19 (`docs/superpowers/audits/range-io-staging-2026-11-19.md`): streaming vs eager throughput/peak-RSS, interrupt/resume, bounded backpressure, and scratch footprint over a live S3-compatible store. Residual: WAN object store, GCS/Azure, multi-node, and network-partition campaigns |
 | Hardware topology and storage-tier discovery | Prototype | Multi-socket affinity, NUMA locality, NVMe pressure, and fallback performance evidence |
 | Team/HPC isolation and RBAC | Prototype / blocked | No OS-level tenant execution boundary; secrets and host files are not isolated |
 | Immutable run history and atomic admission | Planned / blocked | Unique artifact snapshots, atomic create/stage/spawn, and truthful lifecycle transitions |
