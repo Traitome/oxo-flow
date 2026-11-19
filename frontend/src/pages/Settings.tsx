@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { AiConfig, AiConfigEffective, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
@@ -93,7 +93,7 @@ export default function Settings() {
     // surface the list once all loaders settle — the same treatment the
     // quota loader already gets via setNotice.
     const failures: string[] = [];
-    const loadFailed = (key: string) => () => { failures.push(t(key)); };
+    const loadFailed = (key: string) => (err: unknown) => { failures.push(describeApiError(err, t(key))); };
     Promise.allSettled([
       api.health().then(setHealth).catch(loadFailed('settings.loadFailed.health')),
       api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(loadFailed('settings.loadFailed.aiConfig')),
@@ -135,7 +135,7 @@ export default function Settings() {
       api.aiConfigEffective().then(setEffectiveAiConfig).catch(() => { /* keep the previous status */ });
       setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider) });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setTestResult({ ok: false, text: t('settings.ai.saveFailed').replace('{{error}}', msg) });
     }
     setSaving(false);
@@ -154,7 +154,7 @@ export default function Settings() {
         ? { ok: true, text: t('settings.ai.testSuccess').replace('{{message}}', r.message) }
         : { ok: false, text: t('settings.ai.testFailed').replace('{{error}}', r.message) });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setTestResult({ ok: false, text: t('settings.ai.testFailed').replace('{{error}}', msg) });
     } finally {
       setTesting(false);
@@ -170,7 +170,7 @@ export default function Settings() {
       setQuotaForm(q.limits);
       setNotice(t('settings.quota.saved'));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setNotice(t('settings.quota.saveFailed').replace('{{error}}', msg));
     }
     setQuotaSaving(false);

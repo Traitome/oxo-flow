@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Trash2, Server, Activity } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { ClusterInfo } from '../api/types';
 import { useI18n } from '../context/I18n';
 
@@ -32,7 +32,7 @@ export default function Clusters() {
     api
       .listClusters()
       .then(setClusters)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : t('clusters.loadFailed')));
+      .catch((e: unknown) => setError(describeApiError(e, t('clusters.loadFailed'))));
   };
   useEffect(reload, [t]);
 
@@ -56,7 +56,7 @@ export default function Clusters() {
       setForm({ ...form, id: '', name: '', ssh_host: '', ssh_user: '', ssh_key: '', remote_dir: '' });
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t('clusters.saveFailed'));
+      setError(describeApiError(err, t('clusters.saveFailed')));
     }
   };
 
@@ -75,7 +75,7 @@ export default function Clusters() {
     } catch (err: unknown) {
       setProbeResults((prev) => ({
         ...prev,
-        [id]: { ok: false, text: sanitizeClusterError(err instanceof Error ? err.message : t('clusters.loadFailed')) },
+        [id]: { ok: false, text: sanitizeClusterError(describeApiError(err, t('clusters.loadFailed'))) },
       }));
     }
   };
@@ -87,7 +87,7 @@ export default function Clusters() {
       setNotice(t('clusters.removed').replace('{{name}}', name));
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t('clusters.removeFailed'));
+      setError(describeApiError(err, t('clusters.removeFailed')));
     }
   };
 

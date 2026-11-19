@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { AuditLogResponse } from '../api/types';
 import { useI18n, getLocale } from '../context/I18n';
 
@@ -31,7 +31,7 @@ export default function Audit() {
       .audit(days, page, perPage)
       // A later success must clear the banner from an earlier failed load.
       .then((d) => { setData(d); setError(null); })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : t('audit.loadFailed')));
+      .catch((e: unknown) => setError(describeApiError(e, t('audit.loadFailed'))));
   }, [days, page, perPage, t]);
 
   const totalPages = useMemo(() => {

@@ -3,7 +3,7 @@ import { Send, Square, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction, type ChatProgress } from '../context/PipelineSession';
 import { useServerVersion } from '../api/version';
-import { api, ApiError } from '../api/client';
+import { api, ApiError, describeApiError } from '../api/client';
 import { useI18n } from '../context/I18n';
 
 /** Fallback inactivity budget before the server's `ready` event arrives.
@@ -397,7 +397,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `✅ ${t('chat.saved').replace('{{name}}', name)}` }]);
         navigate('/editor');
       } catch (err: unknown) {
-        setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', err instanceof Error ? err.message : 'unknown error')}` }]);
+        setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', describeApiError(err, 'unknown error'))}` }]);
       }
     } else if (action.action === 'regenerate' || action.action === 'retry') {
       // #550: input was cleared on the first send — the button read empty

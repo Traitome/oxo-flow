@@ -50,7 +50,7 @@ export default function Users() {
         if (e instanceof ApiError && e.code === "ACCESS_DENIED") {
           setLoadDenied(true);
         } else {
-          setError(e instanceof Error ? e.message : t("users.loadFailed"));
+          setError(describeApiError(e, t("users.loadFailed")));
         }
       });
   };
@@ -69,7 +69,7 @@ export default function Users() {
       setPassword("");
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("users.createFailed"));
+      setError(describeApiError(err, t("users.createFailed")));
     } finally {
       setCreating(false);
     }
@@ -83,7 +83,7 @@ export default function Users() {
       setNotice(t("users.deleted").replace("{{name}}", name));
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("users.deleteFailed"));
+      setError(describeApiError(err, t("users.deleteFailed")));
     }
   };
 

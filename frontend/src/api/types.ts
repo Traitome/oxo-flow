@@ -106,22 +106,36 @@ export interface KnowledgeToolsResponse {
 // ── Runs ──
 /** Cursor-paginated run list envelope (issue #82 P1-3/P1-13). */
 export interface RunList {
-  items: RunItem[];
+  items: RunListItem[];
   next_cursor: string | null;
   total: number;
 }
 
-export interface RunItem {
+/** Exact shape of a `GET /api/runs` list item (drift-gated to the server's
+ *  `run_row_to_list_item` literal in tests/frontend_types_drift.rs). */
+export interface RunListItem {
   id: string; user_id: string; pipeline_id: string | null;
   /** Workflow name the run executed (backend enriches the list — issue #82 P1-3). */
   workflow_name?: string | null;
-  /** The TOML the run executed (get_run only — powers Manual Edit). */
-  pipeline_snapshot?: string;
   /** True when the run was a --dry-run plan (persisted since #907 P3-14). */
   dry_run?: boolean;
   status: string; phase: string; workdir: string | null;
+  /** Non-null when a remote result pull failed — the run's artifacts may be
+   *  missing even though `status` is terminal (issue #1112 / audit RB-05). */
+  artifacts_incomplete?: boolean | null;
   started_at: string | null; finished_at: string | null; created_at: string;
+  /** Wall-clock seconds between started_at and finished_at (null while running). */
+  duration_secs?: number | null;
 }
+
+/** `GET /api/runs/{id}` detail — the list shape plus the executed TOML
+ *  (powers Manual Edit). */
+export interface RunDetail extends RunListItem {
+  pipeline_snapshot?: string;
+}
+
+/** Compat alias for pages consuming either run shape. */
+export type RunItem = RunDetail;
 /** One expanded sample×rule instance from a run's checkpoint
  *  (issue #82 P1-1): `qc_auto-discovered_S1` → rule `qc`, sample `S1`. */
 export interface RunInstance {

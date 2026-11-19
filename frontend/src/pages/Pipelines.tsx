@@ -33,7 +33,7 @@ export default function Pipelines() {
     api
       .listTemplates()
       .then((tpl) => { setTemplates(tpl); setError(null); })
-      .catch((err: unknown) => setError(t('common.loadFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))));
+      .catch((err: unknown) => setError(t('common.loadFailed').replace('{{error}}', describeApiError(err, t('common.unknownError')))));
   }, [t]);
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export default function Pipelines() {
       .then((pl) => { setPipelines(pl); setError(null); })
       .catch((err: unknown) => {
         setPipelines([]);
-        setError(t('common.loadFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError')));
+        setError(t('common.loadFailed').replace('{{error}}', describeApiError(err, t('common.unknownError'))));
       });
   }, [tab, t]);
 
@@ -67,7 +67,7 @@ export default function Pipelines() {
       setPipelines((prev) => prev.filter((p) => p.id !== id));
       setNotice({ text: t('pipelines.deleted').replace('{{name}}', name) });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setNotice({ text: t('pipelines.deleteFailed').replace('{{error}}', msg), error: true });
     }
   };
@@ -104,7 +104,7 @@ export default function Pipelines() {
       setNotice({ text: t('pipelines.forked').replace('{{name}}', res.name) });
       navigate(`/editor?pipeline=${res.forked_id}`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setNotice({ text: t('pipelines.forkFailed').replace('{{error}}', msg), error: true });
     }
   };
@@ -121,7 +121,7 @@ export default function Pipelines() {
       URL.revokeObjectURL(url);
       setNotice({ text: t('pipelines.exported').replace('{{format}}', format) });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      const msg = describeApiError(err, t('common.unknownError'));
       setNotice({ text: t('pipelines.exportFailed').replace('{{error}}', msg), error: true });
     }
   };

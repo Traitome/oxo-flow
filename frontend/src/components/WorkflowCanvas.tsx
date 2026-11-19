@@ -21,7 +21,7 @@ import '@xyflow/react/dist/style.css';
 import { LayoutGrid, TrainTrack } from 'lucide-react';
 import type { DagJson } from '../api/types';
 import { useI18n } from '../context/I18n';
-import { canvasPositionKey } from '../utils/identityStorage';
+import { canvasPositionKey, isClientPersistenceSuppressed } from '../utils/identityStorage';
 import { MetroCanvas } from './MetroCanvas';
 
 // ── Node card: a terminal snippet, because the subject's vernacular is code ──
@@ -174,6 +174,9 @@ const positionsStore = {
     }
   },
   save(scopeKey: string, positions: Record<string, { x: number; y: number }>) {
+    // Identity-scoped writes respect the logout kill-switch (#1144/UX-02):
+    // after a wipe no canvas drag may resurrect a bucket for the old user.
+    if (isClientPersistenceSuppressed()) return;
     try {
       localStorage.setItem(canvasPositionKey(scopeKey), JSON.stringify(positions));
     } catch {

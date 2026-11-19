@@ -653,9 +653,22 @@ export default function MonitorReport() {
     if (!monitorStatus) return <div className="empty-state">{t('monitor.noMonitorData')}</div>;
 
     const hasAlerts = monitorStatus.alerts.length > 0;
+    // RB-05 (issue #1112): a terminal run whose remote result pull failed
+    // cannot be told apart from a complete one by `status` alone — surface
+    // the artifacts-incomplete marker the list endpoint carries.
+    const selectedRun = selId ? runs.find((r) => r.id === selId) : undefined;
+    const artifactsIncomplete = selectedRun?.artifacts_incomplete === true;
 
     return (
       <div>
+        {artifactsIncomplete && (
+          <div className="dash-card" style={{ marginBottom: '1rem', background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)' }}>
+            <div style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'flex-start', gap: 6, color: 'var(--color-warning)' }}>
+              <TriangleAlert size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span>{t('monitor.artifactsIncomplete')}</span>
+            </div>
+          </div>
+        )}
         {/* Overall Status */}
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <span className={`status-badge ${monitorStatus.overall}`} style={{ fontSize: '0.85rem', padding: '4px 12px' }}>

@@ -9,6 +9,16 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
+/// (Rust source file, function whose `serde_json::json!({...})` literal
+/// shapes a public response, TS interface). Used where the response is
+/// constructed as a raw JSON literal instead of a typed struct — the same
+/// name-set comparison as [`PINS`], against the literal's top-level keys.
+const JSON_PINS: &[(&str, &str, &str)] = &[(
+    "crates/oxo-flow-web/src/domains/execution/service.rs",
+    "run_row_to_list_item",
+    "RunListItem",
+)];
+
 /// (Rust source file, Rust struct, TS interface). The TS side may mark
 /// fields optional — only the name set is compared.
 const PINS: &[(&str, &str, &str)] = &[
@@ -179,6 +189,61 @@ fn ts_interface_fields(types_ts: &str, name: &str) -> BTreeSet<String> {
     fields
 }
 
+/// Top-level keys of the `serde_json::json!({...})` literal inside `function`
+/// (depth-matched): the mechanical truth for [`JSON_PINS`] pairs. Keys are
+/// plain identifiers here (no escapes) — the same pin assumption style as
+/// the serde-attribute check below.
+fn json_literal_keys(path: &PathBuf, function: &str) -> BTreeSet<String> {
+    let text = strip_comments(&fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!("cannot read {}: {e}", path.display());
+    }));
+    let anchor = format!("fn {function}");
+    let start = text
+        .find(&anchor)
+        .unwrap_or_else(|| panic!("fn {function} not found in {}", path.display()));
+    let macro_rel = text[start..]
+        .find("serde_json::json!")
+        .unwrap_or_else(|| panic!("fn {function} has no serde_json::json! literal"));
+    let body = braced_body(&text[start + macro_rel..], "serde_json::json!")
+        .unwrap_or_else(|| panic!("serde_json::json! in {function} has no object literal"));
+
+    let mut keys = BTreeSet::new();
+    let mut depth = 0i32;
+    let bytes: Vec<char> = body.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            '"' if depth == 0 => {
+                // Scan the quoted token, then decide by the next
+                // non-space character whether it is a key (`:`) or a
+                // value (`,`).
+                let mut key = String::new();
+                i += 1;
+                while i < bytes.len() && bytes[i] != '"' {
+                    key.push(bytes[i]);
+                    i += 1;
+                }
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == ':' {
+                    keys.insert(key);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    assert!(
+        !keys.is_empty(),
+        "json! literal in {function} yielded no keys"
+    );
+    keys
+}
+
 fn ts_field_name(segment: &str) -> Option<String> {
     let segment = segment.trim();
     let segment = segment.strip_prefix("readonly ").unwrap_or(segment);
@@ -211,6 +276,17 @@ fn frontend_api_types_match_the_rust_response_contracts() {
         if !missing_in_ts.is_empty() || !unknown_to_rust.is_empty() {
             failures.push(format!(
                 "{rust_name} ↔ {ts_name}: missing in types.ts {missing_in_ts:?}; unknown to Rust {unknown_to_rust:?}"
+            ));
+        }
+    }
+    for (rust_file, function, ts_name) in JSON_PINS {
+        let rust_fields = json_literal_keys(&root.join(rust_file), function);
+        let ts_fields = ts_interface_fields(&types_ts, ts_name);
+        let missing_in_ts: Vec<_> = rust_fields.difference(&ts_fields).collect();
+        let unknown_to_rust: Vec<_> = ts_fields.difference(&rust_fields).collect();
+        if !missing_in_ts.is_empty() || !unknown_to_rust.is_empty() {
+            failures.push(format!(
+                "{function} (json!) ↔ {ts_name}: missing in types.ts {missing_in_ts:?}; unknown to Rust {unknown_to_rust:?}"
             ));
         }
     }

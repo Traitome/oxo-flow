@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import { useI18n } from '../context/I18n';
 import { AUTH_CHANGED_EVENT, AUTH_TOKEN_KEY, writeIdentityHint } from '../utils/identityStorage';
 
@@ -44,7 +44,7 @@ export default function Login() {
       window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
       navigate('/');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t('login.failed'));
+      setError(describeApiError(err, t('login.failed')));
     } finally {
       setLoading(false);
     }
