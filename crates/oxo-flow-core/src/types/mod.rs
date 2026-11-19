@@ -385,12 +385,18 @@ impl BioTypeSpec {
 
     /// Compression stream a format implies *even when none is declared*.
     ///
-    /// BAM and CRAM are, by the SAM/BAM specification, BGZF-compressed
-    /// streams — every conformant BAM/CRAM is BGZF, so a producer that omits
-    /// `compression` still satisfies a consumer's `compression=bgzip`
-    /// requirement (issue #1255). No other format carries an implied stream
-    /// wrapper: FASTQ, VCF, SAM and friends may be plain, gzip, or bgzip, so
-    /// they must state their compression explicitly.
+    /// BAM is, by the SAM/BAM specification, a BGZF-compressed stream —
+    /// every conformant BAM is BGZF, so a producer that omits `compression`
+    /// still satisfies a consumer's `compression=bgzip` requirement (issue
+    /// #1255, truth-set case a12). CRAM deliberately does NOT ride that
+    /// implication: the CRAM specification defines its own container (blocks
+    /// framed as gzip/bzip2/LZMA, no BGZF `BC` extra field), so a CRAM
+    /// producer cannot silently satisfy a `bgzip` consumer — the consumer
+    /// declaring one on a CRAM edge is asserting an expectation the format
+    /// cannot prove, and the edge must state compression explicitly. No
+    /// other format carries an implied stream wrapper: FASTQ, VCF, SAM and
+    /// friends may be plain, gzip, or bgzip, so they must state their
+    /// compression explicitly.
     ///
     /// This is the single shared source of the format-implied-compression
     /// invariant consulted by [`BioTypeSpec::is_subtype_of`] (and therefore,
@@ -399,7 +405,7 @@ impl BioTypeSpec {
     #[must_use]
     pub fn implied_compression(format: BioFormat) -> CompressionKind {
         match format {
-            BioFormat::Bam | BioFormat::Cram => CompressionKind::Bgzip,
+            BioFormat::Bam => CompressionKind::Bgzip,
             _ => CompressionKind::None,
         }
     }
