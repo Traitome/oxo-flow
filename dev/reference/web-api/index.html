@@ -6516,8 +6516,13 @@ table forms such as <code>[types.*]</code> / <code>[rules.types]</code> and inli
 by staging <code>workflow.oxoflow</code> and all <code>include_files</code> sources on disk, then
 re-parsing through the canonical <code>from_file</code> path (the same machinery the
 CLI preflight uses) and running <code>validate_workflow_types</code> on the merged
-config. This covers typed workflows with local include graphs, typed
-includes, and <code>config_overrides</code> (issue #1018). Unresolvable includes
+config. This covers typed workflows with local include graphs and typed
+includes (issue #1018). Scope note: the admission graph is built from the
+workflow file's <code>[config]</code> table without <code>config_overrides</code> applied — the
+CLI's own preflight re-runs the identical gate with overrides applied before
+anything executes, so a workflow whose routing depends on an overridden
+value fails at the spawned CLI, not silently (issue #1152 remaining gap).
+Unresolvable includes
 (<code>repo = ...</code> git includes, missing files) surface as
 <code>400 {"code":"RUN_ERROR"}</code> from the canonical parser — not a blanket
 typed-admission rejection. Only the host workflow and locally staged sources
@@ -6557,9 +6562,11 @@ assets are ignored.</p>
   overwrite the main workflow. Files are written beside <code>workflow.oxoflow</code>
   in the run directory, where the CLI's
   <code>resolve_includes</code> resolves them unchanged — the same machinery local
-  <code>oxo-flow run</code> uses. Note: <code>pipeline_snapshot</code> in the run row stores only
-  the host TOML, so status/DAG endpoints re-parse it without includes; the
-  run itself executes correctly because the spawned CLI re-parses from disk.
+  <code>oxo-flow run</code> uses. The resolved workflow is also persisted as
+  <code>.oxo-flow/resolved-workflow.oxoflow</code> in the run workdir, and <code>/status</code>,
+  <code>/dag-status</code>, <code>/instances</code>, and <code>/protected-drift</code> load that snapshot
+  (see the resolved-snapshot section above), so status/DAG views see the
+  same merged rule set the run executes.
   There is no per-key content cap beyond the request-body limit (2 MiB by
   default, <code>body_limit</code> in the server config).</li>
 <li><code>config_overrides</code> (array of strings, optional) passes CLI config
@@ -7445,7 +7452,11 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
   <code>PATH</code>/<code>HOME</code>/<code>LANG</code>/<code>LC_*</code>, the engine's non-secret configuration knobs
   (e.g. <code>OXO_FLOW_TMPDIR</code>, <code>OXO_FLOW_MODULE_CACHE</code>, <code>OXO_FLOW_STRICT_PLACEHOLDERS</code>,
   <code>OXO_FLOW_BIN</code>), and the explicitly declared passthrough names — never
-  <code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider keys, or MCP tokens. This is
+  <code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider keys, or MCP tokens. The
+  passthrough contract is reproduced end-to-end: the server forwards both
+  the <code>OXO_FLOW_ENV_PASSTHROUGH</code> list and the named variables themselves, so
+  the CLI child's rule shells re-admit exactly the values an operator's
+  direct <code>oxo-flow run</code> would see. This is
   the same policy the local executor already applied to rule shells, so the web
   path is no longer the weaker surface.</li>
 <li><strong>Other platforms</strong>: Darwin rejects <code>RLIMIT_DATA</code>/<code>RLIMIT_AS</code> changes with

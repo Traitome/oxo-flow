@@ -4173,9 +4173,10 @@ each guard is independently tested:</p>
 <li><strong>Terminal run only</strong> — the run must be <code>completed</code>, <code>failed</code>, or <code>cancelled</code>. A live run (<code>queued</code>, <code>running</code>, <code>paused</code>) is never touched.</li>
 <li><strong>Not a lineage target</strong> — retry and resume create a <em>new</em> run row that copies the predecessor's <code>workdir</code>. A <code>workdir</code> shared by two or more rows still identifies the tree a later run depends on, so any such tree is spared.</li>
 <li><strong>Age gate</strong> — the run must have finished (or, absent a finish time, been created) at least <code>--older-than</code> days ago. An unparseable timestamp is treated as too young and the tree is kept.</li>
-<li><strong>Protected output / checkpoint reference</strong> — if the tree carries a declared protected output (or its workflow snapshot cannot be parsed, which is treated fail-closed as protected), the tree is kept.</li>
+<li><strong>Protected output</strong> — if the tree carries a declared protected output (or its workflow snapshot cannot be parsed, which is treated fail-closed as protected), the tree is kept.</li>
 <li><strong>Runs-root confinement</strong> — deletion only ever targets a path whose parent directory is literally named <code>runs</code>, with the run id and user id traversal-validated first. Anything else is skipped.</li>
 </ul>
+<p><code>runs gc</code> does not take the engine's workdir lock: a terminal status already implies the child process exited (releasing its flock), so the age gate above is the concurrency guard — keep <code>--older-than</code> at its default (or larger) on servers that also start runs.</p>
 <p><strong>What <code>runs gc</code> deletes:</strong></p>
 <ul>
 <li>Only whole <code>&lt;...&gt;/runs/&lt;run_id&gt;/</code> trees that pass every guard above</li>
