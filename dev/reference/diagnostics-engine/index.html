@@ -4695,7 +4695,7 @@ caption), and the retry POST is the only mutation sent.</p>
 <tr>
 <td><code>TYPE-006</code></td>
 <td>Compression</td>
-<td>Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required)</td>
+<td>Block compression stream mismatch (e.g. plain gzip passed where random-access BGZF is required). A BAM or CRAM already IS BGZF by specification, so a plain <code>BAM</code> satisfies <code>compression=bgzip</code>; only genuine mismatches (e.g. <code>BAM</code> vs <code>compression=zstd</code>, or <code>VCF</code> vs <code>compression=bgzip</code>) reject</td>
 <td>Re-compresses stream (<code>bgzip</code>)</td>
 </tr>
 <tr>
@@ -4722,9 +4722,15 @@ caption), and the retry POST is the only mutation sent.</p>
 <td>The consumer names a <code>reference_build</code> while the producer omits it, so alignment compatibility cannot be checked (the build check only fires when both sides name a build)</td>
 <td>Declares the producer's <code>reference_build</code> so its alignment against the consumer's required build can be verified</td>
 </tr>
+<tr>
+<td><code>TYPE-010</code></td>
+<td>Unpairable edge (advisory)</td>
+<td>Both rules declare <code>[types]</code>, but no output channel name on the producer matches any input channel name on the consumer, so no contract can be paired and the typed edge would otherwise pass in silence. Fires once per edge, and only when zero channels pair</td>
+<td>Keys the producer's <code>[rules.types].outputs</code> and the consumer's <code>[rules.types].inputs</code> with the same channel names (or aligns them with the rules' input/output paths) so the contracts can be paired</td>
+</tr>
 </tbody>
 </table>
-<p><code>TYPE-001</code> .. <code>TYPE-007</code> are proven violations: they fail <code>oxo-flow validate</code> and abort <code>oxo-flow run</code> in preflight. <code>TYPE-008</code> and <code>TYPE-009</code> are <strong>advisory</strong> — they report an <em>unverifiable</em> edge (a missing contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.</p>
+<p><code>TYPE-001</code> .. <code>TYPE-007</code> are proven violations: they fail <code>oxo-flow validate</code> and abort <code>oxo-flow run</code> in preflight. <code>TYPE-008</code>, <code>TYPE-009</code>, and <code>TYPE-010</code> are <strong>advisory</strong> — they report an <em>unverifiable</em> edge (a missing or unpairable contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.</p>
 <h3 id="curated-scientific-preflight-catalog-sci-">Curated Scientific Preflight Catalog (<code>SCI-*</code>)<a class="headerlink" href="#curated-scientific-preflight-catalog-sci-" title="Permanent link">#</a></h3>
 <p>Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.</p>
 <h4 id="1-germline-somatic-variant-calling">1. Germline &amp; Somatic Variant Calling<a class="headerlink" href="#1-germline-somatic-variant-calling" title="Permanent link">#</a></h4>

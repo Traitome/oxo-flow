@@ -10909,14 +10909,16 @@ and extensible attributes — to the files flowing across DAG edges. Contracts
 are checked statically before any compute: a producer whose output violates
 a consumer's declared type fails <code>oxo-flow validate</code> (error) and aborts
 <code>oxo-flow run</code> in preflight with a <code>[TYPE-0xx]</code> diagnostic (see
-<a href="../diagnostics-engine/#biological-subtyping-violations-type-">TYPE-001..009</a> —
+<a href="../diagnostics-engine/#biological-subtyping-violations-type-">TYPE-001..010</a> —
 diagnostics carry remediation hints, and where the fix is mechanical they
 synthesize the command (such as <code>samtools view -b</code> or <code>samtools sort</code>);
-TYPE-004 and TYPE-007 carry suggestions only). Two further codes are
+TYPE-004 and TYPE-007 carry suggestions only). Three further codes are
 <em>advisory</em>: <code>TYPE-008</code> flags a typed consumer whose producer declares no
-<code>[types]</code> at all, and <code>TYPE-009</code> flags a consumer that names a
-<code>reference_build</code> while the producer omits it — both report an unverifiable
-edge (a missing contract, not a mismatch) as a warning and never fail a run.</p>
+<code>[types]</code> at all, <code>TYPE-009</code> flags a consumer that names a
+<code>reference_build</code> while the producer omits it, and <code>TYPE-010</code> flags an edge
+where both rules declare types but no output channel name pairs with an input
+channel name — all report an unverifiable edge (a missing or unpairable
+contract, not a mismatch) as a warning and never fail a run.</p>
 <h3 id="named-type-declarations">Named type declarations<a class="headerlink" href="#named-type-declarations" title="Permanent link">#</a></h3>
 <p>Declare a reusable contract under a top-level <code>[types.&lt;name&gt;]</code> table:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1" href="#__codelineno-96-1"></a><span class="k">[types.raw_sam]</span>
@@ -10962,7 +10964,7 @@ edge (a missing contract, not a mismatch) as a warning and never fail a run.</p>
 <tr>
 <td><code>compression</code></td>
 <td><code>none</code>, <code>gzip</code>, <code>bgzip</code>, <code>zstd</code></td>
-<td>Block/stream compression of the file</td>
+<td>Block/stream compression of the file. BAM and CRAM are BGZF by specification, so a producer declaring a plain <code>bam</code>/<code>cram</code> already satisfies a consumer's <code>compression=bgzip</code> requirement; other formats must state compression explicitly</td>
 </tr>
 <tr>
 <td><code>read_groups</code></td>
@@ -11024,8 +11026,9 @@ accompaniment (<code>TYPE-003</code>), reference build (<code>TYPE-004</code>), 
 channel reference that matches no <code>[types.*]</code> declaration (or an unparsable
 inline spec) reports <code>TYPE-UNKNOWN</code>. Edges the checker cannot prove either
 way are reported as advisory <code>TYPE-008</code> (typed consumer against an untyped
-producer) and <code>TYPE-009</code> (consumer names a build the producer omits); these
-are warnings, not failures, so a partially annotated workflow still runs. Channel semantics: identical channel
+producer), <code>TYPE-009</code> (consumer names a build the producer omits), and
+<code>TYPE-010</code> (both sides typed but no channel name pairs); these are warnings,
+not failures, so a partially annotated workflow still runs. Channel semantics: identical channel
 names always match; <code>default</code> matches when either side declares only one
 channel; and with a single channel on each side, a shared output/input path
 also matches. Beyond static checking, <code>oxo-flow test</code>'s deep check (<code>D005</code>)
