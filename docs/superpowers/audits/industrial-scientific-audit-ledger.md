@@ -49,7 +49,7 @@ This ledger combines static review, local tests, and command-level simulations. 
 ### Not established
 
 - No completed GitHub or designated-Linux-host CI result is claimed for this tree.
-- No live PostgreSQL, horizontal multi-process, crash-recovery, or production-load campaign is complete.
+- No production-load campaign is complete, and no live PostgreSQL result beyond the single-host loopback smoke is claimed: a single-host loopback concurrency/crash/horizontal smoke campaign IS now recorded (live `postgres:16`, N-way concurrent guarded inserts, killed-writer crash recovery, two-instance shared guard — see [`postgres-ledger-2026-11-19.md`](postgres-ledger-2026-11-19.md) and the "Unified run-ledger storage abstraction" row in `ROADMAP.md`), while production-scale row counts, connection-pool exhaustion, network partition / genuinely remote servers, and a SQLite-vs-PostgreSQL differential re-check remain NOT done.
 - No live SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, or Google Cloud Batch campaign is complete.
 - No NUMA, NVMe-tiering, accelerator, or 10,000-sample performance study is complete.
 - No human-subjects study is complete.
