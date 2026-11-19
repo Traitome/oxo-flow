@@ -4,8 +4,9 @@
 //! drives BOTH admission surfaces — the full finder [`check_workflow_types`]
 //! and the filtered gate [`validate_workflow_types`] — so the two can never
 //! disagree about what a workflow declares. Covers TYPE-001..TYPE-007 in both
-//! directions plus the advisory TYPE-008/TYPE-009 unverifiable-edge codes, and
-//! pins the deliberate compatibility bypasses as explicit assertions.
+//! directions plus the advisory TYPE-008/TYPE-009/TYPE-010 unverifiable-edge
+//! codes, and pins the deliberate compatibility bypasses as explicit
+//! assertions.
 
 use super::checker::{check_workflow_types, validate_workflow_types};
 use super::inspect::IntrospectedBioType;
@@ -19,7 +20,8 @@ use crate::dag::WorkflowDag;
 /// (`None` = the workflow is fully typed and must yield zero diagnostics).
 /// `accept` is what [`validate_workflow_types`] must return: `false` for a
 /// proven violation, `true` for a fully-satisfied workflow *and* for advisory
-/// unverifiable edges (TYPE-008/TYPE-009), which are reported but non-fatal.
+/// unverifiable edges (TYPE-008/TYPE-009/TYPE-010), which are reported but
+/// non-fatal.
 struct Case {
     name: &'static str,
     types_block: &'static str,
@@ -231,6 +233,212 @@ fn compile(case: &Case) -> (WorkflowConfig, WorkflowDag) {
     let dag = WorkflowDag::from_rules(&config.rules)
         .unwrap_or_else(|e| panic!("case '{}' must build a DAG: {e}", case.name));
     (config, dag)
+}
+
+/// Parse raw TOML into a config + DAG, failing the test on any parse error.
+fn compile_toml(toml: &str) -> (WorkflowConfig, WorkflowDag) {
+    let config = WorkflowConfig::parse(toml).unwrap_or_else(|e| panic!("must parse: {e}\n{toml}"));
+    let dag =
+        WorkflowDag::from_rules(&config.rules).unwrap_or_else(|e| panic!("must build a DAG: {e}"));
+    (config, dag)
+}
+
+/// Render a two-rule workflow whose typed contracts may carry MULTIPLE channels
+/// per side — the single-channel `wf()` helper above cannot express the
+/// multi-channel / `default`-keyed edges of truth-set cases a08/a09/a11.
+///
+/// `producer_outputs` / `consumer_inputs` are the literal `[rules.types]` map
+/// bodies (e.g. `"a.bam" = "BAM", "b.vcf" = "VCF"`); the path lists are the raw
+/// `output` / `input` file globs the DAG wires on.
+fn multichannel_wf(
+    producer_paths: &[&str],
+    producer_outputs: &str,
+    consumer_paths: &[&str],
+    consumer_inputs: &str,
+) -> String {
+    let quote = |paths: &[&str]| {
+        paths
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "[workflow]\nname = \"multichannel\"\n\n\
+         [[rules]]\nname = \"make\"\noutput = [{prod_paths}]\nshell = \"echo\"\n\
+         [rules.types]\noutputs = {{ {producer_outputs} }}\n\n\
+         [[rules]]\nname = \"use\"\ninput = [{cons_paths}]\noutput = [\"result.txt\"]\nshell = \"echo\"\n\
+         [rules.types]\ninputs = {{ {consumer_inputs} }}\n",
+        prod_paths = quote(producer_paths),
+        cons_paths = quote(consumer_paths),
+    )
+}
+
+// --- Issue #1254: multi-channel pairing silent-skip -------------------------
+
+/// Truth-set a08: a multi-output producer typed by RAW PATH (`a.bam`→BAM,
+/// `b.vcf`→VCF) feeding a consumer whose single input is keyed `default`.
+/// Neither channel name pairs, so before #1254 the typed edge produced NO
+/// diagnostic at all — a silent skip (false-accept). The fix must surface
+/// exactly one advisory instead of silence.
+#[test]
+fn issue_1254_unpaired_default_consumer_reports_advisory() {
+    let toml = multichannel_wf(
+        &["a.bam", "b.vcf"],
+        "\"a.bam\" = \"BAM\", \"b.vcf\" = \"VCF\"",
+        &["a.bam"],
+        "default = \"BAM[sort_order=coordinate]\"",
+    );
+    let (config, dag) = compile_toml(&toml);
+    let diagnostics = check_workflow_types(&config, &dag);
+    let advisories: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.violation.code == "TYPE-010")
+        .collect();
+    assert_eq!(
+        advisories.len(),
+        1,
+        "an unpaired typed edge must surface exactly one TYPE-010 advisory, not silence: {diagnostics:?}"
+    );
+    let adv = advisories[0];
+    assert!(
+        adv.producer_channel.contains("a.bam") && adv.producer_channel.contains("b.vcf"),
+        "advisory must name the producer's unpaired channels: {adv:?}"
+    );
+    assert!(
+        adv.consumer_channel.contains("default"),
+        "advisory must name the consumer's unpaired channel: {adv:?}"
+    );
+    // Advisory codes are non-fatal: the admission gate still accepts the edge.
+    assert!(
+        validate_workflow_types(&config, &dag).is_ok(),
+        "TYPE-010 is advisory and must not fail the gate"
+    );
+}
+
+/// Truth-set a11: same root cause, different surface — the producer types its
+/// two channels by NAME (`aligned`, `calls`) and the consumer's single input is
+/// keyed `reads`. No pair forms → advisory, not silence.
+#[test]
+fn issue_1254_unpaired_named_consumer_reports_advisory() {
+    let toml = multichannel_wf(
+        &["a.bam", "b.vcf"],
+        "aligned = \"BAM\", calls = \"VCF\"",
+        &["a.bam"],
+        "reads = \"BAM[sort_order=coordinate]\"",
+    );
+    let (config, dag) = compile_toml(&toml);
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(
+        diagnostics.iter().any(|d| d.violation.code == "TYPE-010"),
+        "unpaired named edge must surface the TYPE-010 advisory: {diagnostics:?}"
+    );
+    assert!(validate_workflow_types(&config, &dag).is_ok());
+}
+
+/// Truth-set a09 CONTROL: identical producer to a08, but the consumer keys its
+/// input by the shared raw path `a.bam`, so `out_ch == in_ch` pairs and the
+/// concrete violation fires. Pins that the #1254 fallback adds NO advisory
+/// noise (nor a spurious extra TYPE-002) when a pair DOES form.
+#[test]
+fn issue_1254_paired_edge_yields_one_type_002_and_no_advisory() {
+    let toml = multichannel_wf(
+        &["a.bam", "b.vcf"],
+        "\"a.bam\" = \"BAM\", \"b.vcf\" = \"VCF\"",
+        &["a.bam"],
+        "\"a.bam\" = \"BAM[sort_order=coordinate]\"",
+    );
+    let (config, dag) = compile_toml(&toml);
+    let diagnostics = check_workflow_types(&config, &dag);
+    let type_002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.violation.code == "TYPE-002")
+        .collect();
+    assert_eq!(
+        type_002.len(),
+        1,
+        "exactly one TYPE-002 for the single paired edge: {diagnostics:?}"
+    );
+    assert!(
+        !diagnostics.iter().any(|d| d.violation.code == "TYPE-010"),
+        "no advisory may fire when a channel pair forms: {diagnostics:?}"
+    );
+    assert!(validate_workflow_types(&config, &dag).is_err());
+}
+
+// --- Issue #1255: format-implied compression --------------------------------
+
+/// Truth-set a12: BAM is BY SPECIFICATION a BGZF stream, so a plain `BAM`
+/// producer already satisfies a consumer's `compression=bgzip` requirement.
+/// Before #1255 this was a false-reject (TYPE-006).
+#[test]
+fn issue_1255_plain_bam_satisfies_bgzip_requirement() {
+    let producer = BioTypeSpec::new(BioFormat::Bam);
+    let consumer = BioTypeSpec {
+        format: BioFormat::Bam,
+        compression: Some(CompressionKind::Bgzip),
+        ..Default::default()
+    };
+    assert!(
+        producer.is_subtype_of(&consumer).is_ok(),
+        "a plain BAM already IS bgzip; requiring bgzip must not reject"
+    );
+}
+
+/// Format-invariance guard: FASTQ and VCF carry NO implied stream compression,
+/// so they must still require the explicit expectation (t04 stays a reject).
+#[test]
+fn issue_1255_fastq_and_vcf_get_no_implied_compression() {
+    for format in [BioFormat::Fastq, BioFormat::Vcf] {
+        let producer = BioTypeSpec::new(format);
+        let consumer = BioTypeSpec {
+            format,
+            compression: Some(CompressionKind::Bgzip),
+            ..Default::default()
+        };
+        let err = producer
+            .is_subtype_of(&consumer)
+            .expect_err("only BAM/CRAM imply bgzip");
+        assert!(
+            err.iter().any(|v| v.code == "TYPE-006"),
+            "{format} must reject a bgzip requirement: {err:?}"
+        );
+    }
+}
+
+/// Genuine-mismatch guard: the #1255 short-circuit must not weaken a real
+/// compression conflict — BAM against an explicit `compression=zstd` still
+/// rejects.
+#[test]
+fn issue_1255_bam_versus_zstd_still_rejects() {
+    let producer = BioTypeSpec::new(BioFormat::Bam);
+    let consumer = BioTypeSpec {
+        format: BioFormat::Bam,
+        compression: Some(CompressionKind::Zstd),
+        ..Default::default()
+    };
+    let err = producer
+        .is_subtype_of(&consumer)
+        .expect_err("BAM is bgzip, not zstd");
+    assert!(
+        err.iter().any(|v| v.code == "TYPE-006"),
+        "BAM vs zstd must still be TYPE-006: {err:?}"
+    );
+}
+
+/// Truth-set a12 end-to-end through the DAG checker (not just the spec lattice).
+#[test]
+fn issue_1255_truthset_a12_edge_accepts_end_to_end() {
+    let toml = "\
+[workflow]\nname = \"a12\"\n\n\
+[[rules]]\nname = \"align\"\noutput = [\"a.bam\"]\nshell = \"samtools sort -o a.bam in.sam\"\n\
+[rules.types]\noutputs = { default = \"BAM\" }\n\n\
+[[rules]]\nname = \"index\"\ninput = [\"a.bam\"]\noutput = [\"out.txt\"]\nshell = \"samtools index a.bam\"\n\
+[rules.types]\ninputs = { default = \"BAM[compression=bgzip]\" }\n";
+    let (config, dag) = compile_toml(toml);
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(diagnostics.is_empty(), "a12 must accept: {diagnostics:?}");
+    assert!(validate_workflow_types(&config, &dag).is_ok());
 }
 
 #[test]

@@ -15,6 +15,12 @@
 #   whose stated requirement is violated. If the checker cannot pair the
 #   channels it must at minimum surface an advisory — a typed edge that
 #   produces NO diagnostic is a silent skip and therefore a false-accept.
+#
+# POST-FIX (2026-11-19, issue #1254): the checker now surfaces this edge as
+#   advisory TYPE-010 ("unpairable edge") instead of silence. Per the issue's
+#   stated intent the unpaired edge is *surfaced, not blocked*, so the harness
+#   verdict for this case moved from `reject` to `accept` (with the advisory);
+#   the pre-fix `reject/TYPE-002` expectation above is retained for provenance.
 
 [workflow]
 name = "a08"

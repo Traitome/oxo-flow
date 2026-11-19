@@ -1145,7 +1145,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         Ok(dag) => {
             if !config.types.is_empty() || config.rules.iter().any(|rule| rule.types.is_some()) {
                 for td in crate::types::check_workflow_types(config, &dag) {
-                    // Unverifiable edges (TYPE-008/009) are advisory: the
+                    // Unverifiable edges (TYPE-008/009/010) are advisory: the
                     // contract could not be checked, not proven violated, so
                     // they surface as warnings and never fail validation.
                     let severity = if crate::types::is_advisory_type_code(&td.violation.code) {

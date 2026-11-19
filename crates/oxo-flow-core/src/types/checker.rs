@@ -14,13 +14,14 @@ use crate::dag::WorkflowDag;
 ///
 /// These fire on dataflow edges where a contract *cannot be checked* (rather
 /// than is known to be violated): a typed consumer whose upstream producer
-/// declares no `[types]` (TYPE-008), or a consumer that names a reference build
-/// against a producer that omits one (TYPE-009). Every bridge that maps a
-/// [`TypeViolation`] into a user-facing actionable diagnostic must keep
+/// declares no `[types]` (TYPE-008), a consumer that names a reference build
+/// against a producer that omits one (TYPE-009), or a typed producer/consumer
+/// edge whose channels cannot be paired at all (TYPE-010). Every bridge that
+/// maps a [`TypeViolation`] into a user-facing actionable diagnostic must keep
 /// advisory codes non-fatal — see `crate::format` and
 /// `crate::scientific_preflight`. This is the single source of truth so the
 /// two bridges cannot drift.
-pub const ADVISORY_TYPE_CODES: [&str; 2] = ["TYPE-008", "TYPE-009"];
+pub const ADVISORY_TYPE_CODES: [&str; 3] = ["TYPE-008", "TYPE-009", "TYPE-010"];
 
 /// Returns true when `code` is an advisory (non-fatal) BioType diagnostic.
 pub fn is_advisory_type_code(code: &str) -> bool {
@@ -221,7 +222,16 @@ impl BioTypeSpec {
         if let Some(expected_comp) = expected.compression
             && expected_comp != CompressionKind::None
         {
-            let current_comp = self.compression.unwrap_or(CompressionKind::None);
+            // A format may imply a compression stream even when the producer
+            // declares none: BAM/CRAM are BGZF by specification, so a plain
+            // `BAM` already satisfies a `compression=bgzip` requirement
+            // (issue #1255). This is the format invariant, NOT a blanket
+            // tolerance — BAM against `compression=zstd`, and FASTQ/VCF
+            // (which imply no stream wrapper) against `compression=bgzip`,
+            // still reject below.
+            let current_comp = self
+                .compression
+                .unwrap_or_else(|| BioTypeSpec::implied_compression(self.format));
             if !current_comp.satisfies(expected_comp) {
                 let suggestion = if expected_comp == CompressionKind::Bgzip {
                     "compress with bgzip instead of standard gzip for random access compatibility"
@@ -351,6 +361,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
             };
 
             // Match output channels from producer with input channels of consumer
+            let mut any_channel_paired = false;
             for (out_ch, out_type_name) in &producer_types.outputs {
                 for (in_ch, in_type_name) in &consumer_types.inputs {
                     // Channels match if identical, or either is "default" against a
@@ -372,6 +383,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                             && producer_rule.output.iter().any(|o| o == in_ch));
 
                     if channel_match {
+                        any_channel_paired = true;
                         let producer_spec = resolve_type_spec(out_type_name, config);
                         let consumer_spec = resolve_type_spec(in_type_name, config);
 
@@ -447,6 +459,41 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                     }
                 }
             }
+
+            // A typed producer feeding a typed consumer where NOTHING paired:
+            // every channel key on both sides failed to line up, so the loop
+            // above checked no contract and this edge would otherwise pass in
+            // total silence — a false-accept (issue #1254). Report one advisory
+            // (TYPE-010) naming both sides' channels so the operator can key
+            // them consistently. Fires only when zero pairs formed, so a
+            // resolvable edge never gains noise.
+            if !any_channel_paired {
+                diagnostics.push(TypeDiagnostic {
+                    producer_rule: producer_name.clone(),
+                    consumer_rule: consumer_name.clone(),
+                    producer_channel: producer_types
+                        .outputs
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    consumer_channel: consumer_types
+                        .inputs
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    violation: TypeViolation {
+                        code: "TYPE-010".to_string(),
+                        message: "unpairable biological contract: both rules declare types, but no output channel name matches an input channel name, so this dataflow edge cannot be checked".to_string(),
+                        suggestion: Some(
+                            "key the producer's [rules.types].outputs and the consumer's [rules.types].inputs with the same channel names (or align them with the rules' input/output paths) so the contracts can be paired"
+                                .to_string(),
+                        ),
+                        coercion_rule: None,
+                    },
+                });
+            }
         }
     }
 
@@ -457,10 +504,11 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
 ///
 /// Returns an empty success when the workflow declares no BioTypes. This is
 /// the shared admission gate for CLI preflight and web run creation, so only
-/// *fatal* findings fail it: advisory unverifiable-edge codes (TYPE-008/009)
-/// are dropped here because an unverifiable edge is not a proven violation.
-/// Callers that surface every finding (the format bridge, scientific
-/// preflight) still see the advisory diagnostics via [`check_workflow_types`].
+/// *fatal* findings fail it: advisory unverifiable-edge codes
+/// (TYPE-008/TYPE-009/TYPE-010) are dropped here because an unverifiable edge
+/// is not a proven violation. Callers that surface every finding (the format
+/// bridge, scientific preflight) still see the advisory diagnostics via
+/// [`check_workflow_types`].
 pub fn validate_workflow_types(
     config: &WorkflowConfig,
     dag: &WorkflowDag,
