@@ -3514,6 +3514,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sensitive-value-recoverability-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sensitive-value recoverability contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4535,6 +4546,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sensitive-value-recoverability-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sensitive-value recoverability contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4936,6 +4958,46 @@ it does <strong>not</strong> prove: real conda/pixi solver or network behavior,
 real-toolchain CLI compatibility beyond the emulated contract,
 container/module backends, cluster execution paths, or <code>env gc</code> for
 conda/mamba (they are not store-managed).</p>
+<hr />
+<h2 id="sensitive-value-recoverability-contract">Sensitive-value recoverability contract<a class="headerlink" href="#sensitive-value-recoverability-contract" title="Permanent link">#</a></h2>
+<p>Rules that route a sensitive value (a <code>{config.&lt;key&gt;}</code> whose value is in the
+run's sensitive set — see the <code>[config]</code> sensitive-key mechanism) never put the
+value into any artifact a scheduler, a co-tenant, or a later process can read
+back. The engine materializes the value once, into a <code>0o600</code> env file named
+<code>secrets.env</code> inside the rule's private job directory, and the job shell sources
+it inside an <code>env -i</code> wrapper. Everything else carries only the <strong>reference</strong>
+name (<code>OXO_FLOW_SENSITIVE_0</code>).</p>
+<p>Guaranteed value-free (issue #1258; each is asserted by a test over the whole
+run tree, reading every file as bytes):</p>
+<ul>
+<li>the scheduler-visible job script and its per-array command files — the value
+  is replaced by <code>${OXO_FLOW_SENSITIVE_0}</code>, the env-file path, and the <code>env -i</code>
+  wrapper;</li>
+<li>the mock-scheduler state directory (the scheduler's own copy of the script);</li>
+<li><code>status.json</code>, <code>events.jsonl</code>, and every other run-directory artifact;</li>
+<li>the container-wrapper command (docker/singularity): the reference is
+  forwarded <strong>by name</strong> (<code>-e OXO_FLOW_SENSITIVE_0</code>, plus the
+  <code>APPTAINERENV_</code>/<code>SINGULARITYENV_</code> aliases for singularity), never by value;</li>
+<li>cloud dispatch bodies (k8s/aws/gcp): the job sees only the routed
+  <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> reference, mapped to a secret store on the operator
+  side (<code>OXO_FLOW_SECRET_REFS</code>).</li>
+</ul>
+<p>The env file itself is removed as soon as the driver observes the job terminal,
+and a startup/exit backstop sweeps any env file left behind by a killed
+predecessor — so a <strong>restart</strong> (resume) never leaves a recoverable value, and a
+<strong>cancellation</strong> (interrupt) sweeps on the way out. Both paths are covered by
+tests over the whole run tree.</p>
+<p><strong>Docker bind-mount caveat (#1177).</strong> A literal Docker bind mount whose <em>source
+path</em> contains the value cannot be expressed without the container runtime
+seeing that path — the runtime must be handed the expanded source to mount it.
+That is a deliberate, documented limitation of literal bind mounts, not a leak
+in the routing mechanism; the reference-based route (env file + <code>env -i</code>) is the
+supported path for sensitive values. Prefer passing sensitive data through the
+routed reference, not through a bind-mount source path.</p>
+<p>The live end-to-end campaign across real schedulers and cloud backends is
+tracked separately (CL-05 / issue #1158); the renderer and run-tree guarantees
+above are unit- and integration-verified in
+<code>crates/oxo-flow-core/src/backend/</code>.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
