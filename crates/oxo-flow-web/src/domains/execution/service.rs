@@ -409,6 +409,9 @@ pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
         // may be missing (issue #1112 / audit RB-05): `status` alone cannot
         // express an incomplete-while-terminal run.
         "artifacts_incomplete": r.artifacts_incomplete,
+        // Durable cluster routing fact (issue #1257 / audit RB-05); `null` for
+        // local runs and for retry/resume rows, which re-execute locally.
+        "cluster_id": r.cluster_id,
         "started_at": r.started_at,
         "finished_at": r.finished_at,
         "created_at": r.created_at,

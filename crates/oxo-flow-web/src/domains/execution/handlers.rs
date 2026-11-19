@@ -1494,6 +1494,10 @@ pub async fn get_run(
         // express an incomplete-while-terminal run, so the reason travels
         // alongside it.
         "artifacts_incomplete": run.artifacts_incomplete,
+        // Durable cluster routing fact, persisted at dispatch (issue #1257 /
+        // audit RB-05): lets a client discover which cluster a restart-orphaned
+        // remote run was routed to, exactly the fact cancellation resolves from.
+        "cluster_id": run.cluster_id,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "created_at": run.created_at,
