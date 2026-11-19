@@ -96,6 +96,7 @@ while IFS=$'\t' read -r case exp codes note; do
   lint_out="$("$BIN" lint "$ROOT/$case" --json 2>/dev/null)"
   seen_lint="$(printf '%s' "$lint_out" | grep -o 'TYPE-[0-9][0-9][0-9]' | sort -u | paste -sd, -)"
   seen="$(printf '%s\n%s\n' "$seen_valid" "$seen_lint" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
+  codes="$(printf '%s' "$codes" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
   [[ -z "$codes" ]] && codes='-'
   [[ -z "$seen" ]] && seen='-'
   if [[ "$codes" == "$seen" ]]; then codes_correct=yes; codes_ok=$((codes_ok+1)); else codes_correct=NO; codes_bad=$((codes_bad+1)); fi
