@@ -4796,6 +4796,7 @@ caption), and the retry POST is the only mutation sent.</p>
 <li><code>SCI-ZERO-BYTE-COMPLETION</code>: Rule masks failures by creating empty binary outputs (<code>|| touch {output}</code>), causing downstream tools to crash on corrupt streams.</li>
 <li><code>SCI-MULTI-TENANT-PORT-COLLISION</code>: Interactive server rules specify hardcoded server ports (e.g. <code>--port 8888</code>), causing collision failures on multi-tenant nodes.</li>
 </ul>
+<p>The per-rule provenance (authority citation, positive fixture, and mention-only negative fixture) for all 51 rules, together with the adversarial-fixture harness and a measured preflight latency, is audited in <a href="https://github.com/ShixiangWang/oxo-flow/blob/main/docs/superpowers/audits/scientific-preflight-2026-11.md"><code>docs/superpowers/audits/scientific-preflight-2026-11.md</code></a> (issue #1244). The fixture table that drives the audit lives in <code>crates/oxo-flow-core/tests/scientific_preflight_adversarial.rs</code>.</p>
 
 
 
