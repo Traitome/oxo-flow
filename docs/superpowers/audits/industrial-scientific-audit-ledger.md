@@ -87,7 +87,7 @@ Fixed on the web spawn path (issue #1129, RB-01a):
 
 - The spawned CLI no longer inherits the server environment: `spawn_background_run_with_args` reuses the engine's own rule-shell policy (`oxo_flow_core::executor::apply_rule_env_allowlist`) plus a small operator-knob allowlist, so `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider credentials (`ANTHROPIC_*`/`OPENAI_*`/`OLLAMA_*`/`DEEPSEEK_*`), `OXO_FLOW_AI_API_KEY`, MCP tokens, and the sign-in passwords never reach a tenant-authored shell.
 - Operator-wide `RLIMIT_CPU` (`OXO_FLOW_WEB_RLIMIT_CPU_SECS`) and `RLIMIT_NPROC` (`OXO_FLOW_WEB_RLIMIT_NPROC`) ceilings are installed alongside the existing `RLIMIT_DATA` on the spawned process tree (Linux; a no-op elsewhere — Darwin rejects these `setrlimit` calls).
-- A two-tenant adversarial test (`crates/oxo-flow-web/tests/rb01_tenant_isolation.rs`) asserts the server secrets are ABSENT from a rule shell's environment and that a CPU-spinning rule is killed; removing the allowlist call fails the test (non-vacuity recorded in PR #1245).
+- A two-tenant adversarial test (`crates/oxo-flow-web/tests/rb01_tenant_isolation.rs`) asserts the server secrets are ABSENT from a rule shell's environment and that a CPU-spinning rule is killed; removing the allowlist call fails the test (non-vacuity recorded in PR #1241).
 
 Still NOT enforced (residual — see the web API reference and the PR body):
 
