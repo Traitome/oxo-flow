@@ -5047,6 +5047,28 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
             "out/token.txt",
         );
         let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+
+        // Observe the tree MID-RUN. A post-run assertion cannot tell the
+        // startup sweep (driver.rs:365) from the end-of-run backstop
+        // (driver.rs:367): both walk `jobs/` and remove `secrets.env`, and
+        // both finish before `run()` returns, so either one alone would
+        // satisfy it. The submit hook fires after the startup sweep and while
+        // the run is still live — a stale file still present at submit proves
+        // the startup sweep failed.
+        let stale_probe = stale_dir.join(crate::backend::SENSITIVE_ENV_FILE_NAME);
+        let seen_at_submit: Arc<std::sync::Mutex<Option<bool>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let probe_slot = seen_at_submit.clone();
+        let on_submit = move |_rule: String, _job: String| {
+            let path = stale_probe.clone();
+            let slot = probe_slot.clone();
+            Box::pin(async move {
+                *slot.lock().unwrap() = Some(path.exists());
+                Ok(())
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        };
+
         let records = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(d.run(
@@ -5057,7 +5079,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[fresh_secret.to_string()],
-                    on_submit: None,
+                    on_submit: Some(Box::new(on_submit)),
                     on_settle: None,
                 },
             ))
@@ -5071,6 +5093,15 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
         // by construction, so the whole-tree walk finds nothing.
         assert_marker_absent(fx.run_dir.path(), stale_secret, "restarted run tree");
         assert_marker_absent(fx.run_dir.path(), fresh_secret, "restarted run tree");
+
+        // The load-bearing assertion: the predecessor's env file was already
+        // gone when the new job was submitted — the startup sweep removed it,
+        // not the end-of-run backstop.
+        assert_eq!(
+            *seen_at_submit.lock().unwrap(),
+            Some(false),
+            "the predecessor's env file must already be gone at submission time"
+        );
         assert!(
             !stale_dir
                 .join(crate::backend::SENSITIVE_ENV_FILE_NAME)
