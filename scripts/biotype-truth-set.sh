@@ -4,7 +4,9 @@
 #
 # Truth set (18 cases):
 #   * 15 typed/adversarial cases under tests/truthset/biotype/cases/
-#     (t01..t06 transplanted Nextflow/Snakemake format edges; a06..a14
+#     (t01..t06 hand-authored adversarial edges modelled on the Nextflow/Snakemake
+#      import-fixture format edges — only t01/t06 track edges literally present
+#      in rnaseq.ok.nf; a06..a14
 #     hand-authored adversarial probes at the TYPE-code boundaries).
 #   *  3 real repository .oxoflow files under examples/gallery/ that were
 #     NOT written for the checker (all untyped, expected accept).

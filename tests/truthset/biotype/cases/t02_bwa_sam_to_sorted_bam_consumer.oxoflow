@@ -1,6 +1,7 @@
-# T2 — transplant of a Nextflow RNA-seq rule pair (see
-# tests/fixtures/import/nextflow/rnaseq.ok.nf): bwa-mem2 emits SAM
-# (unsorted by default); the downstream MarkDuplicates-style consumer
+# T2 — hand-authored adversarial probe modelled on the Nextflow RNA-seq
+# format edges (tests/fixtures/import/nextflow/rnaseq.ok.nf, which uses
+# STAR/trimmomatic/subread — NOT bwa-mem2/MarkDuplicates): bwa-mem2 emits
+# SAM (unsorted by default); the downstream MarkDuplicates-style consumer
 # requires a coordinate-sorted BAM.
 #
 # EXPECTED (recorded before running, argued from the tool contract):

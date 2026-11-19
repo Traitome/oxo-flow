@@ -1,4 +1,4 @@
-# T4 — transplant of a `gzip`-compressed VCF producer paired with a
+# T4 — hand-authored adversarial probe modelling a `gzip`-compressed VCF producer paired with a
 # tabix-indexed consumer (common Snakemake pattern where a rule pipes
 # `bgzip -c` incorrectly as plain `gzip -c`). tabix requires BGZF; a plain
 # gzip stream is not seekable, so random-access tabix indexing is invalid.
