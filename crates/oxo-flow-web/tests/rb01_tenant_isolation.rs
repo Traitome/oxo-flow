@@ -171,13 +171,21 @@ async fn web_spawned_rule_shell_cannot_see_server_secrets() {
     {
         let ulimits = std::fs::read_to_string(run_dir.join("child-ulimits.txt"))
             .expect("stub wrote its rlimits");
-        assert!(
-            ulimits.contains("CPU=2"),
-            "RLIMIT_CPU must be installed at the configured ceiling:\n{ulimits}"
-        );
-        assert!(
-            ulimits.contains("NPROC=1024"),
-            "RLIMIT_NPROC must be installed at the configured ceiling:\n{ulimits}"
+        // `/proc/self/limits` is shell-agnostic (dash's `ulimit` has no `-u`).
+        // Each line is `<name> <soft> <hard> <unit>`; find the line whose leading
+        // words are the resource name, then read the next whitespace field (soft
+        // limit). Never parse by column width.
+        let soft_limit = |prefix: &str| -> Option<u64> {
+            ulimits.lines().find_map(|line| {
+                let rest = line.strip_prefix(prefix)?;
+                rest.split_whitespace().next()?.parse::<u64>().ok()
+            })
+        };
+        assert_eq!(soft_limit("Max cpu time"), Some(2), "limits:\n{ulimits}");
+        assert_eq!(
+            soft_limit("Max processes"),
+            Some(1024),
+            "limits:\n{ulimits}"
         );
 
         // A rule that spins CPU must be killed — observable failure, not a
@@ -202,7 +210,8 @@ async fn web_spawned_rule_shell_cannot_see_server_secrets() {
 ///
 /// It parses `--workdir` out of its argv (the web builds
 /// `run <workflow> --workdir <dir> …`), writes its environment and its own
-/// `ulimit -t`/`ulimit -u` readings into the run directory, and — when the
+/// rlimit readings (`/proc/self/limits`, dash-portable; `ulimit -t` fallback)
+/// into the run directory, and — when the
 /// workflow text carries the `SPIN_CPU` marker — spins until the `RLIMIT_CPU`
 /// ceiling kills it. Otherwise it exits 0.
 fn write_stub(stub: &std::path::Path) {
@@ -219,7 +228,11 @@ while [ $# -gt 0 ]; do
 done
 if [ -n "$dir" ]; then
   env > "$dir/child-env.txt" 2>&1
-  { echo "CPU=$(ulimit -t)"; echo "NPROC=$(ulimit -u)"; } > "$dir/child-ulimits.txt" 2>&1
+  if [ -r /proc/self/limits ]; then
+    cp /proc/self/limits "$dir/child-ulimits.txt" 2>&1
+  else
+    echo "CPU=$(ulimit -t)" > "$dir/child-ulimits.txt" 2>&1
+  fi
 fi
 if [ -n "$wf" ] && grep -q SPIN_CPU "$wf" 2>/dev/null; then
   while :; do :; done
