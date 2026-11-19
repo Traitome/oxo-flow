@@ -12,7 +12,8 @@
 #   M4 scratch footprint      eager vs stream peak scratch bytes
 #
 # Emits raw numbers. --self-test adds the FAIL-FIRST non-vacuity check
-# (perturb stream -> eager and assert the scratch discriminator flips).
+# (adds an eager control run and asserts its scratch footprint, not the
+# stream arm's, separates the two staging paths).
 #
 # Usage:
 #   scripts/range-io-staging.sh [--bin <oxo-flow>] [--obj-mib N] [--self-test]

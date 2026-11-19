@@ -97,9 +97,11 @@ object on a live S3-compatible endpoint:
 > (d) **scratch footprint** `stream` peak scratch is ~0 while `eager` peak
 > scratch ≈ the object size, i.e. streaming does **not** buffer the full object
 > to scratch;
-> (e) **non-vacuity** perturbing the streaming arm to `eager` flips the
-> scratch-footprint discriminator, proving the measurement observes the staging
-> path (a harness blind to it would report ~0 for both).
+> (e) **non-vacuity** re-running the same workflow with `staging_mode` set to
+> `eager` (a control run, not a second `stream` run) reports ~object-size
+> scratch while the captured `stream` arm reported ~0, so the scratch-footprint
+> discriminator distinguishes the two staging paths (a harness blind to them
+> would report ~0 for both).
 
 ## 5. Raw numbers
 
@@ -115,7 +117,7 @@ Slow consumer: `16` MiB/s. All arms `ok=True` unless noted.
 | M2 `stream` (killed mid-read) | -9 (SIGKILL) | 1.2989 | — | 90452 | 0 | — |
 | M3 `stream` (slow consumer) | 0 | 16.2926 | 15.71 | 93380 | **0** | true |
 | M3 `eager` (slow consumer) | 0 | 18.7607 | 13.65 | 63172 | 268435523 | true |
-| self-test (stream perturbed→eager) | 0 | 3.5284 | 72.55 | 62828 | 268435523 | true |
+| self-test (eager control) | 0 | 3.5284 | 72.55 | 62828 | 268435523 | true |
 
 **M2 interruption + resume detail:**
 
@@ -131,9 +133,10 @@ Slow consumer: `16` MiB/s. All arms `ok=True` unless noted.
 | stale artifact after resume | none (`.part` gone) | none (FIFO gone, `staged_is_fifo=False`) |
 
 **Self-test (FAIL-FIRST):** `stream_scratch = 0 B` (< 2% of object: true),
-`perturbed_scratch = 268435523 B` (> 90%: true) → **PASS**. The scratch
-discriminator flips when the streaming arm is perturbed to `eager`, so the
-measurement is not vacuously reporting ~0 for both.
+`eager_control_scratch = 268435523 B` (> 90%: true) → **PASS**. The eager
+control run's peak scratch (268435523 B, the full object) contrasts with the
+captured streaming arm's 0 B, so the discriminator separates the two staging
+paths and the measurement is not vacuously reporting ~0 for both.
 
 ## 6. Observations
 
@@ -156,9 +159,10 @@ measurement is not vacuously reporting ~0 for both.
   wall time (16.29 s) equals the slow-consumer arm because the same workflow
   (slow consumer) was re-run.
 - **`eager` scratch equals the object size by design**, not a leak: it is the
-  staged regular file the shell reads (268435523 B = 268435456 B + the
-  transient `.part` peak). The `< 2%` / `> 90%` self-test thresholds encode
-  exactly this.
+  staged regular file the shell reads (268435523 B = 268435456 B + 67 B, the
+  `.meta.json` etag sidecar that `stage_with_cache` writes beside the staged
+  file; 268435523 − 268435456 = 67 B). The `< 2%` / `> 90%` self-test
+  thresholds encode exactly this.
 
 ## 7. Honesty boundary
 

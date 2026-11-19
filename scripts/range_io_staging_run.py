@@ -19,10 +19,12 @@ measurements:
   M4 scratch footprint      peak bytes under .oxo-flow/staged for eager vs
                             stream over one object.
 
-Non-vacuity (FAIL-FIRST): `--self-test` re-runs the streaming workflow with
-the staging mode PERTURBED to `eager` and asserts the scratch-footprint
-discriminator flips (stream ~0 scratch, perturbed ~object size). A harness
-that always reported ~0 scratch would fail this.
+Non-vacuity (FAIL-FIRST): `--self-test` re-runs the same workflow with
+`staging_mode` set to `eager` and compares that control's peak scratch against
+the previously captured `stream` arm's number, asserting the scratch-footprint
+discriminator separates the two staging paths (stream ~0 scratch, eager control
+~object size). A harness that always reported ~0 scratch would fail this. It
+does not mutate the stream arm; it adds an eager control run.
 
 This file is invoked by scripts/range-io-staging.sh; it does not bring up
 the server itself. Exit code is 0 unless --self-test assertions fail.
@@ -358,23 +360,27 @@ def main():
 
     # ---- FAIL-FIRST self-test ---------------------------------------------
     if args.self_test:
-        log("SELF-TEST: perturb stream -> eager, scratch discriminator must flip")
+        log("SELF-TEST: eager control run vs captured stream scratch must differ")
         obj = obj_bytes
         m_stream = results["measurements"]["m14_stream"]["peak_scratch_bytes"]
-        wd = make_workdir("selftest-perturbed")
-        # Declared stream, but PERTURBED to eager: proves the measurement sees
-        # the staging path (a harness blind to it would report ~0 for both).
+        wd = make_workdir("selftest-eager-control")
+        # Eager control run (the same object, staging_mode = eager): the
+        # captured stream arm reported ~0 scratch, so a full-object control
+        # proves the measurement sees the staging path (a harness blind to it
+        # would report ~0 for both). It does not mutate the stream arm.
         with open(os.path.join(wd, "wf.oxoflow"), "w") as f:
             f.write(workflow_text(args.bucket, key, "eager", FAST))
         r = run_once(args.bin, wd, env)
         r["ok"] = (r["rc"] == 0 and read_out_sha(wd) == want_sha)
-        results["measurements"]["selftest_perturbed"] = r
+        results["measurements"]["selftest_eager_control"] = r
         pe = r["peak_scratch_bytes"]
         a = m_stream < 0.02 * obj
         b = pe > 0.9 * obj
-        results["self_test"] = {"stream_scratch": m_stream, "perturbed_scratch": pe,
-                                "stream_bounded": a, "perturbed_full": b, "pass": bool(a and b)}
-        log("  stream scratch=%d B (<2%% of obj: %s) perturbed scratch=%d B (>90%%: %s) => %s"
+        results["self_test"] = {"stream_scratch": m_stream,
+                                "eager_control_scratch": pe,
+                                "stream_bounded": a, "eager_control_full": b,
+                                "pass": bool(a and b)}
+        log("  stream scratch=%d B (<2%% of obj: %s) eager-control scratch=%d B (>90%%: %s) => %s"
             % (m_stream, a, pe, b, "PASS" if (a and b) else "FAIL"))
 
     rp = os.path.join(args.root, "results.json")
@@ -389,8 +395,8 @@ def main():
                  v["peak_scratch_bytes"], v.get("ok")))
     if args.self_test:
         st = results["self_test"]
-        print("self_test pass=%s stream_scratch=%s perturbed_scratch=%s"
-              % (st["pass"], st["stream_scratch"], st["perturbed_scratch"]))
+        print("self_test pass=%s stream_scratch=%s eager_control_scratch=%s"
+              % (st["pass"], st["stream_scratch"], st["eager_control_scratch"]))
         return 0 if st["pass"] else 1
     return 0
 
