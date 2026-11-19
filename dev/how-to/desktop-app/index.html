@@ -4496,26 +4496,63 @@ platform-independent; verified on X11/Xvfb, Linux):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">cd</span><span class="w"> </span>crates/oxo-flow-desktop<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
 </span></code></pre></div>
 <h2 id="windows">Windows<a class="headerlink" href="#windows" title="Permanent link">#</a></h2>
-<p>There is no Windows bundle yet — the release pipeline does not build one
-(<code>cargo-bundle</code>'s <code>msi</code> format requires a Windows host). Windows users run
-the Linux binaries under WSL2. The desktop crate itself compiles for
-Windows (wry uses WebView2) but is not packaged by CI yet.</p>
+<p><strong>Support status: source-compatible, not built, not tested (issue #1223).</strong>
+Be precise about what that means:</p>
+<ul>
+<li><strong>It compiles.</strong> The desktop crate carries Windows code paths
+  (<code>#[cfg(windows)]</code> in <code>crates/oxo-flow-desktop/src/main.rs</code>: <code>USERPROFILE</code>
+  instead of <code>HOME</code>, the <code>explorer</code> opener instead of <code>cmd /c start</code>), and
+  wry targets WebView2 on Windows. No CI job builds it for Windows, so
+  "compiles" is a claim about the source, not a verified artifact.</li>
+<li><strong>No bundle ships.</strong> The release pipeline builds no Windows installer
+  (<code>cargo-bundle</code>'s <code>msi</code> format needs a Windows host, and there is no
+  Windows CI runner). Windows users run the Linux binaries under WSL2.</li>
+<li><strong>No Windows lifecycle test.</strong> The lifecycle smoke test below is a POSIX
+  bash script — it uses <code>flock</code>, <code>SIGTERM</code>, and (on headless Linux) a private
+  Xvfb display, none of which exist on Windows. It cannot run on Windows as
+  written, and there is no Windows CI runner, so the Windows desktop
+  lifecycle is <strong>unmeasured</strong>.</li>
+</ul>
+<p>To exercise the shell on Windows by hand, build it with its own cargo
+invocation (<code>cd crates/oxo-flow-desktop &amp;&amp; cargo build --release</code>) after the
+SPA build above; it needs the WebView2 runtime (preinstalled on Windows
+10/11) and MSVC Build Tools. The three properties <code>desktop-smoke.sh</code> asserts
+can be checked with this PowerShell sketch (manual, unverified — Windows uses
+no SIGTERM, so the clean-exit check is "close the window" rather than a
+signal):</p>
+<div class="language-powershell highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">$bin</span> <span class="p">=</span> <span class="s2">"crates\oxo-flow-desktop\target\release\oxo-flow-desktop.exe"</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nv">$home_tmp</span> <span class="p">=</span> <span class="nb">New-Item</span> <span class="n">-ItemType</span> <span class="n">Directory</span> <span class="n">-Path</span> <span class="p">(</span><span class="nb">Join-Path</span> <span class="nv">$env:TEMP</span> <span class="p">(</span><span class="no">[guid]</span><span class="p">::</span><span class="n">NewGuid</span><span class="p">()))</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c"># USERPROFILE is the Windows equivalent of the script's isolated HOME.</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nv">$env:USERPROFILE</span> <span class="p">=</span> <span class="nv">$home_tmp</span><span class="p">;</span> <span class="nv">$env:HOME</span> <span class="p">=</span> <span class="nv">$home_tmp</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nv">$p</span> <span class="p">=</span> <span class="nb">Start-Process</span> <span class="nv">$bin</span> <span class="n">-PassThru</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c"># 1. the shell anchors its data dir and brings up the embedded server</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="nv">$data</span> <span class="p">=</span> <span class="nb">Join-Path</span> <span class="nv">$home_tmp</span> <span class="s2">".oxo-flow\desktop"</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="k">while</span> <span class="p">(</span><span class="o">-not</span> <span class="p">(</span><span class="nb">Test-Path</span> <span class="p">(</span><span class="nb">Join-Path</span> <span class="nv">$data</span> <span class="s2">"oxo-flow.db"</span><span class="p">)))</span> <span class="p">{</span> <span class="nb">Start-Sleep</span> <span class="n">-Milliseconds</span> <span class="n">500</span> <span class="p">}</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="c"># 2. a second launch must refuse the single-instance lock</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="nv">$p2</span> <span class="p">=</span> <span class="nb">Start-Process</span> <span class="nv">$bin</span> <span class="n">-PassThru</span> <span class="n">-Wait</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="k">if</span> <span class="p">(</span><span class="nv">$p2</span><span class="p">.</span><span class="n">ExitCode</span> <span class="o">-eq</span> <span class="n">0</span><span class="p">)</span> <span class="p">{</span> <span class="k">throw</span> <span class="s2">"second instance should have refused the lock"</span> <span class="p">}</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="c"># 3. close the window (the documented shutdown path) and confirm exit</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="nb">Stop-Process</span> <span class="nv">$p</span>  <span class="c"># window close; no SIGTERM on Windows</span>
+</span></code></pre></div>
+<p>This variant is provided for completeness and is <strong>not</strong> run by CI; treat any
+Windows result as unverified until a Windows runner and a <code>pwsh</code> port of the
+smoke test exist.</p>
 <h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">#</a></h2>
 <p>After packaging, verify the shell starts its server and serves the SPA
 without a source checkout (the shell resolves <code>static/</code> relative to the
 executable, same lookup as the standalone server):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">APP</span><span class="o">=</span><span class="s2">"oxo-flow.app/Contents/MacOS/oxo-flow"</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span><span class="w">            </span><span class="c1"># opens a native window; server on an ephemeral port</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>lsof<span class="w"> </span>-p<span class="w"> </span><span class="nv">$!</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-m1<span class="w"> </span>TCP<span class="w">     </span><span class="c1"># shows the loopback listener</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">APP</span><span class="o">=</span><span class="s2">"oxo-flow.app/Contents/MacOS/oxo-flow"</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span><span class="w">            </span><span class="c1"># opens a native window; server on an ephemeral port</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>lsof<span class="w"> </span>-p<span class="w"> </span><span class="nv">$!</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-m1<span class="w"> </span>TCP<span class="w">     </span><span class="c1"># shows the loopback listener</span>
 </span></code></pre></div>
 <p>Verify the bundle signature and icon:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>codesign<span class="w"> </span>-dv<span class="w"> </span>--verbose<span class="o">=</span><span class="m">4</span><span class="w"> </span>oxo-flow.app<span class="w">        </span><span class="c1"># Signature=adhoc</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>plutil<span class="w"> </span>-lint<span class="w"> </span>oxo-flow.app/Contents/Info.plist
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>codesign<span class="w"> </span>-dv<span class="w"> </span>--verbose<span class="o">=</span><span class="m">4</span><span class="w"> </span>oxo-flow.app<span class="w">        </span><span class="c1"># Signature=adhoc</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>plutil<span class="w"> </span>-lint<span class="w"> </span>oxo-flow.app/Contents/Info.plist
 </span></code></pre></div>
 <h3 id="lifecycle-smoke-test">Lifecycle smoke test<a class="headerlink" href="#lifecycle-smoke-test" title="Permanent link">#</a></h3>
 <p><code>scripts/desktop-smoke.sh</code> (also <code>make desktop-smoke</code>) proves the shell
 lifecycle without touching your real data directory:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>make<span class="w"> </span>desktop-smoke<span class="w">          </span><span class="c1"># builds crates/oxo-flow-desktop, then runs the smoke</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>make<span class="w"> </span>desktop-smoke<span class="w">          </span><span class="c1"># builds crates/oxo-flow-desktop, then runs the smoke</span>
 </span></code></pre></div>
 <p>It launches the binary with <code>HOME</code> pointed at a temporary directory and
 asserts, in order:</p>
@@ -4583,18 +4620,18 @@ tarballs (built by CI, not by hand):</p>
 </tbody>
 </table>
 <h3 id="install-from-a-tarball">Install from a tarball<a class="headerlink" href="#install-from-a-tarball" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/SHA256SUMS.txt
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.32.0/SHA256SUMS.txt
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.32.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
 </span></code></pre></div>
 <p>Pick the target that matches the machine: <code>gnu</code> for glibc distributions,
 <code>musl</code> for Alpine/static links, <code>armv7</code> for 32-bit ARM.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Linux one-liners</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Linux one-liners</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
 </span></code></pre></div>
 <p>The AppImage runs <code>oxo-flow serve --open</code> on launch; the deb/rpm install
 <code>/usr/bin/oxo-flow</code> with the SPA under <code>/usr/share/oxo-flow/static</code>

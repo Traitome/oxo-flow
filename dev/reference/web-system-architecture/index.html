@@ -4728,7 +4728,7 @@ ones gated) after asserting the served bundle is the freshly built artifact
 <tr>
 <td style="text-align: left;">WCAG / accessibility</td>
 <td style="text-align: left;"><code>accessibility.spec.ts</code></td>
-<td style="text-align: left;">axe-core scans the six primary routes in both color themes plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI. CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes and the out-of-scope canvas surface are documented in the spec header.</td>
+<td style="text-align: left;">axe-core scans the six primary routes in both color themes, the canvas editor mode (<code>/editor</code> with <code>oxo_editor_mode=canvas</code>: the React Flow rule cards and the CodeMirror TOML pane) in both themes, plus three mobile-viewport scans (drawer closed in both themes and open) with the WCAG 2.0/2.1 A + AA tag set; any violation fails the spec. No axe rule is disabled — the findings this gate surfaced were fixed in the UI (including the canvas rule-card <code>label-content-name-mismatch</code> and the dark TOML syntax contrast, issue #1223). CI runs with no AI provider, so the AI-disabled dashboard/settings states are gated; both those and the configured variants pass. The scanned routes are documented in the spec header.</td>
 </tr>
 <tr>
 <td style="text-align: left;">Metro frame-time budget</td>
@@ -4749,8 +4749,14 @@ ones gated) after asserting the served bundle is the freshly built artifact
 </table>
 <p>Deliberately not covered by this suite: visual pixel rendering, real-device
 mobile gestures, screen-reader output beyond what axe-core's rule set
-evaluates, and Windows desktop packaging (the release pipeline does not
-build a Windows bundle).</p>
+evaluates, and the Windows desktop lifecycle (the release pipeline builds no
+Windows bundle and the smoke test is POSIX-only). The screen-reader gap is
+not incidental: axe-core checks the accessibility tree a screen reader
+<em>consumes</em>, but it does not run one, so the Metro keyboard path and the
+mobile drawer's announced output remain <strong>manual and unmeasured</strong> — no
+NVDA/JAWS/VoiceOver/TalkBack pass has been performed. Windows desktop is
+source-compatible but unbuilt and untested by CI; see
+<code>docs/guide/src/how-to/desktop-app.md</code> → Windows.</p>
 <h2 id="domain-driven-module-structure">Domain-Driven Module Structure<a class="headerlink" href="#domain-driven-module-structure" title="Permanent link">#</a></h2>
 <table>
 <thead>
