@@ -1,0 +1,42 @@
+# Cross-architecture reproduction measurement fixture (#1166).
+# Pinned, tiny, deterministic. Uses the `system` environment backend only
+# (no network, no conda/pixi/mamba) so it runs unchanged on any host that
+# already ships sh/sort/wc/gzip/python3.
+#
+# The three outputs deliberately span the artifact classes under test:
+#   - summary.txt   : PURE-TEXT  (sorted + wc) — expected architecture-stable
+#   - payload.txt.gz: COMPRESSED (gzip -n, mtime/name stripped) — stable iff the
+#                     zlib/gzip build matches
+#   - float.txt     : IEEE-754 FLOATING-POINT (%.17g of a fixed series) — the
+#                     class most likely to differ across toolchains
+
+[workflow]
+name = "cross-arch-provenance"
+version = "1.0.0"
+description = "Deterministic 3-rule fixture spanning text/compressed/float artifacts"
+author = "oxo-flow research program"
+
+[[rules]]
+name = "prepare"
+output = ["data/payload.txt"]
+shell = """
+mkdir -p data
+: > {output[0]}
+for i in $(seq 1 64); do echo "line $i value $((i * 37 % 97))" >> {output[0]}; done
+"""
+
+[[rules]]
+name = "text_and_compress"
+input = ["data/payload.txt"]
+output = ["summary.txt", "data/payload.txt.gz"]
+shell = """
+{ sort {input[0]} | wc -l ; sort -u {input[0]} | head -3 ; } > {output[0]}
+gzip -n -c {input[0]} > {output[1]}
+"""
+
+[[rules]]
+name = "float_sum"
+output = ["float.txt"]
+shell = """
+python3 -c "print('%.17g' % sum(1.0/i for i in range(1, 1001)))" > {output[0]}
+"""
