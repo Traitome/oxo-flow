@@ -266,66 +266,60 @@ longer needed.
 
 **Severity**: P1
 
-**Maturity**: Prototype
+**Maturity**: Fixed (2026-11-19, #1131) — every pre-spawn staging step is fatal and compensates; fault injection proves no spawn
 
-Workflow-write failure, run-row insertion failure, and uploaded-input staging failure can be logged while execution continues. The client can receive a successful response without a durable, cancellable run ledger entry or with incomplete inputs.
+Workflow-write failure, run-row insertion failure, and uploaded-input staging failure used to be
+logged while execution continued. Implemented fail-closed: every step between the workdir claim
+and the executor spawn (workflow write, include writes, resolved-snapshot write, input staging,
+cluster resolution) is fatal, and each failure path compensates through `compensate_failed_run` —
+release the spawn reservation, delete the run row (`delete_run`, added to the `StorageBackend`
+trait with SQLite + PostgreSQL implementations), remove the workdir. All writes go through the
+shared staged-write discipline (`oxo_flow_core::atomic_file`), so the durable-commit-before-spawn
+ordering holds.
 
 Evidence:
 
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:503`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:566`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:593`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:649`
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs` (`compensate_failed_run`; every pre-spawn failure path)
+- `crates/oxo-flow-web/src/infra/db/mod.rs` (`delete_run` trait method)
+- `crates/oxo-flow-web/tests/pre_spawn_fault_no_spawn.rs` (fault injection at each stage: non-2xx, zero spawns, no orphan workdir)
 
 Required exit evidence:
 
-- Fault injection at each stage produces a non-2xx response and no process spawn.
-- The workflow manifest, input manifest, run row, and workdir lease are durably committed before spawn.
-- A crash before or after commit has a deterministic recovery outcome.
+- Fault injection at each stage produces a non-2xx response and no process spawn. — MET (`pre_spawn_fault_no_spawn.rs`, non-vacuous control).
+- The workflow manifest, input manifest, run row, and workdir lease are durably committed before spawn. — MET (staged-write discipline; fault-injection ordering assertions).
+- A crash before or after commit has a deterministic recovery outcome. — PARTIAL: startup reconciliation (`reconcile_stale`) recovers reservations, and spawn happens only after durable commit; PostgreSQL crash-recovery/multi-instance admission remains an explicitly unproven gap (AGENTS.md).
 
 ### RB-04: Web admission does not yet have resolved-graph parity
 
 **Severity**: P1
 
-**Maturity**: Implemented but unproven
+**Maturity**: Partial (2026-11-19, #1216) — admission resolves the staged include graph through the canonical loader and runs the same core checker as CLI preflight; overrides are not yet applied to the admission graph
 
-Web run creation now invokes the same core validator as CLI preflight before
-persistence for the submitted TOML. Typed-source routing parses TOML
-structurally, recognizes table and inline declaration forms, and follows only
-locally staged sources reachable through `[[include]]`. Any typed or
-uninspectable include graph, and a directly typed workflow with any include
-graph or configuration overrides, fails closed because the web layer cannot
-yet evaluate the CLI's fully resolved graph. Unrelated staged assets are
-ignored.
-
-This closes part of the routing gap, but it does not make admission sound:
-the shared core checker itself has false-acceptance paths (RB-04A). It also
-does not establish parser-complete type-declaration discovery, remote-include
-policy, or CLI/web identity for the resolved graph.
+Web run creation stages the workflow and all `include_files` sources, re-parses through the
+canonical `from_file` path (the same machinery CLI preflight uses — the old text-scan
+`TYPED_ADMISSION_UNSUPPORTED` gate is gone), and runs `validate_workflow_types` on the merged
+config. Typed declarations are detected structurally from the parsed document (table and inline
+forms); unrelated staged assets do not participate. The remaining parity gap: the admission graph
+is built from the workflow file's `[config]` table WITHOUT `config_overrides` applied, while the
+CLI applies overrides before its identical gate — a typed workflow whose routing depends on
+overridden `{config.*}` values is admitted on a different graph than the one the CLI later
+executes (the CLI's own preflight still gates the real run, so this is parity, not safety).
 
 Evidence:
 
 - `crates/oxo-flow-cli/src/commands/run/preflight.rs:36`
 - `crates/oxo-flow-core/src/format.rs:1108`
-- `crates/oxo-flow-web/src/domains/execution/service.rs:21`
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs:461`
 - `crates/oxo-flow-web/src/domains/execution/service.rs` (`validate_workflow_types` call and focused tests)
-- `crates/oxo-flow-web/src/domains/execution/handlers.rs` (`TYPED_ADMISSION_UNSUPPORTED` fail-closed gate)
-- `crates/oxo-flow-web/tests/api_contract_hardening.rs` (`create_run_rejects_invalid_biotypes_before_persistence`, `create_run_accepts_a_compatible_typed_workflow`, `create_run_fails_closed_for_typed_workflows_with_overrides`, `create_run_fails_closed_for_inline_types_with_overrides`, `create_run_fails_closed_when_an_include_declares_types`, `create_run_fails_closed_when_an_include_uses_inline_types`, `create_run_ignores_unrelated_staged_toml_that_declares_types`, `create_run_fails_closed_when_a_reachable_include_is_unstaged`, `create_run_fails_closed_for_an_unstaged_include_without_optional_fields`, `create_run_fails_closed_for_a_git_include_without_optional_fields`, `create_run_accepts_direct_types_with_an_unrelated_staged_asset`, `create_run_fails_closed_for_direct_types_with_a_local_include_graph`, `create_run_rejects_a_dot_alias_of_the_main_workflow_key`, `create_run_rejects_duplicate_canonical_include_keys`, `create_run_rejects_case_insensitive_duplicate_include_keys`, `create_run_detects_types_through_a_dot_alias_include_key`)
+- `crates/oxo-flow-web/src/domains/execution/handlers.rs` (resolved-admission path: stage → `from_file` → `validate_workflow_types`)
+- `crates/oxo-flow-web/tests/api_contract_hardening.rs` (`create_run_rejects_invalid_biotypes_before_persistence`, `create_run_accepts_a_compatible_typed_workflow`, `create_run_accepts_typed_workflows_with_overrides`, `create_run_accepts_include_that_declares_types`, `create_run_ignores_unrelated_staged_toml_that_declares_types`, `create_run_fails_closed_when_a_reachable_include_is_unstaged`, `create_run_fails_closed_for_an_unstaged_include_without_optional_fields`, `create_run_fails_closed_for_a_git_include_without_optional_fields`, `create_run_accepts_direct_types_with_an_unrelated_staged_asset`, `create_run_rejects_a_dot_alias_of_the_main_workflow_key`, `create_run_rejects_duplicate_canonical_include_keys`, `create_run_rejects_case_insensitive_duplicate_include_keys`, `create_run_detects_types_through_a_dot_alias_include_key`)
 
 Required exit evidence:
 
-- Direct invalid declared types receive a structured `400` before run-row persistence; unit and API tests cover this boundary. Static control flow returns before directory lease or process spawn, but dedicated filesystem/process assertions remain open.
-- Typed include graphs, uninspectable includes, and direct typed workflows with any include graph or overrides fail before persistence with `TYPED_ADMISSION_UNSUPPORTED`; positive compatible-type coverage proves the direct gate and unrelated staged assets do not cause false rejection.
-- Include-file resolution and configuration-override semantics must run
-  through the same fully resolved admission path before the finding is closed.
+- Direct invalid declared types receive a structured `400` before run-row persistence; unit and API tests cover this boundary.
 - Undefined config references must receive the same pre-persistence rejection.
-- CLI and web admission must evaluate the same resolved workflow and invoke
-  the same canonical checker.
-- Declaration detection must be parser-derived and table-driven across every
-  supported TOML spelling; an uninspectable source must fail closed.
-- The remote-include policy must be explicit and fail closed, with tests for
-  network access, pinned repository includes, cycles, and path aliases.
+- CLI and web admission must evaluate the same resolved workflow and invoke the same canonical checker — includes are resolved; `config_overrides` must be applied to the admission graph to complete parity.
+- Declaration detection must be parser-derived and table-driven across every supported TOML spelling; an uninspectable source must fail closed.
+- The remote-include policy must be explicit and fail closed, with tests for network access, pinned repository includes, cycles, and path aliases.
 
 ### RB-04A: BioType checker can scientifically false-accept
 
@@ -943,14 +937,14 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 | :--- | :---: | :--- | :--- | :--- |
 | WEB-01 | P0 | No OS-level tenant execution boundary. | Partially fixed (#1129) | RB-01. The web spawn path now clears/allowlists the child environment (server secrets — `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP credentials — no longer reach a tenant-authored rule shell) and installs operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` alongside `RLIMIT_DATA` on Linux. Filesystem namespace, uid separation, per-run container, and network limits remain unenforced — cross-tenant path-guessing reads are still possible. |
 | WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design), allocated only after validation so rejected creates leave no orphan dir. Admission is `INSERT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` backed by partial unique indexes on live `pipeline_id`/`workdir` in both SQLite and PostgreSQL (409 on the loser; proven on live PostgreSQL by the CI smoke concurrency tests); the pipeline slot is global across readers. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `shared_pipeline_slot_is_global_across_identities`, `validation_rejected_create_leaves_no_run_directory`, `pipeline_guard_*`, `live_admission_indexes_*`, `test_concurrent_*admission*`. See RB-02. |
-| WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
+| WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Fixed (#1131, 2026-11-19) | Every pre-spawn staging step is fatal and compensates (`compensate_failed_run`, `delete_run`); fault injection `pre_spawn_fault_no_spawn.rs` proves no spawn and no orphan. See RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
 | WEB-05 | P1 | Failed re-upload can destroy the previous valid file. | Fixed (#1114) | Uploads stream to a sibling temp file and `rename` over the destination only after validation; every failure path removes only the temp, so the prior file survives. See RB-08. |
 | WEB-06 | P1 | Remote pull failure does not prevent `completed`. | Fixed (#1112) | A failed result pull now fails the run and records `artifacts_incomplete`. See RB-05. |
 | WEB-07 | P1 | Scheduler cancellation and accounting collapse outcomes. | Partial (#1132) | The core scheduler path no longer discards cancellation errors, fabricates exit code 0, or expands a base array verdict across elements that expose their own status. Cloud live campaigns remain CL-05. See RB-06. |
 | WEB-08 | P1 | Web admission still depends on a permissive BioType checker and lacks resolved include/override parity. | Checker parity fixed (#1118); resolved admission open | Direct TOML routes now report TYPE-008/009 for untyped-producer and build-incomplete edges (advisory at the admission gate); the resolved include/override admission seam remains RB-04. |
 | WEB-09 | P1 | Quotas are racy and process-local. | Partially fixed (#1133, #1221) | RB-09. Admission is one atomic storage CAS + reservation insert and quota state is durable/shared through `StorageBackend` (SQLite+PostgreSQL); declared memory is OS-enforced for local Linux runs (`RLIMIT_DATA`). Remote cluster runs forward their declared ceilings to the cluster engine's scheduler pool + budget gate (#1221). Non-Linux stays advisory (follow-up #1221). |
-| WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Implemented and verified | Fail-closed on `main` (PR #1170, merge commit `266e9f0a7`, issue #1135). `logout_result` (`crates/oxo-flow-web/src/domains/auth/handlers.rs`) maps a `delete_session` outcome — `Err` → structured `500 DB_ERROR`, `0` rows → benign already-revoked no-op, `>0` → success — and `logout` propagates it, so a delete failure can no longer report a successful sign-out; `StorageBackend::delete_session` now returns the rows removed in both the SQLite and PostgreSQL impls. The OAuth session-insert path was already fail-closed (`.map_err(... SERVICE_UNAVAILABLE "DB_ERROR")` before the token is returned). Tests: `logout_result_fails_closed_on_delete_error`, `logout_result_is_idempotent_when_no_row_existed`, `logout_result_succeeds_when_a_row_was_revoked` (handler unit tests); the sqlite contract asserts `1` then `0` rows removed across two deletes. Docs: `docs/guide/src/reference/web-api.md` fail-closed logout note. |
+| WEB-10 | P1 | OAuth can return a token when session insertion fails; logout can report success when deletion fails. | Fixed (#1170) — implemented and verified | Fail-closed on `main` (PR #1170, merge commit `266e9f0a7`, issue #1135). `logout_result` (`crates/oxo-flow-web/src/domains/auth/handlers.rs`) maps a `delete_session` outcome — `Err` → structured `500 DB_ERROR`, `0` rows → benign already-revoked no-op, `>0` → success — and `logout` propagates it, so a delete failure can no longer report a successful sign-out; `StorageBackend::delete_session` now returns the rows removed in both the SQLite and PostgreSQL impls. The OAuth session-insert path was already fail-closed (`.map_err(... SERVICE_UNAVAILABLE "DB_ERROR")` before the token is returned). Tests: `logout_result_fails_closed_on_delete_error`, `logout_result_is_idempotent_when_no_row_existed`, `logout_result_succeeds_when_a_row_was_revoked` (handler unit tests); the sqlite contract asserts `1` then `0` rows removed across two deletes. Docs: `docs/guide/src/reference/web-api.md` fail-closed logout note. |
 | WEB-11 | P1 | Pipeline edits can silently lose updates; revision insertion is best-effort. | Fixed (#1136) | Baseline re-confirmed on main @ ccf1d4ffa: the update path wrote the row unconditionally (`crates/oxo-flow-web/src/domains/workflow/handlers.rs:802` at that base — the issue's `:775` had drifted) and `record_revision` (`:31`) logged-and-continued on DB failure, so the request reported success without its snapshot. Mechanism: a new monotonic `pipelines.revision` column (default 1) is the concurrency token (distinct from the TOML-derived `version`); it travels as a strong HTTP validator — `ETag: "<revision>"` on GET/create/PUT/rollback responses and back in `If-Match` on PUT/rollback — so the mirrored JSON response contract (`frontend/src/api/types.ts`) is unchanged. The storage layer performs a single-statement compare-and-swap (`UPDATE ... SET revision = revision + 1 WHERE id = ? AND (? IS NULL OR revision = ?)`, rows-affected checked) implemented in both the SQLite and PostgreSQL `StorageBackend` impls (`create_pipeline_with_revision`, `update_pipeline_cas`), so the guard is the atomic write, not a read-then-write. A stale validator writes nothing and answers `409 {code:"PIPELINE_VERSION_CONFLICT", detail:"expected revision N but the stored revision is M", suggestion:"Re-read GET /api/pipelines/{id} for its current ETag and retry with If-Match ..."}`; a malformed validator answers `400 INVALID_IF_MATCH`; omitting the header keeps the historical unconditional update (documented backward compatibility, token still advances). Atomicity statement: create (row + initial snapshot) and update/rollback (CAS row write + pre-write snapshot + 50-row prune) each run in ONE storage transaction per backend, so either both commit or the request fails; failure injection (dropping `pipeline_revisions` on a dedicated in-memory DB, no production test hooks) proves the update/create rolls back and cannot report success. Remaining boundary (documented): the fork/import `save_pipeline` upsert path writes no revision rows (copies start at revision 1 with no history), and the permission/default read before the CAS is outside the transaction — the write itself is guarded by the token, not by that read. Evidence tests: `interleaved_writers_one_conflicts_and_the_winner_survives`, `update_without_if_match_stays_backward_compatible`, `malformed_if_match_is_rejected_not_ignored`, `quoted_and_unquoted_if_match_both_work`, `cas_applies_once_and_records_the_pre_write_snapshot`, `stale_token_is_a_conflict_and_writes_nothing`, `failed_revision_insert_rolls_back_the_pipeline_update`, `failed_initial_revision_insert_rolls_back_the_create` (`crates/oxo-flow-web/tests/pipeline_concurrency.rs`). Docs: `docs/guide/src/reference/web-api.md` → "Optimistic concurrency (`ETag` / `If-Match`)" and Version History transaction semantics. Commit binding: 755259911e93dc68feb6c64daf0761c5e7aa90ba. |
 | WEB-12 | P1/P2 | DAG edit history is unowned, process-global, unbounded, and non-durable. | Fixed (#1191) | Commit binding: `7636a2ab67b683fa6f68a8e27795729fe2cca5e1` (PR #1191, issue #1137). Stacks are now keyed by `(CurrentUser.id, pipeline id)` — the same `resolve(Option<Extension<CurrentUser>>)` identity the other pipeline handlers use, with the `default` pseudo-user in personal mode — so two identities editing the same pipeline id own independent stacks. Bounds are documented constants in `crates/oxo-flow-web/src/domains/dag/service.rs`: `MAX_EDIT_HISTORY_DEPTH` = 50 transitions per stack (oldest dropped) and `MAX_EDIT_HISTORY_PIPELINES` = 256 stacks process-wide (LRU eviction on a monotonic use clock). Restart semantics are fail-closed and documented, not persisted: history remains in RAM, undo/redo return a typed `HistoryOutcome`, and the HTTP layer answers `409 EDIT_HISTORY_UNAVAILABLE` (no stack: never edited, restart, or LRU loss) or `409 EDIT_HISTORY_STALE` (supplied TOML is not the history tip) with remediation suggestions; `404 NO_UNDO`/`NO_REDO` remain only for a genuinely exhausted direction. Tests: `domains::dag::service::tests::{edit_history_is_scoped_by_owner, edit_history_depth_cap_drops_the_oldest_transition, edit_history_lru_evicts_the_oldest_pipeline, undo_and_redo_without_history_are_unavailable, exhausted_undo_is_distinguished_from_unavailable_history}`; `domains::dag::handlers::tests::{undo_is_scoped_to_the_acting_user, undo_after_restart_fails_closed_with_structured_code, redo_after_restart_fails_closed_with_structured_code, stale_undo_fails_closed_without_consuming_history, undo_with_no_remaining_transitions_keeps_no_undo}`. Docs: `docs/guide/src/reference/web-api.md` (DAG editing scope/caps/lifetime/codes), `docs/guide/src/reference/dag-edit-api.md` ("History scope, caps, and lifetime" + failure-code table), `docs/guide/src/reference/web-system-architecture.md` (error-code table). |
 | WEB-13 | P2 | Template visibility is ambiguous across tenants. | Fixed (#1193) | Commit binding: `ce0d3026f229c26524d7b31921ee5c47d45010dc` (PR #1193, issue #1138). One exported predicate — `can_read_pipeline` plus its write sibling `can_write_pipeline` in `crates/oxo-flow-web/src/domains/workflow/visibility.rs`, re-exported from the workflow domain root — now encodes the policy every path evaluates: an owner sees their own pipeline; `workspace`-visibility (shared-library/template) pipelines are readable by every signed-in user; another tenant's `private`/`link` pipeline is invisible (`link` is a share-token capability, not a read grant); the pre-existing admin cross-tenant override is documented; unknown visibility values fail closed; deletion is a hard delete in both backends, so a deleted pipeline has no row, is invisible to everyone (admins included), and every read answers 404. List/read convention: `GET /api/pipelines` filters its candidate window and `POST /api/pipelines/search` filters returned rows with the same predicate, while `GET`/`PUT`/`DELETE /api/pipelines/{id}`, both revision routes, rollback, fork, share, saved-id `diff`/`export`, `POST /api/runs` with `pipeline_id`, and `POST /api/ai/optimize` with `pipeline_id` answer `404 NOT_FOUND` (never 403) when it returns false. Storage `list_pipelines_visible`/`search_pipelines` are documented candidate windows (SQL scoping before `LIMIT`, audit #664), not the policy source. Documented exemptions: share landing/import (the token is the capability), the global `/api/templates` library (no per-tenant visibility column; writes owner/admin-gated), and the TOML-only DAG edit endpoints. Evidence tests (real team-mode router with Bearer identities): `own_pipeline_is_visible_in_list_and_read`, `other_tenants_private_pipeline_is_absent_from_list_and_404_on_read`, `workspace_shared_pipeline_is_visible_to_other_tenants_read_only`, `deleted_pipeline_is_invisible_in_list_and_read`, `foreign_pipeline_update_rollback_and_delete_are_refused_404` (also fork/share/run-create; asserts the row is intact), `admin_override_sees_foreign_private_pipeline`, `share_token_is_the_authorization_exemption` (`crates/oxo-flow-web/tests/pipeline_visibility.rs`); predicate unit matrix `domains::workflow::visibility::tests::{owner_sees_own_pipeline_in_every_visibility, other_tenants_private_pipeline_is_invisible, other_tenants_link_pipeline_is_invisible, workspace_shared_pipeline_is_visible_to_any_signed_in_user, unknown_visibility_fails_closed, admin_sees_every_tenant, only_owner_or_admin_may_write}`. Docs: `docs/guide/src/reference/web-api.md` → "Visibility policy (WEB-13 / issue #1138)"; `docs/guide/src/how-to/collaboration.md` permissions table aligned with the enforced policy. |
