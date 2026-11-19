@@ -267,6 +267,26 @@ pub fn parse_index_list(spec: &str) -> BTreeSet<u32> {
     indexes
 }
 
+/// The terminal phase of an Indexed Job, read from
+/// `status.conditions[*].type` (`Failed` / `Complete`).
+///
+/// With `backoffLimit: 0` a single pod failure terminally fails the Job and
+/// the controller never creates the remaining pods (`parallelism` caps the
+/// in-flight count), so indexes that appear in neither status list on a
+/// terminal-Failed Job will never run — they must settle, or the driver
+/// polls a dead Job forever (an element verdict of `Running` resets the
+/// driver's blind-settlement guard). A `Complete` Job with an unrecorded
+/// index is contradictory wire data, not a provable outcome: the index is
+/// [`BackendJobStatus::Unknown`] — never a fabricated success or failure —
+/// and the driver's terminal-unknown guard settles it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexedJobTerminal {
+    /// `status.conditions` contains `type: Failed`.
+    Failed,
+    /// `status.conditions` contains `type: Complete`.
+    Complete,
+}
+
 /// The verdict an Indexed Job's status proves for one completion index.
 ///
 /// `completed` / `failed` come from
@@ -277,12 +297,15 @@ pub fn parse_index_list(spec: &str) -> BTreeSet<u32> {
 /// that element is [`BackendJobStatus::Unknown`] — never a success and
 /// never a fabricated failure. An element that is neither recorded
 /// completed nor recorded failed, while the Job is not in that blind
-/// state, is still live.
+/// state, is still live — unless the Job itself is terminal
+/// ([`IndexedJobTerminal`]): an unrecorded index can then never start, so
+/// it settles instead of reporting live forever.
 pub fn indexed_element_status(
     completed: &BTreeSet<u32>,
     failed: &BTreeSet<u32>,
     failed_count: u64,
     index: u32,
+    job_terminal: Option<IndexedJobTerminal>,
 ) -> BackendJobStatus {
     if completed.contains(&index) {
         return BackendJobStatus::Completed;
@@ -293,7 +316,16 @@ pub fn indexed_element_status(
     if failed_count > 0 && failed.is_empty() {
         return BackendJobStatus::Unknown;
     }
-    BackendJobStatus::Running
+    match job_terminal {
+        // backoffLimit: 0 — the controller will never create or restart
+        // this index; the work will not be done, so the element fails.
+        Some(IndexedJobTerminal::Failed) => BackendJobStatus::Failed,
+        // A Complete Job must have run every index; a missing index on a
+        // Complete Job is wire data we cannot interpret — settle as
+        // unknown, never fabricate the outcome.
+        Some(IndexedJobTerminal::Complete) => BackendJobStatus::Unknown,
+        None => BackendJobStatus::Running,
+    }
 }
 
 #[cfg(test)]
@@ -558,7 +590,7 @@ mod tests {
             (3, BackendJobStatus::Running),
         ] {
             assert_eq!(
-                indexed_element_status(&completed, &failed, 1, index),
+                indexed_element_status(&completed, &failed, 1, index, None),
                 expected,
                 "index {index} must have its own verdict"
             );
@@ -566,11 +598,80 @@ mod tests {
         // Kubernetes < 1.31 has status.failed but no failedIndexes: the
         // Job is terminal-failed and the failing element is unknowable.
         // It must be Unknown, never success and never assumed to be index 0.
-        let unknown = indexed_element_status(&BTreeSet::new(), &BTreeSet::new(), 2, 1);
+        let unknown = indexed_element_status(&BTreeSet::new(), &BTreeSet::new(), 2, 1, None);
         assert_eq!(
             unknown,
             BackendJobStatus::Unknown,
             "missing failedIndexes must not pin the failure on a guessed element"
+        );
+    }
+
+    /// backoffLimit: 0 makes a terminal-Failed Indexed Job final: the
+    /// controller never creates the remaining pods (`parallelism` caps
+    /// in-flight elements), so indexes recorded in NEITHER status list
+    /// would previously report `Running` forever — resetting the driver's
+    /// blind-settlement guard and polling a dead Job with no wall-clock
+    /// budget. A terminal-Failed Job settles the unrecorded index as
+    /// Failed; a Complete Job with an unrecorded index is contradictory
+    /// wire data, so it settles as Unknown (never fabricated success).
+    #[test]
+    fn unrecorded_index_settles_when_the_job_is_terminal() {
+        let completed = parse_index_list("0");
+        let failed = parse_index_list("1");
+        // Indexes 2..63 never got a pod (parallelism capped at 2): the
+        // recorded sets prove nothing about them, the Job does.
+        for index in [2, 63] {
+            assert_eq!(
+                indexed_element_status(
+                    &completed,
+                    &failed,
+                    1,
+                    index,
+                    Some(IndexedJobTerminal::Failed)
+                ),
+                BackendJobStatus::Failed,
+                "an unrecorded index on a terminal-Failed Job can never run"
+            );
+        }
+        // The recorded verdicts are untouched by the terminal phase.
+        assert_eq!(
+            indexed_element_status(&completed, &failed, 1, 0, Some(IndexedJobTerminal::Failed)),
+            BackendJobStatus::Completed
+        );
+        assert_eq!(
+            indexed_element_status(&completed, &failed, 1, 1, Some(IndexedJobTerminal::Failed)),
+            BackendJobStatus::Failed
+        );
+        // A live Job keeps unrecorded indexes live — the fix must not
+        // settle anything on a Job that is still running.
+        assert_eq!(
+            indexed_element_status(&completed, &failed, 1, 2, None),
+            BackendJobStatus::Running
+        );
+        // Complete-but-unrecorded is contradictory wire data: Unknown, so
+        // the driver's terminal-unknown guard can settle it, never a
+        // fabricated success.
+        assert_eq!(
+            indexed_element_status(
+                &completed,
+                &failed,
+                1,
+                2,
+                Some(IndexedJobTerminal::Complete)
+            ),
+            BackendJobStatus::Unknown
+        );
+        // The blind state (no failedIndexes field) keeps its documented
+        // Unknown contract even on a terminal-Failed Job.
+        assert_eq!(
+            indexed_element_status(
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                2,
+                1,
+                Some(IndexedJobTerminal::Failed)
+            ),
+            BackendJobStatus::Unknown
         );
     }
 }
