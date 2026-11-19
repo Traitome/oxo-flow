@@ -6783,6 +6783,21 @@ registered group is refused with <code>409</code> rather than flipped in the DB:
 and <strong>resume</strong> answers <code>409 RUN_NOT_RESUMABLE</code> (a paused run whose process has
 exited has nothing to unfreeze — writing <code>running</code> would show it executing
 with nothing behind it). In both cases the stored status is left unchanged.</p>
+<p>The status flip itself is a compare-and-set: <strong>pause</strong> only moves a row that is
+still <code>running</code>, and <strong>resume</strong> only moves a row that is still <code>paused</code>. If the
+row leaves that state in the window between the handler's read and its guarded
+write, the transition loses the race and the endpoint answers
+<code>409 RUN_STATE_CHANGED</code> without rewriting the row. A losing request re-reads the
+row and reconciles the process group with what it finds, so row and process
+cannot disagree. It unfreezes the group (<code>SIGCONT</code>) only if the run is no longer
+<code>paused</code> — i.e. it went terminal; if it observes <code>paused</code> the freeze came from a
+concurrent <strong>same-target pause</strong> that won, and the loser leaves it frozen. It
+re-freezes the group (<code>SIGSTOP</code>) only if the run is no longer <code>running</code> — i.e. it
+went terminal; if it observes <code>running</code> the unfreeze came from a concurrent
+<strong>same-target resume</strong> that won, and the loser leaves it running. The two
+handlers are therefore idempotent under concurrent same-target requests and never
+leave a terminal row whose process is frozen (or a paused row whose process is
+running).</p>
 <h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>GET /api/runs/{id}/logs
 </span></code></pre></div>
