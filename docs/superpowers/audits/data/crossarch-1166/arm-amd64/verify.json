@@ -1,0 +1,60 @@
+{
+  "command": "provenance",
+  "verify": {
+    "checkpoint": "/home/ubuntu/armA-amd64/work/.oxo-flow/checkpoint.json",
+    "cleaned": 0,
+    "entries": [
+      {
+        "actual": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+        "expected": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+        "file": "data/bytes.bin",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+        "expected": "sha256:62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+        "file": "data/bytes.bin.gz",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+        "expected": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+        "file": "data/payload.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+        "expected": "sha256:4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+        "file": "data/payload.txt.gz",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+        "expected": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+        "file": "float.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+        "expected": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+        "file": "float_series.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:01eb1d2c51f8cc56e3a135ab78c9613f9fb3e387037082ae87166d797faeef5f",
+        "expected": "sha256:01eb1d2c51f8cc56e3a135ab78c9613f9fb3e387037082ae87166d797faeef5f",
+        "file": "manifest.sha256",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:110991a1d3281fe972833859d532f7c91067ee7569fe219b2e8dce2cb21b10ee",
+        "expected": "sha256:110991a1d3281fe972833859d532f7c91067ee7569fe219b2e8dce2cb21b10ee",
+        "file": "summary.txt",
+        "status": "matched"
+      }
+    ],
+    "matched": 8,
+    "mismatched": 0,
+    "missing": 0
+  }
+}
