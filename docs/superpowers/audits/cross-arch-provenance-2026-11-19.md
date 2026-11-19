@@ -109,8 +109,10 @@ No other declared artifact differs.
   1. **`wc -l` output formatting.** Apple/BSD `wc` pads the count to column width
      8 when reading a pipe; GNU `wc` does not. Reproduced directly:
      `printf 'a\nb\n' | wc -l | od -c` → arm A: `       2\n` (seven spaces); arm B: `2\n`.
-     (Both tools omit padding when reading a named file — `wc -l data/payload.txt`
-     → `64 data/payload.txt`.)
+     BSD `wc` pads the count to width 8 in all single-count invocations (pipe,
+     named file, and redirected stdin all measured padded on arm A:
+     `wc -l data/payload.txt` → `      64 data/payload.txt`); GNU `wc` pads
+     for none of them.
   2. **`sort` collation order.** Arm A's BSD `sort` produced byte order for the
      `sort -u | head -3` lines (`line 1`, `line 10`, `line 11`); arm B's GNU
      `sort` under `en_US.UTF-8` produced dictionary order (`line 10`, `line 11`,
