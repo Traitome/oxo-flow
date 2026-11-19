@@ -884,7 +884,19 @@ async fn cancel_targets_persisted_cluster_after_registry_restart() {
 async fn cancel_reports_empty_unresolved_jobs_for_a_local_kill() {
     common::ensure_db().await;
     insert_run_row("pc-1257-local", "running").await;
-    let mut child = spawn_and_register("pc-1257-local");
+    let child = spawn_and_register("pc-1257-local");
+
+    // Reap the child CONCURRENTLY with the cancel request. An unreaped child
+    // stays a zombie, and a zombie is still a member of its process group, so
+    // `killpg(pgid, 0)` (which backs `group_alive`) keeps answering "alive"
+    // through both grace windows — the cancel would then (correctly) report
+    // the group as an unresolved job. Production reaps its children, so model
+    // that reaper here: the assertion must measure the cancel path, not
+    // zombie accounting.
+    let reaper = std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
 
     let (status, body) = post_json("/api/runs/pc-1257-local/cancel", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body:?}");
@@ -894,6 +906,6 @@ async fn cancel_reports_empty_unresolved_jobs_for_a_local_kill() {
         "{body:?}"
     );
 
-    let _ = child.wait();
+    reaper.join().expect("reaper thread panicked");
     process_control::unregister("pc-1257-local");
 }
