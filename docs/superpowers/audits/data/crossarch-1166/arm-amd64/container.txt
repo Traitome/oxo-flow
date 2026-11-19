@@ -1,0 +1,11 @@
+image-src:          9f6c5in3dh5vszgdz0.xuanyuan.run/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+manifest-list-digest: sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+staged-tag:         crossarch1166:pin
+platform:           linux/amd64
+image-id:           sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db
+image-arch:         amd64
+container-arch: x86_64
+python3: Python 3.12.16
+sort: sort (GNU coreutils) 9.7
+gzip: gzip 1.13
+sha256sum: sha256sum (GNU coreutils) 9.7
