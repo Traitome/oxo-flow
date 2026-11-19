@@ -18,7 +18,7 @@ services:
       - OXO_FLOW_FRONTEND_DIR=/app/frontend/dist
       # Authentication — CHANGE THESE in production:
       - OXO_FLOW_ADMIN_PASSWORD=changeme
-      # AI provider passthrough — the README/AGENTS one-liners
+      # AI provider passthrough — the AGENTS.md one-liners
       # (`OXO_FLOW_AI_PROVIDER=... docker compose up -d`) rely on these
       # value-less entries to forward host env into the container.
       - OXO_FLOW_AI_PROVIDER

@@ -188,7 +188,7 @@ conda install -c bioconda oxo-flow-cli
 
 ### Run with Docker
 
-Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.19`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:
+Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.32`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:
 
 ```bash
 # Web UI at http://localhost:3000 (CLI is inside the same image)

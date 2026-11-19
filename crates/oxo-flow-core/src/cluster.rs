@@ -2,7 +2,9 @@
 // Test code uses deprecated `Rule::threads` / `Rule::memory` shorthand fields.
 #![allow(deprecated)]
 //!
-//! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.
+//! The four HPC schedulers — SLURM, PBS/Torque, SGE, and LSF — generate
+//! submit scripts here; the cloud backends (Kubernetes, AWS Batch, GCP
+//! Batch) delegate to `backend/`.
 
 use crate::error::Result;
 use crate::rule::Rule;
