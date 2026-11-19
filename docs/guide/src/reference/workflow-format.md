@@ -3075,7 +3075,7 @@ The name is your choice (it is referenced by rules, not derived from files).
 | `sort_order` | `unsorted`, `queryname`, `coordinate`, `unknown` | Record ordering within alignment/variant files |
 | `index` | `bai`, `csi`, `crai`, `tbi`, `fai` | Companion index artifact the file must be accompanied by |
 | `reference_build` | String (e.g. `"GRCh38"`) | Reference genome build the data was produced against |
-| `compression` | `none`, `gzip`, `bgzip`, `zstd` | Block/stream compression of the file. BAM and CRAM are BGZF by specification, so a producer declaring a plain `bam`/`cram` already satisfies a consumer's `compression=bgzip` requirement; other formats must state compression explicitly |
+| `compression` | `none`, `gzip`, `bgzip`, `zstd` | Block/stream compression of the file. BAM is BGZF by specification, so a producer declaring a plain `bam` already satisfies a consumer's `compression=bgzip` requirement. CRAM is *not* BGZF (its container is its own block-level gzip/bzip2/LZMA framing, with no BGZF `BC` extra field), so a CRAM producer must state its compression explicitly; other formats do too |
 | `read_groups` | Table: `{ required = true, fields = ["ID", "SM", ...] }` | `@RG` header metadata the consumer requires |
 | `attributes` | Map of string → string | Extensible contract attributes (e.g. `variant_type = "germline"`) |
 

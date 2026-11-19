@@ -1,0 +1,36 @@
+# B12 — multi-channel PAIRING control (accept). Two separate producer rules
+# each emit one FASTQ channel (r1 from one, r2 from the other); the consumer
+# declares both channels. Each producer output channel name matches the
+# consumer input channel name, so BOTH channels pair and the edge is fully
+# paired. This is the non-over-fire control for the "unpairable edge" advisory
+# (TYPE-010): a paired multi-channel edge must yield NO diagnostic. Derivation:
+# channel-match semantics (producer output channel == consumer input channel).
+#
+# EXPECTED: accept — no TYPE diagnostic (paired channels, no TYPE-010).
+
+[workflow]
+name = "b12"
+
+[[rules]]
+name = "trim_r1"
+input = ["raw_R1.fastq.gz"]
+output = ["trimmed_R1.fastq.gz"]
+shell = "cutadapt -o trimmed_R1.fastq.gz raw_R1.fastq.gz"
+[rules.types]
+outputs = { r1 = "FASTQ" }
+
+[[rules]]
+name = "trim_r2"
+input = ["raw_R2.fastq.gz"]
+output = ["trimmed_R2.fastq.gz"]
+shell = "cutadapt -o trimmed_R2.fastq.gz raw_R2.fastq.gz"
+[rules.types]
+outputs = { r2 = "FASTQ" }
+
+[[rules]]
+name = "align_pair"
+input = ["trimmed_R1.fastq.gz", "trimmed_R2.fastq.gz"]
+output = ["aln.bam"]
+shell = "bwa mem ref trimmed_R1.fastq.gz trimmed_R2.fastq.gz | samtools sort -o aln.bam"
+[rules.types]
+inputs = { r1 = "FASTQ", r2 = "FASTQ" }

@@ -1,0 +1,24 @@
+# B02 — format boundary (TYPE-001). A CRAM producer feeds a BAM consumer.
+# CRAM and BAM are distinct formats in the contract (samtools view -b converts
+# CRAM to BAM), so this must reject on format even though both are coordinate
+# alignment containers. Derivation: format list + TYPE-001 row.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b02"
+
+[[rules]]
+name = "compress"
+output = ["a.cram"]
+shell = "samtools view -C -T ref.fa -o a.cram in.bam"
+[rules.types]
+outputs = { default = "CRAM" }
+
+[[rules]]
+name = "markdup"
+input = ["a.cram"]
+output = ["md.bam"]
+shell = "gatk MarkDuplicates -I a.cram -O md.bam"
+[rules.types]
+inputs = { default = "BAM" }

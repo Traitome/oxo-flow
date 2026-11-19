@@ -1,0 +1,35 @@
+# B18 — implied-compression boundary (TYPE-006). Both ends are CRAM and the
+# build agrees, so the ONLY possible contract on the edge is the consumer's
+# compression=bgzip requirement. An independent spec-reader (the CRAM
+# specification: block-level gzip/bzip2/LZMA containers, no BGZF `BC` extra
+# field) concludes CRAM is NOT BGZF, so a plain CRAM cannot satisfy a
+# compression=bgzip consumer and the edge must reject. Derivation: CRAM
+# specification, NOT the checker source.
+#
+# FINDING (2026-11-20): this case surfaced a DOCUMENTATION defect, not a
+# checker defect. The workflow-format reference (compression field row) claimed
+# "BAM and CRAM are BGZF by specification"; the checker correctly treats only
+# BAM that way (see the deliberate `cram_does_not_imply_bgzip` library test).
+# The doc row was corrected in this change to name BAM only. The verdict below
+# is the SPEC-correct one.
+#
+# EXPECTED: reject — TYPE-006.
+
+[workflow]
+name = "b18"
+
+[[rules]]
+name = "to_cram"
+input = ["aln.bam"]
+output = ["sample.cram"]
+shell = "samtools view -C -T ref.fa -o sample.cram aln.bam"
+[rules.types]
+outputs = { default = "CRAM[reference_build=GRCh38]" }
+
+[[rules]]
+name = "cram_consumer"
+input = ["sample.cram"]
+output = ["report.txt"]
+shell = "samtools view -T ref.fa sample.cram | wc -l > report.txt"
+[rules.types]
+inputs = { default = "CRAM[compression=bgzip,reference_build=GRCh38]" }

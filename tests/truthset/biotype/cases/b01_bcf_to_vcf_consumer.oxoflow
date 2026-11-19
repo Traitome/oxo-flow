@@ -1,0 +1,24 @@
+# B01 — format boundary (TYPE-001). A BCF producer (bcftools -Ob) feeds a
+# consumer that requires text VCF. Per the BioType format contract BCF and VCF
+# are DISTINCT formats (bcftools view -O v is the conversion), so this must
+# reject. Derivation: workflow-format reference format list + TYPE-001 row.
+#
+# EXPECTED (argued from the format contract, NOT the checker source): reject — TYPE-001.
+
+[workflow]
+name = "b01"
+
+[[rules]]
+name = "call"
+output = ["calls.bcf"]
+shell = "bcftools call -Ob -o calls.bcf in.bcf"
+[rules.types]
+outputs = { default = "BCF" }
+
+[[rules]]
+name = "annotate"
+input = ["calls.bcf"]
+output = ["annot.vcf"]
+shell = "bcftools annotate -Ov -o annot.vcf calls.bcf"
+[rules.types]
+inputs = { default = "VCF" }

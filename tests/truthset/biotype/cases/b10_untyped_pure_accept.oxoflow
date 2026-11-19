@@ -1,0 +1,22 @@
+# B10 — untyped control (accept). A realistic two-rule trimming+quant pipeline
+# that declares NO [types.*] / [rules.types] at all: BioTypes is opt-in, so the
+# checker must stay silent and admit the workflow. Guards against a regression
+# where an untyped edge is flagged. Derivation: "no [types.*] => no BioType
+# diagnostic" (workflow-format reference, opt-in contract).
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b10"
+
+[[rules]]
+name = "trim"
+input = ["sample_R1.fastq.gz", "sample_R2.fastq.gz"]
+output = ["trimmed_R1.fastq.gz", "trimmed_R2.fastq.gz"]
+shell = "fastp -i sample_R1.fastq.gz -I sample_R2.fastq.gz -o trimmed_R1.fastq.gz -O trimmed_R2.fastq.gz"
+
+[[rules]]
+name = "quant"
+input = ["trimmed_R1.fastq.gz", "trimmed_R2.fastq.gz"]
+output = ["quant.sf"]
+shell = "salmon quant -i idx -l A -1 trimmed_R1.fastq.gz -2 trimmed_R2.fastq.gz -o quant"

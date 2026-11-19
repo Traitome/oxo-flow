@@ -1,0 +1,35 @@
+# B16 — named-type-table contract (TYPE-004). Two named [types.*] tables are
+# bound to the rule channels by NAME through [rules.types], exercising the
+# named-table resolution path (not just inline strings). The producer is
+# hg19-aligned, the consumer wants GRCh38, so the builds genuinely differ.
+# Derivation: named [types.*] tables + reference_build field + TYPE-004.
+#
+# EXPECTED: reject — TYPE-004.
+
+[workflow]
+name = "b16"
+
+[types.hg19_aln]
+format = "bam"
+sort_order = "coordinate"
+reference_build = "hg19"
+
+[types.grch38_aln]
+format = "bam"
+sort_order = "coordinate"
+reference_build = "GRCh38"
+
+[[rules]]
+name = "align_hg19"
+output = ["sample.bam"]
+shell = "bwa mem hg19.fa r1.fq r2.fq | samtools sort -o sample.bam"
+[rules.types]
+outputs = { default = "hg19_aln" }
+
+[[rules]]
+name = "lift_and_call"
+input = ["sample.bam"]
+output = ["sample.vcf.gz"]
+shell = "liftover sample.bam && custom-call -R grch38.fa -O sample.vcf.gz"
+[rules.types]
+inputs = { default = "grch38_aln" }

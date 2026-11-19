@@ -1,0 +1,25 @@
+# B13 — attribute boundary (TYPE-007). A single-sample germline VCF producer
+# feeds a somatic-variant caller that declares variant_type=somatic. The
+# declared attribute differs from the produced one, and the produced VCF does
+# not carry the somatic attribute, so the contract fails. Derivation: TYPE-007
+# row (attribute mismatch).
+#
+# EXPECTED: reject — TYPE-007.
+
+[workflow]
+name = "b13"
+
+[[rules]]
+name = "germline_call"
+output = ["germline.vcf.gz"]
+shell = "gatk HaplotypeCaller -O germline.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[variant_type=germline]" }
+
+[[rules]]
+name = "somatic_filter"
+input = ["germline.vcf.gz"]
+output = ["somatic.vcf.gz"]
+shell = "custom-somatic-filter germline.vcf.gz > somatic.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[variant_type=somatic]" }

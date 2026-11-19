@@ -1,0 +1,24 @@
+# B03 — index boundary (TYPE-003). A FASTA reference produced WITHOUT a .fai
+# feeds a consumer that requires index=fai (samtools faidx / GATK -R). Builds
+# agree (both GRCh38), so the ONLY violation is the missing companion index.
+# Derivation: workflow-format reference (index field) + TYPE-003 row.
+#
+# EXPECTED: reject — TYPE-003.
+
+[workflow]
+name = "b03"
+
+[[rules]]
+name = "download_ref"
+output = ["ref.fa"]
+shell = "curl -o ref.fa https://example.org/GRCh38.fa"
+[rules.types]
+outputs = { default = "FASTA[reference_build=GRCh38]" }
+
+[[rules]]
+name = "call"
+input = ["ref.fa"]
+output = ["out.vcf"]
+shell = "gatk HaplotypeCaller -R ref.fa -I a.bam -O out.vcf"
+[rules.types]
+inputs = { default = "FASTA[reference_build=GRCh38,index=fai]" }
