@@ -114,6 +114,19 @@ fn resolves_within(root_abs: &std::path::Path, candidate: &std::path::Path) -> b
     }
 }
 
+/// Bounded alternatives appended to the oversized-file error (issue #1259,
+/// audit AI-12).
+///
+/// The message must name ONLY tools the session actually exposes. The
+/// standard registry ([`knowledge_tool_registry`]) has no shell/bash tool,
+/// so the earlier "read only the lines you need with a shell command" wording
+/// directed the model at a channel that does not exist. `read_file` itself
+/// takes only a `path` (no line-range option), so the real bounded moves are:
+/// a narrower file, the embedded docs, or a URL fetch. The registry-membership
+/// test `oversized_read_guidance_names_only_registry_tools` keeps this string
+/// from drifting away from the registry again.
+const OVERSIZED_READ_GUIDANCE: &str = "read_file reads whole files only (it has no line-range option), so read a smaller file instead — for example a narrower summary or excerpt of this file, the embedded docs via lookup_skill/lookup_doc, or a URL source via fetch_url";
+
 #[async_trait]
 impl Tool for ReadFileTool {
     fn def(&self) -> ToolDef {
@@ -178,7 +191,7 @@ impl Tool for ReadFileTool {
                 return Err(AiError::ToolError {
                     tool: "read_file".into(),
                     message: format!(
-                        "cannot read '{path}': file is {} bytes (read_file caps at {MAX_READ_BYTES} — the result must fit the model context). Read only the lines you need with a shell command (e.g. `head`/`grep` via whatever shell execution channel this session provides), or point read_file at a smaller summary file",
+                        "cannot read '{path}': file is {} bytes (read_file caps at {MAX_READ_BYTES} — the result must fit the model context). {OVERSIZED_READ_GUIDANCE}",
                         meta.len()
                     ),
                 });
@@ -705,9 +718,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_file_caps_at_256k_and_steers_to_shell() {
-        // #948 P2-2: an oversized read must be refused with steering (shell
-        // head/grep), while a file at exactly the cap still reads fine.
+    async fn read_file_caps_at_256k_and_steers_to_available_alternatives() {
+        // #948 P2-2: an oversized read must be refused with steering toward
+        // bounded alternatives that the session actually exposes (#1259),
+        // while a file at exactly the cap still reads fine.
         let dir = tempfile::tempdir().unwrap();
         let tool = ReadFileTool::scoped(dir.path());
 
@@ -727,8 +741,8 @@ mod tests {
             "cap must be named in the error: {msg}"
         );
         assert!(
-            msg.contains("shell command"),
-            "error must steer to a shell command (head/grep): {msg}"
+            msg.contains("fetch_url"),
+            "error must steer to a bounded alternative that exists (fetch_url): {msg}"
         );
     }
 
@@ -1338,6 +1352,58 @@ mod knowledge_registry_tests {
         ] {
             assert!(registry.get(name).is_some(), "missing {name}");
             assert!(registry.is_read_only(name), "{name} must be read-only");
+        }
+    }
+
+    /// #1259 (audit AI-12): the oversized-`read_file` guidance must name only
+    /// tools the session actually exposes. It used to steer at "a shell
+    /// command (e.g. `head`/`grep` via whatever shell execution channel this
+    /// session provides)" — a channel the standard registry has never had.
+    #[tokio::test]
+    async fn oversized_read_guidance_names_only_registry_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ReadFileTool::scoped(dir.path());
+        std::fs::write(dir.path().join("big.bin"), [b'a'; 256 * 1024 + 1]).unwrap();
+        let msg = tool
+            .execute(r#"{"path": "big.bin"}"#)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        // Every tool-name-shaped token in the emitted message (an
+        // underscore-joined lowercase identifier) must resolve in the
+        // standard registry. `read_file` is the emitting tool itself —
+        // supplied by the runtime on top of the knowledge registry — so it
+        // is the one legitimate self-reference.
+        let registry = knowledge_tool_registry();
+        let registered = registry.names();
+        let mut cited = Vec::new();
+        for token in msg
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| t.contains('_'))
+        {
+            if token == "read_file" {
+                continue;
+            }
+            cited.push(token.to_string());
+            assert!(
+                registered.iter().any(|n| n == token),
+                "oversized-read guidance cites '{token}', which the standard \
+                 registry does not provide; registry = {registered:?}; message = {msg}"
+            );
+        }
+        // Guard against the guidance silently dropping every alternative.
+        assert!(
+            cited.contains(&"fetch_url".to_string()),
+            "guidance must point at a real alternative (fetch_url): {msg}"
+        );
+
+        // The regression: no pointer at a shell/bash channel.
+        for forbidden in ["shell", "bash", "head", "grep"] {
+            assert!(
+                !msg.to_lowercase().contains(forbidden),
+                "guidance must not promise a '{forbidden}' channel: {msg}"
+            );
         }
     }
 }

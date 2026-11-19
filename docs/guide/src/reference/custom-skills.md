@@ -267,8 +267,12 @@ endpoint sends the credential unencrypted on the wire.
 The agent's built-in `read_file` tool refuses files larger than **256 KiB**
 — a model-directed read of a huge data file would otherwise be
 buffered whole and dumped into the model transcript (an OOM and
-prompt-injection vector). The error steers the model to targeted reads
-(`head`, `grep` over a shell channel) or a smaller summary file.
+prompt-injection vector). `read_file` reads whole files only (it has no
+line-range option), so the error steers the model to a bounded alternative
+that the session actually exposes: a narrower file (a smaller summary or
+excerpt), the embedded docs (`lookup_skill`/`lookup_doc`), or a URL source
+(`fetch_url`). It never promises a shell channel — the standard registry
+carries no shell/bash tool.
 (`fetch_url` carries the same bound under its 256 KiB response cap.)
 
 ## Roadmap
