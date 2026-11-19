@@ -4132,6 +4132,16 @@ the native replacement for a poll-for-output-files shell supervisor
 <td><code>&lt;workdir&gt;/.oxo-flow/checkpoint.json</code></td>
 <td>Checkpoint inspected for the final verdict. Use it with <a href="../run/#variant-checkpoints-checkpoint"><code>run --checkpoint</code></a>. When <code>--workdir</code> is omitted, the run directory recorded in the checkpoint supplies the lock/pid/status location; before the checkpoint exists <code>wait</code> polls for it (never the caller's cwd), and a recorded <code>failed</code> status is reported immediately even when no checkpoint was ever written. Pass <code>--workdir</code> for an immediate wait</td>
 </tr>
+<tr>
+<td><code>--timeout</code></td>
+<td><code>0</code></td>
+<td>Maximum seconds to wait before giving up (<code>0</code> = no timeout)</td>
+</tr>
+<tr>
+<td><code>--interval</code></td>
+<td><code>5</code></td>
+<td>Poll interval in seconds between checkpoint inspections</td>
+</tr>
 </tbody>
 </table>
 <h2 id="exit-status">Exit status<a class="headerlink" href="#exit-status" title="Permanent link">#</a></h2>

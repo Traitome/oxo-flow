@@ -4890,7 +4890,7 @@ the execution layer knows the planning layer's outputs, never the reverse.</p>
 <tbody>
 <tr>
 <td><code>scheduler.rs</code></td>
-<td>Ready-set computation (priority descending, name ascending), ResourcePool accounting</td>
+<td>Ready-set computation with the <code>dispatch_order</code> tie-break (name ascending by default), ResourcePool accounting — effective priority + aging is applied by the CLI run loop</td>
 </tr>
 <tr>
 <td><code>executor/process.rs</code></td>
