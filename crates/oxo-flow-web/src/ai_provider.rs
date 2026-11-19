@@ -88,7 +88,20 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
         // runtime rather than creating a provider that fails with a cryptic
         // empty-credential builder error.
         if !key.trim().is_empty() {
-            let kind: ProviderKind = row.provider.parse().unwrap_or(ProviderKind::OpenAi);
+            // A corrupt provider name must not silently become OpenAI —
+            // that would route the user's key to an endpoint they never
+            // chose. Skip the row (shared runtime stays in charge) and say
+            // so, mirroring the invalid-env-name handling in oxo-flow-ai.
+            let kind = match row.provider.parse::<ProviderKind>() {
+                Ok(kind) => kind,
+                Err(_) => {
+                    tracing::warn!(
+                        "stored AI provider '{}' for user is not a known provider — ignoring the row; re-save the AI configuration",
+                        row.provider
+                    );
+                    return AiProviderRegistry::global().get_provider();
+                }
+            };
             resolved = Some(create_provider(kind, Some(key), row.api_url, row.model));
         }
     }
@@ -145,6 +158,34 @@ fn reported_model(
     })
 }
 
+/// Whether a registry state should report `is_configured: true`.
+///
+/// The decision trusts the ACTIVE provider, not the config snapshot.
+/// Status probes (metrics ai_provider component, settings UI) must agree
+/// with what actually executes:
+/// - Env-only deployments (`ANTHROPIC_AUTH_TOKEN` exported, no key in the
+///   registry snapshot) carry their env-discovered credential internally.
+/// - Ollama is keyless by design and its endpoint always resolves on the
+///   ACTIVE backend (`OLLAMA_HOST`, or the localhost default). The old
+///   snapshot-only check (`c.api_url.is_some()`) reported an env-only
+///   OLLAMA_HOST deployment as disabled while chat/test succeeded — a
+///   B7-class status-vs-executor contradiction.
+fn reported_configured(
+    enabled: bool,
+    provider: &str,
+    active: &Result<AiProvider, oxo_flow_ai::error::AiError>,
+) -> bool {
+    match active {
+        // Test/scripted providers are always considered configured; they
+        // do not need a real API key.
+        Ok(AiProvider::Scripted(_)) => true,
+        Ok(AiProvider::Noop) => false,
+        // The active provider is real — trust it.
+        Ok(_) => enabled && !provider.is_empty(),
+        Err(_) => false,
+    }
+}
+
 impl AiProviderRegistry {
     pub fn global() -> Self {
         Self
@@ -165,28 +206,7 @@ impl AiProviderRegistry {
                 let active_provider = oxo_flow_ai::AI.provider();
                 let provider = reported_provider_name(&active_provider);
                 let model = reported_model(c.model, &active_provider);
-                let is_configured = match active_provider {
-                    // Test/scripted providers are always considered configured;
-                    // they do not need a real API key.
-                    Ok(AiProvider::Scripted(_)) => true,
-                    Ok(AiProvider::Noop) => false,
-                    // The active provider is real — trust it. Env-only
-                    // deployments (ANTHROPIC_AUTH_TOKEN exported, no key in
-                    // the registry snapshot) previously reported
-                    // is_configured: false here even though /api/ai/test and
-                    // every generation surface succeeded, because the
-                    // snapshot's api_key is None while the provider carries
-                    // its env-discovered credential internally. Status
-                    // probes (metrics ai_provider component, settings UI)
-                    // must agree with what actually executes.
-                    Ok(_) if provider == "ollama" => {
-                        // Ollama is local and needs no key, but a reachable URL
-                        // must be configured (the backend default is localhost).
-                        c.enabled && c.api_url.is_some()
-                    }
-                    Ok(_) => c.enabled && !provider.is_empty(),
-                    Err(_) => false,
-                };
+                let is_configured = reported_configured(c.enabled, &provider, &active_provider);
                 ProviderConfig {
                     provider,
                     api_url: c.api_url,
@@ -266,7 +286,9 @@ impl AiProviderRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{reported_model, reported_provider_name, validate_provider_kind};
+    use super::{
+        reported_configured, reported_model, reported_provider_name, validate_provider_kind,
+    };
 
     #[test]
     fn provider_names_are_validated_before_durable_writes() {
@@ -320,5 +342,27 @@ mod tests {
         // Unconfigured registries never claim a model.
         assert_eq!(reported_model(None, &Ok(AiProvider::Noop)), None);
         assert_eq!(reported_model(None, &Err(AiError::NotConfigured)), None);
+    }
+
+    #[test]
+    fn reported_configured_trusts_the_active_ollama_backend() {
+        use oxo_flow_ai::error::AiError;
+        use oxo_flow_ai::provider::{AiProvider, ProviderKind, create_provider};
+
+        // Env-only OLLAMA_HOST deployment: the config snapshot carries no
+        // api_url, but the active backend always resolves one — status must
+        // not report "disabled" while chat/test succeed (B7-class).
+        let ollama = create_provider(ProviderKind::Ollama, None, None, None);
+        assert_eq!(ollama.name(), "ollama");
+        assert!(ollama.api_url().is_some());
+        assert!(reported_configured(true, "ollama", &Ok(ollama)));
+
+        // Disabled pins and unconfigured registries stay unconfigured.
+        assert!(!reported_configured(false, "ollama", &Ok(AiProvider::Noop)));
+        assert!(!reported_configured(
+            true,
+            "ollama",
+            &Err(AiError::NotConfigured)
+        ));
     }
 }
