@@ -53,7 +53,8 @@ apparatus must observe N winners — if it could only ever print `1`, M1's
 | CPUs | 4 (`nproc`) |
 | RAM | 3.6 GiB total |
 | PostgreSQL server | `PostgreSQL 16.16 (Debian) on x86_64-pc-linux-gnu` (container `postgres:16`) |
-| repo commit | `1face885104d24af95b213d52b90ed68373ab957` |
+| baseline commit | `1face885104d24af95b213d52b90ed68373ab957` (`origin/main` at branch point) |
+| measured head | `923ea6a4606087cbbc91f08abd74e288a5f01a8f` (this PR's head — harness/test/script live here) |
 | branch | `research/1251-postgres-ledger` |
 | oxo-flow | `0.32.0` |
 | rustc / cargo | `1.98.0` / `1.98.0` |
@@ -183,5 +184,6 @@ SQLite-vs-PostgreSQL differential on the same guard.
 | Harness (bash) | `scripts/postgres-ledger-campaign.sh` |
 | Guard implementation | `crates/oxo-flow-web/src/infra/db/postgres.rs` (`insert_run_guarded`, partial indexes) |
 | Contract baseline | `crates/oxo-flow-web/tests/postgres_storage_contract.rs` |
-| Repo commit measured | `1face885104d24af95b213d52b90ed68373ab957` |
+| baseline commit | `1face885104d24af95b213d52b90ed68373ab957` (`origin/main` at branch point) |
+| Repo commit measured | `923ea6a4606087cbbc91f08abd74e288a5f01a8f` (this PR's head — harness/test/script live here) |
 | Host | `VM-4-4-ubuntu`, 4 CPU, 3.6 GiB RAM, `postgres:16` (16.16) container |
