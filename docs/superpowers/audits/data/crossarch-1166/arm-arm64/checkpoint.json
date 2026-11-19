@@ -1,0 +1,99 @@
+{
+  "completed_rules": [
+    "float_sum",
+    "prepare",
+    "text_and_compress"
+  ],
+  "failed_rules": [],
+  "benchmarks": {
+    "float_sum": {
+      "rule": "float_sum",
+      "wall_time_secs": 4.862,
+      "max_memory_mb": 263,
+      "cpu_seconds": 0.008247,
+      "retries": 0
+    },
+    "prepare": {
+      "rule": "prepare",
+      "wall_time_secs": 2.954,
+      "max_memory_mb": 237,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    },
+    "text_and_compress": {
+      "rule": "text_and_compress",
+      "wall_time_secs": 0.796,
+      "max_memory_mb": 269,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    }
+  },
+  "workflow_path": "/home/ubuntu/crossarch-1166/cross-arch-provenance-container.oxoflow",
+  "workflow_git_sha": "4b21018f9b3975ce3a9796ce0e9a126c35e6bd65",
+  "workdir": "/home/ubuntu/armB-arm64/work",
+  "checksums": {
+    "data/bytes.bin": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+    "data/bytes.bin.gz": "sha256:62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+    "data/payload.txt": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+    "data/payload.txt.gz": "sha256:4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+    "float.txt": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+    "float_series.txt": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+    "manifest.sha256": "sha256:01eb1d2c51f8cc56e3a135ab78c9613f9fb3e387037082ae87166d797faeef5f",
+    "summary.txt": "sha256:110991a1d3281fe972833859d532f7c91067ee7569fe219b2e8dce2cb21b10ee"
+  },
+  "rule_fingerprints": {
+    "float_sum": "sha256:acec66c61b08e512a387e3db709672837ec8b32935f013fbb4dd41f4a32de60e",
+    "prepare": "sha256:00d998196396997edacc0edf636297f66894d842e19d7b43508df40a87c484ad",
+    "text_and_compress": "sha256:7f94bb85ad1b3b2f5e511db79477e45aecf837c366b52f721bd230dee6417164"
+  },
+  "rule_fingerprints_no_input": {
+    "float_sum": "sha256:348e8b59f6d523457e704ea6438705d7a34e6eead135277d55fe6c361d00bd86",
+    "prepare": "sha256:aa81e8e1e39e0621671df3cd1ec5b1651ef49b5c06ff10e9dcbd5fad3b5ba0e0",
+    "text_and_compress": "sha256:b24e06e1c6b9117c1d7278e5f482f9c9510ff4ce5c5879c0127ffc264ae0f082"
+  },
+  "input_manifests": {
+    "text_and_compress": [
+      {
+        "path": "data/bytes.bin",
+        "size": 4096,
+        "mtime_nanos": 1795118021382916591,
+        "hash": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75"
+      },
+      {
+        "path": "data/payload.txt",
+        "size": 1073,
+        "mtime_nanos": 1795118019387903229,
+        "hash": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440"
+      }
+    ]
+  },
+  "rule_runs": {
+    "float_sum": {
+      "exit_code": 0,
+      "started_at": "2026-11-19T19:53:33.938206219Z",
+      "finished_at": "2026-11-19T19:53:38.800371598Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/home/ubuntu/armB-arm64/work':'/home/ubuntu/armB-arm64/work' -w '/home/ubuntu/armB-arm64/work' 'crossarch1166:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'python3 -c \"print('\\''%.17g'\\'' % sum(1.0/i for i in range(1, 1001)))\" > float.txt\n# Many FP values in one file: magnifies any per-operation rounding drift.\npython3 -c \"\nvals = [1.0/i for i in range(1, 2001)]\nimport math\nprint('\\''%.17g'\\'' % math.fsum(vals))\nprint('\\''%.17g'\\'' % sum(vals))\nprint('\\''%.17g'\\'' % (sum(vals) - math.fsum(vals)))\n\" > float_series.txt\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "prepare": {
+      "exit_code": 0,
+      "started_at": "2026-11-19T19:53:38.825245668Z",
+      "finished_at": "2026-11-19T19:53:41.779344472Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/home/ubuntu/armB-arm64/work':'/home/ubuntu/armB-arm64/work' -w '/home/ubuntu/armB-arm64/work' 'crossarch1166:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'mkdir -p '\\''data'\\''\nmkdir -p data\n: > data/payload.txt\nfor i in $(seq 1 64); do echo \"line $i value $((i * 37 % 97))\" >> data/payload.txt; done\n# Fixed byte pattern (no /dev/urandom): exercises raw binary output.\npython3 -c \"import sys; sys.stdout.buffer.write(bytes((i*53+7) % 256 for i in range(4096)))\" > data/bytes.bin\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "text_and_compress": {
+      "exit_code": 0,
+      "started_at": "2026-11-19T19:53:41.791722170Z",
+      "finished_at": "2026-11-19T19:53:42.588470764Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/home/ubuntu/armB-arm64/work':'/home/ubuntu/armB-arm64/work' -w '/home/ubuntu/armB-arm64/work' 'crossarch1166:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'mkdir -p '\\''data'\\''\n{ sort data/payload.txt | wc -l ; sort -u data/payload.txt | head -3 ; } > summary.txt\ngzip -n -c data/payload.txt > data/payload.txt.gz\ngzip -n -c data/bytes.bin > data/bytes.bin.gz\nsha256sum data/payload.txt data/bytes.bin > manifest.sha256\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    }
+  }
+}

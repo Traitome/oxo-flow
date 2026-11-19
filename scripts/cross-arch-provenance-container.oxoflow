@@ -1,0 +1,64 @@
+# Cross-architecture reproduction measurement fixture (#1166), container arm.
+# Pinned, tiny, deterministic. Unlike the `system`-backend fixture
+# (cross-arch-provenance.oxoflow), this one runs inside a PINNED container
+# image referenced by its multi-arch manifest-list digest, so both arms share
+# an identical container digest and an identical toolchain (same coreutils,
+# same python, same gzip) — only the container CPU architecture differs. That
+# removes the OS/toolchain confound the macOS-vs-Linux observation carried.
+#
+# The image is python:3.12-slim pinned by manifest-list digest
+#   python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+# Both arms share that ONE manifest-list digest. Docker's classic (non-containerd)
+# snapshotter stores a digest-only reference for exactly one platform and refuses
+# to re-resolve it to another ("cannot overwrite digest"), so the harness stages
+# each platform's image under the fixed local tag `crossarch1166:pin` before each
+# arm's run; the workflow therefore references the tag, not the digest. Both
+# staged images are pulled from the same manifest-list digest (per-platform image
+# ids are recorded in container.txt), so image identity is equal across arms and
+# only the CPU architecture differs.
+
+[workflow]
+name = "cross-arch-provenance-container"
+version = "1.0.0"
+description = "Deterministic multi-class fixture, pinned container digest"
+author = "oxo-flow research program"
+
+[[rules]]
+name = "prepare"
+environment = { docker = "crossarch1166:pin" }
+output = ["data/payload.txt", "data/bytes.bin"]
+shell = """
+mkdir -p data
+: > {output[0]}
+for i in $(seq 1 64); do echo "line $i value $((i * 37 % 97))" >> {output[0]}; done
+# Fixed byte pattern (no /dev/urandom): exercises raw binary output.
+python3 -c "import sys; sys.stdout.buffer.write(bytes((i*53+7) % 256 for i in range(4096)))" > {output[1]}
+"""
+
+[[rules]]
+name = "text_and_compress"
+environment = { docker = "crossarch1166:pin" }
+input = ["data/payload.txt", "data/bytes.bin"]
+output = ["summary.txt", "data/payload.txt.gz", "data/bytes.bin.gz", "manifest.sha256"]
+shell = """
+{ sort {input[0]} | wc -l ; sort -u {input[0]} | head -3 ; } > {output[0]}
+gzip -n -c {input[0]} > {output[1]}
+gzip -n -c {input[1]} > {output[2]}
+sha256sum {input[0]} {input[1]} > {output[3]}
+"""
+
+[[rules]]
+name = "float_sum"
+environment = { docker = "crossarch1166:pin" }
+output = ["float.txt", "float_series.txt"]
+shell = """
+python3 -c "print('%.17g' % sum(1.0/i for i in range(1, 1001)))" > {output[0]}
+# Many FP values in one file: magnifies any per-operation rounding drift.
+python3 -c "
+vals = [1.0/i for i in range(1, 2001)]
+import math
+print('%.17g' % math.fsum(vals))
+print('%.17g' % sum(vals))
+print('%.17g' % (sum(vals) - math.fsum(vals)))
+" > {output[1]}
+"""
