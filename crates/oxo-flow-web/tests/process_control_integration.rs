@@ -574,6 +574,42 @@ fn set_finalize_before_cas(site: &str) -> FinalizeBeforeCasEnv {
     FinalizeBeforeCasEnv { _guard: guard }
 }
 
+/// RAII guard: widen the read-then-write window in the run handlers so two
+/// same-target requests reliably overlap, restore on drop. `site` is `"pause"`
+/// or `"resume"`.
+///
+/// It holds `FINALIZE_BEFORE_CAS_ENV`, the SAME process-global lock the
+/// finalize-seam tests take: both seams are read by the same pause/resume
+/// handlers, so a race test running beside a terminal-finalize test would see
+/// that test's `OXO_FLOW_TEST_FINALIZE_BEFORE_CAS` and have its row cancelled
+/// underneath it. One lock for both variables keeps every seam-driving test
+/// mutually exclusive.
+struct CasDelayEnv {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for CasDelayEnv {
+    fn drop(&mut self) {
+        // Soundness: FINALIZE_BEFORE_CAS_ENV serializes every writer and
+        // reader of this variable inside the test binary.
+        unsafe {
+            std::env::remove_var("OXO_FLOW_TEST_CAS_DELAY_MS");
+        }
+    }
+}
+
+fn set_cas_delay(site: &str) -> CasDelayEnv {
+    let guard = FINALIZE_BEFORE_CAS_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Soundness: FINALIZE_BEFORE_CAS_ENV serializes every writer and reader
+    // of this variable inside the test binary.
+    unsafe {
+        std::env::set_var("OXO_FLOW_TEST_CAS_DELAY_MS", site);
+    }
+    CasDelayEnv { _guard: guard }
+}
+
 /// True while process `pid` is in the kernel's stopped (job-control) state:
 /// the first field of `ps -o state=` is `T` for a SIGSTOPped task.
 fn process_is_stopped(pid: i32) -> bool {
@@ -677,6 +713,84 @@ async fn resume_refused_when_row_went_terminal_refreezes_process() {
         .expect("cleanup kill");
     child.wait().expect("wait after cleanup");
     process_control::unregister("pc-resume-cas");
+}
+
+/// RB-07 / #1256 review: an `Ok(false)` CAS does NOT always mean the row went
+/// terminal — it also fires when a concurrent SAME-TARGET pause already won.
+/// The loser must NOT unfreeze the group the winner legitimately froze, or the
+/// run ends row=`paused` / process=running with nothing left to re-freeze it.
+#[tokio::test]
+async fn concurrent_pause_loser_does_not_unfreeze_paused_run() {
+    common::ensure_db().await;
+    insert_run_row("pc-pause-race", "running").await;
+    let mut child = spawn_and_register("pc-pause-race");
+    let _delay = set_cas_delay("pause");
+
+    let (a, b) = tokio::join!(
+        post_json("/api/runs/pc-pause-race/pause", json!({})),
+        post_json("/api/runs/pc-pause-race/pause", json!({})),
+    );
+    let ok_a = a.0 == StatusCode::OK;
+    let ok_b = b.0 == StatusCode::OK;
+    assert!(ok_a ^ ok_b, "exactly one pause wins: a={a:?} b={b:?}");
+    let loser = if ok_a { &b } else { &a };
+    assert_eq!(loser.0, StatusCode::CONFLICT, "loser: {loser:?}");
+    assert_eq!(loser.1["code"], "RUN_STATE_CHANGED", "loser: {loser:?}");
+
+    assert_eq!(run_status("pc-pause-race").await.as_deref(), Some("paused"));
+    // Let a (buggy) SIGCONT land, then prove it did not: the winner's freeze
+    // must survive the loser's refusal.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        process_is_stopped(child.id() as i32),
+        "the loser of a same-target pause must not unfreeze a legitimately paused run"
+    );
+
+    process_control::signal_group(child.id() as i32, process_control::SIGCONT)
+        .expect("cleanup cont");
+    process_control::signal_group(child.id() as i32, process_control::SIGKILL)
+        .expect("cleanup kill");
+    child.wait().expect("wait after cleanup");
+    process_control::unregister("pc-pause-race");
+}
+
+/// RB-07 / #1256 review, resume side: the loser of two concurrent SAME-TARGET
+/// resumes must NOT re-freeze the group the winner legitimately unfroze, or the
+/// run ends row=`running` / process frozen (SIGSTOP is uncatchable — it hangs
+/// until a manual `kill -CONT`).
+#[tokio::test]
+async fn concurrent_resume_loser_does_not_refreeze_running_run() {
+    common::ensure_db().await;
+    insert_run_row("pc-resume-race", "paused").await;
+    let mut child = spawn_and_register("pc-resume-race");
+    process_control::signal_group(child.id() as i32, process_control::SIGSTOP).expect("pre-freeze");
+    let _delay = set_cas_delay("resume");
+
+    let (a, b) = tokio::join!(
+        post_json("/api/runs/pc-resume-race/resume", json!({})),
+        post_json("/api/runs/pc-resume-race/resume", json!({})),
+    );
+    let ok_a = a.0 == StatusCode::OK;
+    let ok_b = b.0 == StatusCode::OK;
+    assert!(ok_a ^ ok_b, "exactly one resume wins: a={a:?} b={b:?}");
+    let loser = if ok_a { &b } else { &a };
+    assert_eq!(loser.0, StatusCode::CONFLICT, "loser: {loser:?}");
+    assert_eq!(loser.1["code"], "RUN_STATE_CHANGED", "loser: {loser:?}");
+
+    assert_eq!(
+        run_status("pc-resume-race").await.as_deref(),
+        Some("running")
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !process_is_stopped(child.id() as i32),
+        "the loser of a same-target resume must not re-freeze a legitimately running run"
+    );
+
+    process_control::signal_group(child.id() as i32, process_control::SIGKILL)
+        .expect("cleanup kill");
+    child.wait().expect("wait after cleanup");
+    process_control::unregister("pc-resume-race");
 }
 
 #[tokio::test]
