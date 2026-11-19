@@ -3040,14 +3040,16 @@ and extensible attributes — to the files flowing across DAG edges. Contracts
 are checked statically before any compute: a producer whose output violates
 a consumer's declared type fails `oxo-flow validate` (error) and aborts
 `oxo-flow run` in preflight with a `[TYPE-0xx]` diagnostic (see
-[TYPE-001..009](diagnostics-engine.md#biological-subtyping-violations-type-) —
+[TYPE-001..010](diagnostics-engine.md#biological-subtyping-violations-type-) —
 diagnostics carry remediation hints, and where the fix is mechanical they
 synthesize the command (such as `samtools view -b` or `samtools sort`);
-TYPE-004 and TYPE-007 carry suggestions only). Two further codes are
+TYPE-004 and TYPE-007 carry suggestions only). Three further codes are
 *advisory*: `TYPE-008` flags a typed consumer whose producer declares no
-`[types]` at all, and `TYPE-009` flags a consumer that names a
-`reference_build` while the producer omits it — both report an unverifiable
-edge (a missing contract, not a mismatch) as a warning and never fail a run.
+`[types]` at all, `TYPE-009` flags a consumer that names a
+`reference_build` while the producer omits it, and `TYPE-010` flags an edge
+where both rules declare types but no output channel name pairs with an input
+channel name — all report an unverifiable edge (a missing or unpairable
+contract, not a mismatch) as a warning and never fail a run.
 
 ### Named type declarations
 
@@ -3073,7 +3075,7 @@ The name is your choice (it is referenced by rules, not derived from files).
 | `sort_order` | `unsorted`, `queryname`, `coordinate`, `unknown` | Record ordering within alignment/variant files |
 | `index` | `bai`, `csi`, `crai`, `tbi`, `fai` | Companion index artifact the file must be accompanied by |
 | `reference_build` | String (e.g. `"GRCh38"`) | Reference genome build the data was produced against |
-| `compression` | `none`, `gzip`, `bgzip`, `zstd` | Block/stream compression of the file |
+| `compression` | `none`, `gzip`, `bgzip`, `zstd` | Block/stream compression of the file. BAM and CRAM are BGZF by specification, so a producer declaring a plain `bam`/`cram` already satisfies a consumer's `compression=bgzip` requirement; other formats must state compression explicitly |
 | `read_groups` | Table: `{ required = true, fields = ["ID", "SM", ...] }` | `@RG` header metadata the consumer requires |
 | `attributes` | Map of string → string | Extensible contract attributes (e.g. `variant_type = "germline"`) |
 
@@ -3138,8 +3140,9 @@ accompaniment (`TYPE-003`), reference build (`TYPE-004`), read groups
 channel reference that matches no `[types.*]` declaration (or an unparsable
 inline spec) reports `TYPE-UNKNOWN`. Edges the checker cannot prove either
 way are reported as advisory `TYPE-008` (typed consumer against an untyped
-producer) and `TYPE-009` (consumer names a build the producer omits); these
-are warnings, not failures, so a partially annotated workflow still runs. Channel semantics: identical channel
+producer), `TYPE-009` (consumer names a build the producer omits), and
+`TYPE-010` (both sides typed but no channel name pairs); these are warnings,
+not failures, so a partially annotated workflow still runs. Channel semantics: identical channel
 names always match; `default` matches when either side declares only one
 channel; and with a single channel on each side, a shared output/input path
 also matches. Beyond static checking, `oxo-flow test`'s deep check (`D005`)

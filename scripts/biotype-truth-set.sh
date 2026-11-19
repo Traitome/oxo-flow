@@ -44,10 +44,10 @@ tests/truthset/biotype/cases/t05_cram_hg19_to_grch38_consumer.oxoflow	reject	TYP
 tests/truthset/biotype/cases/t06_fastq_gz_passthrough.oxoflow	accept	-	trimmomatic gz FASTQ -> salmon
 tests/truthset/biotype/cases/a06_queryname_bam_to_coordinate_consumer.oxoflow	reject	TYPE-002	queryname BAM -> coordinate consumer
 tests/truthset/biotype/cases/a07_bam_no_readgroup_to_bqsr.oxoflow	reject	TYPE-005	no-@RG BAM -> BQSR (RG required)
-tests/truthset/biotype/cases/a08_multichannel_default_mismatch.oxoflow	reject	TYPE-002	multi-out producer -> default-keyed consumer (FALSE-ACCEPT)
+tests/truthset/biotype/cases/a08_multichannel_default_mismatch.oxoflow	accept	-	multi-out producer -> default-keyed consumer (advisory TYPE-010 in checker, #1254)
 tests/truthset/biotype/cases/a09_multichannel_namekey_default.oxoflow	reject	TYPE-002	CONTROL for a08, path-keyed consumer
 tests/truthset/biotype/cases/a10_build_alias_hg38_grch38.oxoflow	accept	-	hg38 alias == GRCh38
-tests/truthset/biotype/cases/a11_multichannel_namekey_mismatch.oxoflow	reject	TYPE-002	multi-out named producer -> named consumer (FALSE-ACCEPT)
+tests/truthset/biotype/cases/a11_multichannel_namekey_mismatch.oxoflow	accept	-	multi-out named producer -> named consumer (advisory TYPE-010 in checker, #1254)
 tests/truthset/biotype/cases/a12_bam_implicit_bgzip.oxoflow	accept	-	plain BAM vs consumer bgzip requirement (FALSE-REJECT)
 tests/truthset/biotype/cases/a13_somatic_to_germline_consumer.oxoflow	reject	TYPE-007	somatic VCF -> germline joint-calling
 tests/truthset/biotype/cases/a14_typed_consumer_untyped_producer.oxoflow	accept	-	TYPE-008 advisory edge must not fail

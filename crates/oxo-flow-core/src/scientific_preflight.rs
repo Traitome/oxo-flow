@@ -1384,9 +1384,10 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
     }
 
     // Biological type contract check (TYPE-001 .. TYPE-007 are proven
-    // violations; TYPE-008 .. TYPE-009 flag unverifiable edges — a typed
-    // consumer whose producer declares no [types], or a build-incomplete
-    // pair — and surface here as advisory warnings, not failures).
+    // violations; TYPE-008 .. TYPE-010 flag unverifiable edges — a typed
+    // consumer whose producer declares no [types], a build-incomplete
+    // pair, or a typed pair whose channels do not line up — and surface
+    // here as advisory warnings, not failures).
     if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
         && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&config.rules)
     {

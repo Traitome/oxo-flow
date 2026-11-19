@@ -382,6 +382,27 @@ impl BioTypeSpec {
             ..Default::default()
         }
     }
+
+    /// Compression stream a format implies *even when none is declared*.
+    ///
+    /// BAM and CRAM are, by the SAM/BAM specification, BGZF-compressed
+    /// streams — every conformant BAM/CRAM is BGZF, so a producer that omits
+    /// `compression` still satisfies a consumer's `compression=bgzip`
+    /// requirement (issue #1255). No other format carries an implied stream
+    /// wrapper: FASTQ, VCF, SAM and friends may be plain, gzip, or bgzip, so
+    /// they must state their compression explicitly.
+    ///
+    /// This is the single shared source of the format-implied-compression
+    /// invariant consulted by [`BioTypeSpec::is_subtype_of`] (and therefore,
+    /// through [`crate::types::IntrospectedBioType::satisfies_spec`], by the
+    /// header introspector too).
+    #[must_use]
+    pub fn implied_compression(format: BioFormat) -> CompressionKind {
+        match format {
+            BioFormat::Bam | BioFormat::Cram => CompressionKind::Bgzip,
+            _ => CompressionKind::None,
+        }
+    }
 }
 
 /// Rule-level biological type declarations.
@@ -398,9 +419,10 @@ pub struct RuleTypesSpec {
 /// Specific violation identified during biological subtyping check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeViolation {
-    /// Diagnostic identifier (`TYPE-001` .. `TYPE-009`, or `TYPE-UNKNOWN`
-    /// when a referenced type name cannot be resolved). `TYPE-008` / `TYPE-009`
-    /// are advisory unverifiable-edge codes — see [`is_advisory_type_code`].
+    /// Diagnostic identifier (`TYPE-001` .. `TYPE-010`, or `TYPE-UNKNOWN`
+    /// when a referenced type name cannot be resolved). `TYPE-008` / `TYPE-009` /
+    /// `TYPE-010` are advisory unverifiable-edge codes — see
+    /// [`is_advisory_type_code`].
     pub code: String,
     /// Clear explanation of the semantic mismatch.
     pub message: String,

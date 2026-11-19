@@ -11,6 +11,12 @@
 #   reject — TYPE-002: the requirement (coordinate) is stated and checkable
 #   against the producer's typed BAM (unsorted). A typed edge that yields NO
 #   diagnostic is a silent skip, i.e. a false-accept.
+#
+# POST-FIX (2026-11-19, issue #1254): the checker now surfaces this edge as
+#   advisory TYPE-010 ("unpairable edge") instead of silence. Surfaced, not
+#   blocked — the harness verdict moved from `reject` to `accept` (with the
+#   advisory); the pre-fix `reject/TYPE-002` expectation above is retained for
+#   provenance.
 
 [workflow]
 name = "a11"
