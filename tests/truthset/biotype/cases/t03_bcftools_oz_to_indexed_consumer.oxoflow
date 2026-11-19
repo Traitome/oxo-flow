@@ -1,0 +1,25 @@
+# T3 — transplant of a bcftools variant-filtering edge (Nextflow
+# common pattern): `bcftools view -Oz` emits a bgzip-compressed VCF
+# (BGZF blocks), indexed with `tabix -p vcf` (.tbi); the downstream
+# filtering/annotation consumer requires a bgzip+tabix VCF.
+#
+# EXPECTED (recorded before running):
+#   accept — bgzip satisfies the bgzip requirement and index=tbi matches.
+
+[workflow]
+name = "t03"
+
+[[rules]]
+name = "filter"
+output = ["calls.vcf.gz"]
+shell = "bcftools view -Oz -o calls.vcf.gz in.bcf && tabix -p vcf calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=bgzip,index=tbi]" }
+
+[[rules]]
+name = "annotate"
+input = ["calls.vcf.gz"]
+output = ["annot.vcf.gz"]
+shell = "bcftools annotate -Oz -o annot.vcf.gz calls.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=tbi]" }

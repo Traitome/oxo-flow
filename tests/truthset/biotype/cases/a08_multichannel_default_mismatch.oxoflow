@@ -1,0 +1,35 @@
+# A08 — ADVERSARIAL (headline false-accept probe). Channel-matching
+# boundary where the correspondence is UNAMBIGUOUS yet no diagnostic fires.
+#
+# The producer emits TWO typed outputs whose channel keys ARE the raw output
+# paths ("a.bam" -> BAM, "b.vcf" -> VCF). The consumer reads the exact same
+# path "a.bam" and declares its single input keyed `default` as
+# BAM[sort_order=coordinate]. Both sides name the path "a.bam" literally, the
+# producer typed it (BAM, unsorted), and the consumer stated a checkable
+# requirement (coordinate-sorted). There is no ambiguity about which artifact
+# flows and what it should be.
+#
+# EXPECTED (argued from the contract semantics, NOT the code):
+#   reject — TYPE-002: the producer's BAM at a.bam is unsorted, the consumer
+#   requires coordinate. A typed consumer must never silently accept an edge
+#   whose stated requirement is violated. If the checker cannot pair the
+#   channels it must at minimum surface an advisory — a typed edge that
+#   produces NO diagnostic is a silent skip and therefore a false-accept.
+
+[workflow]
+name = "a08"
+
+[[rules]]
+name = "make"
+output = ["a.bam", "b.vcf"]
+shell = "echo"
+[rules.types]
+outputs = { "a.bam" = "BAM", "b.vcf" = "VCF" }
+
+[[rules]]
+name = "use"
+input = ["a.bam"]
+output = ["result.txt"]
+shell = "echo"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

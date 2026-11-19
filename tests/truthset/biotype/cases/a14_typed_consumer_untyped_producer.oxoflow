@@ -1,0 +1,25 @@
+# A14 — ADVERSARIAL, TYPE-008 advisory path through the REAL CLI (not just
+# the library unit test). A typed consumer reads from a producer that
+# declares no [rules.types] at all, so the edge is UNVERIFIABLE — not
+# provably violated.
+#
+# Policy question (argued from the diagnostic contract, docs/guide/src/
+# reference/diagnostics-engine.md): TYPE-008 is declared advisory and must
+# NOT fail validation.
+#   EXPECTED: accept (valid=true) with a WARNING carrying code TYPE-008.
+
+[workflow]
+name = "a14"
+
+[[rules]]
+name = "align"
+output = ["a.bam"]
+shell = "bwa mem ref.fa reads.fq > a.bam"
+
+[[rules]]
+name = "call"
+input = ["a.bam"]
+output = ["out.vcf"]
+shell = "bcftools mpileup -f ref.fa a.bam"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

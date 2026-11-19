@@ -1,0 +1,26 @@
+# T1 — transplant of the Nextflow STAR->featureCounts edge (see
+# tests/fixtures/import/nextflow/rnaseq.ok.nf): STAR --outSAMtype BAM
+# SortedByCoordinate produces a coordinate-sorted BAM, indexed by
+# `samtools index` (BAM .bai); featureCounts reads a coordinate-sorted,
+# indexed BAM.
+#
+# EXPECTED (recorded before running):
+#   accept — no TYPE diagnostic; the edge is fully satisfied.
+
+[workflow]
+name = "t01"
+
+[[rules]]
+name = "align"
+output = ["stage.bam"]
+shell = "STAR --outSAMtype BAM SortedByCoordinate"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,index=bai]" }
+
+[[rules]]
+name = "count"
+input = ["stage.bam"]
+output = ["counts.txt"]
+shell = "featureCounts -o counts.txt stage.bam"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

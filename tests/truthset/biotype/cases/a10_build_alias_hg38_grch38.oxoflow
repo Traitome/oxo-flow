@@ -1,0 +1,24 @@
+# A10 — reference-build alias boundary (TYPE-004 / normalization). Producer
+# declares the common alias `hg38`; consumer declares the canonical
+# `GRCh38`. Both denote the same assembly (UCSC hg38 == GRCh38).
+#
+# EXPECTED (argued from the assembly naming convention, NOT the code):
+#   accept — hg38 and GRCh38 are the SAME build, so no TYPE-004.
+
+[workflow]
+name = "a10"
+
+[[rules]]
+name = "align"
+output = ["a.bam"]
+shell = "bwa mem hg38.fa reads.fq > a.bam"
+[rules.types]
+outputs = { default = "BAM[reference_build=hg38]" }
+
+[[rules]]
+name = "call"
+input = ["a.bam"]
+output = ["out.vcf"]
+shell = "bcftools mpileup -f GRCh38.fa a.bam"
+[rules.types]
+inputs = { default = "BAM[reference_build=GRCh38]" }

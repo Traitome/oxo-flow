@@ -1,0 +1,26 @@
+# T4 — transplant of a `gzip`-compressed VCF producer paired with a
+# tabix-indexed consumer (common Snakemake pattern where a rule pipes
+# `bgzip -c` incorrectly as plain `gzip -c`). tabix requires BGZF; a plain
+# gzip stream is not seekable, so random-access tabix indexing is invalid.
+#
+# EXPECTED (recorded before running):
+#   reject — TYPE-006 (gzip does not satisfy a bgzip requirement).
+#   The consumer also requires index=tbi the producer never declares: TYPE-003.
+
+[workflow]
+name = "t04"
+
+[[rules]]
+name = "call"
+output = ["raw.vcf.gz"]
+shell = "gzip -c raw.vcf > raw.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=gzip]" }
+
+[[rules]]
+name = "merge"
+input = ["raw.vcf.gz"]
+output = ["merged.vcf.gz"]
+shell = "bcftools merge -Oz -o merged.vcf.gz raw.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=tbi]" }

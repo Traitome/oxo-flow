@@ -1,0 +1,24 @@
+# T5 — transplant of a liftover/cohort-merge edge: a CRAM aligned against
+# hg19 fed into a consumer requiring GRCh38 (a real clinical/research
+# mismatch: hg19 and GRCh38 coordinates are not interchangeable).
+#
+# EXPECTED (recorded before running):
+#   reject — TYPE-004 (hg19 normalizes to GRCh37, not GRCh38).
+
+[workflow]
+name = "t05"
+
+[[rules]]
+name = "align_hg19"
+output = ["legacy.cram"]
+shell = "samtools view -C -T hg19.fa -o legacy.cram in.bam"
+[rules.types]
+outputs = { default = "CRAM[reference_build=hg19]" }
+
+[[rules]]
+name = "merge_grch38"
+input = ["legacy.cram"]
+output = ["merged.bcf"]
+shell = "bcftools merge -Ob -o merged.bcf legacy.cram"
+[rules.types]
+inputs = { default = "CRAM[reference_build=GRCh38]" }
