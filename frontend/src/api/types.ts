@@ -115,6 +115,8 @@ export interface RunList {
  *  `run_row_to_list_item` literal in tests/frontend_types_drift.rs). */
 export interface RunListItem {
   id: string; user_id: string; pipeline_id: string | null;
+  /** Cluster routing the run was submitted under (#1257), null for local runs. */
+  cluster_id?: string | null;
   /** Workflow name the run executed (backend enriches the list — issue #82 P1-3). */
   workflow_name?: string | null;
   /** True when the run was a --dry-run plan (persisted since #907 P3-14). */
