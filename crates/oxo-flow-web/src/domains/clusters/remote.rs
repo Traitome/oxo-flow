@@ -562,7 +562,7 @@ pub struct RunStaging {
 /// actually true rather than an aspiration:
 ///
 /// - **Memory.** A local Linux web-spawned run is OS-capped by a
-///   process-tree `RLIMIT_DATA` (executor.rs `apply_memory_rlimit`) — that
+///   process-tree `RLIMIT_DATA` (executor.rs `apply_run_rlimits`) — that
 ///   rlimit is a local-process construct and cannot be installed on the
 ///   cluster host. The remote path therefore forwards `--max-memory <MB>`
 ///   when the staged ceiling is nonzero, which drives the engine's scheduler

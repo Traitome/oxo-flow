@@ -286,28 +286,130 @@ pub const EXIT_CODE_WRAPPER_SCRIPT: &str =
 /// exactly as declared.
 pub const MIN_ENFORCED_MEMORY_MB: u64 = 512;
 
-/// Enforce a run's declared memory as an OS ceiling on the spawned CLI and
-/// every process it spawns (RB-09 / issue #1133).
+/// Operator knob (RB-01a / issue #1129): wall-of-CPU ceiling in seconds for
+/// a web-spawned run's process tree, installed as `RLIMIT_CPU`.
 ///
-/// `RLIMIT_DATA` bounds the data segment plus anonymous mappings — the
-/// memory rules actually allocate — while leaving file-backed mappings
-/// (reference/BAM mmaps) alone. Exceeding it makes the allocation fail, so
-/// the offending rule dies and the run fails with a real error instead of
-/// the overage being silently added to a counter.
+/// Unset (or `0`) installs nothing — today's behavior. A positive value
+/// sends `SIGXCPU` (then `SIGKILL` if that is ignored) once the tree has
+/// burned that many CPU-seconds, so a runaway rule cannot pin a core of the
+/// server forever. This is an operator-wide ceiling, deliberately not a
+/// per-workflow declaration: it bounds *any* run a tenant submits.
+pub const RLIMIT_CPU_ENV: &str = "OXO_FLOW_WEB_RLIMIT_CPU_SECS";
+
+/// Operator knob (RB-01a / issue #1129): maximum process count for a
+/// web-spawned run, installed as `RLIMIT_NPROC`. Unset (or `0`) installs
+/// nothing.
+///
+/// CAVEAT (documented in the web API reference): `RLIMIT_NPROC` counts
+/// every process of the child's *real user id*, not just this subtree. When
+/// the server runs as a shared account, a low value also caps unrelated
+/// processes of that account — set it only on a per-run account, and above
+/// the account's steady-state process count.
+pub const RLIMIT_NPROC_ENV: &str = "OXO_FLOW_WEB_RLIMIT_NPROC";
+
+/// Engine configuration knobs the web-spawned CLI is allowed to inherit
+/// (RB-01a / issue #1129).
+///
+/// The CLI and core engine read these from their own environment while a run
+/// executes (scratch dirs, module cache, hook timeout, disk-pressure knobs,
+/// wildcard relaxation, container-registry mirrors, cloud storage, secret
+/// references). The tenant of a web run never sets them, so re-admitting the
+/// ones the *server operator* exported preserves existing engine behavior
+/// across the spawn — none of them carry a server credential. Every entry is
+/// an `OXO_*` variable the CLI/core actually reads; `PATH`/`HOME`/`LANG`/
+/// `LC_*` and `OXO_FLOW_ENV_PASSTHROUGH` come from the shared rule-env
+/// policy and are deliberately absent here.
+///
+/// Deliberately EXCLUDED (would defeat the isolation): `DATABASE_URL`,
+/// `OXO_FLOW_MASTER_KEY`, `ANTHROPIC_*`/`OPENAI_*`/`OLLAMA_*`/`DEEPSEEK_*`
+/// provider credentials, `OXO_FLOW_AI_API_KEY`, `OXO_FLOW_MCP_TOKEN*`, and
+/// `OXO_FLOW_ADMIN_PASSWORD`/`*_USER_PASSWORD`/`*_VIEWER_PASSWORD`.
+const WEB_SPAWN_ENV_ALLOWLIST: &[&str] = &[
+    // Scratch space + module cache.
+    "OXO_FLOW_TMPDIR",
+    "OXO_FLOW_MODULE_CACHE",
+    "OXO_FLOW_ENV_STORE",
+    // Execution-time limits the operator may have tuned.
+    "OXO_FLOW_HOOK_TIMEOUT_SECS",
+    "OXO_FLOW_OUTPUT_TAIL_BYTES",
+    "OXO_FLOW_STRICT_PLACEHOLDERS",
+    "OXO_FLOW_DISK_TICK_SECS",
+    "OXO_FLOW_DISK_HOLD_ROUNDS",
+    "OXO_FLOW_SPAWN_WATCHDOG_SECS",
+    "OXO_ENV_LOCK_TIMEOUT_SECS",
+    // Wildcard relaxation + registry/cloud mirrors (operator-set policy).
+    "OXO_FLOW_UNSAFE_WILDCARDS",
+    "OXO_REGISTRY_MIRRORS",
+    "OXO_S3_FORCE_PATH_STYLE",
+    "AWS_ENDPOINT_URL",
+    // Secret references + the sandbox binary pin the CLI resolves by name.
+    "OXO_FLOW_SECRET_REFS",
+    "OXO_FLOW_BIN",
+];
+
+/// Parse an operator rlimit knob. Unset, empty, unparseable, or `0` all mean
+/// "unset — install nothing" (today's behavior, the default for both knobs).
+/// A malformed value warns and falls back to `0` rather than guessing.
+fn parse_rlimit_knob(raw: Option<&str>, name: &str) -> u64 {
+    let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+        return 0;
+    };
+    match raw.parse::<u64>() {
+        Ok(n) => n,
+        Err(_) => {
+            warn!("{name} value {raw:?} is not a number — ignoring it (no rlimit installed)");
+            0
+        }
+    }
+}
+
+/// The operator's `RLIMIT_CPU` ceiling in CPU-seconds (`0` = unset).
+pub fn cpu_limit_secs() -> u64 {
+    parse_rlimit_knob(
+        std::env::var(RLIMIT_CPU_ENV).ok().as_deref(),
+        RLIMIT_CPU_ENV,
+    )
+}
+
+/// The operator's `RLIMIT_NPROC` process ceiling (`0` = unset).
+pub fn nproc_limit() -> u64 {
+    parse_rlimit_knob(
+        std::env::var(RLIMIT_NPROC_ENV).ok().as_deref(),
+        RLIMIT_NPROC_ENV,
+    )
+}
+
+/// Enforce OS resource ceilings on the spawned CLI and every process it
+/// spawns (RB-09 / issue #1133; RB-01a / issue #1129).
+///
+/// A single `pre_exec` installs up to three rlimits, each only when its
+/// value is nonzero (so the default — every knob unset — installs nothing
+/// and behavior is unchanged):
+///
+/// - `RLIMIT_DATA` from the run's declared memory (`memory_limit_mb`,
+///   floored at [`MIN_ENFORCED_MEMORY_MB`]): bounds the data segment plus
+///   anonymous mappings — the memory rules actually allocate — while leaving
+///   file-backed mappings (reference/BAM mmaps) alone. Exceeding it makes
+///   the allocation fail, so the offending rule dies with a real error
+///   instead of the overage being silently counted.
+/// - `RLIMIT_CPU` from [`RLIMIT_CPU_ENV`]: caps cumulative CPU-seconds.
+/// - `RLIMIT_NPROC` from [`RLIMIT_NPROC_ENV`]: caps process count.
 ///
 /// Linux only: Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` changes with EINVAL,
-/// so there the ceiling remains advisory and this is a no-op (documented in
-/// the web API reference). A declaration of `0` means the workflow claims no
-/// memory and nothing is enforced.
+/// so there the ceilings remain advisory and this is a no-op (documented in
+/// the web API reference). A declared memory of `0` means the workflow
+/// claims no memory and nothing is enforced for that dimension.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // pre_exec is the only way to install a rlimit before exec
-fn apply_memory_rlimit(cmd: &mut Command, memory_limit_mb: u64) {
-    let Some(ceiling_mb) =
-        (memory_limit_mb > 0).then(|| memory_limit_mb.max(MIN_ENFORCED_MEMORY_MB))
-    else {
-        return;
-    };
-    let bytes = ceiling_mb.saturating_mul(1024 * 1024) as nix::libc::rlim_t;
+fn apply_run_rlimits(cmd: &mut Command, memory_limit_mb: u64, cpu_secs: u64, nproc: u64) {
+    let memory_bytes = (memory_limit_mb > 0).then(|| {
+        memory_limit_mb
+            .max(MIN_ENFORCED_MEMORY_MB)
+            .saturating_mul(1024 * 1024)
+    });
+    if memory_bytes.is_none() && cpu_secs == 0 && nproc == 0 {
+        return; // nothing opted in — install no pre_exec hook at all
+    }
     // SAFETY: the closure runs in the child between fork and exec; it only
     // calls setrlimit (async-signal-safe) and touches no shared state. A
     // failure (e.g. an unexpected kernel restriction) must not abort the
@@ -315,18 +417,34 @@ fn apply_memory_rlimit(cmd: &mut Command, memory_limit_mb: u64) {
     // failing for a reason the user cannot act on.
     unsafe {
         cmd.pre_exec(move || {
-            let limit = nix::libc::rlimit {
-                rlim_cur: bytes,
-                rlim_max: bytes,
-            };
-            let _ = nix::libc::setrlimit(nix::libc::RLIMIT_DATA, &limit);
+            if let Some(bytes) = memory_bytes {
+                let limit = nix::libc::rlimit {
+                    rlim_cur: bytes as nix::libc::rlim_t,
+                    rlim_max: bytes as nix::libc::rlim_t,
+                };
+                let _ = nix::libc::setrlimit(nix::libc::RLIMIT_DATA, &limit);
+            }
+            if cpu_secs > 0 {
+                let limit = nix::libc::rlimit {
+                    rlim_cur: cpu_secs as nix::libc::rlim_t,
+                    rlim_max: cpu_secs as nix::libc::rlim_t,
+                };
+                let _ = nix::libc::setrlimit(nix::libc::RLIMIT_CPU, &limit);
+            }
+            if nproc > 0 {
+                let limit = nix::libc::rlimit {
+                    rlim_cur: nproc as nix::libc::rlim_t,
+                    rlim_max: nproc as nix::libc::rlim_t,
+                };
+                let _ = nix::libc::setrlimit(nix::libc::RLIMIT_NPROC, &limit);
+            }
             Ok(())
         });
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn apply_memory_rlimit(_cmd: &mut Command, _memory_limit_mb: u64) {}
+fn apply_run_rlimits(_cmd: &mut Command, _memory_limit_mb: u64, _cpu_secs: u64, _nproc: u64) {}
 
 /// Execution options carried from the run request to the CLI subprocess.
 #[derive(Debug, Clone, Default)]
@@ -502,6 +620,9 @@ pub fn spawn_background_run(
     };
     let args = build_cli_args(&run_dir.join("workflow.oxoflow"), &run_dir, &flags);
     let memory_limit_mb = flags.memory_limit_mb;
+    // RB-01a (#1129): the CPU/process ceilings are operator-wide knobs, not
+    // per-workflow declarations — the spawn body resolves them from the
+    // environment, so the argument vector and the caller stay unchanged.
     spawn_background_run_with_args(
         run_id,
         username,
@@ -518,7 +639,9 @@ pub fn spawn_background_run(
 ///
 /// `memory_limit_mb` is the run's declared total memory (0 = none): the
 /// executor turns it into an OS ceiling on the spawned process tree where
-/// the platform supports one (RB-09 / issue #1133).
+/// the platform supports one (RB-09 / issue #1133). The operator-wide
+/// `RLIMIT_CPU` / `RLIMIT_NPROC` ceilings are resolved from the environment
+/// inside the spawn body (0 = install nothing; RB-01a / issue #1129).
 pub fn spawn_background_run_with_args(
     run_id: String,
     username: String,
@@ -651,10 +774,28 @@ pub fn spawn_background_run_with_args(
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
 
-        // RB-09 (#1133): enforce the run's declared memory as an OS ceiling
-        // on the CLI and every rule subprocess it spawns. Applied before the
-        // spawn below; a no-op off Linux (see the helper).
-        apply_memory_rlimit(&mut cmd, memory_limit_mb);
+        // RB-01a (#1129): the child must NOT inherit the server's full
+        // environment. `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider
+        // credentials and MCP tokens would otherwise sit in the `environ` of
+        // a process whose rule shells are authored by the requesting tenant.
+        // Reuse the engine's rule-shell policy verbatim (clear_env +
+        // PATH/HOME/LANG/LC_* + OXO_FLOW_ENV_PASSTHROUGH), re-admitting only
+        // the engine's own non-secret configuration knobs so an
+        // operator-configured server spawns the CLI identically.
+        let mut spawn_envs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for name in WEB_SPAWN_ENV_ALLOWLIST {
+            if let Ok(value) = std::env::var(name) {
+                spawn_envs.insert((*name).to_string(), value);
+            }
+        }
+        oxo_flow_core::executor::apply_rule_env_allowlist(&mut cmd, &spawn_envs, false);
+
+        // RB-09 (#1133) + RB-01a (#1129): enforce the run's declared memory
+        // as an OS ceiling on the CLI and every rule subprocess it spawns,
+        // plus the operator's CPU/process ceilings. Applied before the spawn
+        // below; a no-op off Linux (see the helper).
+        apply_run_rlimits(&mut cmd, memory_limit_mb, cpu_limit_secs(), nproc_limit());
 
         // Transient fork failures (EAGAIN/ENOMEM under full-workspace
         // parallel test load, issue #120) must not permanently fail the run
