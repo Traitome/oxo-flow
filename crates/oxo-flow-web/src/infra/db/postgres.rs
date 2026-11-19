@@ -1071,6 +1071,62 @@ impl StorageBackend for PostgresBackend {
         Ok(())
     }
 
+    async fn transition_run_status(
+        &self,
+        id: &str,
+        from: &[&str],
+        to: &str,
+        phase: &str,
+    ) -> Result<bool, String> {
+        // Compare-and-set (RB-07 / #1256) — the PostgreSQL twin of the
+        // SQLite implementation; see that one for the rationale.
+        debug_assert!(!from.is_empty(), "transition_run_status needs a from set");
+        let terminal = models::is_terminal_run_status(to);
+        // Placeholder numbering: status/phase always bind first, then the
+        // optional timestamp, then id, then the `status IN (…)` origins.
+        let ts_bind = if terminal || to == "running" {
+            Some(3)
+        } else {
+            None
+        };
+        let id_bind = if ts_bind.is_some() { 4 } else { 3 };
+        let mut counter = id_bind + 1;
+        let marks = from
+            .iter()
+            .map(|_| {
+                let s = format!("${counter}");
+                counter += 1;
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = if terminal {
+            format!(
+                "UPDATE runs SET status = $1, phase = $2, finished_at = $3 \
+                 WHERE id = $4 AND status IN ({marks})"
+            )
+        } else if to == "running" {
+            format!(
+                "UPDATE runs SET status = $1, phase = $2, started_at = COALESCE(started_at, $3) \
+                 WHERE id = $4 AND status IN ({marks})"
+            )
+        } else {
+            format!("UPDATE runs SET status = $1, phase = $2 WHERE id = $3 AND status IN ({marks})")
+        };
+        // Safe: every dynamic fragment is a fixed SQL keyword or a `$N`
+        // marker derived from `from.len()` — all values ride in binds.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(to).bind(phase);
+        if ts_bind.is_some() {
+            q = q.bind(Self::now());
+        }
+        q = q.bind(id);
+        for origin in from {
+            q = q.bind(*origin);
+        }
+        let res = q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
     async fn get_run(&self, id: &str) -> Result<Option<models::RunRow>, String> {
         sqlx::query_as::<_, models::RunRow>("SELECT * FROM runs WHERE id = $1")
             .bind(id)
@@ -2639,6 +2695,76 @@ mod tests {
             nodes[0].finished_at.as_deref(),
             Some("2026-01-01T00:05:00+00:00")
         );
+    }
+
+    /// The PostgreSQL twin of the SQLite CAS test (RB-07 / #1256): a guarded
+    /// `transition_run_status` moves the row only from an admissible origin
+    /// and reports the lost race as `false` without clobbering a terminal row.
+    #[tokio::test]
+    async fn test_transition_run_status_is_compare_and_set() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+        let user = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create_user");
+        let run = backend
+            .create_run(&sample_run(&user.id))
+            .await
+            .expect("create_run");
+
+        // queued -> running is admissible.
+        assert!(
+            backend
+                .mark_run_running(&run.id, "2026-01-01T00:00:00+00:00")
+                .await
+                .expect("mark_run_running"),
+            "queued → running claims the row"
+        );
+
+        // running -> paused moves the row.
+        assert!(
+            backend
+                .transition_run_status(&run.id, &["running"], "paused", "paused: user")
+                .await
+                .expect("running → paused"),
+            "running is an admissible origin"
+        );
+        // A second transition from the now-stale origin must not move it.
+        assert!(
+            !backend
+                .transition_run_status(&run.id, &["running"], "paused", "paused: again")
+                .await
+                .expect("stale-origin transition"),
+            "a stale origin loses the compare-and-set"
+        );
+        let row = backend.get_run(&run.id).await.expect("get_run").unwrap();
+        assert_eq!(row.status, "paused");
+        assert_eq!(row.phase, "paused: user");
+
+        // Cancel-vs-finalize: the terminal write wins and blocks the resume.
+        assert!(
+            backend
+                .record_run_terminal(
+                    &run.id,
+                    "cancelled",
+                    "cancelled",
+                    "2026-01-01T00:10:00+00:00"
+                )
+                .await
+                .expect("record_run_terminal"),
+            "first terminal write applies"
+        );
+        assert!(
+            !backend
+                .transition_run_status(&run.id, &["paused"], "running", "executing")
+                .await
+                .expect("resume CAS"),
+            "a terminal row cannot be resurrected by a resume"
+        );
+        let row = backend.get_run(&run.id).await.expect("get_run").unwrap();
+        assert_eq!(row.status, "cancelled");
     }
 
     #[tokio::test]

@@ -1312,6 +1312,51 @@ impl StorageBackend for SqliteBackend {
         Ok(res.rows_affected() > 0)
     }
 
+    async fn transition_run_status(
+        &self,
+        id: &str,
+        from: &[&str],
+        to: &str,
+        phase: &str,
+    ) -> Result<bool, String> {
+        // Compare-and-set (RB-07 / #1256): the `status IN (…)` predicate
+        // makes the read-then-write window atomic, so a pause/resume that
+        // raced a cancel/finalize moves nothing instead of clobbering it.
+        // Empty `from` is a programming error — a transition with no
+        // admissible origin can never move a row.
+        debug_assert!(!from.is_empty(), "transition_run_status needs a from set");
+        // Placeholder for the `status IN (…)` tail, one `?` per origin.
+        let marks = std::iter::repeat_n("?", from.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let terminal = models::is_terminal_run_status(to);
+        let sql = if terminal {
+            format!(
+                "UPDATE runs SET status = ?, phase = ?, finished_at = ? \
+                 WHERE id = ? AND status IN ({marks})"
+            )
+        } else if to == "running" {
+            format!(
+                "UPDATE runs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?) \
+                 WHERE id = ? AND status IN ({marks})"
+            )
+        } else {
+            format!("UPDATE runs SET status = ?, phase = ? WHERE id = ? AND status IN ({marks})")
+        };
+        // Safe: every dynamic fragment is a fixed SQL keyword or a `?` count
+        // derived from `from.len()` — all values ride in binds.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(to).bind(phase);
+        if terminal || to == "running" {
+            q = q.bind(Self::now());
+        }
+        q = q.bind(id);
+        for origin in from {
+            q = q.bind(*origin);
+        }
+        let res = q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
     async fn update_run_pid(&self, id: &str, pid: i64) -> Result<(), String> {
         sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
             .bind(pid)
@@ -3264,6 +3309,84 @@ mod tests {
         let row = backend.get_run(&created.id).await.unwrap().unwrap();
         assert_eq!(row.status, "cancelled");
         assert_eq!(row.phase, "cancelled");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: transition_run_status CAS semantics (RB-07 / #1256)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_transition_run_status_is_compare_and_set() {
+        let backend = create_backend().await;
+        let user = create_test_user(&backend, "cas-transition").await;
+        let pipeline = create_test_pipeline(&backend, &user.id, "cas-pipeline").await;
+
+        let run = models::RunRow {
+            id: String::new(),
+            user_id: user.id.clone(),
+            pipeline_id: Some(pipeline.id.clone()),
+            pipeline_snapshot: pipeline.toml_content.clone(),
+            workflow_name: None,
+            status: "running".to_string(),
+            phase: "executing".to_string(),
+            dry_run: false,
+            pid: None,
+            workdir: None,
+            config_overrides: None,
+            artifacts_incomplete: None,
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            finished_at: None,
+            created_at: String::new(),
+        };
+        let created = backend.create_run(&run).await.unwrap();
+
+        // Move running -> paused: the admissible origin matches, so the row
+        // moves and the call reports it.
+        let moved = backend
+            .transition_run_status(&created.id, &["running"], "paused", "paused: user")
+            .await
+            .unwrap();
+        assert!(moved, "running is an admissible origin — row must move");
+        let paused = backend.get_run(&created.id).await.unwrap().unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.phase, "paused: user");
+
+        // A second transition from the now-stale origin moves nothing: this
+        // is the lost race the guard exists for.
+        let clobbered = backend
+            .transition_run_status(&created.id, &["running"], "paused", "paused: again")
+            .await
+            .unwrap();
+        assert!(!clobbered, "a stale origin must not move the row");
+        let row = backend.get_run(&created.id).await.unwrap().unwrap();
+        assert_eq!(row.phase, "paused: user", "the row is unchanged");
+
+        // Concurrent cancel vs. finalize: only the first terminal write wins,
+        // and a blocked CAS from `running` cannot resurrect a paused row.
+        let now = chrono::Utc::now().to_rfc3339();
+        assert!(
+            backend
+                .record_run_terminal(&created.id, "cancelled", "cancelled", &now)
+                .await
+                .unwrap()
+        );
+        let late = backend
+            .transition_run_status(&created.id, &["paused"], "running", "executing")
+            .await
+            .unwrap();
+        assert!(!late, "a paused origin no longer holds — resume must lose");
+        let row = backend.get_run(&created.id).await.unwrap().unwrap();
+        assert_eq!(row.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn test_transition_run_status_unknown_id_moves_nothing() {
+        let backend = create_backend().await;
+        let moved = backend
+            .transition_run_status("no-such-run", &["running"], "paused", "paused")
+            .await
+            .unwrap();
+        assert!(!moved, "an absent row never reports a move");
     }
 
     // -----------------------------------------------------------------------

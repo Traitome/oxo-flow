@@ -281,6 +281,22 @@ pub trait StorageBackend: Send + Sync {
         phase: &str,
         finished_at: &str,
     ) -> Result<bool, String>;
+    /// Compare-and-set run status transition (RB-07 / #1256). Moves a run to
+    /// `to` only when its stored status is currently in `from`; the guarded
+    /// `WHERE id = ? AND status IN (…)` predicate closes the read-then-write
+    /// window that let a pause/resume clobber a concurrently finalized row.
+    /// Honors the same timestamp semantics as [`Self::update_run_status`]:
+    /// a terminal `to` stamps `finished_at`, a `to` of `"running"` does
+    /// `COALESCE(started_at, ?)`. Returns `true` when this call moved the
+    /// row, `false` when the row was absent or already left `from` (a lost
+    /// race — the caller must treat it as a conflict, never a success).
+    async fn transition_run_status(
+        &self,
+        id: &str,
+        from: &[&str],
+        to: &str,
+        phase: &str,
+    ) -> Result<bool, String>;
     /// Record that a run's artifacts could not be fully materialized locally
     /// (`reason` is the result-pull error). Deliberately does NOT touch the
     /// run's status: the note is independent of the terminal state, so a run

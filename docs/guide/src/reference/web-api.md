@@ -960,6 +960,22 @@ and **resume** answers `409 RUN_NOT_RESUMABLE` (a paused run whose process has
 exited has nothing to unfreeze — writing `running` would show it executing
 with nothing behind it). In both cases the stored status is left unchanged.
 
+The status flip itself is a compare-and-set: **pause** only moves a row that is
+still `running`, and **resume** only moves a row that is still `paused`. If the
+row leaves that state in the window between the handler's read and its guarded
+write, the transition loses the race and the endpoint answers
+`409 RUN_STATE_CHANGED` without rewriting the row. A losing request re-reads the
+row and reconciles the process group with what it finds, so row and process
+cannot disagree. It unfreezes the group (`SIGCONT`) only if the run is no longer
+`paused` — i.e. it went terminal; if it observes `paused` the freeze came from a
+concurrent **same-target pause** that won, and the loser leaves it frozen. It
+re-freezes the group (`SIGSTOP`) only if the run is no longer `running` — i.e. it
+went terminal; if it observes `running` the unfreeze came from a concurrent
+**same-target resume** that won, and the loser leaves it running. The two
+handlers are therefore idempotent under concurrent same-target requests and never
+leave a terminal row whose process is frozen (or a paused row whose process is
+running).
+
 ### Logs
 ```
 GET /api/runs/{id}/logs
