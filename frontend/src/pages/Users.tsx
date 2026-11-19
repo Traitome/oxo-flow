@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Trash2, UserPlus } from "lucide-react";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, describeApiError } from "../api/client";
 import type { UserInfo } from "../api/types";
 import { useI18n } from "../context/I18n";
 
