@@ -522,7 +522,7 @@ Maturity labels used below:
 | Capability | Maturity | Remaining exit evidence |
 | :--- | :--- | :--- |
 | Backwards-compatible BioTypes declarations and `TYPE-*` diagnostics | Implemented but unproven | Broad biological truth-set validation and false-positive analysis |
-| Header inspection and scientific preflight | Implemented but unproven | Literature-backed rule review, adversarial fixtures, and measured latency |
+| Header inspection and scientific preflight | Implemented and verified | Evidence landed (issue #1244): all 51 curated `SCI-*` rules carry a checkable authority (no `UNVERIFIED`; five engine-invariant rules cite the oxo-flow spec by path), an adversarial fixture table (`crates/oxo-flow-core/tests/scientific_preflight_adversarial.rs`) asserts positive + corrected-silent + mention-only-silent per rule, and preflight latency is measured (about 13 ms for 200 rules x 1000 samples). See [`docs/superpowers/audits/scientific-preflight-2026-11.md`](docs/superpowers/audits/scientific-preflight-2026-11.md); `SCI-MUTECT2-NO-GERMLINE` is positive-only (see its `NOT_ADVERSARIALLY_EXERCISED` entry) |
 | Hybrid re-entry and `[[values]]` expansion | Implemented but unproven | Deterministic replay at cohort scale and crash/interruption tests |
 | Metropolis design tokens and Metro-DAG renderer | Prototype | Accessibility, semantic safety, mobile, 5,000-10,000-node performance, and visual regression tests |
 | Guided editor and cross-surface state | Prototype / blocked | Round-trip semantic preservation, explicit diff acceptance, tenant-scoped drafts, and stale-validation blocking |
