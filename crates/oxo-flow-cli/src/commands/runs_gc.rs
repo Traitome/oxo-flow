@@ -451,6 +451,7 @@ mod tests {
             workdir: workdir.map(str::to_string),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: None,
             finished_at: finished_at.map(str::to_string),
             created_at: created_at.to_string(),

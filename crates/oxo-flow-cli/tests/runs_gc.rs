@@ -56,6 +56,7 @@ fn run_row(
         workdir,
         config_overrides: None,
         artifacts_incomplete: None,
+        cluster_id: None,
         started_at: started_at.map(str::to_string),
         finished_at: finished_at.map(str::to_string),
         created_at: OLD.to_string(),
