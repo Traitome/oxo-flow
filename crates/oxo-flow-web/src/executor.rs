@@ -337,11 +337,20 @@ const WEB_SPAWN_ENV_ALLOWLIST: &[&str] = &[
     "OXO_FLOW_DISK_HOLD_ROUNDS",
     "OXO_FLOW_SPAWN_WATCHDOG_SECS",
     "OXO_ENV_LOCK_TIMEOUT_SECS",
+    // Operator passthrough for RULE shells: the CLI child re-reads this
+    // variable when building its own allowlist, so without forwarding it
+    // an operator's passthrough names reach rule shells on direct CLI runs
+    // but silently NOT on web-spawned runs (review of RB-01a, #1241).
+    "OXO_FLOW_ENV_PASSTHROUGH",
     // Wildcard relaxation + registry/cloud mirrors (operator-set policy).
     "OXO_FLOW_UNSAFE_WILDCARDS",
     "OXO_REGISTRY_MIRRORS",
     "OXO_S3_FORCE_PATH_STYLE",
+    // The S3 storage stack reads endpoint+region as a pair — forwarding
+    // only the endpoint strands region-scoped setups on web-spawned runs.
     "AWS_ENDPOINT_URL",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
     // Secret references + the sandbox binary pin the CLI resolves by name.
     "OXO_FLOW_SECRET_REFS",
     "OXO_FLOW_BIN",
@@ -787,6 +796,20 @@ pub fn spawn_background_run_with_args(
         for name in WEB_SPAWN_ENV_ALLOWLIST {
             if let Ok(value) = std::env::var(name) {
                 spawn_envs.insert((*name).to_string(), value);
+            }
+        }
+        // The operator's passthrough is a name LIST: the CLI child re-reads
+        // `OXO_FLOW_ENV_PASSTHROUGH` when building each rule shell's
+        // allowlist and then admits those names from ITS OWN ambient — so
+        // the named variables themselves must ride along too, or the
+        // passthrough contract silently diverges between direct CLI runs
+        // and web-spawned runs (review of RB-01a, #1241). Same trust level
+        // as CLI-direct: the server operator named them deliberately.
+        if let Ok(passthrough) = std::env::var("OXO_FLOW_ENV_PASSTHROUGH") {
+            for name in oxo_flow_core::executor::parse_env_passthrough(Some(&passthrough)) {
+                if let Ok(value) = std::env::var(&name) {
+                    spawn_envs.insert(name, value);
+                }
             }
         }
         oxo_flow_core::executor::apply_rule_env_allowlist(&mut cmd, &spawn_envs, false);

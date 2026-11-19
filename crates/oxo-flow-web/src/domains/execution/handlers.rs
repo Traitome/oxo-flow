@@ -947,19 +947,33 @@ pub async fn create_run(
 
     // One canonical load path for the plan: when secondary sources are
     // staged, resolve them (`from_file`) before building the response. The
-    // resolved config is reused for admission below — never re-parsed.
+    // resolved config is reused for admission below — never re-parsed. The
+    // load runs on the blocking pool: a repo-pinned [[include]] clones from
+    // the module cache inside `from_file`, and a git fetch must not pin a
+    // tokio worker for its duration.
     let resolved_config = if include_paths.is_empty() {
         None
     } else {
-        Some(
-            oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path).map_err(|e| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    "RUN_ERROR",
-                    format!("resolved workflow parse failed: {e}"),
-                )
-            })?,
-        )
+        let path = workflow_path.clone();
+        let resolved = tokio::task::spawn_blocking(move || {
+            oxo_flow_core::config::WorkflowConfig::from_file(&path)
+        })
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "RUN_ERROR",
+                format!("workflow load task failed: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "RUN_ERROR",
+                format!("resolved workflow parse failed: {e}"),
+            )
+        })?;
+        Some(resolved)
     };
     let resp = match &resolved_config {
         // Keep the stable TYPE_CONTRACT_VIOLATION code for biological
@@ -1009,43 +1023,9 @@ pub async fn create_run(
             })
             .unwrap_or_else(|| "unnamed".to_string());
 
-        // Read permission, not just existence (#519): executing a private
-        // pipeline by id exposes its name/DAG/products through the run's own
-        // status endpoints. Foreign and unknown ids both answer
-        // PIPELINE_NOT_FOUND (no oracle).
-        if let Some(pid) = &pipeline_id {
-            let row = backend
-                .get_pipeline(pid)
-                .await
-                .map_err(|e| db_err(format!("DB error checking pipeline {pid}: {e}")))?;
-            if !row.as_ref().is_some_and(|p| can_read_pipeline(&user, p)) {
-                return Err(err(
-                    StatusCode::NOT_FOUND,
-                    "PIPELINE_NOT_FOUND",
-                    format!("Pipeline {pid} not found"),
-                ));
-            }
-        }
-
-        // Save pipeline TOML to the working directory so the executor (CLI
-        // subprocess) can read it. `tokio::fs` keeps the small write off
-        // the async runtime's blocking threads (#268 item 4, web minor).
-        //
-        // The sources are staged into a per-request temp dir first and only
-        // copied into the run's workdir after the admission claim below
-        // wins (claim-then-stage). The run workdir is unique per run, so a
-        // rejected request could not clobber a winner's files anyway; the
-        // ordering keeps the artifact tree absent until the row that names
-        // it exists, which is the invariant run-history readers rely on.
-        let staging = tempfile::tempdir().map_err(|e| {
-            tracing::error!("Failed to create staging directory: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "RUN_ERROR",
-                "Failed to create staging directory".to_string(),
-            )
-        })?;
-        let workflow_path = stage_run_sources(staging.path(), toml, &include_paths).await?;
+        // Read permission was checked before any IO above (pre-IO hoist) —
+        // re-checking here would retype the same gate with no new information
+        // between the two points (review of #1216: dead code, never retype).
 
         // Config-override passthrough: shape-validated above, before the
         // row was persisted (PR #930 NIT-3); full semantics stay inside
@@ -1061,7 +1041,10 @@ pub async fn create_run(
         //
         // The old scan_admission_sources text-scan that rejected any typed
         // workflow with includes as TYPED_ADMISSION_UNSUPPORTED is gone —
-        // this is the real resolved admission path.
+        // this is the real resolved admission path. The staged sources from
+        // the single per-request staging above (claim-then-stage: they are
+        // copied into the workdir only after the admission claim wins) are
+        // what this load resolves.
         let admission_config = match resolved_config {
             Some(resolved) => Some(resolved),
             None => {
@@ -1072,17 +1055,29 @@ pub async fn create_run(
                 let host_has_types = host_config.rules.iter().any(|r| r.types.is_some())
                     || !host_config.types.is_empty();
                 if host_has_types || !host_config.includes.is_empty() {
-                    Some(
-                        oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path).map_err(
-                            |e| {
-                                err(
-                                    StatusCode::BAD_REQUEST,
-                                    "RUN_ERROR",
-                                    format!("resolved workflow parse failed: {e}"),
-                                )
-                            },
-                        )?,
-                    )
+                    // A repo-pinned [[include]] clones from the module cache
+                    // inside `from_file` — keep the git fetch off the async
+                    // worker (same reason the file writes use spawn_blocking).
+                    let path = workflow_path.clone();
+                    let resolved = tokio::task::spawn_blocking(move || {
+                        oxo_flow_core::config::WorkflowConfig::from_file(&path)
+                    })
+                    .await
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "RUN_ERROR",
+                            format!("workflow load task failed: {e}"),
+                        )
+                    })?
+                    .map_err(|e| {
+                        err(
+                            StatusCode::BAD_REQUEST,
+                            "RUN_ERROR",
+                            format!("resolved workflow parse failed: {e}"),
+                        )
+                    })?;
+                    Some(resolved)
                 } else {
                     None
                 }
@@ -1165,8 +1160,16 @@ pub async fn create_run(
         // RB-09 (#1133): the quota check and the reservation are ONE atomic
         // storage operation, placed after every validation so a 4xx never
         // has to undo an admission, and before the workdir claim so the
-        // admitted run id is known. A rejected request answers 429 here.
-        admit_spawn_budget(backend.as_ref(), &resp.run_id, &user.id, quota_usage).await?;
+        // admitted run id is known. A rejected request answers 429 here —
+        // and compensates the already-allocated workdir, so a quota-rejected
+        // create does not accumulate an empty `runs/<uuid>/` tree (review on
+        // RB-02 F2: the 400 gates were covered; this path was not).
+        if let Err(resp) =
+            admit_spawn_budget(backend.as_ref(), &resp.run_id, &user.id, quota_usage).await
+        {
+            discard_run_dir(&run_dir).await;
+            return Err(resp);
+        }
 
         // Admission is one atomic guarded insert: a saved pipeline admits
         // one live run at a time (keyed on pipeline_id — two concurrent
@@ -2031,6 +2034,19 @@ pub async fn retry_run(
                 "Run {id} is still {} — wait for it to finish (or cancel it) before retrying",
                 run.status
             ),
+        ));
+    }
+
+    // A legacy row with no workdir has nothing to re-execute in, and the
+    // workdir admission guard cannot claim it (NULL never matches the
+    // guard predicate), so two concurrent retries would both admit and
+    // both spawn. Fail the same way `resume_checkpoint` does instead of
+    // relying on an unclaimable row (review on RB-02).
+    if run.workdir.is_none() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
         ));
     }
 
