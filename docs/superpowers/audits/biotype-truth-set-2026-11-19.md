@@ -181,7 +181,10 @@ even the CI spans most of the unit interval.
 ## 5. Per-case table
 
 Expected verdict and rationale were recorded before running; ACTUAL is read from
-the CLI JSON. `codes` = sorted unique `TYPE-NNN` seen in the output.
+the CLI JSON. `codes` = sorted unique `TYPE-NNN` seen in the output. (This is
+the **pre-fix baseline**; since #1262 the `codes` column is *asserted* by the
+harness as a set-equality cross-check — see Section 6.1 — and the `a08`/`a11`
+rows below reflect the pre-fix ACTUAL of `—`.)
 
 | case | expected | actual | codes | correct? | rationale (argued from the format/rule contract) |
 | :--- | :---: | :---: | :--- | :---: | :--- |
@@ -252,12 +255,30 @@ gone — `a08`/`a11` now **accept** (the checker emits advisory `TYPE-010`;
 surfaced, gate not failed) — and the false-reject (`a12`) accepts. The EXPECT
 table's verdict for `a08`/`a11` was updated from `reject` to `accept` (the
 advisory outcome was the issue's stated intent: surface, not block); every
-other row is unchanged and `t04` still rejects `TYPE-003,TYPE-006`. The EXPECT
-`codes` column is informational only — the harness scores `correct` purely on
-the expected-vs-actual verdict, because the advisory `TYPE-010`/`TYPE-008` codes
-are emitted by the checker (`check_workflow_types`) but filtered out of the CLI
-`validate --json` `warnings` array (which retains only `W042`-class lint
-diagnostics), so the code cell reads `-` for those accept rows.
+other row is unchanged and `t04` still rejects `TYPE-003,TYPE-006`.
+
+**Scoring rule (extended, #1262).** The harness now scores TWO independent
+axes. The VERDICT axis is unchanged (expected-vs-actual verdict, the 2×2
+matrix). The CODES axis is new: each case's ACTUAL code set is the union of the
+`TYPE-NNN` codes seen on `validate --json` and on `lint --json`, compared for
+**set-equality** against the EXPECT expected-codes column; a case is
+`codes-correct=yes` only if the sets are EQUAL. The lint surface is
+load-bearing — the advisory codes (`TYPE-008`/`009`/`010`) are filtered out of
+the admission gate by `validate_workflow_types` and never reach
+`validate --json` (its `warnings` array retains only `W042`-class lint
+diagnostics), so uniting in `lint --json` is what lets an accept-with-advisory
+case score its `TYPE-010` instead of a spurious empty set. The expected-codes
+column is therefore no longer informational: `a08`/`a11` declare `TYPE-010`
+(and `a14` declares `TYPE-008`) and the harness **asserts** them.
+
+**Codes accounting (post-fix, #1262): `codes-correct=18  codes-fail=0  (of
+18)`.** No case is verdict-pass/codes-fail — every expected code set matches the
+actual set exactly. The codes line is deliberately kept separate from the
+matrix, so a case whose verdict is right but whose codes are wrong surfaces as a
+codes-fail cell (with an explicit `verdict-pass / codes-fail` line) rather than
+disappearing into a green verdict. Non-vacuity was confirmed: temporarily
+reverting `a08`'s expected `TYPE-010` to `-` drives `codes-fail=1` while the
+verdict cell stays `yes`, then restores cleanly.
 
 **Verdict vs the operational criterion (post-fix): PASS (0 false-accepts).**
 The residual honesty boundary in Section 9 still applies: this is a small
@@ -311,7 +332,9 @@ user key both sides with the same channel names
 `ADVISORY_TYPE_CODES`, so `validate_workflow_types` drops it and the admission
 gate still passes (the a08/a11 shapes move from *silent accept* to *accept with
 an advisory* — surfaced, not blocked). The fallback is gated on the zero-pairs
-condition, so a09 (a pair forms) is unaffected.
+condition, so a09 (a pair forms) is unaffected. Since #1262 the harness
+**asserts** this outcome — `a08`'s expected-codes cell reads `TYPE-010` and the
+codes cross-check fails if that code regresses.
 
 ### 7.2 `a11_multichannel_namekey_mismatch` — FALSE-ACCEPT (TYPE-002 missing)
 
@@ -336,7 +359,8 @@ over-rejecting. Tracked as a #1163 follow-up.
 zero-pair advisory is `TYPE-010` (a new advisory code alongside `TYPE-008`/
 `TYPE-009`), registered in `ADVISORY_TYPE_CODES` so it never fails the gate.
 a11 now reports `TYPE-010` naming `aligned`/`calls` against `reads` instead of
-silently accepting.
+silently accepting. Since #1262 the harness **asserts** `TYPE-010` for `a11`
+alongside `a08`.
 
 ### 7.3 `a12_bam_implicit_bgzip` — FALSE-REJECT (TYPE-006 over-strict)
 
@@ -411,10 +435,14 @@ false-reject to accept.
   hand-authored cases, not on real typed pipelines.
 - **Single arm, single toolchain** (macOS arm64, rustc 1.98.0). No
   cross-platform or cross-version contrast intended or performed.
-- **One type-check entry point only.** Only `validate` was used as the surface;
-  `run`/`dry-run` preflight share `validate_workflow_types` but were not driven
-  here. Advisory-vs-fatal policy was checked for TYPE-008 (`a14`, accept) via
-  `validate`; TYPE-009 was **not** exercised by a case.
+- **One type-check entry point only.** `validate` is the VERDICT surface
+  (`run`/`dry-run` preflight share `validate_workflow_types` but were not driven
+  here). Since #1262 the harness additionally reads `lint --json` as the
+  full-diagnostic surface for the CODES cross-check, because the advisory
+  `TYPE-008`/`009`/`010` codes are filtered out of `validate --json`.
+  Advisory-vs-fatal policy was checked for TYPE-008 (`a14`, accept) via
+  `validate` and for TYPE-010 (`a08`/`a11`, accept) via `lint`; TYPE-009 was
+  **not** exercised by a case.
 - **Formats covered:** BAM, SAM, CRAM, VCF, FASTQ (and gvcf alias by code
   reading only). BED, FASTA, GTF, BCF and the `Generic` short-circuit path were
   **not** driven.
@@ -430,6 +458,9 @@ false-reject to accept.
 - Cases: `tests/truthset/biotype/cases/{t01..t06,a06..a14}*.oxoflow` (each with
   its pre-registered EXPECT in a header comment).
 - Harness: `scripts/biotype-truth-set.sh` (EXPECT table + matrix printer).
+  Since #1262 the EXPECT table's expected-codes column is asserted
+  (set-equality) and the harness also prints a codes line, reading the union of
+  the `validate --json` and `lint --json` `TYPE-NNN` code sets.
 - Real examples: `examples/gallery/{13_simple_variant_calling,
   06_rnaseq_quantification,09_single_cell_rnaseq}.oxoflow`.
 - Checker source read for root-cause: `crates/oxo-flow-core/src/types/checker.rs`
