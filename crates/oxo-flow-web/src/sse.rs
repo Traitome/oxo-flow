@@ -59,7 +59,9 @@ pub fn issue_ticket(user_id: &str) -> String {
     let ticket: String = (0..32)
         .map(|_| format!("{:02x}", rng.random_range(0..=255u8)))
         .collect();
-    let mut guard = store.lock().unwrap();
+    let mut guard = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Opportunistic pruning keeps the map bounded even if tickets are
     // never consumed.
     guard.retain(|_, (exp, _)| *exp > std::time::Instant::now());
@@ -76,7 +78,13 @@ pub fn issue_ticket(user_id: &str) -> String {
 /// a concurrent one — finds nothing.
 fn consume_ticket(ticket: &str) -> Option<String> {
     let store = EVENT_TICKETS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-    let (exp, user_id) = store.lock().unwrap().remove(ticket)?;
+    // Poison-tolerant like every other mutex in the crate: a panic while
+    // another thread holds the lock must not turn every later ticket
+    // mint/consume into a handler panic.
+    let (exp, user_id) = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(ticket)?;
     if exp > std::time::Instant::now() {
         Some(user_id)
     } else {
