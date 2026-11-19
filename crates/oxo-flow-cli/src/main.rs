@@ -248,9 +248,9 @@ pub enum Commands {
             help = "Detach execution into a background process (see long help)"
         )]
         background: bool,
-        /// Proceed despite protected-tree drift (issue #935): [engine]
-        /// protected_data_trees baselines differ from the current tree.
-        /// Without this flag `run` refuses to execute.
+        /// Proceed despite protected-tree drift (issue #935): the engine
+        /// section's protected_data_trees baseline differs from the current
+        /// tree. Without this flag `run` refuses to execute.
         #[arg(long)]
         allow_protected_drift: bool,
         /// Strict environment mode (issue #1011): a stale pixi.lock install
