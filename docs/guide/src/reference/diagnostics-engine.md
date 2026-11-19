@@ -295,3 +295,5 @@ Deterministic, evidence-backed rules covering genomics, transcriptomics, epigeno
 - `SCI-PIPE-FAIL-DISABLED`: Multi-stage shell pipelines (`cmd1 | cmd2 | cmd3`) lack `set -o pipefail`; upstream tool crashes are silently masked.
 - `SCI-ZERO-BYTE-COMPLETION`: Rule masks failures by creating empty binary outputs (`|| touch {output}`), causing downstream tools to crash on corrupt streams.
 - `SCI-MULTI-TENANT-PORT-COLLISION`: Interactive server rules specify hardcoded server ports (e.g. `--port 8888`), causing collision failures on multi-tenant nodes.
+
+The per-rule provenance (authority citation, positive fixture, and mention-only negative fixture) for all 51 rules, together with the adversarial-fixture harness and a measured preflight latency, is audited in [`docs/superpowers/audits/scientific-preflight-2026-11.md`](https://github.com/ShixiangWang/oxo-flow/blob/main/docs/superpowers/audits/scientific-preflight-2026-11.md) (issue #1244). The fixture table that drives the audit lives in `crates/oxo-flow-core/tests/scientific_preflight_adversarial.rs`.
