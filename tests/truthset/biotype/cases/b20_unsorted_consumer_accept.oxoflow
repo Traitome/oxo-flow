@@ -1,0 +1,25 @@
+# B20 — sort-skip control (accept). The consumer declares sort_order=unsorted,
+# which the reference documents as "no ordering constraint" (a consumer that
+# does not care about order). A sort_order of `unsorted` on the consumer side
+# therefore imposes no requirement, so a coordinate-sorted producer must be
+# admitted. Derivation: sort_order field semantics (unsorted = unconstrained).
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b20"
+
+[[rules]]
+name = "sort_coord"
+output = ["coord.bam"]
+shell = "samtools sort -o coord.bam in.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate]" }
+
+[[rules]]
+name = "any_order_consumer"
+input = ["coord.bam"]
+output = ["stats.txt"]
+shell = "samtools flagstat coord.bam > stats.txt"
+[rules.types]
+inputs = { default = "BAM[sort_order=unsorted]" }

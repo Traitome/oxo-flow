@@ -1,0 +1,24 @@
+# B08 — build alias (accept control). A BAM aligned to mm39 (the GRCm39 mouse
+# assembly alias) feeds a consumer declaring reference_build=GRCm39. Both names
+# denote the same assembly, so the normalized builds agree and this accepts.
+# Derivation: reference-build normalization aliases (mm39 == GRCm39).
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b08"
+
+[[rules]]
+name = "align"
+output = ["aln.bam"]
+shell = "bwa mem mm39.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,reference_build=mm39]" }
+
+[[rules]]
+name = "call_mouse"
+input = ["aln.bam"]
+output = ["mouse.vcf.gz"]
+shell = "gatk HaplotypeCaller -I aln.bam -O mouse.vcf.gz"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,reference_build=GRCm39]" }

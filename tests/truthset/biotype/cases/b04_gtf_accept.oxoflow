@@ -1,0 +1,23 @@
+# B04 — accept control. GTF annotation produced against GRCh38 feeds a GRCh38
+# GTF consumer (featureCounts/HTSeq). Same format, same build, no extra
+# contract declared. Derivation: format list + build normalization (identical).
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b04"
+
+[[rules]]
+name = "filter_gtf"
+output = ["genes.gtf"]
+shell = "grep -v '^#' gencode.gtf > genes.gtf"
+[rules.types]
+outputs = { default = "GTF[reference_build=GRCh38]" }
+
+[[rules]]
+name = "count"
+input = ["genes.gtf"]
+output = ["counts.txt"]
+shell = "featureCounts -a genes.gtf -o counts.txt a.bam"
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCh38]" }

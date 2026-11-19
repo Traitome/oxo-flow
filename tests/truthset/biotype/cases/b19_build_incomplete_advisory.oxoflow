@@ -1,0 +1,27 @@
+# B19 — build-incomplete advisory (TYPE-009). The producer declares a plain BAM
+# with NO reference_build; the consumer declares it requires
+# reference_build=GRCh38. The consumer states a checkable build requirement the
+# producer cannot confirm, which is exactly the documented TYPE-009 advisory
+# ("build-incomplete pair": one side names a build, the other does not). The
+# edge is surfaced as ADVISORY, never fatal, so the verdict must stay accept and
+# the code set must carry TYPE-009. Derivation: advisory TYPE-009 row.
+#
+# EXPECTED: accept — TYPE-009 (advisory).
+
+[workflow]
+name = "b19"
+
+[[rules]]
+name = "align"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate]" }
+
+[[rules]]
+name = "call"
+input = ["aln.bam"]
+output = ["calls.vcf.gz"]
+shell = "gatk HaplotypeCaller -R grch38.fa -I aln.bam -O calls.vcf.gz"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,reference_build=GRCh38]" }

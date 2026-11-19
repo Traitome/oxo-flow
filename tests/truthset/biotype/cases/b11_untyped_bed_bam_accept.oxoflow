@@ -1,0 +1,21 @@
+# B11 — untyped control (accept). A untyped BED + untyped BAM error-prone edge
+# (the classic shape where a `.bed` and a `.bam` are fed to a tool that wants
+# them reversed). With NO type annotations the checker has no contract to
+# enforce and must accept. Derivation: opt-in contract (no [types.*]).
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b11"
+
+[[rules]]
+name = "bait"
+input = ["capture.bed"]
+output = ["bait.bed"]
+shell = "bedtools sort -i capture.bed > bait.bed"
+
+[[rules]]
+name = "call"
+input = ["bait.bed", "reads.bam"]
+output = ["called.vcf"]
+shell = "custom-caller --regions bait.bed --reads reads.bam -o called.vcf"

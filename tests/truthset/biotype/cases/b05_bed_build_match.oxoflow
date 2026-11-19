@@ -1,0 +1,22 @@
+# B05 — accept control. BED target regions on GRCh38 feed a GRCh38 BED
+# consumer. Same format, same build. Derivation: format list + identical build.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b05"
+
+[[rules]]
+name = "sort_bed"
+output = ["targets.bed"]
+shell = "sort -k1,1 -k2,2n raw.bed > targets.bed"
+[rules.types]
+outputs = { default = "BED[reference_build=GRCh38]" }
+
+[[rules]]
+name = "call_regions"
+input = ["targets.bed"]
+output = ["region.vcf"]
+shell = "gatk HaplotypeCaller -L targets.bed -O region.vcf"
+[rules.types]
+inputs = { default = "BED[reference_build=GRCh38]" }

@@ -1,0 +1,29 @@
+# B17 — genuinely unpairable edge (TYPE-010 advisory). A realistic variant-
+# calling producer emits TWO outputs typed by channel name (vcf, index); the
+# downstream report rule reads the literal calls.vcf.gz path but keys its input
+# under `default`. The producer side has two channels so the single/single
+# path-shared fallback does not apply, and no channel name matches `default`,
+# so no pair forms. The edge is surfaced as ADVISORY TYPE-010 (never fatal), so
+# the verdict stays accept and the code set carries TYPE-010. Derivation:
+# advisory TYPE-010 row (unpairable edge).
+#
+# EXPECTED: accept — TYPE-010 (advisory).
+
+[workflow]
+name = "b17"
+
+[[rules]]
+name = "call"
+input = ["aln.bam"]
+output = ["calls.vcf.gz", "calls.vcf.gz.csi"]
+shell = "bcftools call -Oz -o calls.vcf.gz aln.bam && bcftools index calls.vcf.gz"
+[rules.types]
+outputs = { vcf = "VCF[compression=bgzip,index=csi]", index = "VCF[compression=bgzip,index=csi]" }
+
+[[rules]]
+name = "report"
+input = ["calls.vcf.gz"]
+output = ["report.txt"]
+shell = "bcftools stats calls.vcf.gz > report.txt"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=csi]" }

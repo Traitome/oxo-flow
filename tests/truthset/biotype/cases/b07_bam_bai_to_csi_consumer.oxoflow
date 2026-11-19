@@ -1,0 +1,26 @@
+# B07 — index-kind boundary (TYPE-003). A coordinate-sorted BAM carries a BAI
+# index (the samtools default for a small BAM); the consumer declares it needs
+# a CSI index (large-contig/whole-genome caller). BAI and CSI are DISTINCT
+# index kinds, so a BAI cannot satisfy a CSI requirement. Format and sort
+# agree, so the ONLY violation is the index kind. Derivation: index field +
+# TYPE-003 row.
+#
+# EXPECTED: reject — TYPE-003.
+
+[workflow]
+name = "b07"
+
+[[rules]]
+name = "sort_index"
+output = ["sorted.bam"]
+shell = "samtools sort -o sorted.bam in.bam && samtools index sorted.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,index=bai]" }
+
+[[rules]]
+name = "gvcf_call"
+input = ["sorted.bam"]
+output = ["g.vcf.gz"]
+shell = "gatk HaplotypeCaller -ERC GVCF -I sorted.bam -O g.vcf.gz"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,index=csi]" }

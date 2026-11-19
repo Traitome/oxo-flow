@@ -1,0 +1,25 @@
+# B09 — genuine build mismatch (TYPE-004). A cohort joint-caller consumes
+# per-sample VCFs. One producer declares gVCF-level reference_build=GRCh37
+# (an hg19-pipeline sample), the consumer declares GRCh38. GRCh37 and GRCh38
+# are DIFFERENT builds (no alias relationship), so lifting over is required and
+# the check must reject. Derivation: build normalization (distinct) + TYPE-004.
+#
+# EXPECTED: reject — TYPE-004.
+
+[workflow]
+name = "b09"
+
+[[rules]]
+name = "sample_a"
+output = ["a.g.vcf.gz"]
+shell = "gatk HaplotypeCaller -ERC GVCF -O a.g.vcf.gz -R hg19.fa"
+[rules.types]
+outputs = { default = "VCF[reference_build=GRCh37]" }
+
+[[rules]]
+name = "joint"
+input = ["a.g.vcf.gz"]
+output = ["cohort.vcf.gz"]
+shell = "gatk GenomicsDBImport && gatk GenotypeGVCFs -R grch38.fa -O cohort.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[reference_build=GRCh38]" }

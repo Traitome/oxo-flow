@@ -1,0 +1,23 @@
+# B06 — format boundary (TYPE-001). BED intervals feed a consumer that
+# requires GTF features (e.g. an annotation-aware tool). BED and GTF are
+# distinct formats. Derivation: format list + TYPE-001 row.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b06"
+
+[[rules]]
+name = "make_bed"
+output = ["regions.bed"]
+shell = "bedtools makewindows -g genome.txt -w 1000 > regions.bed"
+[rules.types]
+outputs = { default = "BED" }
+
+[[rules]]
+name = "annotate"
+input = ["regions.bed"]
+output = ["annot.gtf"]
+shell = "custom-annotate regions.bed > annot.gtf"
+[rules.types]
+inputs = { default = "GTF" }

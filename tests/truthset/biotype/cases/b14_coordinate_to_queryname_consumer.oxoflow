@@ -1,0 +1,25 @@
+# B14 — sort boundary (TYPE-002). A coordinate-sorted BAM producer feeds a
+# consumer that explicitly requires queryname sort (e.g. a tool that walks read
+# pairs by name). Coordinate != queryname, so the contract fails. Format, index,
+# and build all agree, isolating the violation to sort order. Derivation:
+# sort_order field + TYPE-002 row.
+#
+# EXPECTED: reject — TYPE-002.
+
+[workflow]
+name = "b14"
+
+[[rules]]
+name = "sort_coord"
+output = ["coord.bam"]
+shell = "samtools sort -o coord.bam in.bam && samtools index coord.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,index=bai]" }
+
+[[rules]]
+name = "name_walk"
+input = ["coord.bam"]
+output = ["pairs.txt"]
+shell = "custom-namewalk coord.bam > pairs.txt"
+[rules.types]
+inputs = { default = "BAM[sort_order=queryname,index=bai]" }

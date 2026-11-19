@@ -1,0 +1,26 @@
+# B15 — compression-on-accept control (accept). A bgzip-compressed VCF producer
+# (bcftools -Oz) feeds a consumer that requires bgzip + tabix. BGZF satisfies a
+# bgzip requirement, and the producer declared the tbi index, so every field
+# agrees and this must accept. Derivation: compression satisfies relation
+# (BGZF => bgzip) + TYPE-003/006 rows. NOTE: exercises a NON-BAM format so the
+# Bam-only implied_compression shortcut is not what makes it pass.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b15"
+
+[[rules]]
+name = "compress_vcf"
+output = ["calls.vcf.gz"]
+shell = "bcftools view -Oz -o calls.vcf.gz raw.vcf && tabix -p vcf calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=bgzip,index=tbi]" }
+
+[[rules]]
+name = "index_consumer"
+input = ["calls.vcf.gz"]
+output = ["report.txt"]
+shell = "bcftools stats calls.vcf.gz > report.txt"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=tbi]" }
