@@ -1152,6 +1152,7 @@ pub async fn create_run(
             // so retry can replay the exact argv the client sent.
             config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
             artifacts_incomplete: None,
+            cluster_id: cluster_id.clone(),
             started_at: None,
             finished_at: None,
             created_at: now_iso(),
@@ -1496,6 +1497,10 @@ pub async fn get_run(
         // express an incomplete-while-terminal run, so the reason travels
         // alongside it.
         "artifacts_incomplete": run.artifacts_incomplete,
+        // Durable cluster routing fact, persisted at dispatch (issue #1257 /
+        // audit RB-05): lets a client discover which cluster a restart-orphaned
+        // remote run was routed to, exactly the fact cancellation resolves from.
+        "cluster_id": run.cluster_id,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "created_at": run.created_at,
@@ -2137,6 +2142,9 @@ pub async fn retry_run(
         // Retry starts a fresh run: the previous run's artifact note does not
         // carry over (issue #1112 / audit RB-05).
         artifacts_incomplete: None,
+        // Retry re-executes locally, so the new row carries no cluster
+        // routing fact (issue #1257 / audit RB-05).
+        cluster_id: None,
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
@@ -2293,6 +2301,11 @@ pub async fn cancel_run(
         ));
     }
 
+    // Issue #1257 / audit RB-05: jobs the cancel path could not confirm dead.
+    // Anything pushed here is surfaced in the response so a caller never
+    // mistakes a best-effort signal for a confirmed kill.
+    let mut unresolved_jobs: Vec<UnresolvedJob> = Vec::new();
+
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
     //
@@ -2370,19 +2383,65 @@ pub async fn cancel_run(
             }
             if group_alive(pgid) {
                 tracing::error!("run {id}: process group {pgid} still alive after SIGKILL");
+                unresolved_jobs.push(UnresolvedJob {
+                    run_id: id.clone(),
+                    cluster_id: String::new(),
+                    reason: format!("local process group {pgid} survived SIGTERM and SIGKILL"),
+                });
             }
         }
         crate::process_control::unregister(&id);
-    } else if let Some(cluster_id) = crate::domains::clusters::remote::remote_cluster_of(&id) {
-        // Remote run: signal the remote wrapper script.
-        let cluster_row: Option<models::ClusterRow> =
-            backend.get_cluster(&cluster_id).await.unwrap_or(None);
-        if let Some(cluster_row) = cluster_row
-            && let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
-        {
-            tracing::warn!("remote cancel failed for run {id}: {e}");
+    } else if let Some(cluster_id) = remote_cluster_for_cancel(&run, &id) {
+        // Remote run: signal the remote wrapper script. The cluster to signal
+        // is resolved from the PERSISTED row first (issue #1257 / audit
+        // RB-05) — the in-memory registry is only a fast path and does not
+        // survive a server restart, so a restart-orphaned remote run is still
+        // cancelled against the cluster it was launched on. A job the cancel
+        // path cannot confirm dead is surfaced as an unresolved job id in the
+        // response instead of being logged and dropped.
+        match backend.get_cluster(&cluster_id).await {
+            Ok(Some(cluster_row)) => {
+                match crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await {
+                    Ok(crate::domains::clusters::remote::RemoteCancelOutcome::Confirmed) => {
+                        crate::domains::clusters::remote::unregister_remote(&id);
+                    }
+                    Ok(crate::domains::clusters::remote::RemoteCancelOutcome::Unresolved) => {
+                        crate::domains::clusters::remote::unregister_remote(&id);
+                        unresolved_jobs.push(UnresolvedJob {
+                            run_id: id.clone(),
+                            cluster_id: cluster_id.clone(),
+                            reason: "remote cancel returned no confirmation; cannot confirm the job is dead".into(),
+                        });
+                    }
+                    Err(e) => {
+                        crate::domains::clusters::remote::unregister_remote(&id);
+                        unresolved_jobs.push(UnresolvedJob {
+                            run_id: id.clone(),
+                            cluster_id: cluster_id.clone(),
+                            reason: format!("remote cancel request failed: {e}"),
+                        });
+                    }
+                }
+            }
+            Ok(None) => {
+                crate::domains::clusters::remote::unregister_remote(&id);
+                unresolved_jobs.push(UnresolvedJob {
+                    run_id: id.clone(),
+                    cluster_id: cluster_id.clone(),
+                    reason: format!(
+                        "cluster configuration {cluster_id} no longer exists; the remote job could not be signalled"
+                    ),
+                });
+            }
+            Err(e) => {
+                crate::domains::clusters::remote::unregister_remote(&id);
+                unresolved_jobs.push(UnresolvedJob {
+                    run_id: id.clone(),
+                    cluster_id: cluster_id.clone(),
+                    reason: format!("DB error resolving cluster {cluster_id}: {e}"),
+                });
+            }
         }
-        crate::domains::clusters::remote::unregister_remote(&id);
     } else {
         tracing::warn!(
             "cancel for run {id}: no live process group registered (already finished or server restarted)"
@@ -2399,7 +2458,34 @@ pub async fn cancel_run(
         "run_id": id,
         "status": "cancelled",
         "cancelled_at": now,
+        // Issue #1257 / audit RB-05: exact ids of jobs the cancel path
+        // signalled but could not confirm dead. Empty = every target was
+        // confirmed gone.
+        "unresolved_jobs": unresolved_jobs,
     })))
+}
+
+/// A job the cancel path could not confirm dead (issue #1257 / audit RB-05).
+#[derive(Debug, Clone, serde::Serialize)]
+struct UnresolvedJob {
+    run_id: String,
+    /// Cluster the job was routed to; empty for a local process-group target
+    /// that could not be confirmed dead.
+    cluster_id: String,
+    /// Human-readable reason the kill could not be confirmed.
+    reason: String,
+}
+
+/// Resolve the cluster a remote run was routed to when cancelling it.
+///
+/// The PERSISTED row is authoritative (issue #1257 / audit RB-05): it
+/// survives a server restart, whereas the in-memory remote registry does
+/// not. The registry is consulted only as a fast path for a run the current
+/// process still tracks; it is deliberately not the source of truth.
+fn remote_cluster_for_cancel(run: &models::RunRow, run_id: &str) -> Option<String> {
+    run.cluster_id
+        .clone()
+        .or_else(|| crate::domains::clusters::remote::remote_cluster_of(run_id))
 }
 
 #[utoipa::path(
@@ -3841,6 +3927,9 @@ pub async fn resume_checkpoint(
         // workdir already carries the original run's baked configuration.
         config_overrides: None,
         artifacts_incomplete: None,
+        // Resume re-executes locally, so the new row carries no cluster
+        // routing fact (issue #1257 / audit RB-05).
+        cluster_id: None,
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
@@ -4232,6 +4321,7 @@ mod staging_tests {
             workdir: Some(run_dir.path().to_string_lossy().to_string()),
             config_overrides: None,
             artifacts_incomplete: None,
+            cluster_id: None,
             started_at: None,
             finished_at: None,
             created_at: "2026-11-18T00:00:00Z".into(),

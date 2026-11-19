@@ -67,6 +67,14 @@ const RUNNING_MARKER: &str = "__RUNNING__";
 /// Remote file recording the wrapper's process-group id (cancel target).
 const PGID_FILE: &str = ".pgid";
 
+/// Terminal status tokens printed by [`cancel_script`]. The cancel path must
+/// distinguish "signalled and gone" from "signalled but still running": the
+/// script's exit code is always 0 (a signal that merely fails to deliver is
+/// not an error), so the outcome rides stdout as an explicit token (issue
+/// #1257 / audit RB-05).
+const CANCEL_CONFIRMED_MARKER: &str = "__OXO_CANCEL_CONFIRMED__";
+const CANCEL_UNRESOLVED_MARKER: &str = "__OXO_CANCEL_UNRESOLVED__";
+
 /// Remote file collecting the wrapper's own stdout/stderr — kept separate
 /// from the launch call's stdout, which carries only the `launched` marker.
 const LAUNCH_LOG: &str = "launch.log";
@@ -422,10 +430,18 @@ fn cancel_script(remote_dir: &str, run_id: &str) -> String {
     let pgid_file_q = shell_quote(PGID_FILE);
     // The wrapper is started as `sh run-<id>.sh` (relative, after `cd`).
     let wrapper_cmdline_q = shell_quote(&format!("sh run-{run_id}.sh"));
+    let confirmed_q = shell_quote(CANCEL_CONFIRMED_MARKER);
+    let unresolved_q = shell_quote(CANCEL_UNRESOLVED_MARKER);
     format!(
         // No `--` before the negative pid: dash's kill builtin rejects it
         // ("Illegal number: -"), so the group kill must use the POSIX
         // negative-pid form directly.
+        //
+        // After signalling, probe again: a run whose wrapper/group survived
+        // both SIGTERM and SIGKILL cannot be confirmed dead, so the script
+        // prints an explicit outcome token (issue #1257 / audit RB-05). The
+        // exit code stays 0 — a signal that fails to deliver is not a shell
+        // error, and the caller reads stdout for the verdict.
         "cd {remote_dir_q} 2>/dev/null; \
          pgid=$(cat {pgid_file_q} 2>/dev/null); \
          case \"$pgid\" in \
@@ -435,26 +451,83 @@ fn cancel_script(remote_dir: &str, run_id: &str) -> String {
               kill -KILL -\"$pgid\" 2>/dev/null ;; \
          esac; \
          pkill -TERM -xf {wrapper_cmdline_q} 2>/dev/null; \
+         sleep 1; \
+         alive=0; \
+         case \"$pgid\" in \
+           ''|*[!0-9]*) ;; \
+           *) if kill -0 -\"$pgid\" 2>/dev/null; then alive=1; fi ;; \
+         esac; \
+         if pgrep -xf {wrapper_cmdline_q} >/dev/null 2>&1; then alive=1; fi; \
+         if [ \"$alive\" = 1 ]; then \
+           printf '%s\\n' {unresolved_q}; \
+         else \
+           printf '%s\\n' {confirmed_q}; \
+         fi; \
          true"
     )
 }
 
-/// Cancel a remote run by killing its process group (or wrapper) remotely.
-pub async fn cancel_remote(cluster: &ClusterRow, run_id: &str) -> std::io::Result<()> {
+/// The verdict a remote cancel reached (issue #1257 / audit RB-05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCancelOutcome {
+    /// The wrapper and its process group were signalled and are confirmed
+    /// gone — nothing survives on the remote host.
+    Confirmed,
+    /// A live wrapper or process group survived the signal: the run may
+    /// still be executing remotely and the caller must surface this instead
+    /// of reporting a clean cancel.
+    Unresolved,
+}
+
+/// Interpret [`cancel_script`]'s stdout into a verdict.
+///
+/// Parsed line-wise from the end and only from stdout, mirroring
+/// [`parse_poll_stdout`]: a login shell may print a banner before the token,
+/// and stderr is never part of this stream (see [`RemoteOutput`]).
+fn parse_cancel_stdout(stdout: &str) -> RemoteCancelOutcome {
+    for line in stdout.lines().rev() {
+        let line = line.trim();
+        if line == CANCEL_UNRESOLVED_MARKER {
+            return RemoteCancelOutcome::Unresolved;
+        }
+        if line == CANCEL_CONFIRMED_MARKER {
+            return RemoteCancelOutcome::Confirmed;
+        }
+    }
+    // No token at all: the cancel script may have died mid-way (e.g. a
+    // broken pipe or an ssh transport failure the exit code masked). Treat
+    // "cannot confirm" as unresolved rather than claiming success.
+    RemoteCancelOutcome::Unresolved
+}
+
+/// Cancel a remote run by killing its process group (or wrapper) remotely,
+/// returning whether the remote process is confirmed gone (issue #1257 /
+/// audit RB-05).
+pub async fn cancel_remote(
+    cluster: &ClusterRow,
+    run_id: &str,
+) -> std::io::Result<RemoteCancelOutcome> {
     let remote_dir = remote_run_dir(cluster, run_id);
     let output = remote_exec(cluster, &cancel_script(&remote_dir, run_id)).await?;
+    let outcome = parse_cancel_stdout(&output.stdout);
     tracing::info!(
-        "remote cancel for {run_id}: exit {}, {}",
+        "remote cancel for {run_id}: {outcome:?} (exit {}, {})",
         output.code,
         output.for_log()
     );
-    Ok(())
+    Ok(outcome)
 }
 
 /// Best-effort remote cancel + registry cleanup for terminal paths.
 async fn cancel_and_unregister(cluster: &ClusterRow, run_id: &str) {
-    if let Err(e) = cancel_remote(cluster, run_id).await {
-        tracing::warn!("remote cancel for {run_id} failed: {e}");
+    match cancel_remote(cluster, run_id).await {
+        Ok(RemoteCancelOutcome::Confirmed) => {}
+        Ok(RemoteCancelOutcome::Unresolved) => {
+            tracing::warn!(
+                "remote cancel for {run_id} could not confirm the remote process is dead"
+            );
+        }
+        Err(e) => tracing::warn!("remote cancel for {run_id} failed: {e}"),
     }
     unregister_remote(run_id);
 }
@@ -1053,6 +1126,43 @@ mod tests {
             script.contains("pkill -TERM -xf 'sh run-run-1.sh'"),
             "exact command-line match only — a loose -f pattern would TERM \
              the shell running the cancel script, got: {script}"
+        );
+        // Issue #1257 / audit RB-05: after signalling, the script probes
+        // again and prints an explicit verdict token so cancel can tell
+        // "gone" from "still alive".
+        assert!(script.contains("if kill -0 -\"$pgid\""), "got: {script}");
+        assert!(
+            script.contains("if pgrep -xf 'sh run-run-1.sh'"),
+            "got: {script}"
+        );
+        assert!(
+            script.contains("__OXO_CANCEL_UNRESOLVED__"),
+            "got: {script}"
+        );
+        assert!(script.contains("__OXO_CANCEL_CONFIRMED__"), "got: {script}");
+    }
+
+    #[test]
+    fn cancel_stdout_parsing_reads_the_verdict_token() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            parse_cancel_stdout("__OXO_CANCEL_CONFIRMED__\n"),
+            RemoteCancelOutcome::Confirmed
+        );
+        assert_eq!(
+            parse_cancel_stdout("__OXO_CANCEL_UNRESOLVED__\n"),
+            RemoteCancelOutcome::Unresolved
+        );
+        // A login banner precedes the token on stdout.
+        assert_eq!(
+            parse_cancel_stdout("Welcome\n__OXO_CANCEL_CONFIRMED__\n"),
+            RemoteCancelOutcome::Confirmed
+        );
+        // No token at all → cannot confirm → unresolved.
+        assert_eq!(parse_cancel_stdout(""), RemoteCancelOutcome::Unresolved);
+        assert_eq!(
+            parse_cancel_stdout("garbage\n"),
+            RemoteCancelOutcome::Unresolved
         );
     }
 

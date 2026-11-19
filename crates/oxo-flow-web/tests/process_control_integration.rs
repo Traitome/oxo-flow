@@ -810,3 +810,102 @@ async fn cancel_terminal_run_is_rejected() {
     assert_eq!(body["code"], "RUN_NOT_ACTIVE");
     assert_eq!(run_status("pc-done").await.as_deref(), Some("completed"));
 }
+
+/// Insert a run row carrying a persisted cluster routing fact (issue #1257).
+async fn insert_run_row_with_cluster(run_id: &str, status: &str, cluster_id: &str) {
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query(
+        "INSERT INTO runs (id, user_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, cluster_id, started_at, created_at)
+         VALUES (?, 'default', '', 'control-test', ?, 'executing', NULL, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(run_id)
+    .bind(status)
+    .bind(format!("/tmp/control-{run_id}"))
+    .bind(cluster_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Insert a cluster row whose SSH endpoint refuses instantly (port 1 on
+/// loopback), so the remote cancel path fails fast without real networking.
+async fn insert_unreachable_cluster(cluster_id: &str) {
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query(
+        "INSERT INTO clusters (id, name, ssh_host, ssh_port, ssh_user, ssh_key, scheduler, remote_dir, enabled, created_at)
+         VALUES (?, ?, '127.0.0.1', 1, NULL, NULL, NULL, NULL, 1, '2026-01-01T00:00:00Z')
+         ON CONFLICT(id) DO UPDATE SET ssh_host = excluded.ssh_host, ssh_port = excluded.ssh_port, enabled = excluded.enabled",
+    )
+    .bind(cluster_id)
+    .bind(cluster_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Issue #1257 / audit RB-05: cancellation resolves the cluster from the
+/// PERSISTED row, so a restart (in-memory registry gone) still routes the
+/// cancel to the right cluster — and a job that cannot be confirmed dead is
+/// surfaced as an unresolved job id rather than logged and dropped.
+#[tokio::test]
+async fn cancel_targets_persisted_cluster_after_registry_restart() {
+    common::ensure_db().await;
+    let cluster_id = "pc-cluster-1257";
+    insert_unreachable_cluster(cluster_id).await;
+    insert_run_row_with_cluster("pc-restart-1257", "running", cluster_id).await;
+    // Simulate a server restart: the in-memory routing registry is empty.
+    oxo_flow_web::domains::clusters::remote::unregister_remote("pc-restart-1257");
+    assert!(
+        oxo_flow_web::domains::clusters::remote::remote_cluster_of("pc-restart-1257").is_none()
+    );
+
+    let (status, body) = post_json("/api/runs/pc-restart-1257/cancel", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+
+    // The cancel reached the persisted cluster and could not confirm the
+    // remote job dead (unreachable host) — the exact job is reported.
+    let unresolved = body["unresolved_jobs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("unresolved_jobs must be an array: {body:?}"));
+    assert_eq!(unresolved.len(), 1, "{body:?}");
+    assert_eq!(unresolved[0]["run_id"], "pc-restart-1257");
+    assert_eq!(unresolved[0]["cluster_id"], cluster_id);
+    assert!(
+        unresolved[0]["reason"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty()),
+        "unresolved job must carry a reason: {body:?}"
+    );
+}
+
+/// A cancelled LOCAL run that reached terminal state cleanly reports an
+/// empty `unresolved_jobs` array (the field is always present).
+#[tokio::test]
+async fn cancel_reports_empty_unresolved_jobs_for_a_local_kill() {
+    common::ensure_db().await;
+    insert_run_row("pc-1257-local", "running").await;
+    let child = spawn_and_register("pc-1257-local");
+
+    // Reap the child CONCURRENTLY with the cancel request. An unreaped child
+    // stays a zombie, and a zombie is still a member of its process group, so
+    // `killpg(pgid, 0)` (which backs `group_alive`) keeps answering "alive"
+    // through both grace windows — the cancel would then (correctly) report
+    // the group as an unresolved job. Production reaps its children, so model
+    // that reaper here: the assertion must measure the cancel path, not
+    // zombie accounting.
+    let reaper = std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+
+    let (status, body) = post_json("/api/runs/pc-1257-local/cancel", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(
+        body["unresolved_jobs"].as_array().map(|a| a.len()),
+        Some(0),
+        "{body:?}"
+    );
+
+    reaper.join().expect("reaper thread panicked");
+    process_control::unregister("pc-1257-local");
+}

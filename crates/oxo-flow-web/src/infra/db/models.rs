@@ -71,6 +71,13 @@ pub struct RunRow {
     /// succeeded" from "raced a broken transfer" (issue #1112 / audit RB-05).
     /// Independent of `status`: a `cancelled` run can still carry a note.
     pub artifacts_incomplete: Option<String>,
+    /// Cluster a remote run was dispatched to (`None` = local run). Persisted
+    /// at dispatch so cancellation resolves the routing fact from the row
+    /// instead of an in-memory registry that does not survive a restart
+    /// (issue #1257 / audit RB-05): after a restart the row still names the
+    /// cluster to signal, and a job the cancel path could not confirm dead is
+    /// reported unresolved instead of silently dropped.
+    pub cluster_id: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,
