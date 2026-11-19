@@ -112,11 +112,24 @@ async fn resume_refuses_a_run_without_a_process_group() {
 async fn retry_from_rule_on_corrupt_snapshot_is_a_500_not_a_silent_noop() {
     common::ensure_db().await;
     seed_run("run-retry", "failed").await;
+    // The retry path requires a workdir (a run without one answers
+    // NO_WORKDIR before the snapshot is ever read — there is nothing to
+    // retry into). Point this row at an empty directory: the empty
+    // pipeline_snapshot then fails DAG reconstruction through the same
+    // corrupt-row path this test pins.
+    let workdir = std::env::temp_dir().join(format!("audit-remediation-{}", std::process::id()));
+    std::fs::create_dir_all(&workdir).expect("seed workdir");
+    sqlx::query("UPDATE runs SET workdir = ? WHERE id = 'run-retry'")
+        .bind(workdir.to_string_lossy().to_string())
+        .execute(pool())
+        .await
+        .expect("seed workdir");
 
     let (status, body) = post("/api/runs/run-retry/retry", json!({"from_rule": "fastqc"})).await;
 
-    // The seeded run's pipeline_snapshot is empty, so DAG reconstruction
-    // fails — this is a corrupt-row 500, not a from_rule rejection.
+    // The seeded run's pipeline_snapshot is empty and no workflow file
+    // exists in the workdir, so DAG reconstruction fails — this is a
+    // corrupt-row 500, not a from_rule rejection.
     // The important invariant: from_rule must NOT be silently swallowed
     // (the old UNSUPPORTED_FIELD 400 was honest; a 200 with no effect
     // would be the silent-ignore failure mode issue #1017 was filed to fix).

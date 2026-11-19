@@ -56,6 +56,15 @@ const DATABASE_URL_SENTINEL: &str = "postgres://rb01:rb01-db-secret@127.0.0.1/rb
 const B_SECRET_FILE: &str = "rb01-b-private.txt";
 const B_SECRET_BODY: &str = "tenant-b-original-contents";
 
+/// The operator passthrough chain probe: the server's
+/// `OXO_FLOW_ENV_PASSTHROUGH` names a variable whose VALUE must survive
+/// server → CLI child → rule shell (the CLI-direct contract), while a
+/// similarly-named UNLISTED variable must stay hidden.
+const PASSTHROUGH_PROBE_NAME: &str = "OXOFLOW_RB01_PROBE";
+const PASSTHROUGH_PROBE_VALUE: &str = "rb01-passthrough-reached-the-rule-shell";
+const UNLISTED_PROBE_NAME: &str = "OXOFLOW_RB01_UNLISTED";
+const UNLISTED_PROBE_VALUE: &str = "rb01-unlisted-must-not-leak";
+
 /// A valid workflow whose rule does nothing of consequence — the stub binary
 /// replaces the CLI, so the shell text only has to parse and pass admission.
 const ENV_PROBE_WORKFLOW: &str = r#"
@@ -108,6 +117,12 @@ async fn web_spawned_rule_shell_cannot_see_server_secrets() {
         // count, so it never starves the harness.
         std::env::set_var("OXO_FLOW_WEB_RLIMIT_CPU_SECS", "2");
         std::env::set_var("OXO_FLOW_WEB_RLIMIT_NPROC", "1024");
+        // Passthrough chain: the operator listed the probe name and set its
+        // value in the server's own environment; the unlisted sibling stays
+        // out of rule shells.
+        std::env::set_var("OXO_FLOW_ENV_PASSTHROUGH", PASSTHROUGH_PROBE_NAME);
+        std::env::set_var(PASSTHROUGH_PROBE_NAME, PASSTHROUGH_PROBE_VALUE);
+        std::env::set_var(UNLISTED_PROBE_NAME, UNLISTED_PROBE_VALUE);
     }
     common::ensure_db().await;
     oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
@@ -157,6 +172,17 @@ async fn web_spawned_rule_shell_cannot_see_server_secrets() {
             "{required} must still reach the rule shell:\n{child_env}"
         );
     }
+    // The operator passthrough chain must reproduce the CLI-direct contract:
+    // the listed name's VALUE reaches the rule shell (server → CLI child →
+    // rule-shell allowlist re-admission), and the unlisted sibling stays out.
+    assert!(
+        child_env.contains(PASSTHROUGH_PROBE_VALUE),
+        "the operator's OXO_FLOW_ENV_PASSTHROUGH value must reach the rule shell:\n{child_env}"
+    );
+    assert!(
+        !child_env.contains(UNLISTED_PROBE_VALUE),
+        "a variable not on the passthrough list must stay hidden:\n{child_env}"
+    );
 
     // ── Tenant B's data is untouched by A's run ───────────────────────────
     // (Not a reachability guarantee — see the module doc / residual note.)

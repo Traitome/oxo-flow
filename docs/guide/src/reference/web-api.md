@@ -651,8 +651,13 @@ table forms such as `[types.*]` / `[rules.types]` and inline forms such as
 by staging `workflow.oxoflow` and all `include_files` sources on disk, then
 re-parsing through the canonical `from_file` path (the same machinery the
 CLI preflight uses) and running `validate_workflow_types` on the merged
-config. This covers typed workflows with local include graphs, typed
-includes, and `config_overrides` (issue #1018). Unresolvable includes
+config. This covers typed workflows with local include graphs and typed
+includes (issue #1018). Scope note: the admission graph is built from the
+workflow file's `[config]` table without `config_overrides` applied — the
+CLI's own preflight re-runs the identical gate with overrides applied before
+anything executes, so a workflow whose routing depends on an overridden
+value fails at the spawned CLI, not silently (issue #1152 remaining gap).
+Unresolvable includes
 (`repo = ...` git includes, missing files) surface as
 `400 {"code":"RUN_ERROR"}` from the canonical parser — not a blanket
 typed-admission rejection. Only the host workflow and locally staged sources
@@ -693,9 +698,11 @@ Execution flags are forwarded to the CLI executor:
   overwrite the main workflow. Files are written beside `workflow.oxoflow`
   in the run directory, where the CLI's
   `resolve_includes` resolves them unchanged — the same machinery local
-  `oxo-flow run` uses. Note: `pipeline_snapshot` in the run row stores only
-  the host TOML, so status/DAG endpoints re-parse it without includes; the
-  run itself executes correctly because the spawned CLI re-parses from disk.
+  `oxo-flow run` uses. The resolved workflow is also persisted as
+  `.oxo-flow/resolved-workflow.oxoflow` in the run workdir, and `/status`,
+  `/dag-status`, `/instances`, and `/protected-drift` load that snapshot
+  (see the resolved-snapshot section above), so status/DAG views see the
+  same merged rule set the run executes.
   There is no per-key content cap beyond the request-body limit (2 MiB by
   default, `body_limit` in the server config).
 - `config_overrides` (array of strings, optional) passes CLI config
@@ -1675,7 +1682,11 @@ Declared resources are enforced, not only counted:
   `PATH`/`HOME`/`LANG`/`LC_*`, the engine's non-secret configuration knobs
   (e.g. `OXO_FLOW_TMPDIR`, `OXO_FLOW_MODULE_CACHE`, `OXO_FLOW_STRICT_PLACEHOLDERS`,
   `OXO_FLOW_BIN`), and the explicitly declared passthrough names — never
-  `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider keys, or MCP tokens. This is
+  `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider keys, or MCP tokens. The
+  passthrough contract is reproduced end-to-end: the server forwards both
+  the `OXO_FLOW_ENV_PASSTHROUGH` list and the named variables themselves, so
+  the CLI child's rule shells re-admit exactly the values an operator's
+  direct `oxo-flow run` would see. This is
   the same policy the local executor already applied to rule shells, so the web
   path is no longer the weaker surface.
 - **Other platforms**: Darwin rejects `RLIMIT_DATA`/`RLIMIT_AS` changes with

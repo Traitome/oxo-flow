@@ -1167,8 +1167,11 @@ impl super::ExecutorBackend for ClusterExecutor {
                                 "-o",
                                 // completedIndexes/failedIndexes are the
                                 // per-index record; the counts are the
-                                // fallback for clusters predating them.
-                                "jsonpath={.status.succeeded}|{.status.failed}|{.spec.completions}|{.status.completedIndexes}|{.status.failedIndexes}",
+                                // fallback for clusters predating them;
+                                // the terminal condition is what lets an
+                                // unrecorded index settle on a dead Job
+                                // (backoffLimit: 0 never starts the rest).
+                                "jsonpath={.status.succeeded}|{.status.failed}|{.spec.completions}|{.status.completedIndexes}|{.status.failedIndexes}|{.status.conditions[*].type}",
                             ],
                         )
                         .await
@@ -1181,14 +1184,14 @@ impl super::ExecutorBackend for ClusterExecutor {
                     }
                     let text = String::from_utf8_lossy(&out.stdout);
                     let trimmed = text.trim();
-                    // The template prints five cells (two literal pipes plus
-                    // three more) even when every field is absent; anything
-                    // shorter is not a status answer → Unknown.
+                    // The template prints six cells (the literal pipes) even
+                    // when every field is absent; anything shorter is not a
+                    // status answer → Unknown.
                     if trimmed.is_empty() {
                         continue;
                     }
                     let cells: Vec<&str> = trimmed.split('|').collect();
-                    if cells.len() < 5 {
+                    if cells.len() < 6 {
                         continue;
                     }
                     let number = |i: usize| cells.get(i).and_then(|v| v.trim().parse::<u64>().ok());
@@ -1203,12 +1206,28 @@ impl super::ExecutorBackend for ClusterExecutor {
                         super::k8s::parse_index_list(cells.get(3).copied().unwrap_or_default());
                     let failed_indexes =
                         super::k8s::parse_index_list(cells.get(4).copied().unwrap_or_default());
+                    // The conditions cell is the space-separated list of
+                    // `status.conditions[*].type` values; a missing cell (an
+                    // older probe output) leaves the Job non-terminal, and a
+                    // Job still running has no terminal condition at all.
+                    let conditions = cells.get(5).copied().unwrap_or_default();
+                    let job_terminal = conditions.split_whitespace().fold(
+                        None,
+                        |acc: Option<super::k8s::IndexedJobTerminal>, t| match t {
+                            "Failed" => Some(super::k8s::IndexedJobTerminal::Failed),
+                            "Complete" if acc != Some(super::k8s::IndexedJobTerminal::Failed) => {
+                                Some(super::k8s::IndexedJobTerminal::Complete)
+                            }
+                            _ => acc,
+                        },
+                    );
                     for (element_id, index) in elements {
                         let mut verdict = super::k8s::indexed_element_status(
                             &completed,
                             &failed_indexes,
                             failed_count,
                             index,
+                            job_terminal,
                         );
                         // Clusters that do not publish completedIndexes leave
                         // the set empty even for a fully successful Job; the
@@ -2313,10 +2332,10 @@ mod tests {
             "kubectl",
             &format!(
                 "printf '%s\\n' \"$@\" >> {calls}\n\
-                 if [ \"$1\" = get ] && [ \"$2\" = job ]; then\n\
-                 echo '1|1|2|0|1'\n\
-                 fi\n\
-                 exit 0",
+                     if [ \"$1\" = get ] && [ \"$2\" = job ]; then\n\
+                     echo '1|1|2|0|1|'\n\
+                     fi\n\
+                     exit 0",
                 calls = calls.display()
             ),
         );
@@ -2364,7 +2383,7 @@ mod tests {
         write_scheduler_shim(
             bin.path(),
             "kubectl",
-            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '0|1|2||'; fi\nexit 0",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '0|1|2|||'; fi\nexit 0",
         );
         let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
             .with_scheduler_dir(bin.path().to_path_buf());
@@ -2378,6 +2397,45 @@ mod tests {
             "missing failedIndexes must not call element 1 failed: {statuses:?}"
         );
         assert_eq!(statuses.get("arr_2"), Some(&BackendJobStatus::Unknown));
+    }
+
+    /// A dead Indexed Job must not hold the driver hostage: with
+    /// `backoffLimit: 0` and `parallelism` < count, one pod failure
+    /// terminally fails the Job and the controller never creates the
+    /// remaining pods, so their indexes appear in NEITHER status list.
+    /// The probe reads the Job's terminal condition and settles those
+    /// indexes as Failed — a `Running` verdict resets the driver's
+    /// blind-settlement guard and real cluster runs have no poll budget.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kubernetes_dead_job_settles_its_unrecorded_elements() {
+        let bin = tempfile::tempdir().unwrap();
+        // Element 1 completed, element 2 failed, elements 3 and 4 never
+        // started; the Job carries its terminal Failed condition.
+        write_scheduler_shim(
+            bin.path(),
+            "kubectl",
+            "if [ \"$1\" = get ] && [ \"$2\" = job ]; then echo '1|1|4|0|1|Failed'; fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&[
+                "arr_1".to_string(),
+                "arr_2".to_string(),
+                "arr_3".to_string(),
+                "arr_4".to_string(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(statuses.get("arr_1"), Some(&BackendJobStatus::Completed));
+        assert_eq!(statuses.get("arr_2"), Some(&BackendJobStatus::Failed));
+        assert_eq!(
+            statuses.get("arr_3"),
+            Some(&BackendJobStatus::Failed),
+            "an unstarted element on a dead Job must settle, not report Running forever: {statuses:?}"
+        );
+        assert_eq!(statuses.get("arr_4"), Some(&BackendJobStatus::Failed));
     }
 
     /// Ledger RB-06: Kubernetes omits zero-valued counters, so they print

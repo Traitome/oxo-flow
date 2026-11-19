@@ -362,13 +362,10 @@ pub(crate) async fn runs_gc(
     report.skipped_count = report.skipped.len();
     report.failed_count = failed;
 
-    if !dry_run && failed > 0 {
-        return Err(anyhow::anyhow!(
-            "runs gc: {} failed to delete",
-            oxo_flow_core::plural(failed, "run tree", "run trees")
-        ));
-    }
-
+    // Emit the report BEFORE the partial-failure error: a --json consumer
+    // must be able to observe `failed_count` (and what WAS reclaimed) even
+    // on the non-zero exit — the documented shape is useless if a delete
+    // failure is the only thing that reaches stdout-less consumers.
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -397,6 +394,13 @@ pub(crate) async fn runs_gc(
         if report.skipped_count > 0 {
             eprintln!("  {} run tree(s) kept", report.skipped_count);
         }
+    }
+
+    if !dry_run && failed > 0 {
+        return Err(anyhow::anyhow!(
+            "runs gc: {} failed to delete",
+            oxo_flow_core::plural(failed, "run tree", "run trees")
+        ));
     }
     Ok(())
 }

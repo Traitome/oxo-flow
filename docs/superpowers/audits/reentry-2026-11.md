@@ -91,6 +91,8 @@ cargo test --test reentry_crash_matrix          # adversarial crash matrix
 | cohort | cold instances | cold wall | resume wall | identity set equal | plan==resume | resume stable | speedup |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **N=200 × M=3** | 1609 | **166.95 s** | **0.59 s** | yes | yes | yes | **283.3×** |
+
+> Wall-clock numbers are N=1 per cell on one host and vary with machine load: an independent re-run of the same harness reproduced every contract claim (instances 1609, identity/plan set equality, resume stability) with cold 251 s / resume 1.11 s (≈226×). The load-bearing claims are the set-equality and the ~2-orders-of-magnitude resume speedup; treat the absolute seconds as indicative only.
 | N=50 × M=3 | 409 | 12.60 s | 0.16 s | yes | yes | yes | 78.8× |
 
 Interpretation: the resume reconstructs the **identical** grown instance set

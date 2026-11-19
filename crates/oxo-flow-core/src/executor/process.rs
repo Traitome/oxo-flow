@@ -3948,8 +3948,11 @@ const ENV_PASSTHROUGH_ENV: &str = "OXO_FLOW_ENV_PASSTHROUGH";
 
 /// Parse the comma-separated `OXO_FLOW_ENV_PASSTHROUGH` list: trim
 /// whitespace, drop empty entries. Extracted as a pure function so tests
-/// exercise it without process-global mutation.
-fn parse_env_passthrough(raw: Option<&str>) -> Vec<String> {
+/// exercise it without process-global mutation, and `pub` (re-exported from
+/// `executor`) so the web spawn path re-admits the SAME named variables the
+/// operator listed — forwarding only the list would leave the CLI child's
+/// ambient without their values (review of RB-01a, #1241).
+pub fn parse_env_passthrough(raw: Option<&str>) -> Vec<String> {
     let Some(raw) = raw else {
         return Vec::new();
     };

@@ -293,7 +293,7 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str, workdir: &std::path::Path) 
                         .context("failed to build the conda environment wrapper for batch")
                 }
             }
-            "docker" | "singularity" => {
+            t if batch_env_type_is_container(t) => {
                 // Each whitespace-separated token of the spec is passed as one
                 // quoted argument so characters like `;` or `$(` in the TOML
                 // cannot break out of the wrapper into the surrounding shell.
@@ -330,17 +330,27 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str, workdir: &std::path::Path) 
     }
 }
 
+/// Whether a batch environment TYPE (the trimmed `kind:` prefix of the
+/// `-e` spec) selects a local container runtime the engine invokes as a
+/// host binary. The ONE decision shared by `wrap_batch_command`'s render
+/// arm (its guard) and [`batch_env_is_container`] — a container kind added
+/// here is admitted by both, never mirrored (invariant "Don't mirror
+/// semantics — share them"; issue #1173/#1233).
+fn batch_env_type_is_container(type_: &str) -> bool {
+    matches!(type_, "docker" | "singularity")
+}
+
 /// Whether a `batch` environment spec selects a local container runtime
 /// (`docker:`/`singularity:`) that the engine invokes as a host binary —
 /// the same admission test the rule path uses
 /// (`EnvironmentSpec::is_container_runtime`, issue #1173/#1233). The spec is
-/// the raw `-e` string, so this reads its `kind:` prefix; the branches that
-/// render the wrapper live in `wrap_batch_command`, next to this predicate,
-/// so the two never drift.
+/// the raw `-e` string, so this reads its `kind:` prefix through the shared
+/// [`batch_env_type_is_container`] decision that `wrap_batch_command`'s
+/// render arm guards on.
 pub fn batch_env_is_container(env_spec: &str) -> bool {
     env_spec
         .split_once(':')
-        .is_some_and(|(type_, _)| matches!(type_.trim(), "docker" | "singularity"))
+        .is_some_and(|(type_, _)| batch_env_type_is_container(type_.trim()))
 }
 
 /// Run a single batch command synchronously.

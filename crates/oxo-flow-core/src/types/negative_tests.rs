@@ -441,6 +441,38 @@ fn issue_1255_truthset_a12_edge_accepts_end_to_end() {
     assert!(validate_workflow_types(&config, &dag).is_ok());
 }
 
+/// CRAM is deliberately excluded from the implied-BGZF short-circuit: the
+/// CRAM specification defines its own container (block-level gzip/bzip2/
+/// LZMA, no BGZF `BC` extra field), so a CRAM producer cannot silently
+/// satisfy a `compression=bgzip` consumer — the edge must state compression
+/// explicitly. Only BAM is BGZF by spec.
+#[test]
+fn cram_does_not_imply_bgzip() {
+    assert_eq!(
+        BioTypeSpec::implied_compression(BioFormat::Bam),
+        CompressionKind::Bgzip,
+        "BAM is BGZF by the SAM/BAM specification"
+    );
+    assert_eq!(
+        BioTypeSpec::implied_compression(BioFormat::Cram),
+        CompressionKind::None,
+        "CRAM's container is its own — no implied BGZF stream"
+    );
+    let producer = BioTypeSpec::new(BioFormat::Cram);
+    let consumer = BioTypeSpec {
+        format: BioFormat::Cram,
+        compression: Some(CompressionKind::Bgzip),
+        ..Default::default()
+    };
+    let err = producer
+        .is_subtype_of(&consumer)
+        .expect_err("a CRAM edge must state compression explicitly");
+    assert!(
+        err.iter().any(|v| v.code == "TYPE-006"),
+        "CRAM producer vs bgzip consumer must reject: {err:?}"
+    );
+}
+
 #[test]
 fn negative_truth_set_drives_both_admission_surfaces() {
     for case in CASES {

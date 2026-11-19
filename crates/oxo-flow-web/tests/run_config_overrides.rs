@@ -215,16 +215,21 @@ async fn retry_replays_the_original_config_overrides() {
     let run_id = format!("retry-ov-{marker}");
 
     // A FAILED run with a parseable snapshot (the retry rebuilds the DAG
-    // from it) and stored overrides. No real workdir is needed: with no
-    // checkpoint the plan is empty and the handler still answers 200.
+    // from it) and stored overrides. The workdir must exist as a value
+    // (a NULL-workdir row answers NO_WORKDIR — it is unclaimable), but no
+    // checkpoint inside it: the plan is empty and the handler still
+    // answers 200 with its honesty note.
+    let workdir = std::env::temp_dir().join(format!("run-config-overrides-{}", std::process::id()));
+    std::fs::create_dir_all(&workdir).expect("seed workdir");
     let pool = oxo_flow_web::infra::db::sqlite::try_pool().expect("personal mode has SQLite");
     sqlx::query(
         "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) \
-         VALUES (?, 'default', NULL, ?, ?, 'failed', 'execution', 0, NULL, NULL, '[\"k=v\"]', NULL, NULL, '2026-10-27T00:00:00Z')",
+         VALUES (?, 'default', NULL, ?, ?, 'failed', 'execution', 0, NULL, ?, '[\"k=v\"]', NULL, NULL, '2026-10-27T00:00:00Z')",
     )
     .bind(&run_id)
     .bind(marked_toml(marker))
     .bind(marker)
+    .bind(workdir.to_string_lossy().to_string())
     .execute(pool)
     .await
     .unwrap();

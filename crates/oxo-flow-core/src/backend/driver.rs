@@ -3932,7 +3932,7 @@ shell = "echo asm > out/{assembler}.txt"
             &kubectl,
             "#!/bin/bash\n\
              if [ \"$1\" = get ]; then\n\
-             echo '1|1|2|0|1'\n\
+             echo '1|1|2|0|1|'\n\
              else\n\
              echo 'job.batch/arr-job created'\n\
              fi\n",
